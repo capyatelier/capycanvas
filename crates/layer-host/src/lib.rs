@@ -169,6 +169,7 @@ pub struct NativeHost {
     pub logical: [f32; 2],
     pub dirty: bool,
     preparation:PreparationWake,
+    device_failure: Option<gpu::FailureWake>,
     pub chrome_hidden: bool,
     keep_zen_button: bool,
     pub error: Option<String>,
@@ -255,7 +256,12 @@ impl NativeHost {
 
     pub fn release_gpu(&mut self) -> Renderer {
         self.warm.retain(|_, _| false);
+        self.device_failure = None;
         Renderer(self.session.renderer_mut().0.take())
+    }
+    pub fn watch_device(&mut self, watch: &DeviceWatch) {
+        self.device_failure = None;
+        self.device_failure = Some(watch.wake_on_failure(self.preparation.signal()));
     }
 
     pub fn set_wake(&mut self,wake:std::sync::Arc<dyn Fn()+Send+Sync>) {
@@ -376,6 +382,7 @@ impl NativeHost {
             logical: [1.0, 1.0],
             dirty:true,
             preparation:PreparationWake::default(),
+            device_failure: None,
             chrome_hidden: false,
             keep_zen_button: false,
             error: None,

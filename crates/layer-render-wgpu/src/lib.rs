@@ -1719,6 +1719,7 @@ impl WgpuRasterizer {
         buffer.map_async(wgpu::MapMode::Read,..,self.device.callback(callback));self.device.request_poll();
     }
     pub fn on_gpu_done(&self,callback:impl FnOnce()+Send+'static) { self.device.on_queue_done(&self.queue,callback); }
+    pub fn destroy_device(&self) { self.device.destroy();self.device.request_poll(); }
 
     pub fn metrics(&self) -> GpuRasterMetrics {
         let mut metrics = self.metrics.clone();

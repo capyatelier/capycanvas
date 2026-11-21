@@ -223,11 +223,22 @@ pub async fn request_device(adapter: &wgpu::Adapter, descriptor: &wgpu::DeviceDe
     Ok((device, queue, watch))
 }
 
-#[derive(Clone, Default)]
-pub struct DeviceWatch {
-    lost: Arc<OnceLock<String>>,
-    error: Arc<OnceLock<String>>,
+type OwnerWake = dyn Fn() + Send + Sync;
+
+#[derive(Default)]
+struct Watched {
+    lost: OnceLock<String>,
+    error: OnceLock<String>,
+    owners: std::sync::Mutex<Vec<std::sync::Weak<OwnerWake>>>,
 }
+
+#[must_use]
+pub struct FailureWake {
+    _owner: Arc<OwnerWake>,
+}
+
+#[derive(Clone, Default)]
+pub struct DeviceWatch(Arc<Watched>);
 impl DeviceWatch {
     pub fn for_device(device: &wgpu::Device) -> Self {
         #[cfg(not(target_arch = "wasm32"))]
@@ -237,30 +248,46 @@ impl DeviceWatch {
     }
     pub fn observe(device: &wgpu::Device) -> Self {
         let watch = Self::default();
-        let lost = watch.lost.clone();
+        let lost = watch.clone();
         device.set_device_lost_callback(move |reason, message| {
-            lost.get_or_init(|| format!("Canvas GPU stopped ({reason:?}): {message}"));
+            lost.latch(&lost.0.lost, || format!("Canvas GPU stopped ({reason:?}): {message}"));
         });
-        let error = watch.error.clone();
+        let error = watch.clone();
         device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| {
-            error.get_or_init(|| e.to_string());
+            error.latch(&error.0.error, || e.to_string());
         }));
         watch
     }
     pub fn lost(&self) -> Option<&str> {
-        self.lost.get().map(String::as_str)
+        self.0.lost.get().map(String::as_str)
     }
     pub fn error(&self) -> Option<&str> {
-        self.error.get().map(String::as_str)
+        self.0.error.get().map(String::as_str)
     }
     pub fn failure(&self) -> Option<String> {
         self.lost().or(self.error()).map(str::to_owned)
     }
     pub fn report_lost(&self, message: impl Into<String>) {
-        self.lost.get_or_init(|| message.into());
+        self.latch(&self.0.lost, || message.into());
     }
     pub fn report_error(&self, message: impl Into<String>) {
-        self.error.get_or_init(|| message.into());
+        self.latch(&self.0.error, || message.into());
+    }
+    pub fn wake_on_failure(&self, owner: Arc<OwnerWake>) -> FailureWake {
+        let mut owners = self.0.owners.lock().unwrap();
+        if self.lost().or(self.error()).is_none() {
+            owners.retain(|live| live.strong_count() != 0);
+            owners.push(Arc::downgrade(&owner));
+        } else {
+            drop(owners);
+            owner();
+        }
+        FailureWake { _owner: owner }
+    }
+    fn latch(&self, reason: &OnceLock<String>, message: impl FnOnce() -> String) {
+        if reason.get().is_some() || reason.set(message()).is_err() { return; }
+        let owners = std::mem::take(&mut *self.0.owners.lock().unwrap());
+        for owner in owners.iter().filter_map(std::sync::Weak::upgrade) { owner(); }
     }
 }
 
@@ -445,6 +472,116 @@ mod tests {
             "retiring the old root cannot close the replacement root's service");
         finish_cached_gpu(&cache).unwrap();
         assert!(cache.lock().unwrap().is_none());
+    }
+
+    const DESTROYED: &str = "Canvas GPU stopped (Destroyed): ";
+
+    fn watched_device() -> (wgpu::Device, wgpu::Queue, DeviceWatch) {
+        let reference = WgpuRasterizer::new_native_headless(DocumentColor::default()).unwrap();
+        pollster::block_on(request_device(reference.adapter(), &Default::default())).unwrap()
+    }
+
+    fn destroy(device: &wgpu::Device) {
+        device.destroy();
+        device.poll(wgpu::PollType::Poll).unwrap();
+    }
+
+    fn refuse_a_buffer(device: &wgpu::Device) {
+        drop(device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 16,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::UNIFORM, mapped_at_creation: false }));
+    }
+
+    struct IdleOwner { host: crate::NativeHost, wakes: Arc<std::sync::atomic::AtomicUsize> }
+    impl IdleOwner {
+        fn new() -> Self {
+            let mut host = crate::NativeHost::new(layer_ui::Platform::Mac).unwrap();
+            let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let count = wakes.clone();
+            host.set_wake(Arc::new(move || { count.fetch_add(1, std::sync::atomic::Ordering::SeqCst); }));
+            Self { host, wakes }
+        }
+        fn wakes(&self) -> usize { self.wakes.load(std::sync::atomic::Ordering::SeqCst) }
+    }
+
+    #[test]
+    fn the_first_failure_of_an_installed_device_wakes_each_idle_owner_once() {
+        let (device, _queue, installed) = watched_device();
+        let (mut owner, mut sibling) = (IdleOwner::new(), IdleOwner::new());
+        owner.host.watch_device(&installed);
+        sibling.host.watch_device(&installed);
+        device.destroy();
+        assert_eq!((owner.wakes(), installed.failure()), (0, None), "wgpu reports a destroyed device at its next maintenance");
+        device.poll(wgpu::PollType::Poll).unwrap();
+        assert_eq!((owner.wakes(), sibling.wakes()), (1, 1));
+        assert_eq!(installed.failure().as_deref(), Some(DESTROYED));
+        installed.report_error("a later error on the stopped device");
+        installed.report_lost("a repeated loss");
+        assert_eq!((owner.wakes(), sibling.wakes()), (1, 1));
+        assert_eq!(installed.failure().as_deref(), Some(DESTROYED));
+    }
+
+    #[test]
+    fn an_uncaptured_error_and_the_loss_that_follows_it_wake_the_owner_once() {
+        let (device, _queue, installed) = watched_device();
+        let mut owner = IdleOwner::new();
+        owner.host.watch_device(&installed);
+        refuse_a_buffer(&device);
+        let error = installed.error().expect("the refused buffer is an uncaptured error").to_owned();
+        assert_eq!((owner.wakes(), installed.lost()), (1, None));
+        refuse_a_buffer(&device);
+        destroy(&device);
+        assert_eq!(owner.wakes(), 1);
+        assert_eq!((installed.lost(), installed.error()), (Some(DESTROYED), Some(error.as_str())));
+    }
+
+    #[test]
+    fn a_replaced_device_never_wakes_the_owner_of_its_replacement() {
+        let (previous_device, _previous_queue, previous) = watched_device();
+        let (device, _queue, replacement) = watched_device();
+        let mut owner = IdleOwner::new();
+        owner.host.watch_device(&previous);
+        owner.host.watch_device(&replacement);
+        refuse_a_buffer(&previous_device);
+        destroy(&previous_device);
+        assert!(previous.error().is_some());
+        assert_eq!(previous.lost(), Some(DESTROYED));
+        assert_eq!((owner.wakes(), replacement.failure()), (0, None));
+        destroy(&device);
+        assert_eq!((owner.wakes(), replacement.lost()), (1, Some(DESTROYED)));
+    }
+
+    #[test]
+    fn a_failure_before_its_owner_registers_wakes_that_owner_once() {
+        let (device, _queue, installed) = watched_device();
+        destroy(&device);
+        assert_eq!(installed.lost(), Some(DESTROYED));
+        let mut owner = IdleOwner::new();
+        owner.host.watch_device(&installed);
+        assert_eq!(owner.wakes(), 1);
+        installed.report_error("a later error on the stopped device");
+        assert_eq!(owner.wakes(), 1);
+    }
+
+    #[test]
+    fn releasing_the_gpu_ends_its_owners_device_wake() {
+        let (device, _queue, installed) = watched_device();
+        let mut owner = IdleOwner::new();
+        owner.host.watch_device(&installed);
+        assert!(owner.host.release_gpu().0.is_none());
+        destroy(&device);
+        assert_eq!((owner.wakes(), installed.lost()), (0, Some(DESTROYED)));
+    }
+
+    #[test]
+    fn destroying_an_idle_renderers_device_wakes_its_owner_without_a_frame() {
+        let renderer = WgpuRasterizer::new_native_headless(DocumentColor::default()).unwrap();
+        let installed = DeviceWatch::for_device(renderer.device());
+        let (woken, wake) = std::sync::mpsc::channel();
+        let _owner = installed.wake_on_failure(Arc::new(move || { let _ = woken.send(()); }));
+        renderer.destroy_device();
+        wake.recv_timeout(std::time::Duration::from_secs(10)).expect("the device service never reported the destroyed device");
+        assert_eq!(installed.lost(), Some(DESTROYED));
+        assert!(wake.try_recv().is_err());
     }
 
     #[test]
