@@ -579,6 +579,15 @@ impl Scene {
     }
     #[cfg(test)]
     pub(crate) fn object_gpu(&self)->[u64;2] {[self.tiers.objects.used(),self.object_results.walked_bytes()[1]+self.exact_object_results.walked_bytes()[1]+self.tiers.schedule.reserved()]}
+    #[cfg(test)]
+    pub(crate) fn counted_and_walked(&self)->[[u64;4];2] {
+        let counted=||{let usage=self.usage();[usage.working,usage.ram,usage.pinned,self.tiers.objects.used()]};
+        loop {
+            let before=counted();
+            let walked=self.walked_usage();let walked=[walked.working,walked.ram,walked.pinned,self.object_gpu()[1]];
+            if counted()==before {return [before,walked];}
+        }
+    }
     pub(crate) fn usage(&self)->Usage {self.tiers.usage()}
     pub(crate) fn working_bytes(&self)->u64 {self.usage().working}
     pub(crate) fn store_metadata_bytes(&self)->u64 {self.scale_pages.lock().unwrap().metadata_bytes()}
