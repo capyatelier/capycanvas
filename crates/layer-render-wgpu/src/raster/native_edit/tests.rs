@@ -33,15 +33,7 @@ use layer_engine::{
     input_queue,
 };
 use layer_render::ViewState;
-
-fn view() -> ViewState {
-    ViewState {
-        width_px: 256,
-        height_px: 256,
-        document_to_surface: [1., 0., 0., 1., 0., 0.],
-    }
-}
-use crate::test_support::flush_engine as flush;
+use crate::test_support::{flush_engine as flush, submit_encoded, view, wait_until};
 fn stroke(
     engine: &mut CanvasEngine<WgpuRasterizer>,
     input: &mut InputProducer<PenEvent>,
@@ -89,7 +81,7 @@ fn engine_on(mut document: layer_core::Document, r: WgpuRasterizer) -> (InputPro
     }
     let (input, consumer) = input_queue(64);
     let mut engine =
-        CanvasEngine::new(r, document, consumer, view(), ViewTransform::IDENTITY).unwrap();
+        CanvasEngine::new(r, document, consumer, view([256; 2]), ViewTransform::IDENTITY).unwrap();
     let brush = layer_core::BrushSnapshot {
         color_rgba_linear: [0.012345, 0.234567, 0.678901, 0.12345],
         color_dynamics: layer_core::BrushColorDynamics {
@@ -124,7 +116,7 @@ fn native_stroke_publication_keeps_prepared_reference_pages_and_matches_fresh_ma
     let reference=occurrence_id(&document);
     let id=target(&document);
     let (mut input,mut live)=engine(document);
-    live.set_view(ViewState {width_px:extent[0],height_px:extent[1],document_to_surface:[1.,0.,0.,1.,0.,0.]},ViewTransform::IDENTITY);
+    live.set_view(view(extent),ViewTransform::IDENTITY);
     live.set_brush(layer_core::BrushSnapshot {diameter:16.,hardness:1.,opacity:1.,flow:1.,
         color_rgba_linear:[0.,0.,0.,1.],mappings:Arc::from([]),..layer_core::default_brush(layer_core::DefaultBrushPreset::GPen)}).unwrap();
     flush(&mut live);
@@ -159,17 +151,14 @@ fn native_stroke_publication_keeps_prepared_reference_pages_and_matches_fresh_ma
         r.set_refine_chunk(Some(1_048_576.));
         r.prepare_regions(Some(&preparation));
         r.shader_idle(true,true);
-        let deadline=std::time::Instant::now()+READBACK_TIMEOUT;
-        loop {
+        wait_until(format_args!("incremental compaction stage {compacted}"),|| {
             crate::test_support::submit_ready(r,crate::test_support::packet(snapshot.view(),extent)).unwrap();
             r.wait_idle().unwrap();
             let flood=&r.regions.as_ref().unwrap().flood;
-            if flood.compaction_pending()==Some(!compacted) {
-                assert!(flood.lines_submitted());
-                break;
-            }
-            assert!(std::time::Instant::now()<deadline,"incremental compaction stage {compacted}");
-        }
+            if flood.compaction_pending()!=Some(!compacted) {return Err(flood.compaction_pending());}
+            assert!(flood.lines_submitted());
+            Ok(())
+        });
         r.shader_idle(false,false);
         let before=live.document().target_raster(id).unwrap().clone();
         stroke(&mut live,&mut input,sequence+10,b);
@@ -327,13 +316,10 @@ fn partial_bakes_back_tiles_without_publishing_the_layer() {
     let plan = engine.document().separation_plan(photo, &filters, ["Frequency Separation", "Low", "High"].map(std::sync::Arc::from)).unwrap();
     let low = plan.operations[0].0;
     engine.insert_with_operations(plan.edits, plan.operations, None).unwrap();
-    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
-    loop {
+    wait_until("the low layer's bake must reach native backing", || {
         engine.render_frame().unwrap();
-        if engine.backend().native_edit.as_ref().unwrap().backing.contains_key(&low) { break; }
-        assert!(std::time::Instant::now() < deadline);
-        std::thread::yield_now();
-    }
+        if engine.backend().native_edit.as_ref().unwrap().backing.contains_key(&low) { Ok(()) } else { Err(()) }
+    });
     let root = engine.document().target_raster(low).unwrap().clone();
     assert!(root.try_data().is_none());
     let r = engine.backend();
@@ -601,7 +587,7 @@ fn native_gpen_keeps_original_photo_pixels_in_touched_tiles() {
 }
 
 fn packet<'a>(layers: &'a Document, reset: bool) -> FramePacket<'a> {
-    FramePacket { view: view(), reset_layers: reset, ..crate::test_support::packet(layers.scene(), layers.composition().size) }
+    FramePacket { view: view([256; 2]), reset_layers: reset, ..crate::test_support::packet(layers.scene(), layers.composition().size) }
 }
 fn restored_fixture(r: &mut WgpuRasterizer) -> Document {
     let color = r.document_color();
@@ -728,9 +714,7 @@ fn native_commit_reuses_scratch_across_color_and_coverage_chunks_without_changin
     let scratch = r.native_edit.as_ref().unwrap().storage_bytes();
     for _ in 0..3 {
         rewrite_working(&mut r, &mut layers);
-        while !r.raster_ready() {
-            std::thread::yield_now();
-        }
+        wait_until("the raster must become ready", || r.raster_ready().then_some(()).ok_or(()));
         crate::test_support::submit_ready(&mut r, packet(&layers, false)).unwrap();
         assert_eq!(backing(&paint(&layers).raster), before);
         assert_eq!(
@@ -742,9 +726,7 @@ fn native_commit_reuses_scratch_across_color_and_coverage_chunks_without_changin
     // An unchanged pending revision reuses every backing ticket, with no copies.
     let previous = paint(&layers).raster.wait_data().unwrap();
     paint_mut(&mut layers).raster = RasterRevision::pending();
-    while !r.raster_ready() {
-        std::thread::yield_now();
-    }
+    wait_until("the raster must become ready", || r.raster_ready().then_some(()).ok_or(()));
     crate::test_support::submit_ready(&mut r, packet(&layers, false)).unwrap();
     let current = paint(&layers).raster.wait_data().unwrap();
     assert!(
@@ -819,9 +801,7 @@ fn publication_matches_independent_native_encoding_at_every_depth() {
                 r.native_edit=Some(NativeEdit::with_mode(&r,transfer,in_place));
                 pollster::block_on(r.compilation.prepare_all(r.native_edit.as_ref().unwrap().required_pipelines(r.document_color.depth,true))).unwrap();
                 let tile=RasterTile::pending(color.paint_descriptor());
-                let mut commands=submission::CommandEncoder::new(&r.device,&Default::default());
-                let capture=r.encode_private_tiles(vec![(image.clone(),tile.clone(),LayerColorMode::FullColor)],&mut commands).unwrap();
-                commands.submit(&r.queue);
+                let capture=submit_encoded(&mut r,|r,commands|r.encode_private_tiles(vec![(image.clone(),tile.clone(),LayerColorMode::FullColor)],commands).unwrap());
                 capture.finish().unwrap();
                 let context=format!("{depth:?} {space:?} in_place={in_place}");
                 assert_native_bytes(&tile.wait_backing().unwrap().decode_on_worker().unwrap(),&expected,&context);
@@ -852,9 +832,7 @@ fn snapshot_capture_keeps_private_samples_and_allocates_only_its_batch() {
     let scratch = |r: &WgpuRasterizer| r.native_edit.as_ref().unwrap().colors.iter().chain(&r.native_edit.as_ref().unwrap().scalars).cloned().collect::<Vec<_>>();
     assert!(scratch(&r).is_empty());
     for repetition in 0..2 {
-        let mut commands = submission::CommandEncoder::new(&r.device, &Default::default());
-        let capture = r.encode_private_tiles(inputs.iter().map(|(texture, tile, mode)| (texture.clone(), RasterTile::pending(tile.descriptor()), *mode)).collect(), &mut commands).unwrap();
-        commands.submit(&r.queue);
+        let capture = submit_encoded(&mut r, |r, commands| r.encode_private_tiles(inputs.iter().map(|(texture, tile, mode)| (texture.clone(), RasterTile::pending(tile.descriptor()), *mode)).collect(), commands).unwrap());
         capture.finish().unwrap();
         for ((texture, _, _), expected) in inputs.iter().zip(&before) { assert_native_bytes(&crate::layer_tests::page_bytes(&r, texture), expected, "private snapshot samples"); }
         assert_eq!(scratch(&r).len(), 3, "capture {repetition} needs one color and two scalar candidates");
@@ -883,9 +861,7 @@ fn late_invalid_color_or_scalar_publishes_defined_values_with_its_siblings() {
             } else {set_pixel(&r,&inputs[16].0,&[f32::NAN,0.,0.,1.]);}
             let bad=inputs.last().unwrap().0.clone();
             let tickets=inputs.iter().map(|(_,tile,_)|tile.clone()).collect::<Vec<_>>();
-            let mut commands=submission::CommandEncoder::new(&r.device,&Default::default());
-            let capture=r.encode_private_tiles(inputs,&mut commands).unwrap();
-            commands.submit(&r.queue);
+            let capture=submit_encoded(&mut r,|r,commands|r.encode_private_tiles(inputs,commands).unwrap());
             let context=format!("{depth:?} in_place={in_place} scalar_failure={scalar_failure}");
             capture.finish().unwrap();
             assert!(tickets.iter().all(|tile|tile.wait_backing().is_ok()),"{context}: every sibling publishes");
@@ -917,10 +893,10 @@ fn mixed_tracking_marks_only_actual_canonical_changes() {
             let count=inputs.len();
             let mut job=r.native_capture_job(NativeFrame {capture:None,publications:Vec::new(),canonical_pages:Vec::new()},inputs,vec![None;count],vec![None;count],vec![None;count]).unwrap();
             job.changes=vec![None,Some(flags.clone())];
-            let mut commands=submission::CommandEncoder::new(&r.device,&Default::default());
-            commands.clear_buffer(&flags,16,None);
-            while r.step_native_rasters(&mut job,&mut commands).unwrap() {}
-            commands.submit(&r.queue);
+            submit_encoded(&mut r,|r,commands| {
+                commands.clear_buffer(&flags,16,None);
+                while r.step_native_rasters(&mut job,commands).unwrap() {}
+            });
             job.frame.capture.take().unwrap().finish().unwrap();
             let bytes=pollster::block_on(crate::local_tone::read_buffer_async(&r.device,&r.queue,&flags)).unwrap();
             let values=bytes[16..].as_chunks::<4>().0;
@@ -1186,7 +1162,7 @@ fn pending_native_save_and_immediate_undo_finish_after_presentation_releases_bac
     let mut document = layer_core::Document::new(PortableId::random(), 256, 256, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     set_color(&mut document,DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U16 });
     let (mut input, mut live) = engine(document);
-    while !live.backend().raster_ready() { std::thread::yield_now(); }
+    wait_until("the raster must become ready", || live.backend().raster_ready().then_some(()).ok_or(()));
     let presentation = live.backend().prioritize_raster_presentation();
     stroke(&mut live, &mut input, 1, 60.);
     let first = paint(live.document()).raster.clone();
@@ -1263,7 +1239,7 @@ fn native_in_place_runtime_matches_candidate_fallback_for_mixed_planes() {
             r.native_edit = Some(NativeEdit::with_mode(&r, transfer, in_place));
             pollster::block_on(r.compilation.prepare_all(r.native_edit.as_ref().unwrap().required_pipelines(r.document_color.depth,true))).unwrap();
             rewrite_working(&mut r, &mut layers);
-            while !r.raster_ready() { std::thread::yield_now(); }
+            wait_until("the raster must become ready", || r.raster_ready().then_some(()).ok_or(()));
             crate::test_support::submit_ready(&mut r, packet(&layers, false)).unwrap();
             assert_eq!(backing(&paint(&layers).raster), expected);
             assert_eq!(backing(mask_raster(&layers)), mask_expected);
@@ -1469,8 +1445,7 @@ fn blend_pickup_of_excess_alpha_commits_bounded_color() {
         document.working.target = Some(target(&document));
         let r = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
         let (mut input, consumer) = input_queue(64);
-        let view = ViewState { width_px: 512, height_px: 256, document_to_surface: [1., 0., 0., 1., 0., 0.] };
-        let mut engine = CanvasEngine::new(r, document, consumer, view, ViewTransform::IDENTITY).unwrap();
+        let mut engine = CanvasEngine::new(r, document, consumer, view([512, 256]), ViewTransform::IDENTITY).unwrap();
         let mut sequence = 0;
         let mut drag = |engine: &mut CanvasEngine<WgpuRasterizer>, xs: &[f32]| {
             for (i, &x) in xs.iter().enumerate() {
@@ -1721,12 +1696,9 @@ fn a_native_capture_larger_than_the_raster_room_publishes_in_windows_within_the_
     let dabs = (0..64).map(|n| crate::tests::test_dab([(n % 32 * PAGE_SIZE + 128) as f32, (n / 32 * PAGE_SIZE + 128) as f32], [1., 0., 1., 1.], 1.)).collect::<Vec<_>>();
     let damage = dabs.iter().copied().map(layer_render::Dab::bounds).fold(layer_core::Rect::EMPTY, layer_core::Rect::union);
     let batch = layer_render::DabBatch { dab_count: dabs.len() as u32, ..crate::test_support::dab_batch(target, crate::tests::test_style(BrushExecution::Dry), damage) };
-    let frame = FramePacket { dabs: &dabs, dab_batches: std::slice::from_ref(&batch), view: view(), ..crate::test_support::packet(doc.scene(), extent) };
+    let frame = FramePacket { dabs: &dabs, dab_batches: std::slice::from_ref(&batch), view: view([256; 2]), ..crate::test_support::packet(doc.scene(), extent) };
     let renderer = || crate::memory::memory_tests::renderer(doc.composition().color, layer_core::DeviceMemoryFacts { budget_bytes: Some(4 << 30), ..Default::default() }).unwrap();
-    let ready = |r: &mut WgpuRasterizer| {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while !r.raster_dependencies_ready(frame, None) { assert!(std::time::Instant::now() < deadline, "the frame becomes ready"); std::thread::sleep(std::time::Duration::from_millis(1)); }
-    };
+    let ready = |r: &mut WgpuRasterizer| wait_until("the frame becomes ready", || r.raster_dependencies_ready(frame, None).then_some(()).ok_or(()));
     let mut whole = renderer();
     ready(&mut whole);
     let admission = whole.restore_preflight.as_ref().unwrap().native.as_ref().unwrap();
@@ -1742,19 +1714,17 @@ fn a_native_capture_larger_than_the_raster_room_publishes_in_windows_within_the_
     other.report(layer_core::MemoryReport { gpu_bytes: pin, pinned_gpu_bytes: pin, ..Default::default() });
     budget.flush_reports();
     let revision = doc.artwork.paint.get(paint).unwrap().raster.clone();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let mut submitted = false;
-    while revision.try_data().is_none() {
-        assert!(std::time::Instant::now() < deadline, "a capture of {outputs} bytes never published within a {room} byte raster room: submitted {submitted}, settling {}, terms {:?}",
-            r.settling.is_some(), r.outstanding_terms());
+    wait_until(format_args!("a capture of {outputs} bytes never published within a {room} byte raster room (submitted, settling, terms)"), || {
+        if revision.try_data().is_some() { return Ok(()); }
         r.poll_pending(frame.view).unwrap();
         if r.can_submit() && let std::task::Poll::Ready(result) = r.submit_when_ready(if submitted { FramePacket { dabs: &[], dab_batches: &[], ..frame } } else { frame }, None) { result.unwrap(); submitted = true; }
         let physical = r.telemetry().resident_bytes;
         let device = budget.snapshot().devices[0].limit_bytes;
         assert!(physical.saturating_add(pin) <= device, "the capture exceeded the device limit: physical {physical} beside a {pin} byte pin, limit {device}");
         r.wait_idle().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
+        Err((submitted, r.settling.is_some(), r.outstanding_terms()))
+    });
     let data = revision.wait_data().unwrap();
     assert_eq!(data.tiles.keys().filter(|key| key.plane == RasterPlane::Color).count(), 64, "the windowed capture published every painted tile");
     assert!(data.tiles.values().all(|tile| tile.wait_backing().is_ok()), "every windowed output reached its backing");

@@ -287,10 +287,7 @@ fn clone_copies_reference_image_layers_by_their_canonical_pixels_at_any_zoom() {
     let plan = engine.document().rasterize_plan(layer, false).unwrap();
     let capture = plan.image_capture(EXTENT, None).unwrap();
     assert!(engine.backend_mut().request_snapshot(layer_render::SnapshotRequest::Image(capture)).unwrap());
-    let image = loop {
-        if let Some(result) = engine.backend_mut().take_snapshot() { break result.unwrap(); }
-        std::thread::yield_now();
-    };
+    let image = crate::test_support::wait_until("the captured image must arrive", || engine.backend_mut().take_snapshot().ok_or(())).unwrap();
     let layer_render::SnapshotResult::Image(image) = image else { panic!("captured image") };
     let edits = plan.with_image(image.map(|(samples, origin)| (layer_core::Image::new(samples), origin))).unwrap();
     engine.insert_with_operations(edits, Vec::new(), None).unwrap();
@@ -344,12 +341,11 @@ fn resident_code_cloner(depth: layer_core::color::SampleDepth) -> (
     assert_eq!(r.source_tiles.borrow().allocated_slots(),0,"completed fixture sources must remain evictable");
     assert_eq!(r.source_tiles.borrow().gpu_bytes(),r.source_tiles.borrow().non_slot_bytes());
     assert!(r.source_tiles.borrow().prepared_view(&source, [1, 1]).is_none());
-    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    for coordinate in page_coordinates(PixelRect::full(extent)) {
+    crate::test_support::submit_encoded(r, |r, encoder| for coordinate in page_coordinates(PixelRect::full(extent)) {
         let prepared = crate::prepare_image_tile(&source, coordinate, r.document_color().space, &r.device.source_samples, None).unwrap();
-        crate::scene::Scene::decode_prepared(r, &mut encoder, &source, coordinate, prepared).unwrap();
-    }
-    r.uploads.finish(&encoder); encoder.submit(&r.queue); crate::test_support::complete(r);
+        crate::scene::Scene::decode_prepared(r, encoder, &source, coordinate, prepared).unwrap();
+    });
+    crate::test_support::complete(r);
     (input, engine, source)
 }
 
@@ -434,15 +430,15 @@ fn retouch_source_promotion_keeps_the_ready_display_window() {
         let composed = r.metrics.composited_pixels;
         let mut retouch = r.retouch_sources();
         let mapping = retouch.mapping(r, &Gather { region: PixelRect::new(64, 64, 81, 65), scale: [1.; 2], offset: [320.; 2], stroke: None }).unwrap();
-        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        let (_, complete) = retouch.pages(r, &mapping, &mut encoder).unwrap();
-        assert!(complete);
-        assert_eq!(prepared_photo_view(r, &source, [1, 1]).texture().format(), wgpu::TextureFormat::Rgba32Float);
-        assert_eq!(r.scale_display.as_ref().map(|cache| cache.view().clone()), window);
-        assert_eq!(crate::test_support::document_texture(r), &document);
-        assert_eq!(r.metrics.composited_pixels, composed);
-        r.retouch = Some(retouch);
-        r.uploads.finish(&encoder); encoder.submit(&r.queue);
+        crate::test_support::submit_encoded(r, |r, encoder| {
+            let (_, complete) = retouch.pages(r, &mapping, encoder).unwrap();
+            assert!(complete);
+            assert_eq!(prepared_photo_view(r, &source, [1, 1]).texture().format(), wgpu::TextureFormat::Rgba32Float);
+            assert_eq!(r.scale_display.as_ref().map(|cache| cache.view().clone()), window);
+            assert_eq!(crate::test_support::document_texture(r), &document);
+            assert_eq!(r.metrics.composited_pixels, composed);
+            r.retouch = Some(retouch);
+        });
         engine.render_frame().unwrap();
         assert!(engine.backend().metrics.frame_composited_pages.is_empty(), "promotion alone cannot invalidate display windows");
     }

@@ -69,17 +69,16 @@ fn liquify_modes_move_a_marker_in_their_labelled_direction() {
 /// 4×4-page layer when each of its `batches` contacts covers `radius` around
 /// the centre.
 fn committed_frame_passes(style: &DabStyle, radius: f32, batches: usize) -> u64 {
-    let extent = [4 * PAGE_SIZE; 2];
-    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let document = paint_document(extent, "material batch pages");
-    let layer = target(&document);
+    let mut fixture = crate::test_support::Fixture::new(paint_document([4 * PAGE_SIZE; 2], "material batch pages"));
+    let layer = target(&fixture.document);
+    let (r, packet) = fixture.frame();
     let mut base = dab([0.2, 0.4, 0.8, 1.]);
     base.center = Point { x: 512., y: 512. };
     base.radii = [500.; 2];
-    let full = layer_core::Rect::from_extent(extent);
-    let frame = |dabs, batches| FramePacket { dabs, dab_batches: batches, commit_rasters: false, ..packet(document.scene(), extent) };
+    let full = layer_core::Rect::from_extent(packet.document_extent);
+    let frame = |dabs, batches| FramePacket { dabs, dab_batches: batches, commit_rasters: false, ..packet };
     let paint = crate::test_support::dab_batch(layer, crate::tests::test_style(BrushExecution::Dry), full);
-    crate::test_support::submit_ready(&mut r, FramePacket { reset_layers: true, ..frame(std::slice::from_ref(&base), std::slice::from_ref(&paint)) }).unwrap();
+    crate::test_support::submit_ready(r, FramePacket { reset_layers: true, ..frame(std::slice::from_ref(&base), std::slice::from_ref(&paint)) }).unwrap();
     let contacts: Vec<_> = (0..batches).map(|i| {
         let mut contact = dab([0.9, 0.2, 0.1, 1.]);
         contact.center = Point { x: 400. + 6. * i as f32, y: 400. };
@@ -91,7 +90,7 @@ fn committed_frame_passes(style: &DabStyle, radius: f32, batches: usize) -> u64 
     let strokes: Vec<_> = contacts.iter().enumerate().map(|(i, contact)| DabBatch { stroke_id: StrokeId(2), first_dab: i as u32,
         stroke_start: i == 0, stroke_end: false, ..crate::test_support::dab_batch(layer, style.clone(), contact.bounds()) }).collect();
     let before = r.metrics().command_passes;
-    crate::test_support::submit_ready(&mut r, frame(&contacts, &strokes)).unwrap();
+    crate::test_support::submit_ready(r, frame(&contacts, &strokes)).unwrap();
     r.wait_idle().unwrap();
     r.metrics().command_passes - before
 }

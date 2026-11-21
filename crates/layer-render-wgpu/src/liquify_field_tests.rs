@@ -851,13 +851,10 @@ fn pinch_minification_keeps_transparency_at_physical_canvas_edge() {
 }
 
 fn source_color_pages(r: &mut WgpuRasterizer, target: layer_core::SourceTarget, extent: [u32; 2]) -> BTreeMap<[u32; 2], Vec<u8>> {
-    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    let tiles: Vec<_> = page_coordinates(PixelRect::full(extent)).map(|coordinate| {
-        let tile = crate::test_support::query_ready(r, &mut encoder, |r, encoder| r.raw_layer_tile(target, coordinate, encoder)).unwrap();
+    let tiles: Vec<_> = crate::test_support::submit_encoded(r, |r, encoder| page_coordinates(PixelRect::full(extent)).map(|coordinate| {
+        let tile = crate::test_support::query_ready(r, encoder, |r, encoder| r.raw_layer_tile(target, coordinate, encoder)).unwrap();
         (coordinate, tile.texture)
-    }).collect();
-    r.uploads.finish(&encoder);
-    encoder.submit(&r.queue);
+    }).collect());
     tiles.into_iter().map(|(coordinate, texture)| (coordinate, crate::layer_tests::page_bytes(r, &texture))).collect()
 }
 

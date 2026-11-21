@@ -10,9 +10,8 @@ fn stored_source_smudge_stroke_promotes_neighbors_once_for_the_slot_lifetime() {
         crate::test_support::submit_published(&mut r, crate::test_support::packet(doc.scene(), extent));
         crate::test_support::complete(&r);
         crate::test_support::evict_sources(&mut r);
-        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        let originals: Vec<_> = (0..5).map(|x| stored_code_tile(&mut r, &source, x, &mut encoder)).collect();
-        r.uploads.finish(&encoder); encoder.submit(&r.queue); crate::test_support::complete(&r);
+        let originals: Vec<_> = crate::test_support::submit_encoded(&mut r, |r, encoder| (0..5).map(|x| stored_code_tile(r, &source, x, encoder)).collect());
+        crate::test_support::complete(&r);
         let identities: Vec<_> = originals.iter().enumerate().map(|(x, tile)| {
             assert_eq!(tile.texture.format(), stored_code_format(depth), "{depth:?}, page {x}");
             let sources = r.source_tiles.borrow();
@@ -60,10 +59,10 @@ fn stored_source_smudge_stroke_promotes_neighbors_once_for_the_slot_lifetime() {
                     }
                 }
             }
-            let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-            r.read_raw_neighborhood(target, [1, 0], [Some([-1, 0]), Some([0, 0]), Some([1, 0])], &mut encoder).unwrap();
-            assert_eq!(encoder.pass_count(), 0, "the real smudge dab already prepared its immutable neighbors");
-            r.uploads.finish(&encoder); encoder.submit(&r.queue);
+            crate::test_support::submit_encoded(&mut r, |r, encoder| {
+                r.read_raw_neighborhood(target, [1, 0], [Some([-1, 0]), Some([0, 0]), Some([1, 0])], encoder).unwrap();
+                assert_eq!(encoder.pass_count(), 0, "the real smudge dab already prepared its immutable neighbors");
+            });
         }
         assert_eq!(r.device.source_samples.stats().misses, sample_misses);
         let layer = r.paint_layers.iter().find(|layer| layer.id == target).unwrap();
