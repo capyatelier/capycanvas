@@ -1075,13 +1075,13 @@ impl Slot {
     fn ready(&self)->bool {self.valid.load(Ordering::Acquire) && self.pending.as_ref().is_none_or(|pending|pending.recorded())
         && self.assembly.as_ref().is_none_or(|assembly|assembly.recorded())}
 }
-struct RetirementCompletion(Arc<std::sync::atomic::AtomicBool>,Arc<dyn Fn()+Send+Sync>);
+struct RetirementCompletion {completed:Arc<std::sync::atomic::AtomicBool>,wake:Arc<dyn Fn()+Send+Sync>,_completing:crate::residency::Charge}
 #[cfg(not(target_arch="wasm32"))]
 type SourceRetirement=crate::device_poll::Retirement<RetirementCompletion>;
 #[cfg(target_arch="wasm32")]
 type SourceRetirement=RetirementCompletion;
 impl Drop for RetirementCompletion {
-    fn drop(&mut self) {self.0.store(true,Ordering::Release);(self.1)();}
+    fn drop(&mut self) {self.completed.store(true,Ordering::Release);(self.wake)();}
 }
 #[derive(Clone)]
 enum Pixels {
@@ -1262,6 +1262,7 @@ pub(crate) struct DecodedTiles {
     pub evictions: u64,
     retired_bytes: Arc<crate::residency::Tier>,
     retiring_bytes: Option<Arc<crate::residency::Tier>>,
+    completing: Arc<crate::residency::Tier>,
     #[cfg(not(target_arch="wasm32"))]
     retirement:Option<crate::device_poll::RetirementHandle>,
     #[cfg(target_arch="wasm32")]
@@ -1299,7 +1300,7 @@ impl DecodedTiles {
             destination, slots: Vec::new(), arrays: Vec::new(), views: Default::default(), keys: Default::default(), clock: 0, decoders: VecDeque::new(), pixels: Vec::new(),
             inputs: Vec::new(), transfer: Default::default(), input_bytes: decoded.charge(0), table_bytes: decoded.charge(0), evicted: Default::default(), passes: Default::default(),
             in_flight: Default::default(), leased: Default::default(), hits: 0, misses: 0, evictions: 0,
-            retired_bytes: crate::residency::Tier::within(&decoded), retiring_bytes: None, decoded, retirement: None, retiring: Vec::new(),
+            retired_bytes: crate::residency::Tier::within(&decoded), retiring_bytes: None, completing: Arc::default(), decoded, retirement: None, retiring: Vec::new(),
         }
     }
     pub fn admit_limits(&mut self, upload_bytes: u64) {
@@ -1366,9 +1367,10 @@ impl DecodedTiles {
     }
     fn retire(&mut self,slot:Slot)->SourceRetirement {
         let completed=Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let completing=self.completing.charge(slot.bytes());
         let value=RetiredSlot {_charge:[self.retired_bytes.charge(slot.bytes()),self.retiring_bytes.as_ref().unwrap().charge(slot.bytes())],_layer:slot.layer,encoded:slot.encoded.map(|weak|weak.into_inner().unwrap()).unwrap_or_default(),completed:completed.clone()};
         let owner=self.retirement.as_ref().unwrap();
-        let completion=RetirementCompletion(completed,owner.release_wake());
+        let completion=RetirementCompletion {completed,wake:owner.release_wake(),_completing:completing};
         #[cfg(not(target_arch="wasm32"))]
         owner.dispose_when(value,RetiredSlot::ready);
         #[cfg(target_arch="wasm32")]
@@ -1377,7 +1379,7 @@ impl DecodedTiles {
         let completion=owner.retirement(completion);
         completion
     }
-    pub(crate) fn retired_tier(&self)->Arc<crate::residency::Tier> {self.retired_bytes.clone()}
+    pub(crate) fn completing_tier(&self)->Arc<crate::residency::Tier> {self.completing.clone()}
     pub(crate) fn flush_retired(&mut self, encoder: &mut crate::submission::CommandEncoder) {
         if self.retiring.is_empty() { return; }
         encoder.retain_resources();

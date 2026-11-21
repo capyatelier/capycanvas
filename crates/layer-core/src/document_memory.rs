@@ -89,7 +89,7 @@ impl DocumentMemory {
         Self {owner:self.owner.clone(),reservation:self.reservation.clone(),preview_inventory:self.preview_inventory.clone(),_capture:Some(capture)}
     }
     pub(crate) fn capture(&self, document: &crate::Document) -> Self {
-        let editor=crate::Editor {document:document.clone(),undo:Vec::new(),redo:Vec::new(),checkpoint:0,next_checkpoint:1,ledger:Default::default(),memory_dirty:false};
+        let editor=crate::Editor {document:document.clone(),undo:Vec::new(),redo:Vec::new(),checkpoint:0,next_checkpoint:1,ledger:Default::default(),memory_dirty:false,amends:Vec::new()};
         let capture=Arc::new(CaptureMemory {inventory:Arc::new(editor.retained_tiles()),owner:self.weak(),reservation:self.reservation.clone()});
         self.owner.inventories.lock().unwrap().captures.push(Arc::downgrade(&capture));
         self.owner.refresh();
@@ -177,11 +177,11 @@ impl crate::Document {
     }
     pub fn initialize_memory(&mut self) {
         if self.memory.initialized() {return;}
-        let editor=crate::Editor {document:self.clone(),undo:Vec::new(),redo:Vec::new(),checkpoint:0,next_checkpoint:1,ledger:Default::default(),memory_dirty:false};
+        let editor=crate::Editor {document:self.clone(),undo:Vec::new(),redo:Vec::new(),checkpoint:0,next_checkpoint:1,ledger:Default::default(),memory_dirty:false,amends:Vec::new()};
         self.memory.report(editor.retained_tiles(),true);
     }
     pub fn reserve_import(&mut self) -> Result<(), String> {
-        let editor = crate::Editor { document: self.clone(), undo: Vec::new(), redo: Vec::new(), checkpoint: 0, next_checkpoint: 1, ledger: Default::default(), memory_dirty: false };
+        let editor = crate::Editor { document: self.clone(), undo: Vec::new(), redo: Vec::new(), checkpoint: 0, next_checkpoint: 1, ledger: Default::default(), memory_dirty: false, amends: Vec::new() };
         let inventory = editor.retained_tiles();
         let bytes = inventory.total_bytes() as u64;
         if self.memory.reserve(bytes) { Ok(()) } else { Err(crate::MEMORY_BUDGET_EXCEEDED.into()) }

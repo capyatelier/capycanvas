@@ -474,3 +474,17 @@ fn redundant_display_damage_does_not_recompose_unchanged_authored_inputs() {
     assert_eq!(renderer.composite_revision,composite,"damage is a scheduling hint; selected input names did not change");
     assert_eq!(renderer.artwork_revision,artwork,"derived display damage must not look like an authored edit");
 }
+
+#[test]
+fn a_backing_still_in_flight_keeps_a_refused_edit_waiting() {
+    let mut r=crate::memory::memory_tests::renderer(Default::default(),layer_core::DeviceMemoryFacts {budget_bytes:Some(1<<30),..Default::default()}).unwrap();
+    r.publish_memory();r.factory.memory_budget().flush_reports();r.refresh_memory_limits();
+    r.live_stroke=Some(layer_core::StrokeId(1));
+    let runtime=r.raster.get_or_insert_with(Default::default);runtime.ensure_worker().unwrap();
+    let backing=runtime.worker.as_ref().unwrap().pending.charge(1);
+    assert!(r.admit_raster_working(u64::MAX/2).is_err());
+    assert_eq!(r.take_lane_failure(),None,"the pages a capture in flight still pins become evictable when it lands, so the edit waits for it");
+    drop(backing);
+    assert!(r.admit_raster_working(u64::MAX/2).is_err());
+    assert_eq!(r.take_lane_failure(),Some(GpuRasterError::StrokeMemory),"with no capture left to land, nothing else can free the room");
+}

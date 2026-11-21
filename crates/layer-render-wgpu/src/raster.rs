@@ -123,6 +123,7 @@ impl CaptureWorker {
         self.pending.used() < 16
             && self.staging.used() <= MAX_CAPTURE_BYTES - CAPTURE_CHUNK
     }
+    fn in_flight(&self) -> bool { self.pending.used() != 0 }
     fn submit_batch(&self, captures: NativeCapture) -> Result<(), GpuRasterError> {
         let charges = [self.staging.charge(captures.storage_bytes()), self.pending.charge(1)];
         if self.sender.as_ref().unwrap().try_send((captures, charges)).is_err() {
@@ -529,6 +530,9 @@ impl WgpuRasterizer {
             .as_ref()
             .and_then(|r| r.worker.as_ref())
             .is_none_or(CaptureWorker::ready)
+    }
+    pub(crate) fn raster_backing_in_flight(&self) -> bool {
+        self.raster.as_ref().and_then(|r| r.worker.as_ref()).is_some_and(CaptureWorker::in_flight)
     }
 
     pub(super) fn prepare_source_backing(&mut self) -> Result<(), GpuRasterError> {
