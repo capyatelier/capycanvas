@@ -16,7 +16,6 @@ use std::{
         atomic::Ordering,
     },
 };
-pub(crate) type RequiredSource = (Arc<SourceImage>, [u32; 2]);
 #[derive(Clone,Copy,PartialEq,Eq)]
 pub(crate) enum SourceUse { Native, Exact }
 pub(crate) const NORMALIZED_PAGE_BYTES: u64 = PAGE_SIZE as u64 * PAGE_SIZE as u64 * 16;
@@ -436,6 +435,17 @@ impl Inputs {
             .transpose()?.flatten().map(Selected::resident);
         let input=match resident {Some(read)=>Some(read),None=>self.fallback(r,scene,id,plane,coordinate,SourceUse::Exact)?};
         self.decisions.insert((id,plane,coordinate),false,[input,None])
+    }
+    pub(crate) fn stored(&self)->usize {self.tiles.iter().filter(|(_,_,pixels,_)|pixels.is_some()).count()}
+    pub(crate) fn request(&self,r:&mut WgpuRasterizer,class:crate::residency::Class)->Result<bool,GpuRasterError> {
+        let mut held=true;
+        for (key,_,pixels,use_) in &self.tiles {
+            let Some(pixels)=pixels else {continue;};
+            if r.source_tiles.borrow().prepared_slot(key).is_some() {continue;}
+            held=false;
+            if !(class.required() || r.decode_queue_has_room()) || !pixels.request(r,*use_==SourceUse::Exact,class)? {break;}
+        }
+        Ok(held)
     }
     pub(crate) fn additional_bytes(&self,cache:&DecodedTiles)->u64 {
         let mut bytes=self.tiles.iter().map(|(key,color,_,use_)| {
@@ -1150,18 +1160,8 @@ impl PendingTile {
         *self.receipt.lock().unwrap()=Some(pixels.clone());true
     }
     pub fn prepare(&self,r:&mut WgpuRasterizer,class:crate::residency::Class)->Result<(),GpuRasterError> {
-        if self.input.is_some() { return Ok(()); }
-        if self.prepared().is_some() {return Ok(());}
-        match &self.pixels {
-            Pixels::Image(source,coordinate)=> {
-                let id=source.tiles.get(coordinate).ok_or(GpuRasterError::InvalidImage)?.resource_id();
-                if self.texture.format()==wgpu::TextureFormat::Rgba32Float {r.request_exact_image_decode(id,source.clone(),*coordinate,class)?;}
-                else {r.request_image_decode(id,source.clone(),*coordinate,class)?;}
-            },
-            Pixels::Raster(blob,space,destination)=> {r.request_raster_decode_to(blob.clone(),*space,*destination,class)?;},
-            Pixels::Resident => unreachable!(),
-        }
-        Ok(())
+        if self.input.is_some() || self.prepared().is_some() {return Ok(());}
+        self.pixels.request(r,self.texture.format()==wgpu::TextureFormat::Rgba32Float,class).map(drop)
     }
 }
 struct NativeSamples<'a> {
@@ -1172,6 +1172,16 @@ struct NativeSamples<'a> {
     space: RgbSpace,
 }
 impl Pixels {
+    fn request(&self,r:&mut WgpuRasterizer,exact:bool,class:crate::residency::Class)->Result<bool,GpuRasterError> {
+        match self {
+            Self::Image(source,coordinate)=> {
+                let id=source.tiles.get(coordinate).ok_or(GpuRasterError::InvalidImage)?.resource_id();
+                if exact {r.request_exact_image_decode(id,source.clone(),*coordinate,class)}else {r.request_image_decode(id,source.clone(),*coordinate,class)}
+            },
+            Self::Raster(blob,space,destination)=>r.request_raster_decode_to(blob.clone(),*space,*destination,class),
+            Self::Resident=>unreachable!(),
+        }
+    }
     fn native(&self) -> Result<NativeSamples<'_>, GpuRasterError> {
         match self {
             Self::Image(source, coordinate) => {
