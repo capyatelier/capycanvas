@@ -1540,7 +1540,7 @@ fn group_working_layer(doc:&mut Document) {
 const OFFSETS:[(&str,[i64;2]);3]=[("a layer offset by 3 and 5",[3,5]),("a layer offset by 259 and -5",[259,-5]),("a layer offset by -130 and 77",[-130,77])];
 fn zoomed_scene(scene:&str,extent:[u32;2])->Document {
     let image=|seed:u32|rgba8_source(extent,move |x,y|[(x/(3+seed)) as u8,(y/2) as u8,(60*seed) as u8,((x*7+y*(13+seed))%256) as u8]);
-    let mut doc=if scene=="a drawing without Paper" {document_at(extent)}else {
+    let mut doc=if scene.ends_with("without Paper") {document_at(extent)}else {
         Document::new(PortableId::random(),extent[0],extent[1],layer_core::DocumentNames {paint:"Current ink".into(),paper:"Paper".into()})
     };
     let owner=doc.working.occurrence.unwrap();
@@ -1556,7 +1556,7 @@ fn zoomed_scene(scene:&str,extent:[u32;2])->Document {
             let position=doc.scene().position(owner).unwrap();
             insert_occurrence(&mut doc,layer,position+index/2);
         },
-        "a masked layer"=>{
+        "a masked layer"|"a masked layer without Paper"=>{
             let [width,height]=extent.map(|side|side as f32);
             coverage_mask(&mut doc,owner,[0,0],Some(layer_core::Selection::polygon(vec![layer_core::Point {x:width*0.1,y:height*0.1},
                 layer_core::Point {x:width*0.95,y:height*0.15},layer_core::Point {x:width*0.9,y:height*0.95},layer_core::Point {x:width*0.15,y:height*0.9}]).unwrap()));
@@ -1585,16 +1585,101 @@ impl<'a> Zoomed<'a> {
         let [left,top]=OFFSETS.into_iter().find(|(name,_)|*name==self.scene).map_or([0.;2],|(_,offset)|offset.map(|side|side as f32));
         sized_dab([(x-256.)*(1u32<<self.level()) as f32-left,257.-top],self.diameter/2.,&self.style)
     }
-    fn redrawn(&self)->Redrawn {
-        let Self {scene,brush,style,zoom,diameter,tips,frames,redraws}=self;
-        let level=self.level();let extent=[320<<level,140<<level];
-        let case=format!("{brush}, {diameter} px, {tips} tips, on {scene} at {}%",zoom*100.);
-        let doc=zoomed_scene(scene,extent);let target=doc.active_target().unwrap();
+    fn case(&self)->String {format!("{}, {} px, {} tips, on {} at {}%",self.brush,self.diameter,self.tips,self.scene,self.zoom*100.)}
+    fn document(&self)->Document {zoomed_scene(self.scene,[320<<self.level(),140<<self.level()])}
+    fn frame<'d>(&self,doc:&'d Document)->FramePacket<'d> {
+        let extent=doc.composition().size;
         let mut frame=packet(doc.scene(),extent);frame.composite_all=false;
-        frame.view=crate::test_support::view(extent.map(|side|(side as f32*zoom).ceil() as u32));
-        frame.view.document_to_surface=[*zoom,0.,0.,*zoom,0.,0.];
-        let mut r=renderer(&doc);
-        select_retouch(&mut r,target,style);crate::test_support::submit_settled(&mut r,frame);
+        frame.view=crate::test_support::view(extent.map(|side|(side as f32*self.zoom).ceil() as u32));
+        frame.view.document_to_surface=[self.zoom,0.,0.,self.zoom,0.,0.];frame
+    }
+    fn settled(&self,doc:&Document,frame:FramePacket<'_>)->WgpuRasterizer {
+        let mut r=renderer(doc);
+        select_retouch(&mut r,doc.active_target().unwrap(),&self.style);crate::test_support::submit_settled(&mut r,frame);r
+    }
+    fn level_pages_against_a_full_reduction(&self,frames:usize)->Option<([usize;2],f32,bool)> {
+        let (doc,level)=(self.document(),self.level());let (frame,target)=(self.frame(&doc),doc.active_target().unwrap());
+        let mut r=self.settled(&doc,frame);
+        let mut tips=Vec::new();
+        for (step,(ink,tip)) in STROKE.into_iter().take(frames).enumerate() {
+            let dabs=[ink,tip,tip+9.].map(|x|self.at(x));
+            stroke_frame(&mut r,frame,target,&self.style,&dabs[..=self.tips],true,step);
+            tips=dabs[1..=self.tips].to_vec();
+        }
+        let compact=r.preview_level>0 || r.preview_contribution;
+        let held=r.scale_display.as_ref().unwrap().gesture.as_ref()?.pages.iter().filter(|(key,_)|key.source==Some(target) && key.level==level)
+            .map(|(key,page)|(key.clone(),page.clone())).collect::<Vec<_>>();
+        let texels=|r:&WgpuRasterizer,page:&pages::Held|pixels(r,&page.texture).into_iter().map(|texel|texel.map(f32::to_bits)).collect::<Vec<_>>();
+        let reduced=held.iter().map(|(_,page)|texels(&r,page)).collect::<Vec<_>>();
+        let batches=tips.iter().enumerate().map(|(index,dab)|layer_render::DabBatch {kind:layer_render::DabBatchKind::Preview,stroke_id:layer_core::StrokeId(1),
+            first_dab:index as u32,stroke_start:false,stroke_end:false,..crate::test_support::dab_batch(target,self.style.clone(),dab.bounds())}).collect::<Vec<_>>();
+        let whole=FramePacket {dabs:&tips,dab_batches:&batches,composite_all:true,time_seconds:3.,..frame};
+        let tip=crate::brush_tiles::plan_packet(whole,|target|r.target_extent(target)).unwrap().iter().flatten().map(Damage::tile_region).collect::<Vec<_>>();
+        crate::test_support::submit_ready(&mut r,whole).unwrap();
+        let cache=r.scale_display.as_ref().unwrap();
+        {let mut store=cache.pages.lock().unwrap();for (key,_) in &held {store.forget(key,key.plan().bounds);}}
+        cache.evict_window(cache.plan.bounds);
+        crate::test_support::submit_ready(&mut r,FramePacket {time_seconds:3.1,..whole}).unwrap();
+        let (mut differing,mut largest,side)=([0;2],0f32,1u32<<level);
+        for ((_,page),reduced) in held.iter().zip(&reduced) {
+            let (again,width,bounds)=(texels(&r,page),page.texture.width(),page.plan.bounds);
+            for y in 0..page.plan.size[1] {for x in 0..page.plan.size[0] {
+                let index=(y*width+x) as usize;
+                if reduced[index]==again[index] {continue;}
+                let texel=PixelRect::new(bounds.min_x()+x*side,bounds.min_y()+y*side,bounds.min_x()+(x+1)*side,bounds.min_y()+(y+1)*side);
+                differing[usize::from(tip.iter().any(|rect|!rect.intersect(texel).is_empty()))]+=1;
+                largest=reduced[index].iter().zip(&again[index]).map(|(a,b)|(f32::from_bits(*a)-f32::from_bits(*b)).abs()).fold(largest,f32::max);
+            }}
+        }
+        Some((differing,largest,compact))
+    }
+    fn retraces_like_a_renderer_that_never_patches(&self)->[u64;2] {
+        let (case,level,doc)=(self.case(),self.level(),self.document());let (frame,target)=(self.frame(&doc),doc.active_target().unwrap());
+        let [mut patched,mut whole]=[self.settled(&doc,frame),self.settled(&doc,frame)];
+        let cache=patched.scale_display.as_ref().unwrap();
+        let (plan,float)=(cache.plan,cache.texture().format()==wgpu::TextureFormat::Rgba32Float);
+        let same=|patched:&WgpuRasterizer,whole:&WgpuRasterizer| {
+            let (patched,whole)=(display_pixels(patched),display_pixels(whole));
+            let step=|value:f32|i32::from(layer_core::color::f16::from_f32(value).to_bits());
+            patched.iter().zip(&whole).all(|(a,b)|a.iter().zip(b).all(|(a,b)|if float {a.to_bits()==b.to_bits()}else {(step(*a)-step(*b)).abs()<=1}))
+        };
+        let sequence=|r:&WgpuRasterizer|r.scale_display.as_ref().unwrap().contact_id();
+        let composed=|r:&WgpuRasterizer|r.metrics.frame_composited_pages.iter().flat_map(|(_,tile)|pages::coordinates(page_rect(*tile),level)).collect::<BTreeSet<_>>();
+        let (mut held,mut drawn,mut compared,mut texels)=([None;2],BTreeSet::new(),0,[0;2]);
+        for (step,(ink,tip)) in RETRACE.into_iter().enumerate() {
+            let dabs=[self.at(ink),self.at(tip)];
+            texels[0]+=stroke_frame(&mut patched,frame,target,&self.style,&dabs,true,step).composed_texels;
+            let cache=whole.scale_display.as_ref().unwrap();
+            for cell in composed(&patched).intersection(&drawn) {cache.evict_window(pages::bounds(*cell,level,plan.extent));}
+            texels[1]+=stroke_frame(&mut whole,frame,target,&self.style,&dabs,true,step).composed_texels;
+            let now=[sequence(&patched),sequence(&whole)];
+            if now[1].is_none() || now[1]!=held[1] {drawn.clear();}else {drawn.extend(composed(&whole));}
+            let continued=now[0].is_some() && now[0]==held[0];
+            held=now;
+            if !continued {continue;}
+            compared+=1;
+            for _ in 0..3 {
+                if same(&patched,&whole) {break;}
+                stroke_frame(&mut whole,frame,target,&self.style,&dabs[1..],false,step);
+            }
+            assert!(same(&patched,&whole),"{case}, frame {step} of a retraced stroke: the display differs from a renderer that composes whole cells");
+        }
+        let last=self.at(474.);
+        let lift=layer_render::DabBatch {kind:layer_render::DabBatchKind::Persistent,stroke_id:layer_core::StrokeId(1),stroke_end:true,
+            ..crate::test_support::dab_batch(target,self.style.clone(),last.bounds())};
+        for r in [&mut patched,&mut whole] {
+            crate::test_support::submit_settled(r,FramePacket {dabs:std::slice::from_ref(&last),dab_batches:std::slice::from_ref(&lift),time_seconds:2.,..frame});
+            crate::test_support::submit_settled(r,frame);
+        }
+        assert!(same(&patched,&whole),"{case}: after pen up the display differs from a renderer that composed whole cells");
+        assert!(compared+3>=RETRACE.len(),"{case}: the stroke kept its sequence in only {compared} frames");
+        println!("| {case}, retraced | {level} | {} | {compared} of {} frames compared | {} | {} |",if float {"float"}else {"half-float"},RETRACE.len(),texels[0],texels[1]);
+        texels
+    }
+    fn redrawn(&self)->Redrawn {
+        let Self {style,tips,frames,redraws,..}=self;
+        let (case,level,doc)=(self.case(),self.level(),self.document());let (frame,target)=(self.frame(&doc),doc.active_target().unwrap());
+        let mut r=self.settled(&doc,frame);
         let cache=r.scale_display.as_ref().unwrap();
         let (plan,float)=(cache.plan,cache.texture().format()==wgpu::TextureFormat::Rgba32Float);
         assert_eq!(plan.level,level,"{case}: the view's level");
@@ -1655,6 +1740,40 @@ fn below_full_size_every_patched_frame_equals_whole_cells_for_each_kind_of_brush
     for zoom in ZOOMS {for (brush,style,tips) in writers() {Zoomed::new("a photo layer",brush,style,tips,zoom).patches();}}
     for zoom in ZOOMS {Zoomed::new("a photo layer","a watercolor wash",crate::layer_tests::preset_style(DefaultBrushPreset::WatercolorWash),0,zoom).stays_whole();}
 }
+
+const RETRACE:[(f32,f32);12]=[(492.,498.),(498.,504.),(504.,510.),(510.,516.),(516.,522.),(522.,528.),(516.,510.),(510.,504.),(504.,498.),(498.,492.),(492.,486.),(486.,480.)];
+#[test]
+fn at_half_size_a_stroke_that_retraces_its_path_with_a_tip_equals_a_renderer_that_never_patches_in_each_scene() {
+    use DefaultBrushPreset::{Paintbrush,Pencil};
+    let style=crate::layer_tests::preset_style;
+    let patching=["a blank layer","a photo layer","the middle layer of five","a layer in a group","a masked layer","a drawing without Paper","a masked layer without Paper"];
+    for scene in patching {
+        let [patched,whole]=Zoomed::new(scene,"a Pencil",style(Pencil),1,0.5).retraces_like_a_renderer_that_never_patches();
+        assert!(patched<whole,"a Pencil on {scene}: the retraced stroke composes less than whole cells: {patched} against {whole}");
+    }
+    for scene in ["a layer under an adjustment","a layer under a blur","a layer offset by 3 and 5"] {
+        Zoomed::new(scene,"a Pencil",style(Pencil),1,0.5).retraces_like_a_renderer_that_never_patches();
+    }
+    for scene in ["a photo layer","a masked layer without Paper"] {Zoomed::new(scene,"a paintbrush",style(Paintbrush),1,0.5).retraces_like_a_renderer_that_never_patches();}
+}
+
+fn level_pages_equal_a_full_reduction(zoom:f32) {
+    for (brush,style,tips) in writers() {
+        let stroke=Zoomed::new("a photo layer",brush,style,tips,zoom);
+        for frames in [3,4,6,8,10,12] {
+            let Some((differing,largest,compact))=stroke.level_pages_against_a_full_reduction(frames) else {println!("| {} | {frames} | no sequence |",stroke.case());continue;};
+            println!("| {} | {frames} | {differing:?} | {largest:e} | compact {compact} |",stroke.case());
+            assert!(differing==[0;2] || compact && largest<1e-6,
+                "{}, after {frames} frames: {differing:?} texels of the level pages, away from the tip and under it, differ from a full reduction by up to {largest:e}",stroke.case());
+        }
+    }
+}
+#[test]
+fn at_half_size_a_stroke_leaves_its_level_pages_equal_to_a_full_reduction() {level_pages_equal_a_full_reduction(0.5);}
+#[test]
+fn at_quarter_size_a_stroke_leaves_its_level_pages_equal_to_a_full_reduction() {level_pages_equal_a_full_reduction(0.25);}
+#[test]
+fn at_an_eighth_size_a_stroke_leaves_its_level_pages_equal_to_a_full_reduction() {level_pages_equal_a_full_reduction(0.125);}
 
 fn pencil_and_smudge(scene:&str,zoom:f32)->[Zoomed<'_>;2] {
     let style=crate::layer_tests::preset_style;
