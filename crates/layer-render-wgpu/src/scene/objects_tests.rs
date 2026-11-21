@@ -54,10 +54,15 @@ fn native(r: &mut WgpuRasterizer, doc: &layer_core::Document, output: Output) ->
     float_pixels(r, &texture)
 }
 
-fn submit_ready(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
+fn submit_ready(r: &mut WgpuRasterizer, frame: FramePacket<'_>) { composed_cells(r, frame); }
+
+fn composed_cells(r: &mut WgpuRasterizer, frame: FramePacket<'_>) -> std::collections::BTreeSet<[u32; 2]> {
+    let composed = std::cell::RefCell::new(std::collections::BTreeSet::new());
     let wakes = wake_channel(r);
     crate::test_support::submit_ready(r, frame).unwrap();
-    assert!(settle_on_wakes(r, frame, &wakes, 2000, |_| {}).is_some(), "object display preparation must settle");
+    assert!(settle_on_wakes(r, frame, &wakes, 2000, |r| composed.borrow_mut().extend(r.metrics.frame_composited_pages.iter()
+        .filter(|(level, _)| *level == 0).map(|(_, cell)| *cell))).is_some(), "object display preparation must settle");
+    composed.into_inner()
 }
 
 fn wake_channel(r: &mut WgpuRasterizer) -> std::sync::mpsc::Receiver<()> {
@@ -471,6 +476,84 @@ fn affine_edits_clear_vacated_bounds_and_keep_shared_source_residency() {
         let expected = native(&mut r, &doc, Output::Artwork(None));
         let actual = float_pixels(&r, &r.scale_display.as_ref().unwrap().texture().clone());
         assert!(crate::test_support::max_error(&actual, &expected) < 2e-5, "old and new object bounds repaint");
+    }
+}
+
+fn edited_scene(x: f64, masked: bool, blurred: bool) -> (layer_core::Document, Vec<OccurrenceHandle>, Vec<ImageObjectHandle>) {
+    let extent = [1024, 256];
+    let shared = image([16; 2], [255, 0, 0, 255]);
+    let placed = |image: AuthoredImage, scale: f64, x: f64| { let mut object = ImageObject::new(image); object.affine = Affine64([scale, 0., 0., scale, x, 32.]); object };
+    let (mut doc, _, objects) = document(extent, vec![placed(shared.clone(), 1.5, x), placed(image([16; 2], [0, 0, 255, 128]), 1., x + 8.), placed(shared, 1., 600.)]);
+    let owners: Vec<_> = objects.iter().map(|object| doc.scene().object_owner(*object).unwrap()).collect();
+    if masked {
+        let coverage = doc.artwork.coverage.next_handle();
+        let mut mask = layer_core::CoverageSnapshot::reveal_all(coverage, extent, Default::default()); mask.source.default_coverage = 0.5;
+        doc.artwork.coverage.insert(PortableId::random(), mask.source).unwrap();
+        doc.artwork.occurrences.get_mut(owners[0]).unwrap().mask = Some(mask.use_);
+    }
+    if blurred {
+        let instance = layer_core::EffectInstance::new(crate::tests::fixture("gaussian_blur").program());
+        let mut application = EffectApplication::new(instance.program, instance.values, extent);
+        let sigma = application.program.parameters.iter().position(|parameter| parameter.key.as_ref() == "sigma").unwrap();
+        application.values[sigma] = layer_core::EffectValue::Number(8.);
+        let application = doc.artwork.effects.insert(PortableId::random(), application).unwrap();
+        let mut effect = Occurrence::new(OccurrenceContent::Effect(application), "Blur"); effect.attachment = layer_core::Attachment::Effect;
+        let effect = doc.artwork.occurrences.insert(PortableId::random(), effect).unwrap();
+        let stack = doc.composition().result;
+        doc.artwork.stacks.get_mut(stack).unwrap().entries.insert(0, effect);
+    }
+    (layer_core::Document::from_artwork(doc.artwork).unwrap(), owners, objects)
+}
+
+#[test]
+fn object_edits_recompose_only_the_cells_their_old_and_new_reach_cover() {
+    type Change = Box<dyn Fn(&mut layer_core::Document, &[OccurrenceHandle], &[ImageObjectHandle])>;
+    fn object(change: impl Fn(&mut ImageObject) + 'static) -> Change {
+        Box::new(move |doc, _, objects| {
+            let mut value = doc.artwork.objects.get(objects[0]).unwrap().clone(); change(&mut value);
+            doc.apply(layer_core::Edit::ImageObject(RecordChange::replace(&doc.artwork.objects, objects[0], Some(value)).unwrap())).unwrap();
+        })
+    }
+    fn layer(change: impl Fn(&mut Occurrence) + 'static) -> Change {
+        Box::new(move |doc, owners, _| {
+            let mut value = doc.scene().occurrence(owners[0]).unwrap().clone(); change(&mut value);
+            doc.apply(layer_core::Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences, owners[0], Some(value)).unwrap())).unwrap();
+        })
+    }
+    let (sin, cos) = 30f64.to_radians().sin_cos();
+    let replacement = image([16; 2], [0, 255, 0, 255]);
+    let rows: Vec<(&str, f64, bool, bool, Change, &[[u32; 2]])> = vec![
+        ("translate", 32., false, false, object(|object| object.affine.0[4] = 96.), &[[0, 0]]),
+        ("translate across a cell edge", 32., false, false, object(|object| object.affine.0[4] = 244.), &[[0, 0], [1, 0]]),
+        ("translate into another cell", 32., false, false, object(|object| object.affine.0[4] = 300.), &[[0, 0], [1, 0]]),
+        ("rotate", 32., false, false, object(move |object| object.affine = Affine64([1.5 * cos, 1.5 * sin, -1.5 * sin, 1.5 * cos, 48., 32.])), &[[0, 0]]),
+        ("scale", 32., false, false, object(|object| object.affine = Affine64([3., 0., 0., 3., 32., 32.])), &[[0, 0]]),
+        ("sampling mode", 32., false, false, object(|object| object.interpolation = ImageInterpolation::Nearest), &[[0, 0]]),
+        ("reorder", 32., false, false, Box::new(|doc, owners, _| { doc.apply(doc.move_occurrence_edit(owners[0], 1).unwrap()).unwrap(); }), &[[0, 0]]),
+        ("opacity", 32., false, false, layer(|layer| layer.opacity = 0.5), &[[0, 0]]),
+        ("blend", 32., false, false, layer(|layer| layer.blend = layer_core::LayerBlend::Multiply), &[[0, 0]]),
+        ("shared source replaced", 32., false, false, Box::new(move |doc, _, objects| for object in [objects[0], objects[2]] {
+            let mut value = doc.artwork.objects.get(object).unwrap().clone(); value.image = replacement.clone();
+            doc.apply(layer_core::Edit::ImageObject(RecordChange::replace(&doc.artwork.objects, object, Some(value)).unwrap())).unwrap();
+        }), &[[0, 0], [2, 0]]),
+        ("translate under a mask", 32., true, false, object(|object| object.affine.0[4] = 96.), &[[0, 0]]),
+        ("sampling mode under a filter that extends the object's edge", 216., false, true, object(|object| object.interpolation = ImageInterpolation::Nearest), &[[0, 0], [1, 0], [2, 0], [3, 0]]),
+    ];
+    for (case, x, masked, blurred, change, cells) in rows {
+        let (mut doc, owners, objects) = edited_scene(x, masked, blurred);
+        let extent = doc.composition().size;
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        submit_ready(&mut r, packet(doc.scene(), extent));
+        let before = float_pixels(&r, &r.scale_display.as_ref().unwrap().texture().clone());
+        change(&mut doc, &owners, &objects);
+        let composed = composed_cells(&mut r, packet(doc.scene(), extent));
+        assert!(composed.iter().all(|cell| cells.contains(cell)), "{case}: composed {composed:?} outside the cells {cells:?} the edit reaches");
+        let actual = float_pixels(&r, &r.scale_display.as_ref().unwrap().texture().clone());
+        let mut fresh = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        submit_ready(&mut fresh, packet(doc.scene(), extent));
+        let expected = float_pixels(&fresh, &fresh.scale_display.as_ref().unwrap().texture().clone());
+        assert!(crate::test_support::max_error(&before, &expected) > 0.01, "{case}: the edit changes the picture");
+        assert!(crate::test_support::max_error(&actual, &expected) < 2e-5, "{case}: the display shows the edited document");
     }
 }
 
