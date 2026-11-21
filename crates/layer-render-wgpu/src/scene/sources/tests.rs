@@ -781,22 +781,19 @@ fn stored_code_renderer(source: &Arc<SourceImage>) -> (WgpuRasterizer, layer_cor
     (r, doc, target)
 }
 
-fn assert_stored_code_upload(depth: SampleDepth) {
-    let source = stored_code_source(depth, 1);
-    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let tile = submit_encoded(&mut r, |r, encoder| stored_code_tile(r, &source, 0, encoder)); crate::test_support::complete(&r);
-    assert_eq!(tile.texture.format(), stored_code_format(depth));
-    let sources = r.source_tiles.borrow();
-    assert_eq!(sources.slots.len(), 1);
-    assert_eq!(page_bytes(sources.slots[0].layer.format()), u64::from(PAGE_SIZE).pow(2) * if depth == SampleDepth::U8 {4} else {8});
-    assert_eq!(sources.gpu_bytes(), page_bytes(sources.slots[0].layer.format()) + sources.non_slot_bytes());
+#[test]
+fn stored_source_uploads_retain_their_code_widths() {
+    for (depth, code_bytes) in [(SampleDepth::U8, 4), (SampleDepth::U16, 8)] {
+        let source = stored_code_source(depth, 1);
+        let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let tile = submit_encoded(&mut r, |r, encoder| stored_code_tile(r, &source, 0, encoder)); crate::test_support::complete(&r);
+        assert_eq!(tile.texture.format(), stored_code_format(depth), "{depth:?}");
+        let sources = r.source_tiles.borrow();
+        assert_eq!(sources.slots.len(), 1, "{depth:?}");
+        assert_eq!(page_bytes(sources.slots[0].layer.format()), u64::from(PAGE_SIZE).pow(2) * code_bytes, "{depth:?}");
+        assert_eq!(sources.gpu_bytes(), page_bytes(sources.slots[0].layer.format()) + sources.non_slot_bytes(), "{depth:?}");
+    }
 }
-
-#[test]
-fn stored_source_u8_upload_retains_four_byte_codes() { assert_stored_code_upload(SampleDepth::U8); }
-
-#[test]
-fn stored_source_u16_upload_retains_eight_byte_packed_codes() { assert_stored_code_upload(SampleDepth::U16); }
 
 #[test]
 fn stored_source_encoded_slot_count_does_not_overstate_exact_working_capacity() {
@@ -1025,129 +1022,115 @@ fn source_display_records_reuse_scene_uniform_storage_and_preserve_encoded_order
     }
 }
 
-fn assert_promoted_source_reuse_before_completion(hold_encoded: bool) {
-    let source=stored_code_source(SampleDepth::U8,2);
-    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let encoded=submit_encoded(&mut r,|r,encoder| {
-        let encoded=stored_code_tile(r,&source,0,encoder);
-        assert_eq!(encoded.texture.format(),wgpu::TextureFormat::Rgba8Unorm);
-        encoded
-    });crate::test_support::complete(&r);r.device.retirement_handle().flush().unwrap();
-    let encoded_lease=hold_encoded.then(||r.source_tiles.borrow().lease(&encoded.view).unwrap());
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let exact=Scene::promote_source(&mut r,&mut encoder,encoded).unwrap();
-    assert_eq!(exact.texture.format(),wgpu::TextureFormat::Rgba32Float);
-    assert_eq!(encoder.pass_count(),1);
-    if let Some(lease)=&encoded_lease {
-        assert!(Arc::ptr_eq(lease,&r.source_tiles.borrow().lease(&exact.view).unwrap()));
-    }
-    let live=r.source_tiles.borrow().non_slot_bytes()+NORMALIZED_PAGE_BYTES;
-    {
+#[test]
+fn stored_source_promoted_slot_is_leased_only_by_its_real_readers() {
+    for hold_encoded in [false, true] {
+        let source=stored_code_source(SampleDepth::U8,2);
+        let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let encoded=submit_encoded(&mut r,|r,encoder| {
+            let encoded=stored_code_tile(r,&source,0,encoder);
+            assert_eq!(encoded.texture.format(),wgpu::TextureFormat::Rgba8Unorm,"hold_encoded={hold_encoded}");
+            encoded
+        });crate::test_support::complete(&r);r.device.retirement_handle().flush().unwrap();
+        let encoded_lease=hold_encoded.then(||r.source_tiles.borrow().lease(&encoded.view).unwrap());
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        let exact=Scene::promote_source(&mut r,&mut encoder,encoded).unwrap();
+        assert_eq!(exact.texture.format(),wgpu::TextureFormat::Rgba32Float,"hold_encoded={hold_encoded}");
+        assert_eq!(encoder.pass_count(),1,"hold_encoded={hold_encoded}");
+        if let Some(lease)=&encoded_lease {
+            assert!(Arc::ptr_eq(lease,&r.source_tiles.borrow().lease(&exact.view).unwrap()),"hold_encoded={hold_encoded}");
+        }
+        let live=r.source_tiles.borrow().non_slot_bytes()+NORMALIZED_PAGE_BYTES;
+        {
+            let cache=r.source_tiles.borrow();
+            assert_eq!(cache.retired_bytes.used(),NORMALIZED_PAGE_BYTES/4,"hold_encoded={hold_encoded}");
+            assert_eq!(cache.gpu_bytes(),live+NORMALIZED_PAGE_BYTES/4,"the old encoded allocation stays charged until GPU completion: hold_encoded={hold_encoded}");
+        }
+        r.scene_tiers.display.heap().evict(u64::MAX,crate::residency::Class::Authored);
+        r.source_tiles.borrow_mut().retire_evicted();
+        assert_eq!(r.source_tiles.borrow().prepared_view(&source,[0,0]).is_some(),hold_encoded,"a real encoded reader protects the promoted slot: hold_encoded={hold_encoded}");
+        drop(encoded_lease);r.device.retirement_handle().flush().unwrap();
+        r.scene_tiers.display.heap().evict(u64::MAX,crate::residency::Class::Authored);
+        r.source_tiles.borrow_mut().retire_evicted();
+        assert!(r.source_tiles.borrow().prepared_view(&source,[0,0]).is_none(),"retirement bookkeeping does not lease the promoted slot after its real readers drop: hold_encoded={hold_encoded}");
+        let mut retired=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        r.source_tiles.borrow_mut().flush_retired(&mut retired);
+        r.uploads.finish(&encoder);encoder.submit(&r.queue);retired.submit(&r.queue);crate::test_support::complete(&r);r.device.retirement_handle().flush().unwrap();
         let cache=r.source_tiles.borrow();
-        assert_eq!(cache.retired_bytes.used(),NORMALIZED_PAGE_BYTES/4);
-        assert_eq!(cache.gpu_bytes(),live+NORMALIZED_PAGE_BYTES/4,"the old encoded allocation stays charged until GPU completion");
+        assert_eq!(cache.gpu_bytes(),cache.non_slot_bytes(),"hold_encoded={hold_encoded}");
+        assert_eq!(cache.retired_bytes.used(),0,"hold_encoded={hold_encoded}");
     }
-    r.scene_tiers.display.heap().evict(u64::MAX,crate::residency::Class::Authored);
-    r.source_tiles.borrow_mut().retire_evicted();
-    assert_eq!(r.source_tiles.borrow().prepared_view(&source,[0,0]).is_some(),hold_encoded,"a real encoded reader protects the promoted slot");
-    drop(encoded_lease);r.device.retirement_handle().flush().unwrap();
-    r.scene_tiers.display.heap().evict(u64::MAX,crate::residency::Class::Authored);
-    r.source_tiles.borrow_mut().retire_evicted();
-    assert!(r.source_tiles.borrow().prepared_view(&source,[0,0]).is_none(),"retirement bookkeeping does not lease the promoted slot after its real readers drop");
-    let mut retired=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    r.source_tiles.borrow_mut().flush_retired(&mut retired);
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);retired.submit(&r.queue);crate::test_support::complete(&r);r.device.retirement_handle().flush().unwrap();
-    let cache=r.source_tiles.borrow();
-    assert_eq!(cache.gpu_bytes(),cache.non_slot_bytes());
-    assert_eq!(cache.retired_bytes.used(),0);
 }
 
 #[test]
-fn stored_source_promotion_retirement_does_not_lease_the_unborrowed_exact_slot() {
-    assert_promoted_source_reuse_before_completion(false);
-}
-
-#[test]
-fn stored_source_promoted_slot_reuses_after_the_real_encoded_reader_drops_before_completion() {
-    assert_promoted_source_reuse_before_completion(true);
-}
-
-fn cold_restore_inputs_remain_owned_before_the_store_completes(base: bool) {
-    use crate::layer_tests::placement::{paint_document, paint_mut, target};
-    use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileKey};
-    let mut document = paint_document([PAGE_SIZE; 2], "Cold accepted restore");
-    let color = document.composition().color;
-    let image = layer_core::color::source::rgba8_source([PAGE_SIZE; 2], |_, _| [255, 0, 0, 255]);
-    let blob = TileBlob::encode(RasterPlane::Color.descriptor(color),
-        &[255, 0, 0, 255].repeat((PAGE_SIZE * PAGE_SIZE) as usize)).unwrap();
-    let key = if base {
-        paint_mut(&mut document).base = Some(layer_core::authored::PaintBase::new(image.clone().into()));
-        Key::Image(Arc::downgrade(&image), [0; 2])
-    } else {
-        paint_mut(&mut document).raster = RasterRevision::backed(RasterData {
-            tiles: [(TileKey {plane: RasterPlane::Color, coordinate: [0; 2]}, RasterTile::backed(blob))].into(),
-            ..Default::default()
+fn cold_restores_own_their_source_before_decode_completion() {
+    for base in [true, false] {
+        use crate::layer_tests::placement::{paint_document, paint_mut, target};
+        use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileKey};
+        let mut document = paint_document([PAGE_SIZE; 2], "Cold accepted restore");
+        let color = document.composition().color;
+        let image = layer_core::color::source::rgba8_source([PAGE_SIZE; 2], |_, _| [255, 0, 0, 255]);
+        let blob = TileBlob::encode(RasterPlane::Color.descriptor(color),
+            &[255, 0, 0, 255].repeat((PAGE_SIZE * PAGE_SIZE) as usize)).unwrap();
+        let key = if base {
+            paint_mut(&mut document).base = Some(layer_core::authored::PaintBase::new(image.clone().into()));
+            Key::Image(Arc::downgrade(&image), [0; 2])
+        } else {
+            paint_mut(&mut document).raster = RasterRevision::backed(RasterData {
+                tiles: [(TileKey {plane: RasterPlane::Color, coordinate: [0; 2]}, RasterTile::backed(blob))].into(),
+                ..Default::default()
+            });
+            let stored = paint_mut(&mut document).raster.try_data().unwrap().unwrap();
+            let stored = stored.tiles[&TileKey {plane: RasterPlane::Color, coordinate: [0; 2]}].try_backing().unwrap().unwrap();
+            Key::raster(&stored, color.space, color.space)
+        };
+        let mut renderer = WgpuRasterizer::new_native_headless(color).unwrap();
+        let store = crate::test_support::GatedStore::new(&layer_core::Editor::new(document.clone()).retained_tiles(), false);
+        let mut dab = crate::layer_tests::dab([0.; 4]);
+        dab.center = layer_core::Point {x: 128., y: 128.};
+        let batch = crate::test_support::dab_batch(target(&document), crate::tests::test_style(layer_core::BrushExecution::Dry), dab.bounds());
+        let frame = layer_render::FramePacket {dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch),
+            reset_layers: true, ..crate::test_support::packet(document.scene(), [PAGE_SIZE; 2])};
+        wait_until(format_args!("decode worker did not request stored source bytes: base={base}"), || {
+            if store.gate.reads.load(Ordering::Acquire) != 0 { return Ok(()); }
+            assert!(!renderer.raster_dependencies_ready(frame, None), "closed input store must defer restoration: base={base}");
+            Err(())
         });
-        let stored = paint_mut(&mut document).raster.try_data().unwrap().unwrap();
-        let stored = stored.tiles[&TileKey {plane: RasterPlane::Color, coordinate: [0; 2]}].try_backing().unwrap().unwrap();
-        Key::raster(&stored, color.space, color.space)
-    };
-    let mut renderer = WgpuRasterizer::new_native_headless(color).unwrap();
-    let store = crate::test_support::GatedStore::new(&layer_core::Editor::new(document.clone()).retained_tiles(), false);
-    let mut dab = crate::layer_tests::dab([0.; 4]);
-    dab.center = layer_core::Point {x: 128., y: 128.};
-    let batch = crate::test_support::dab_batch(target(&document), crate::tests::test_style(layer_core::BrushExecution::Dry), dab.bounds());
-    let frame = layer_render::FramePacket {dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch),
-        reset_layers: true, ..crate::test_support::packet(document.scene(), [PAGE_SIZE; 2])};
-    wait_until(format_args!("decode worker did not request stored source bytes: base={base}"), || {
-        if store.gate.reads.load(Ordering::Acquire) != 0 { return Ok(()); }
-        assert!(!renderer.raster_dependencies_ready(frame, None), "closed input store must defer restoration: base={base}");
-        Err(())
-    });
-    let accepted_view = {
-        let cache = renderer.source_tiles.borrow();
-        let slot = cache.slots.iter().find(|slot| slot.key.as_ref().is_some_and(|stored| stored.matches(&key)))
-            .expect("cold restore must own its source slot before decoder completion");
-        assert!(slot.leased(), "accepted cold source must have a real lease: base={base}");
-        assert!(!slot.ready(), "closed store cannot have produced ready input pixels");
-        slot.view.clone()
-    };
-    let count = 4;
-    let pressure = scan_source(count, 0);
-    let before = renderer.source_tiles.borrow().evictions;
-    let mut writes = Vec::new();
-    for coordinate in page_coordinates(PixelRect::full(pressure.extent)).take(count) {
-        let (_, write) = renderer.source_tiles.borrow_mut().plan_key_for(&renderer,
-            Key::Image(Arc::downgrade(&pressure), coordinate), SourceUse::Exact).unwrap();
-        writes.extend(write);
+        let accepted_view = {
+            let cache = renderer.source_tiles.borrow();
+            let slot = cache.slots.iter().find(|slot| slot.key.as_ref().is_some_and(|stored| stored.matches(&key)))
+                .unwrap_or_else(|| panic!("cold restore must own its source slot before decoder completion: base={base}"));
+            assert!(slot.leased(), "accepted cold source must have a real lease: base={base}");
+            assert!(!slot.ready(), "closed store cannot have produced ready input pixels: base={base}");
+            slot.view.clone()
+        };
+        let count = 4;
+        let pressure = scan_source(count, 0);
+        let before = renderer.source_tiles.borrow().evictions;
+        let mut writes = Vec::new();
+        for coordinate in page_coordinates(PixelRect::full(pressure.extent)).take(count) {
+            let (_, write) = renderer.source_tiles.borrow_mut().plan_key_for(&renderer,
+                Key::Image(Arc::downgrade(&pressure), coordinate), SourceUse::Exact).unwrap();
+            writes.extend(write);
+        }
+        crate::test_support::evict_sources(&mut renderer);
+        {
+            let cache = renderer.source_tiles.borrow();
+            assert!(cache.evictions > before, "unrelated requests must actually recycle source storage: base={base}");
+            let slot = cache.slots.iter().find(|slot| slot.key.as_ref().is_some_and(|stored| stored.matches(&key))).unwrap();
+            assert_eq!(slot.view, accepted_view, "pressure must not evict an accepted cold source: base={base}");
+            assert!(slot.leased(), "base={base}");
+        }
+        drop(writes);
+        store.gate.release();
+        crate::test_support::submit_settled(&mut renderer, frame);
+        let page = renderer.paint_layers.iter().find(|layer| layer.id == target(&document)).unwrap()
+            .pages.iter().find(|page| page.coordinate == [0; 2]).unwrap();
+        let expected=renderer.current_raster_version(target(&document),RasterPlane::Color,page.coordinate).unwrap();
+        let read=renderer.read_layer_color(target(&document),page.coordinate,&expected,None).unwrap();
+        assert!(crate::test_support::float_pixels(&renderer, &read.value().texture).iter().all(|pixel| *pixel == [1., 0., 0., 1.]),
+            "accepted cold restore preserves its pixels after pressure: base={base}");
     }
-    crate::test_support::evict_sources(&mut renderer);
-    {
-        let cache = renderer.source_tiles.borrow();
-        assert!(cache.evictions > before, "unrelated requests must actually recycle source storage");
-        let slot = cache.slots.iter().find(|slot| slot.key.as_ref().is_some_and(|stored| stored.matches(&key))).unwrap();
-        assert_eq!(slot.view, accepted_view, "pressure must not evict an accepted cold source");
-        assert!(slot.leased());
-    }
-    drop(writes);
-    store.gate.release();
-    crate::test_support::submit_settled(&mut renderer, frame);
-    let page = renderer.paint_layers.iter().find(|layer| layer.id == target(&document)).unwrap()
-        .pages.iter().find(|page| page.coordinate == [0; 2]).unwrap();
-    let expected=renderer.current_raster_version(target(&document),RasterPlane::Color,page.coordinate).unwrap();
-    let read=renderer.read_layer_color(target(&document),page.coordinate,&expected,None).unwrap();
-    assert!(crate::test_support::float_pixels(&renderer, &read.value().texture).iter().all(|pixel| *pixel == [1., 0., 0., 1.]),
-        "accepted cold restore preserves its pixels after pressure: base={base}");
-}
-
-#[test]
-fn cold_paint_base_restore_owns_its_source_before_decode_completion() {
-    cold_restore_inputs_remain_owned_before_the_store_completes(true);
-}
-
-#[test]
-fn cold_raster_color_restore_owns_its_source_before_decode_completion() {
-    cold_restore_inputs_remain_owned_before_the_store_completes(false);
 }
 
 #[test]
