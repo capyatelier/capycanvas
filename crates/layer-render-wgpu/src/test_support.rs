@@ -324,16 +324,13 @@ pub(crate) fn prepare_raster<T>(r:&mut WgpuRasterizer,mut operation:impl FnMut(&
         .chain(layer.watercolor_wetness_pages.iter().map(|page|page.active().allocation_identity())))
         .collect::<Vec<_>>();
     let retained=|r:&WgpuRasterizer|(retained(r),r.layer_masks.pages.values().map(|page|page.allocation_identity()).collect::<Vec<_>>());
-    let original=retained(r);let deadline=std::time::Instant::now()+std::time::Duration::from_secs(20);
-    loop {
-        match operation(r) {
-            Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=> {
-                assert_eq!(retained(r),original,"pending preparation published live pages");
-                assert!(std::time::Instant::now()<deadline,"raster preparation did not complete");
-                r.wait_idle().unwrap();std::thread::sleep(std::time::Duration::from_millis(1));
-            },result=>return result,
-        }
-    }
+    let original=retained(r);
+    wait_until("raster preparation did not complete",||match operation(r) {
+        Err(pending@(GpuRasterError::NotReady|GpuRasterError::NotPublished))=> {
+            assert_eq!(retained(r),original,"pending preparation published live pages");
+            r.wait_idle().unwrap();Err(pending)
+        },result=>Ok(result),
+    })
 }
 
 pub(crate) fn add_paint(artwork: &mut layer_core::authored::Artwork, name: impl Into<Arc<str>>, domain: [u32; 2]) -> (OccurrenceHandle, SourceTarget) {
@@ -510,6 +507,21 @@ pub(crate) fn packet(scene: SceneView<'_>, extent: [u32; 2]) -> FramePacket<'_> 
     }
 }
 
+pub(crate) struct Fixture {
+    pub r: WgpuRasterizer,
+    pub document: layer_core::Document,
+}
+
+impl Fixture {
+    pub fn new(document: layer_core::Document) -> Self {
+        Self { r: WgpuRasterizer::new_native_headless(document.composition().color).unwrap(), document }
+    }
+
+    pub fn frame(&mut self) -> (&mut WgpuRasterizer, FramePacket<'_>) {
+        (&mut self.r, packet(self.document.scene(), self.document.composition().size))
+    }
+}
+
 pub(crate) fn dab_batch(target: SourceTarget, style: DabStyle, damage: layer_core::Rect) -> DabBatch {
     DabBatch {
         preview_end: None,
@@ -591,15 +603,31 @@ pub(crate) fn complete_device(device: &crate::PipelineDevice) {
         .unwrap();
 }
 
+pub(crate) const WAIT_BOUND: Duration = READBACK_TIMEOUT.saturating_mul(2);
+
+pub(crate) fn wait_until<Done, Pending: fmt::Debug>(message: impl fmt::Display, mut step: impl FnMut() -> Result<Done, Pending>) -> Done {
+    let deadline = std::time::Instant::now() + WAIT_BOUND;
+    loop {
+        match step() {
+            Ok(done) => return done,
+            Err(pending) => assert!(std::time::Instant::now() < deadline, "{message}: {pending:?}"),
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+pub(crate) fn submit_encoded<T>(r: &mut WgpuRasterizer,
+    encode: impl FnOnce(&mut WgpuRasterizer, &mut crate::submission::CommandEncoder) -> T) -> T {
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    let encoded = encode(r, &mut encoder);
+    r.uploads.finish(&encoder);
+    encoder.submit(&r.queue);
+    encoded
+}
+
 pub(crate) fn color_sample(r: &mut WgpuRasterizer, request: layer_render::ColorSampleRequest) -> layer_render::ColorSample {
     assert!(r.request_color_sample(request).unwrap());
-    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
-    loop {
-        complete(r);
-        if let Some(sample) = r.take_color_sample() { return sample.unwrap(); }
-        assert!(std::time::Instant::now() < deadline, "color sample must complete");
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
+    wait_until("color sample must complete", || { complete(r); r.take_color_sample().ok_or(()) }).unwrap()
 }
 
 /// Submit `frame` once its dependencies are ready, as the engine does.
@@ -685,47 +713,36 @@ pub(crate) fn submit_settled(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
 
 /// Upload every requested worker decode into the decoded-tile cache.
 pub(crate) fn settle_decodes(r: &mut WgpuRasterizer) {
-    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
-    while r.moving_decode.as_ref().is_some_and(|(_, queue)| queue.pending()) {
-        assert!(std::time::Instant::now() < deadline, "requested decodes must arrive");
-        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        r.drain_image_decodes(&mut encoder).unwrap();
-        r.uploads.finish(&encoder);
-        encoder.submit(&r.queue);
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
+    wait_until("requested decodes must arrive", || {
+        if !r.moving_decode.as_ref().is_some_and(|(_, queue)| queue.pending()) { return Ok(()); }
+        submit_encoded(r, |r, encoder| r.drain_image_decodes(encoder).unwrap());
+        Err(())
+    });
 }
 
 pub(crate) fn query_ready<T>(r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
     mut query: impl FnMut(&mut WgpuRasterizer, &mut crate::submission::CommandEncoder) -> Result<T, GpuRasterError>) -> T {
-    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
-    loop {
+    wait_until("query preparation must complete", || {
         r.drain_image_decodes(encoder).unwrap();
         match query(r, encoder) {
-            Ok(value) => return value,
-            Err(GpuRasterError::NotReady|GpuRasterError::NotPublished) => {},
+            Ok(value) => Ok(value),
+            Err(pending @ (GpuRasterError::NotReady|GpuRasterError::NotPublished)) => {
+                scene::Scene::submit_chunk(r, encoder, "test query preparation").unwrap();
+                Err(pending)
+            },
             Err(error) => panic!("{error}"),
         }
-        scene::Scene::submit_chunk(r, encoder, "test query preparation").unwrap();
-        assert!(std::time::Instant::now() < deadline, "query preparation must complete");
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
+    })
 }
 
 pub(crate) fn thumbnail(r: &mut WgpuRasterizer, id: u64, target: layer_render::ThumbnailTarget) -> ReadbackImage {
-    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
-    while !r.prepare_thumbnail_batch(target).unwrap() {
+    wait_until("thumbnail preparation must complete", || {
+        if r.prepare_thumbnail_batch(target).unwrap() { return Ok(()); }
         complete(r);
-        assert!(std::time::Instant::now() < deadline, "thumbnail preparation must complete");
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
+        Err(())
+    });
     r.request_thumbnail(id, target).unwrap();
-    loop {
-        complete(r);
-        if let Some(image) = r.take_thumbnail() { return image.unwrap(); }
-        assert!(std::time::Instant::now() < deadline, "thumbnail readback must complete");
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
+    wait_until("thumbnail readback must complete", || { complete(r); r.take_thumbnail().ok_or(()) }).unwrap()
 }
 
 pub(crate) fn document_texture(r: &WgpuRasterizer) -> &wgpu::Texture {
@@ -880,9 +897,7 @@ pub(crate) fn blend_space_pixels(r:&mut WgpuRasterizer)->Vec<[f32;4]> {
     let mut pixels=vec![[0.;4];extent[0] as usize*extent[1] as usize];
     for coordinate in page_coordinates(PixelRect::full(extent)) {
         let region=page_rect(coordinate).intersect(PixelRect::full(extent));
-        let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
-        query_ready(r,&mut encoder,|r,encoder|scene.capture_region_prepared(r,frame.packet(extent),&texture,region,scene::Output::Display,encoder));
-        r.uploads.finish(&encoder);encoder.submit(&r.queue);
+        submit_encoded(r,|r,encoder|query_ready(r,encoder,|r,encoder|scene.capture_region_prepared(r,frame.packet(extent),&texture,region,scene::Output::Display,encoder)));
         let samples=float_pixels(r,&texture);
         for y in 0..region.height() {
             let row=(region.min_y()+y) as usize*extent[0] as usize+region.min_x() as usize;
@@ -972,10 +987,7 @@ pub(crate) fn canonical_pixels(r: &mut WgpuRasterizer) -> Vec<[f32; 4]> {
     let mut pixels = vec![[0.; 4]; extent[0] as usize * extent[1] as usize];
     for coordinate in page_coordinates(PixelRect::full(extent)) {
         let region = page_rect(coordinate).intersect(PixelRect::full(extent));
-        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        let tile = query_ready(r, &mut encoder, |r, encoder| capture.region(r, frame.packet(extent), region, [PAGE_SIZE; 2], encoder));
-        r.uploads.finish(&encoder);
-        encoder.submit(&r.queue);
+        let tile = submit_encoded(r, |r, encoder| query_ready(r, encoder, |r, encoder| capture.region(r, frame.packet(extent), region, [PAGE_SIZE; 2], encoder)));
         let samples = float_pixels(r, &tile.texture);
         for y in 0..region.height() {
             let row = (region.min_y() + y) as usize * extent[0] as usize + region.min_x() as usize;

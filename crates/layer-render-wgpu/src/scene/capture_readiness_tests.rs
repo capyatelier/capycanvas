@@ -1,5 +1,5 @@
 use super::*;
-use crate::{artwork_sample_tests::{insert_effect, refresh}, test_support::{packet, float_pixels, staged_renderer}};
+use crate::{artwork_sample_tests::{insert_effect, refresh}, test_support::{Fixture, packet, float_pixels, staged_renderer, submit_encoded, wait_until}};
 use layer_core::{Document, DocumentNames, EffectInstance, EffectValue, authored::{OccurrenceHandle, PortableId}};
 use layer_core::color::{RgbColor, RgbSpace};
 
@@ -27,36 +27,35 @@ fn cold_fragment_family_defers_before_encoding_and_capture_prepares_only_that_fa
         scene.jobs.push(job.clone());
         scene.source_jobs.push(0..1);
         scene.ordered = ordered;
-        let mut encoder = submission::CommandEncoder::new(&r.device,&Default::default());
-        let (entered,entry) = std::sync::mpsc::channel();
-        let (release,held) = std::sync::mpsc::channel();
-        compiler.enqueue(startup::BRUSH,move || {let _=entered.send(());let _=held.recv_timeout(std::time::Duration::from_secs(10));Ok(())});
-        entry.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
-        let deferred = scene.encode_query_jobs(&mut r,&mut encoder,None);
-        let passes = encoder.pass_count();
-        let records = scene.record_count;
-        let retained = scene.jobs.len();
-        let ready = scene.pipeline[3].ready();
-        if !ordered {
-            assert!(scene.encode_query_jobs(&mut r,&mut encoder,None).is_ok(),"discarded fragment work must not block an empty batch");
-            scene.jobs.push(job.clone());
-            assert!(matches!(scene.encode_query_jobs(&mut r,&mut encoder,None),Err(GpuRasterError::NotReady)));
-        }
-        release.send(()).unwrap();
-        assert!(matches!(deferred,Err(GpuRasterError::NotReady)),"{deferred:?}");
-        assert_eq!(passes,0);
-        assert_eq!(records,0);
-        assert_eq!(retained,usize::from(ordered));
-        assert!(!ready);
-        pollster::block_on(scene.prepare_capture_work_async(&mut r)).unwrap();
-        assert!(scene.pipeline[3].ready());
-        assert!(scene.pipeline.iter().enumerate().all(|(i,pipeline)| i==3 || !pipeline.ready()));
-        if !ordered {scene.jobs.push(job);}
-        scene.encode_query_jobs(&mut r,&mut encoder,None).unwrap();
-        assert!(scene.pending_pipelines.render.is_empty() && scene.pending_pipelines.compute.is_empty());
-        assert!(encoder.pass_count()>0);
-        r.uploads.finish(&encoder);
-        encoder.submit(&r.queue);
+        submit_encoded(&mut r,|r,encoder| {
+            let (entered,entry) = std::sync::mpsc::channel();
+            let (release,held) = std::sync::mpsc::channel();
+            compiler.enqueue(startup::BRUSH,move || {let _=entered.send(());let _=held.recv_timeout(std::time::Duration::from_secs(10));Ok(())});
+            entry.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+            let deferred = scene.encode_query_jobs(r,encoder,None);
+            let passes = encoder.pass_count();
+            let records = scene.record_count;
+            let retained = scene.jobs.len();
+            let ready = scene.pipeline[3].ready();
+            if !ordered {
+                assert!(scene.encode_query_jobs(r,encoder,None).is_ok(),"discarded fragment work must not block an empty batch");
+                scene.jobs.push(job.clone());
+                assert!(matches!(scene.encode_query_jobs(r,encoder,None),Err(GpuRasterError::NotReady)));
+            }
+            release.send(()).unwrap();
+            assert!(matches!(deferred,Err(GpuRasterError::NotReady)),"{deferred:?}");
+            assert_eq!(passes,0);
+            assert_eq!(records,0);
+            assert_eq!(retained,usize::from(ordered));
+            assert!(!ready);
+            pollster::block_on(scene.prepare_capture_work_async(r)).unwrap();
+            assert!(scene.pipeline[3].ready());
+            assert!(scene.pipeline.iter().enumerate().all(|(i,pipeline)| i==3 || !pipeline.ready()));
+            if !ordered {scene.jobs.push(job);}
+            scene.encode_query_jobs(r,encoder,None).unwrap();
+            assert!(scene.pending_pipelines.render.is_empty() && scene.pending_pipelines.compute.is_empty());
+            assert!(encoder.pass_count()>0);
+        });
         assert_pixels(&r,&output,[0.0625,0.125,0.1875,0.25]);
     }
 }
@@ -81,11 +80,11 @@ fn cold_compute_copy_encodes_without_admitting_fragment_pipelines() {
     scene.jobs.push(Job::Draw {target:view,sources:[source_view,r.empty_view.clone(),r.empty_view.clone(),r.empty_paper_view.clone()],
         data,over:false,clip:None,source_target:None,edges:None,pipeline:None});
     scene.source_jobs.push(0..1);
-    let mut encoder = submission::CommandEncoder::new(&r.device,&Default::default());
-    let result = scene.encode_query_jobs(&mut r,&mut encoder,None);
-    assert!(result.is_ok(),"compute-only copy must not wait for a fragment pipeline: {result:?}");
-    assert!(scene.pipeline.iter().all(|pipeline| !pipeline.ready()));
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);
+    submit_encoded(&mut r,|r,encoder| {
+        let result = scene.encode_query_jobs(r,encoder,None);
+        assert!(result.is_ok(),"compute-only copy must not wait for a fragment pipeline: {result:?}");
+        assert!(scene.pipeline.iter().all(|pipeline| !pipeline.ready()));
+    });
     assert_pixels(&r,&output,color);
 }
 
@@ -153,21 +152,20 @@ fn capture_after_cold_deferral(hidden_separator: bool) {
     let (mut r, mut scene) = prepared_scene(&doc, &broad, &missing);
     let output = if hidden_separator {Output::Artwork(None)} else {Output::EffectChannels(*broad.last().unwrap())};
     let (destination, _) = create_color_target(&r.device, EXTENT, "cold fused capture");
-    let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
-    let result = scene.capture_region(&mut r, packet(doc.scene(), EXTENT), &destination,
-        PixelRect::full(EXTENT), output, &mut encoder);
-    assert!(matches!(result, Err(GpuRasterError::NotReady)), "{result:?}");
-    assert_eq!(encoder.pass_count(), 0);
-    assert_eq!(scene.record_count, 0);
-    assert!(scene.jobs.is_empty());
-    assert!(scene.source_jobs.is_empty());
-    pollster::block_on(scene.prepare_capture_work_async(&mut r)).unwrap();
-    assert!(scene.effects.chain_ready(doc.scene(), &missing, effects::Execution::Fused, Default::default()));
-    scene.capture_region(&mut r, packet(doc.scene(), EXTENT), &destination,
-        PixelRect::full(EXTENT), output, &mut encoder).unwrap();
-    assert!(encoder.pass_count() > 0);
-    r.uploads.finish(&encoder);
-    encoder.submit(&r.queue);
+    submit_encoded(&mut r, |r, encoder| {
+        let result = scene.capture_region(r, packet(doc.scene(), EXTENT), &destination,
+            PixelRect::full(EXTENT), output, encoder);
+        assert!(matches!(result, Err(GpuRasterError::NotReady)), "{result:?}");
+        assert_eq!(encoder.pass_count(), 0);
+        assert_eq!(scene.record_count, 0);
+        assert!(scene.jobs.is_empty());
+        assert!(scene.source_jobs.is_empty());
+        pollster::block_on(scene.prepare_capture_work_async(r)).unwrap();
+        assert!(scene.effects.chain_ready(doc.scene(), &missing, effects::Execution::Fused, Default::default()));
+        scene.capture_region(r, packet(doc.scene(), EXTENT), &destination,
+            PixelRect::full(EXTENT), output, encoder).unwrap();
+        assert!(encoder.pass_count() > 0);
+    });
     assert_pixels(&r, &destination, if hidden_separator {[0., 0., 0., 1.]} else {[1.; 4]});
 }
 
@@ -190,28 +188,28 @@ fn ordered_cold_fusion_retains_all_jobs_and_source_ranges_until_prepared() {
     let (texture, view) = create_color_target(&r.device, EXTENT, "ordered cold fused capture");
     let destination = Image {texture: texture.clone(), view,
         plan: display_mips::Plan::window(EXTENT, 0, region)};
-    let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
-    scene.prepare_region(&mut r, frame, (region, region.into()), region, false, &mut encoder).unwrap();
-    let declaration=scene.capture_declaration(&r,frame).unwrap();let mut accepted=scene.accept_capture(&mut r,frame,Some(Output::Artwork(None)),&declaration,|scene,r,accepted|scene.group(r,frame,None,[0,0],accepted).map(drop)).unwrap();
-    let image = scene.group(&r, frame, None, [0, 0],&mut accepted).unwrap();
-    let image = scene.converted(&r, image, Convert::linear(frame)).unwrap();
-    scene.copy_window_tile(image, &destination, [0, 0]);
-    assert!(scene.jobs.iter().any(|job| matches!(job, Job::Effect {prepared, ..} if !prepared.pipeline.ready())));
-    let jobs: Vec<_> = scene.jobs.iter().map(std::mem::discriminant).collect();
-    scene.source_jobs = vec![0..1, 1..scene.jobs.len()];
-    let ranges = scene.source_jobs.clone();
-    assert!(!scene.encode_ordered_jobs(&mut r, &mut encoder,None).unwrap());
-    assert_eq!(scene.jobs.iter().map(std::mem::discriminant).collect::<Vec<_>>(), jobs);
-    assert_eq!(scene.source_jobs, ranges);
-    assert_eq!(scene.record_count, 0);
-    assert_eq!(encoder.pass_count(), 0);
-    pollster::block_on(scene.prepare_capture_work_async(&mut r)).unwrap();
-    assert!(scene.encode_ordered_jobs(&mut r, &mut encoder,None).unwrap());
-    assert!(scene.jobs.is_empty());
-    assert!(scene.source_jobs.is_empty());
-    assert!(encoder.pass_count() > 0);
-    r.uploads.finish(&encoder);
-    encoder.submit(&r.queue);
+    let _inputs = submit_encoded(&mut r, |r, encoder| {
+        scene.prepare_region(r, frame, (region, region.into()), region, false, encoder).unwrap();
+        let declaration=scene.capture_declaration(r,frame).unwrap();let mut accepted=scene.accept_capture(r,frame,Some(Output::Artwork(None)),&declaration,|scene,r,accepted|scene.group(r,frame,None,[0,0],accepted).map(drop)).unwrap();
+        let image = scene.group(r, frame, None, [0, 0],&mut accepted).unwrap();
+        let image = scene.converted(r, image, Convert::linear(frame)).unwrap();
+        scene.copy_window_tile(image, &destination, [0, 0]);
+        assert!(scene.jobs.iter().any(|job| matches!(job, Job::Effect {prepared, ..} if !prepared.pipeline.ready())));
+        let jobs: Vec<_> = scene.jobs.iter().map(std::mem::discriminant).collect();
+        scene.source_jobs = vec![0..1, 1..scene.jobs.len()];
+        let ranges = scene.source_jobs.clone();
+        assert!(!scene.encode_ordered_jobs(r, encoder,None).unwrap());
+        assert_eq!(scene.jobs.iter().map(std::mem::discriminant).collect::<Vec<_>>(), jobs);
+        assert_eq!(scene.source_jobs, ranges);
+        assert_eq!(scene.record_count, 0);
+        assert_eq!(encoder.pass_count(), 0);
+        pollster::block_on(scene.prepare_capture_work_async(r)).unwrap();
+        assert!(scene.encode_ordered_jobs(r, encoder,None).unwrap());
+        assert!(scene.jobs.is_empty());
+        assert!(scene.source_jobs.is_empty());
+        assert!(encoder.pass_count() > 0);
+        (declaration, accepted)
+    });
     assert_pixels(&r, &texture, [0., 0., 0., 1.]);
 }
 
@@ -219,7 +217,7 @@ fn ordered_cold_fusion_retains_all_jobs_and_source_ranges_until_prepared() {
 #[test]
 fn native_bake_defers_cold_effects_to_its_parent_compiler_and_preserves_history() {
     use layer_render::CanvasRenderer;
-    use std::{sync::mpsc, time::{Duration, Instant}};
+    use std::{sync::mpsc, time::Duration};
     let (document, _, _) = fixture(false);
     let reference = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
     assert_ne!(reference.adapter().get_info().device_type, wgpu::DeviceType::Cpu);
@@ -240,11 +238,7 @@ fn native_bake_defers_cold_effects_to_its_parent_compiler_and_preserves_history(
     let frame = FramePacket {dab_batches:&batches,..packet(document.scene(),EXTENT)};
     engine.backend_mut().ensure_document_metadata(EXTENT,document.scene()).unwrap();
     assert!(!engine.backend_mut().prepare_bakes(frame));
-    let deadline=Instant::now()+Duration::from_secs(30);
-    while compiler.pending()!=0 {
-        compiler.check().unwrap();assert!(Instant::now()<deadline,"private capture recipes did not prepare");
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    wait_until("private capture recipes did not prepare",||match compiler.pending() {0=>Ok(()),pending=>{compiler.check().unwrap();Err(pending)}});
     let (entered, entry) = mpsc::channel();
     let (release, held) = mpsc::channel();
     compiler.enqueue(startup::DOCUMENT,move || {let _=entered.send(());let _=held.recv();Ok(())});
@@ -255,15 +249,11 @@ fn native_bake_defers_cold_effects_to_its_parent_compiler_and_preserves_history(
     assert!(engine.backend().prepared_bake(target,0,[0;2]).is_none(),"cold bake published pixels while its parent compiler was held");
     assert_eq!(engine.checkpoint(),merged);
     release.send(()).unwrap();
-    let settle = |engine:&mut layer_engine::CanvasEngine<WgpuRasterizer>| {
-        let deadline=Instant::now()+Duration::from_secs(30);
-        loop {
-            engine.render_frame_at(0).unwrap();engine.backend_mut().wait_idle().unwrap();
-            if !engine.has_pending_document_edits() && !engine.raster_backing_pending() && engine.backend().next_frame()!=layer_render::FrameDemand::Work {break;}
-            assert!(Instant::now()<deadline,"native bake did not settle after compiler release");
-            std::thread::sleep(Duration::from_millis(1));
-        }
-    };
+    let settle = |engine:&mut layer_engine::CanvasEngine<WgpuRasterizer>| wait_until("native bake did not settle after compiler release",|| {
+        engine.render_frame_at(0).unwrap();engine.backend_mut().wait_idle().unwrap();
+        let pending=[engine.has_pending_document_edits(),engine.raster_backing_pending(),engine.backend().next_frame()==layer_render::FrameDemand::Work];
+        if pending.contains(&true) {Err(pending)} else {Ok(())}
+    });
     settle(&mut engine);
     let pixels=float_pixels(engine.backend(),crate::test_support::document_texture(engine.backend()));
     assert_eq!(pixels.len(),(EXTENT[0]*EXTENT[1]) as usize);
@@ -281,7 +271,7 @@ fn native_bake_defers_cold_mask_restoration_to_its_parent_compiler() {
     use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey};
     use crate::layer_tests::placement::{paint_document,paint_mut,set_mask,reveal_all};
     use layer_render::CanvasRenderer;
-    use std::{sync::mpsc,time::{Duration,Instant}};
+    use std::{sync::mpsc,time::Duration};
     let mut document=paint_document(EXTENT,"Masked red");
     let color=document.composition().color;
     let pixels=[255,0,0,255].repeat(PAGE_SIZE.pow(2) as usize);
@@ -310,35 +300,28 @@ fn native_bake_defers_cold_mask_restoration_to_its_parent_compiler() {
     let frame=FramePacket {dab_batches:&batches,..packet(document.scene(),EXTENT)};
     engine.backend_mut().ensure_document_metadata(EXTENT,document.scene()).unwrap();
     assert!(!engine.backend_mut().prepare_bakes(frame));
-    let deadline=Instant::now()+Duration::from_secs(30);
-    while compiler.pending()!=0 {
-        compiler.check().unwrap();assert!(Instant::now()<deadline,"private capture recipes did not prepare");
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    wait_until("private capture recipes did not prepare",||match compiler.pending() {0=>Ok(()),pending=>{compiler.check().unwrap();Err(pending)}});
     assert!(!normalization.ready());
     let (entered,entry)=mpsc::channel();let (release,held)=mpsc::channel();
     compiler.enqueue(startup::DOCUMENT,move || {let _=entered.send(());let _=held.recv();Ok(())});
     entry.recv_timeout(Duration::from_secs(5)).unwrap();let pending=compiler.pending();
-    while compiler.pending()==pending {
+    wait_until("masked color normalization did not reach the held parent compiler",|| {
+        if compiler.pending()!=pending {return Ok(());}
         assert!(!engine.backend_mut().prepare_bakes(frame));
         assert!(!normalization.ready());
         assert!(engine.backend().prepared_bake(target,0,[0;2]).is_none());
         assert_eq!(engine.checkpoint(),merged);
-        assert!(Instant::now()<deadline,"masked color normalization did not reach the held parent compiler");
-        std::thread::sleep(Duration::from_millis(1));
-    }
+        Err(pending)
+    });
     assert!(compiler.pending()>pending,"color normalization bypassed the held parent compiler");
     assert!(!normalization.ready());
     assert!(engine.backend().prepared_bake(target,0,[0;2]).is_none());assert_eq!(engine.checkpoint(),merged);
     release.send(()).unwrap();
-    let settle=|engine:&mut layer_engine::CanvasEngine<WgpuRasterizer>| {
-        let deadline=Instant::now()+Duration::from_secs(30);
-        loop {
-            engine.render_frame_at(0).unwrap();engine.backend_mut().wait_idle().unwrap();
-            if !engine.has_pending_document_edits() && !engine.raster_backing_pending() && engine.backend().next_frame()!=layer_render::FrameDemand::Work {break;}
-            assert!(Instant::now()<deadline,"masked bake did not settle");std::thread::sleep(Duration::from_millis(1));
-        }
-    };
+    let settle=|engine:&mut layer_engine::CanvasEngine<WgpuRasterizer>| wait_until("masked bake did not settle",|| {
+        engine.render_frame_at(0).unwrap();engine.backend_mut().wait_idle().unwrap();
+        let pending=[engine.has_pending_document_edits(),engine.raster_backing_pending(),engine.backend().next_frame()==layer_render::FrameDemand::Work];
+        if pending.contains(&true) {Err(pending)} else {Ok(())}
+    });
     settle(&mut engine);assert!(normalization.ready());
     let pixels=float_pixels(engine.backend(),crate::test_support::document_texture(engine.backend()));
     assert_eq!(pixels.len(),(EXTENT[0]*EXTENT[1]) as usize);
@@ -374,19 +357,18 @@ fn a_cloned_publish_job_cannot_consume_one_encoding_twice() {
 
 #[test]
 fn a_display_capture_declares_its_inputs_with_the_frames_signature() {
-    let extent = [512; 2];
-    let doc = crate::scene::scale::tests::document_at(extent);
-    let mut r = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
-    let frame = packet(doc.scene(), extent);
-    crate::test_support::submit_settled(&mut r, frame);
+    let document = crate::scene::scale::tests::document_at([512; 2]);
+    let mut fixture = Fixture { r: crate::memory::memory_tests::legacy_scene_renderer(document.composition().color), document };
+    let (r, frame) = fixture.frame();
+    crate::test_support::submit_settled(r, frame);
     let mut scene = r.scene.take().unwrap();
     let region = PixelRect::new(0, 0, PAGE_SIZE, PAGE_SIZE);
     let window = scene.cached_capture_window(frame.scene, region);
-    let destination = Image::new(&r, display_mips::Plan::window(extent, 0, region), "display capture");
+    let destination = Image::new(r, display_mips::Plan::window(frame.document_extent, 0, region), "display capture");
     let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
-    scene.prepare_region(&mut r, frame, (region, window), PixelRect::EMPTY, false, &mut encoder).unwrap();
+    scene.prepare_region(r, frame, (region, window), PixelRect::EMPTY, false, &mut encoder).unwrap();
     let before = crate::test_support::PassCounts::snapshot();
-    let _ = scene.declare_capture(&mut r, frame, &destination, &[region], Output::Display, None, None);
+    let _ = scene.declare_capture(r, frame, &destination, &[region], Output::Display, None, None);
     let reads = crate::test_support::PassCounts::snapshot().delta(before).signature_reads;
     r.scene = Some(scene);
     assert_eq!(reads, 0, "a display capture captured a signature frame of its own");
@@ -402,20 +384,19 @@ fn a_capture_requests_its_cold_decodes_at_the_class_its_inputs_were_admitted_at(
     let (_,SourceTarget::Paint(paint))=crate::test_support::add_paint(&mut artwork,"Photo",extent) else {unreachable!()};
     let tile=RasterTile::backed(TileBlob::encode(descriptor,&[40,80,120,255].repeat(PAGE_SIZE.pow(2) as usize)).unwrap());
     artwork.paint.get_mut(paint).unwrap().raster=RasterRevision::backed(RasterData {tiles:[(TileKey {plane:RasterPlane::Color,coordinate:[0,0]},tile)].into(),watercolor:None});
-    let doc=Document::from_artwork(artwork).unwrap();
-    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    let mut scene=Scene::new(&r).unwrap();
-    let frame=packet(doc.scene(),extent);
+    let mut fixture=Fixture::new(Document::from_artwork(artwork).unwrap());
+    let (r,frame)=fixture.frame();
+    let mut scene=Scene::new(r).unwrap();
     let region=PixelRect::full(extent);
     let (texture,view)=create_color_target(&r.device,extent,"refined capture");
     let destination=Image {texture,view,plan:display_mips::Plan::window(extent,0,region)};
     let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
-    scene.prepare_region(&mut r,frame,(region,DocRect::from(region)),PixelRect::EMPTY,false,&mut encoder).unwrap();
-    let inputs=scene.declare_capture(&mut r,frame,&destination,&[region],Output::Artwork(None),None,None).unwrap();
-    let (_,mut accepted)=inputs.accept(&mut r,&mut (),|_,r,inputs| {
+    scene.prepare_region(r,frame,(region,DocRect::from(region)),PixelRect::EMPTY,false,&mut encoder).unwrap();
+    let inputs=scene.declare_capture(r,frame,&destination,&[region],Output::Artwork(None),None,None).unwrap();
+    let (_,mut accepted)=inputs.accept(r,&mut (),|_,r,inputs| {
         let bytes=inputs.additional_bytes(&r.source_tiles.borrow());r.admit_display(None,Class::Refinement,bytes).ok()
     },|_,_|Ok(()),|_,_,_|Ok(())).unwrap().unwrap();
-    let captured=scene.capture_prepared_regions(&mut r,frame,&destination,&[region],Output::Artwork(None),false,None,&mut encoder,&mut accepted);
+    let captured=scene.capture_prepared_regions(r,frame,&destination,&[region],Output::Artwork(None),false,None,&mut encoder,&mut accepted);
     assert!(matches!(captured,Err(GpuRasterError::NotReady)),"{captured:?}");
     assert_eq!(r.moving_decode.as_ref().unwrap().1.outstanding_classes(),[Class::Refinement],"a refinement capture decodes ahead of the view");
 }

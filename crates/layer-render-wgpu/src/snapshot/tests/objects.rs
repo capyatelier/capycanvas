@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::{Fixture, submit_encoded, wait_until};
 
 fn document() -> Document {
     let mut artwork = Artwork::new([32; 2]).unwrap();
@@ -59,28 +60,22 @@ fn object_only_worker_exact_capture_contains_authored_alpha() {
 
 #[test]
 fn deferred_object_snapshot_retries_preserve_filtered_windows_and_histogram() {
-    let doc = document();
-    let mut live = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    live.ensure_document_metadata([32; 2], doc.scene()).unwrap();
+    let mut fixture = Fixture::new(document());
+    let (live, frame) = fixture.frame();
+    live.ensure_document_metadata([32; 2], frame.scene).unwrap();
     let (texture, _) = create_color_target(&live.device, [32; 2], "native object reference");
-    let mut scene = live.scene.take().unwrap_or_else(|| scene::Scene::new(&live).unwrap());
-    let mut encoder = submission::CommandEncoder::new(&live.device, &Default::default());
-    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(30);
-    loop {
-        match scene.capture_region_prepared(&mut live, packet(doc.scene(), [32; 2]), &texture,
-            PixelRect::full([32; 2]), scene::Output::Artwork(None), &mut encoder) {
-            Ok(())=>break,
-            Err(GpuRasterError::NotReady)=>{},
+    let mut scene = live.scene.take().unwrap_or_else(|| scene::Scene::new(live).unwrap());
+    wait_until("Native object reference completes", || {
+        match submit_encoded(live, |live, encoder| scene.capture_region_prepared(live, frame, &texture,
+            PixelRect::full([32; 2]), scene::Output::Artwork(None), encoder)) {
+            Ok(())=>Ok(()),
+            Err(pending@GpuRasterError::NotReady)=>{live.wait_idle().unwrap();Err(pending)},
             Err(error)=>panic!("{error}"),
         }
-        assert!(std::time::Instant::now()<deadline,"Native object reference completes");
-        live.uploads.finish(&encoder);encoder.submit(&live.queue);live.wait_idle().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(1));
-        encoder=submission::CommandEncoder::new(&live.device,&Default::default());
-    }
-    live.uploads.finish(&encoder);encoder.submit(&live.queue);live.scene=Some(scene);
-    let expected = crate::test_support::float_pixels(&live, &texture);
-    let mut reader = capture(doc).unwrap();
+    });
+    live.scene=Some(scene);
+    let expected = crate::test_support::float_pixels(live, &texture);
+    let mut reader = capture(fixture.document).unwrap();
     assert!(reader.renderer.snapshot_worker);
     let actual = reader.read_region([0, 0, 32, 32]).unwrap();
     assert!(crate::test_support::max_error(&expected, &actual) < 3e-5);
@@ -94,16 +89,16 @@ fn deferred_object_snapshot_retries_preserve_filtered_windows_and_histogram() {
 
 #[test]
 fn cancelled_object_captures_keep_output_unpublished() {
-    let doc = document();
-    let mut live = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    live.ensure_document_metadata([32; 2], doc.scene()).unwrap();
+    let mut fixture = Fixture::new(document());
+    let (live, frame) = fixture.frame();
+    live.ensure_document_metadata([32; 2], frame.scene).unwrap();
     let (texture, _) = create_color_target(&live.device, [32; 2], "cancelled object capture");
-    let mut scene = live.scene.take().unwrap_or_else(|| scene::Scene::new(&live).unwrap());
+    let mut scene = live.scene.take().unwrap_or_else(|| scene::Scene::new(live).unwrap());
     let mut encoder = submission::CommandEncoder::new(&live.device, &Default::default());
-    assert!(matches!(scene.capture_region(&mut live, packet(doc.scene(), [32; 2]), &texture, PixelRect::full([32; 2]), scene::Output::Artwork(None), &mut encoder), Err(GpuRasterError::NotReady)));
+    assert!(matches!(scene.capture_region(live, frame, &texture, PixelRect::full([32; 2]), scene::Output::Artwork(None), &mut encoder), Err(GpuRasterError::NotReady)));
     live.snapshot_cancelled = Some(Arc::new(AtomicBool::new(true)));
-    assert!(matches!(pollster::block_on(scene.prepare_capture_work_async(&mut live)), Err(GpuRasterError::Color(message)) if message == "Snapshot capture cancelled"));
-    let mut reader = capture(doc).unwrap();
+    assert!(matches!(pollster::block_on(scene.prepare_capture_work_async(live)), Err(GpuRasterError::Color(message)) if message == "Snapshot capture cancelled"));
+    let mut reader = capture(fixture.document).unwrap();
     reader.control().cancel();
     assert!(reader.read_region([0, 0, 32, 32]).is_err());
     assert_eq!(reader.control.output_rows(), 0);

@@ -64,7 +64,6 @@ fn paper_without_texture_keeps_its_color_with_raised_lighting_values() {
 
 #[test]
 fn visible_paper_slope_prepares_while_optional_work_is_parked() {
-    use std::time::{Duration, Instant};
     let reference = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = rough_gray_paper();
     set_paper(&mut document, &[(paper::RELIEF, EffectValue::Number(150.))]);
@@ -74,19 +73,16 @@ fn visible_paper_slope_prepares_while_optional_work_is_parked() {
     r.update_paper_lighting(document.scene()).unwrap();
     assert!(r.paper_lighting.is_some() && r.paper_shade().is_none());
     drop(batch);
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while r.paper_shade().is_none() {
-        r.poll_startup().unwrap();
-        assert!(Instant::now() < deadline, "visible slope must prepare without optional admission");
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    crate::test_support::wait_until("visible slope must prepare without optional admission", || {
+        if r.paper_shade().is_some() { return Ok(()); }
+        Err(r.poll_startup().unwrap())
+    });
     assert!(!r.paper_shade_work_pending());
 }
 
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn first_ready_paper_frame_matches_eager_pixels_without_lighting_unused_surfaces() {
-    use std::time::{Duration, Instant};
     let mut reference = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
     for (overview, raised) in [(false, true), (false, false), (true, true)] {
@@ -110,15 +106,11 @@ fn first_ready_paper_frame_matches_eager_pixels_without_lighting_unused_surfaces
         }
         let lit = raised && !overview;
         drop(batch);
-        let deadline = Instant::now() + Duration::from_secs(60);
-        loop {
+        crate::test_support::wait_until(format_args!("first frame readiness, overview={overview}, raised={raised}"), || {
             let ready = presenter.pipelines_ready(&r);
-            if r.poll_startup().unwrap().complete && ready {
-                break;
-            }
-            assert!(Instant::now() < deadline, "first frame readiness, overview={overview}, raised={raised}");
-            std::thread::sleep(Duration::from_millis(1));
-        }
+            let progress = r.poll_startup().unwrap();
+            if progress.complete && ready { Ok(()) } else { Err((ready, progress)) }
+        });
         let composited = r.metrics.composited_pixels;
         let (texture, target) = crate::create_target(&r.device, [128; 2], format, "first ready paper frame");
         let draw = |presenter: &mut ViewportPresenter, renderer: &WgpuRasterizer| {
