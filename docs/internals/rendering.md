@@ -1376,8 +1376,10 @@ still landing, evictable bytes of another owner, or reservations it has not yet
 borrowed. When the edit itself holds everything that could make room, its frame
 fails instead: the engine cancels the contact or withdraws the unsubmitted edit,
 the drawing keeps its last submitted pixels, the person is told once, and the
-input queued behind the frame is consumed in order. GTK's render thread ends
-such a frame through its failed-frame path. Requested mips pin their roots and in-flight work.
+input queued behind the frame is consumed in order. GTK's render thread drops
+the refused frame and the frames queued behind it, counts the refusal in its
+frame report, and the engine handles it at its next poll like a refused
+submission. Requested mips pin their roots and in-flight work.
 Idle after-present trims release unused storage against the grants.
 Each memory sample charges the allocator's reserved block capacity beyond the
 owners' bytes to the device, so free space kept in allocator blocks counts as

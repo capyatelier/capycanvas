@@ -1571,7 +1571,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         }
         self.frame_clock_ns = timestamp_ns;
         let view = self.view();
-        self.backend.poll_pending(view).map_err(EngineError::Backend)?;
+        match self.backend.poll_pending(view) {
+            Err(error) if B::is_memory_refusal(&error) => self.refuse_unsubmitted_edits()?,
+            result => result.map_err(EngineError::Backend)?,
+        }
         if self.can_park() { self.editor.flush_memory(); }
         if !self.backend.can_submit() {
             return Ok(());
@@ -1679,11 +1682,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         };
         let result = match result {
             Poll::Pending => { self.pending_frame = Some(frame); return Ok(()); }
-            Poll::Ready(Err(error)) if B::is_memory_refusal(&error) => {
-                self.fail_unsubmitted_edits("Not enough memory to submit the raster edit");
-                self.recover_failed_rasters().map_err(EngineError::Document)?;
-                return Ok(());
-            }
+            Poll::Ready(Err(error)) if B::is_memory_refusal(&error) => return self.refuse_unsubmitted_edits(),
             Poll::Ready(result) => result.map_err(EngineError::Backend),
         };
 
@@ -1809,6 +1808,12 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.queued_contacts.clear();
         self.contact_settings = None;
         self.fail_unsubmitted_edits("Renderer stopped before raster submission");
+    }
+
+    fn refuse_unsubmitted_edits(&mut self) -> Result<(), EngineError<B::Error>> {
+        self.fail_unsubmitted_edits("Not enough memory to submit the raster edit");
+        self.recover_failed_rasters().map_err(EngineError::Document)?;
+        Ok(())
     }
 
     fn fail_unsubmitted_edits(&mut self, cause: &str) {
@@ -3419,6 +3424,25 @@ mod tests {
     }
 
     #[test]
+    fn a_refusal_the_renderer_reports_for_a_queued_frame_cancels_the_contact_painting() {
+        let (mut input, mut canvas) = engine("Refused queued frame", 128, 128);
+        input.push(event(1, PenPhase::Down, 20.)).unwrap();
+        input.push(event(2, PenPhase::Up, 80.)).unwrap();
+        canvas.render_frame().unwrap();
+        let (document, checkpoint) = (canvas.document().clone(), canvas.checkpoint());
+        input.push(event(3, PenPhase::Down, 30.)).unwrap();
+        canvas.render_frame_at(1_000_000_000).unwrap();
+        assert!(canvas.has_active_stroke() && canvas.pending_frame.is_none(), "the renderer queued the contact's frame");
+        for (sequence, phase) in [(4, PenPhase::Move), (5, PenPhase::Up), (6, PenPhase::Down), (7, PenPhase::Up)] { input.push(event(sequence, phase, 60.)).unwrap(); }
+        canvas.backend_mut().refuse_queued = true;
+        for frame in 2..12 { canvas.render_frame_at(frame * 1_000_000_000).unwrap(); }
+        assert!(!canvas.has_pending_input() && !canvas.has_pending_document_edits() && !canvas.has_active_stroke());
+        assert_eq!((canvas.metrics().input_events, canvas.metrics().committed_strokes), (7, 2), "the refused contact's samples are consumed and the next contact commits");
+        assert!(canvas.undo().unwrap());
+        assert_eq!((&canvas.document().artwork, canvas.checkpoint()), (&document.artwork, checkpoint), "the refused contact left no history");
+    }
+
+    #[test]
     fn an_amend_refused_memory_returns_to_the_revision_it_replaced() {
         let (mut input, mut canvas) = engine("Refused amend", 128, 128);
         input.push(event(1, PenPhase::Down, 20.)).unwrap();
@@ -3493,6 +3517,7 @@ mod tests {
         phases: Vec<(layer_core::authored::EffectHandle, f32)>,
         fail_submit: bool,
         refuse_memory: bool,
+        refuse_queued: bool,
         pending_preparation: bool,
         fail_resize: bool,
         size: [u32; 2],
@@ -3538,6 +3563,7 @@ mod tests {
         }
         fn poll_pending(&mut self, _view: ViewState) -> Result<(), Self::Error> {
             self.unrelated_submission = false;
+            if std::mem::take(&mut self.refuse_queued) { return Err(BackendError(MEMORY_REFUSED)); }
             Ok(())
         }
         fn has_pending_submission(&self) -> bool { self.unrelated_submission }

@@ -248,11 +248,14 @@ impl PreparationSignal {
     }
 }
 fn submit_ready_frame<R: CanvasRenderer>(renderer: &mut R, packet: FramePacket<'_>, preview: Option<&layer_render::TransformPreview>,
-    draw_start: &mut std::time::Instant) -> std::task::Poll<Result<(), R::Error>> {
+    draw_start: &mut std::time::Instant, report: &FrameReport) -> std::task::Poll<Result<bool, R::Error>> {
     let checking = std::time::Instant::now();
     let Some(ready) = renderer.ready_submission(packet, preview) else { return std::task::Poll::Pending; };
     *draw_start += checking.elapsed();
-    std::task::Poll::Ready(renderer.submit_ready(ready, packet))
+    std::task::Poll::Ready(match renderer.submit_ready(ready, packet) {
+        Err(error) if R::is_memory_refusal(&error) => { report.memory_refusals.fetch_add(1, Ordering::AcqRel); Ok(false) }
+        result => result.map(|()| true),
+    })
 }
 fn admit_frame<T, E>(frame: Option<T>, pending: &mut VecDeque<T>, mut draw: impl FnMut(&mut T) -> Result<bool, E>) -> Result<usize, E> {
     let mut admitted = 0;
@@ -363,6 +366,7 @@ struct Frame {
     stroke_target: Option<crate::wayland::StrokeTarget>,
     // Every queued producer must resolve its immutable roots, even on failure.
     pending_rasters: Vec<layer_core::raster::RasterRevision>,
+    memory_refusals: u64,
     #[cfg(test)]
     queued_ns: u64,
 }
@@ -376,6 +380,7 @@ impl Drop for Frame {
     }
 }
 impl Frame {
+    fn refused(&self, report: &FrameReport) -> bool { self.memory_refusals != report.memory_refusals.load(Ordering::Acquire) }
     fn waits_for_raster(&self) -> bool {
         self.scene.view().targets().any(|t| self.scene.view().raster(t).is_some_and(|r| r.try_data().is_none()))
     }
@@ -585,6 +590,7 @@ struct FrameReport {
     pending_work: AtomicBool,
     retouch_miss: std::sync::atomic::AtomicU64,
     retouch_waiting: std::sync::atomic::AtomicU64,
+    memory_refusals: std::sync::atomic::AtomicU64,
     paper_drawn: std::sync::atomic::AtomicU64,
     showing_drawing: AtomicBool,
     showing_navigator: AtomicBool,
@@ -614,6 +620,7 @@ enum Reply {
 }
 
 const FRAMES_IN_FLIGHT: usize = 2;
+const MEMORY_REFUSED: BackendError = BackendError("Not enough memory to finish this edit");
 pub(crate) const SCREEN_CHECK_DELAY: Duration = Duration::from_millis(250);
 
 #[cfg(test)]
@@ -675,6 +682,7 @@ pub struct RenderWorker {
     selection_overlays: Arc<layer_core::authored::SelectionOverlays>,
     settling_roots: Vec<layer_core::raster::RasterRevision>,
     settling_view: Option<Presentation>,
+    memory_refusals: u64,
     pub(super) startup: layer_render_wgpu::StartupProgress,
     startup_generation: u64,
     startup_key: Option<(layer_render_wgpu::ShaderDocument, layer_render_wgpu::ShaderBrushKey, bool)>,
@@ -972,6 +980,7 @@ impl RenderWorker {
             launch_presented: Vec::new(),
             settling_roots: Vec::new(),
             settling_view: None,
+            memory_refusals: 0,
             startup: Default::default(),
             startup_generation: 0,
             startup_key: None,
@@ -1274,7 +1283,11 @@ impl CanvasRenderer for RenderWorker {
         self.snapshot_gpu.as_ref().ok_or(BackendError("Canvas renderer is unavailable"))?
             .preflight_image_object_affine(scene,object,affine,view).map_err(|_|BackendError("Image sampling request is unsupported"))
     }
+    fn is_memory_refusal(error: &Self::Error) -> bool { *error == MEMORY_REFUSED }
+    fn stroke_memory_refusals(&self) -> u64 { self.memory_refusals }
     fn poll_pending(&mut self, view: ViewState) -> Result<(), Self::Error> {
+        let refusals = self.report.memory_refusals.load(Ordering::Acquire);
+        if std::mem::replace(&mut self.memory_refusals, refusals) != refusals { return Err(MEMORY_REFUSED); }
         if self.has_pending_submission() && let Some(geometry) = self.geometry
             && self.settling_view.as_ref().is_none_or(|old| !old.matches(view, geometry, &self.cursor, self.picker)) {
             let next = Presentation { view, geometry, cursor: self.cursor.clone(), picker: self.picker };
@@ -1627,6 +1640,7 @@ impl CanvasRenderer for RenderWorker {
             selection_overlays: self.selection_overlays.clone(),
             pending_rasters: packet.scene.targets().filter_map(|target| packet.scene.raster(target))
                 .filter(|r| packet.commit_rasters && r.try_data().is_none()).cloned().collect(),
+            memory_refusals: self.memory_refusals,
             dabs: packet.dabs.to_vec(),
             batches: packet.dab_batches.to_vec(),
             restore_rasters: packet.restore_rasters.to_vec(),
@@ -2504,6 +2518,7 @@ impl Worker {
         report: &FrameReport,
         #[cfg(test)] timing: &mut crate::timing::Timing,
     ) -> Result<bool, String> {
+        if frame.refused(report) { return Ok(true); }
         if self.initial_completion.is_some() || !startup.canvas_ready
             || !self.renderer.can_submit() || !frame.dabs.is_empty() && !startup.brush_ready
             || frame.waits_for_raster() && !self.renderer.raster_ready() {
@@ -2511,7 +2526,7 @@ impl Worker {
         }
         #[cfg(test)]
         timing.begin(frame.queued_ns);
-        if !self.draw(frame, #[cfg(test)] timing)? { self.report_frame(report); return Ok(false); }
+        if !self.draw(frame, report, #[cfg(test)] timing)? { self.report_frame(report); return Ok(false); }
         self.report_frame(report);
         Ok(true)
     }
@@ -2593,6 +2608,7 @@ impl Worker {
     fn draw(
         &mut self,
         frame: &mut Frame,
+        report: &FrameReport,
         #[cfg(test)] timing: &mut crate::timing::Timing,
     ) -> Result<bool, String> {
         if let Some(failure) = self.watch.failure() {
@@ -2618,9 +2634,12 @@ impl Worker {
         self.renderer.set_fill_preview(frame.fill_preview.clone());
         self.renderer.set_transform_preview(frame.transform_preview.as_ref()).map_err(error)?;
         self.renderer.set_fill_reveal(frame.fill_reveal);
-        match submit_ready_frame(&mut self.renderer, frame.packet(), frame.transform_preview.as_ref(), &mut draw_start) {
+        match submit_ready_frame(&mut self.renderer, frame.packet(), frame.transform_preview.as_ref(), &mut draw_start, report) {
             std::task::Poll::Pending => return Ok(false),
-            std::task::Poll::Ready(result) => result.map_err(error)?,
+            std::task::Poll::Ready(result) => if !result.map_err(error)? {
+                wake_canvas(&self.area, &self.presented_chrome);
+                return Ok(true);
+            },
         }
         self.last_owner = Some(frame.scene.view().owner());
         if self.renderer.has_pending_submission() { frame.pending_rasters.clear(); }
