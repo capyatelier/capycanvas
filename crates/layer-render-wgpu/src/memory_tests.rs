@@ -379,21 +379,21 @@ fn a_lane_that_display_bytes_still_retiring_would_cover_is_woken_when_they_drain
 }
 
 #[test]
-fn a_stroke_lane_that_nothing_can_free_raises_one_message_per_wait_and_keeps_waiting() {
+fn a_stroke_lane_that_nothing_can_free_refuses_its_edit_once_and_ends_the_wait() {
     let mut r = renderer(Default::default(), layer_core::DeviceMemoryFacts {budget_bytes: Some(1 << 30), ..Default::default()}).unwrap();
     let (send, woken) = std::sync::mpsc::channel();
     r.set_preparation_wake(Arc::new(move || { let _ = send.send(()); }));
     r.publish_memory(); r.factory.memory_budget().flush_reports(); r.refresh_memory_limits();
-    let wait = |r: &mut WgpuRasterizer, bytes: u64| { let admitted = r.admit_raster_working(bytes); r.note_restore_admission(&admitted); admitted.map(drop) };
+    let wait = |r: &mut WgpuRasterizer, bytes: u64| r.admit_raster_working(bytes).map(drop);
     assert!(wait(&mut r, u64::MAX / 2).is_err());
-    assert_eq!(r.memory.stroke_memory_refusals(), 0, "only a stroke's lane tells the person");
+    assert_eq!(r.take_lane_failure(), None, "only an edit's lane is refused");
     r.end_frame_memory(); r.end_frame_memory();
     r.live_stroke = Some(layer_core::StrokeId(1));
     let transient = crate::present_transition::Charge::new(8 * MIB, &r.device.transient_display, r.device.transient_memory.clone());
     r.publish_memory(); r.factory.memory_budget().flush_reports(); r.sync_raster_report();
     let wanted = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used()) + lendable(&r) + 4 * MIB;
     assert!(wait(&mut r, wanted).is_err());
-    assert_eq!(r.memory.stroke_memory_refusals(), 0, "bytes still draining can free the room the lane lacks, so it waits without a message");
+    assert_eq!(r.take_lane_failure(), None, "bytes still draining can free the room the lane lacks, so it waits");
     let edge = r.device.retirement_handle();
     edge.flush().unwrap();
     while woken.try_recv().is_ok() {}
@@ -401,19 +401,17 @@ fn a_stroke_lane_that_nothing_can_free_raises_one_message_per_wait_and_keeps_wai
     edge.flush().unwrap();
     assert!(woken.try_recv().is_ok(), "the drained bytes wake the waiting lane");
     wait(&mut r, wanted).expect("the drained bytes make room for the lane");
-    let fallback = r.admit_raster_window(MIB, u64::MAX / 2, 0);
-    r.note_restore_admission(&fallback);
-    drop(fallback.expect("the window falls back to the room it can get"));
-    assert_eq!(r.memory.stroke_memory_refusals(), 0, "a window that fits after its larger first try tells the person nothing");
-    assert!(wait(&mut r, u64::MAX / 2).is_err());
-    assert_eq!(r.memory.stroke_memory_refusals(), 1, "with nothing left to free, the waiting stroke tells the person once");
-    assert!(wait(&mut r, u64::MAX / 2).is_err());
-    assert_eq!(r.memory.stroke_memory_refusals(), 1, "the same wait does not repeat the message");
-    while woken.try_recv().is_ok() {}
-    assert!(wait(&mut r, MIB).is_ok(), "a lane that fits ends the wait");
-    assert!(woken.try_recv().is_ok(), "ending the wait wakes the work its stop held back");
-    assert!(wait(&mut r, u64::MAX / 2).is_err());
-    assert_eq!(r.memory.stroke_memory_refusals(), 2, "a later wait with nothing to free tells the person again");
+    drop(r.admit_raster_window(MIB, u64::MAX / 2, 0).expect("the window falls back to the room it can get"));
+    assert_eq!(r.take_lane_failure(), None, "a window that fits after its larger first try refuses nothing");
+    for refusals in 1..3 {
+        assert!(wait(&mut r, u64::MAX / 2).is_err());
+        assert!(r.lane_exhausted() && layer_render::CanvasRenderer::stroke_waits_for_memory(&r));
+        while woken.try_recv().is_ok() {}
+        assert_eq!(r.take_lane_failure(), Some(GpuRasterError::StrokeMemory), "with nothing left to free, the edit is refused");
+        assert_eq!(r.memory.stroke_memory_refusals(), refusals, "each refused edit tells the person once");
+        assert!(woken.try_recv().is_ok(), "ending the wait wakes the work its stop held back");
+        assert!(r.take_lane_failure().is_none() && !layer_render::CanvasRenderer::stroke_waits_for_memory(&r), "the refusal ends the wait");
+    }
 }
 
 #[test]

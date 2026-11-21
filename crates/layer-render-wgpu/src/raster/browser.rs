@@ -59,6 +59,7 @@ impl CaptureWorker {
         self.pending.used() < 16
             && self.staging.used() <= MAX_CAPTURE_BYTES - CAPTURE_CHUNK
     }
+    pub(super) fn in_flight(&self) -> bool { self.pending.used() != 0 }
     pub(super) fn submit_batch(&self, captures: NativeCapture) -> Result<(), GpuRasterError> {
         let charges = [self.staging.charge(captures.storage_bytes()), self.pending.charge(1)];
         if self.sender.as_ref().unwrap().try_send((captures, charges)).is_err() {
