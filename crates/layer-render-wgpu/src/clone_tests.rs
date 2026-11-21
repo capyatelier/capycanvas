@@ -338,9 +338,9 @@ fn resident_code_cloner(depth: layer_core::color::SampleDepth) -> (
     let r = engine.backend_mut();
     crate::test_support::complete(r);
     crate::test_support::evict_sources(r);
-    assert_eq!(r.source_tiles.borrow().allocated_slots(),0,"completed fixture sources must remain evictable");
-    assert_eq!(r.source_tiles.borrow().gpu_bytes(),r.source_tiles.borrow().non_slot_bytes());
-    assert!(r.source_tiles.borrow().prepared_view(&source, [1, 1]).is_none());
+    assert_eq!(r.source_tiles.borrow().allocated_slots(),0,"{depth:?}: completed fixture sources must remain evictable");
+    assert_eq!(r.source_tiles.borrow().gpu_bytes(),r.source_tiles.borrow().non_slot_bytes(),"{depth:?}");
+    assert!(r.source_tiles.borrow().prepared_view(&source, [1, 1]).is_none(), "{depth:?}");
     crate::test_support::submit_encoded(r, |r, encoder| for coordinate in page_coordinates(PixelRect::full(extent)) {
         let prepared = crate::prepare_image_tile(&source, coordinate, r.document_color().space, &r.device.source_samples, None).unwrap();
         crate::scene::Scene::decode_prepared(r, encoder, &source, coordinate, prepared).unwrap();
@@ -364,58 +364,53 @@ fn assert_clone_promotes_resident_codes_once(depth: layer_core::color::SampleDep
     let untouched_codes=source.tiles[&[3,0]].decode_on_worker().unwrap();
     let untouched_key=layer_core::raster::TileKey {plane:layer_core::raster::RasterPlane::Color,coordinate:[3,0]};
     let untouched_tile=engine.document().target_raster(PHOTO).unwrap().wait_data().unwrap().tiles.get(&untouched_key).cloned();
-    assert_eq!(original.texture().format(), resident_code_format(depth));
-    assert_eq!(untouched.texture().format(), resident_code_format(depth));
+    assert_eq!(original.texture().format(), resident_code_format(depth), "{depth:?}");
+    assert_eq!(untouched.texture().format(), resident_code_format(depth), "{depth:?}");
     let lease = engine.backend().source_tiles.borrow().lease(&original).unwrap();
     source_at(&mut engine, 384., 384., |_| {});
     draw(&mut engine, &mut input, pen(1, PenPhase::Down, [64., 64.], SampleFlags::PRIMARY));
-    assert_eq!(offset_of(&engine), [320, 320]);
+    assert_eq!(offset_of(&engine), [320, 320], "{depth:?}");
     let exact = prepared_photo_view(engine.backend(), &source, [1, 1]);
-    assert_eq!(exact.texture().format(), wgpu::TextureFormat::Rgba32Float);
-    assert_ne!(exact, original);
-    assert!(Arc::ptr_eq(&lease, &engine.backend().source_tiles.borrow().lease(&exact).unwrap()));
+    assert_eq!(exact.texture().format(), wgpu::TextureFormat::Rgba32Float, "{depth:?}");
+    assert_ne!(exact, original, "{depth:?}");
+    assert!(Arc::ptr_eq(&lease, &engine.backend().source_tiles.borrow().lease(&exact).unwrap()), "{depth:?}");
     for (sequence, x) in [(2, 68.), (3, 72.), (4, 80.)] {
         draw(&mut engine, &mut input, pen(sequence, PenPhase::Move, [x, 64.], SampleFlags::PRIMARY));
-        assert_eq!(prepared_photo_view(engine.backend(), &source, [1, 1]), exact);
-        assert_eq!(prepared_photo_view(engine.backend(), &source, [3, 0]), untouched);
+        assert_eq!(prepared_photo_view(engine.backend(), &source, [1, 1]), exact, "{depth:?}");
+        assert_eq!(prepared_photo_view(engine.backend(), &source, [3, 0]), untouched, "{depth:?}");
         let r = engine.backend_mut();
         let mut retouch = r.retouch_sources();
         let mapping = retouch.mapping(r, &Gather { region: PixelRect::new(64, 64, 81, 65), scale: [1.; 2], offset: [320.; 2], stroke: None }).unwrap();
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         let (_, complete) = retouch.pages(r, &mapping, &mut encoder).unwrap();
-        assert!(complete);
-        assert_eq!(encoder.pass_count(), 0, "warm clone sources cannot normalize again");
-        assert!(Arc::ptr_eq(&lease, &r.source_tiles.borrow().lease(&exact).unwrap()));
+        assert!(complete, "{depth:?}");
+        assert_eq!(encoder.pass_count(), 0, "{depth:?}: warm clone sources cannot normalize again");
+        assert!(Arc::ptr_eq(&lease, &r.source_tiles.borrow().lease(&exact).unwrap()), "{depth:?}");
         r.retouch = Some(retouch);
     }
     draw(&mut engine, &mut input, pen(5, PenPhase::Up, [80., 64.], SampleFlags::PRIMARY));
     flush(&mut engine);
-    assert_eq!(prepared_photo_view(engine.backend(), &source, [1, 1]), exact);
+    assert_eq!(prepared_photo_view(engine.backend(), &source, [1, 1]), exact, "{depth:?}");
     let selected=engine.document().target_raster(PHOTO).unwrap().wait_data().unwrap();
     assert_eq!(selected.tiles.get(&untouched_key).map(|tile|tile.wait_backing().unwrap().decode_on_worker().unwrap()),
-        untouched_tile.as_ref().map(|tile|tile.wait_backing().unwrap().decode_on_worker().unwrap()));
+        untouched_tile.as_ref().map(|tile|tile.wait_backing().unwrap().decode_on_worker().unwrap()), "{depth:?}");
     let SourceTarget::Paint(photo)=PHOTO else {unreachable!()};
     let base=engine.document().artwork.paint.get(photo).unwrap().base.as_ref().unwrap();
-    assert_eq!(base.image.storage().tiles[&[3,0]].decode_on_worker().unwrap(),untouched_codes);
+    assert_eq!(base.image.storage().tiles[&[3,0]].decode_on_worker().unwrap(),untouched_codes,"{depth:?}");
     let maximum = depth.maximum() as f32;
     let pixel = pixels(engine.backend_mut(), PHOTO);
     for (x, y) in [(68, 64), (72, 64)] {
         let code = [((x + 320) % 251) as f32 / 250., ((y + 320) % 241) as f32 / 240., 0.37];
         let expected = code.map(|value| layer_core::color::RgbSpace::Srgb.decode(f64::from((value * maximum).round() / maximum)) as f32);
         let actual = pixel(x, y);
-        assert!((actual[3] - 1.).abs() < 1e-6);
+        assert!((actual[3] - 1.).abs() < 1e-6, "{depth:?}: {actual:?}");
         for channel in 0..3 { assert!((actual[channel] - expected[channel]).abs() < 2e-5, "{depth:?}: {actual:?}, {expected:?}"); }
     }
 }
 
 #[test]
-fn clone_stroke_promotes_resident_u8_once_and_keeps_untouched_codes() {
-    assert_clone_promotes_resident_codes_once(layer_core::color::SampleDepth::U8);
-}
-
-#[test]
-fn clone_stroke_promotes_resident_u16_once_and_keeps_untouched_codes() {
-    assert_clone_promotes_resident_codes_once(layer_core::color::SampleDepth::U16);
+fn clone_stroke_promotes_resident_codes_once_and_keeps_untouched_codes() {
+    for depth in [layer_core::color::SampleDepth::U8, layer_core::color::SampleDepth::U16] { assert_clone_promotes_resident_codes_once(depth); }
 }
 
 #[test]

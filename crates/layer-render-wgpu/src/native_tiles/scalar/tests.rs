@@ -60,9 +60,9 @@ fn code(bytes: &[u8], i: usize, depth: SampleDepth) -> u32 {
 }
 
 #[test]
-fn scalar_writeback_preserves_every_code_half_neighbors_and_partial_packed_words() { scalar_corpus(false); }
-#[test]
-fn native_in_place_scalar_writeback_preserves_every_code_half_neighbors_and_partial_packed_words() { scalar_corpus(true); }
+fn scalar_writeback_preserves_every_code_half_neighbors_and_partial_packed_words_with_and_without_in_place_storage() {
+    for in_place in [false, true] { scalar_corpus(in_place); }
+}
 fn scalar_corpus(in_place: bool) {
     let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let encoder = if in_place { NativeScalarEncoder::in_place(&r.device) } else { NativeScalarEncoder::with_device(&r.device) };
@@ -129,15 +129,15 @@ fn scalar_corpus(in_place: bool) {
                     assert_eq!(
                         code(&bytes, i, depth),
                         expected,
-                        "depth {depth:?}, pattern {pattern}, region {region:?}, pixel {i}"
+                        "in_place={in_place}, depth {depth:?}, pattern {pattern}, region {region:?}, pixel {i}"
                     );
                     let actual =
                         f32::from_le_bytes(canonical_bytes[i * 4..i * 4 + 4].try_into().unwrap());
                     if inside {
-                        assert_eq!(actual, expected as f32 * reciprocal(depth), "canonical pixel {i}");
+                        assert_eq!(actual, expected as f32 * reciprocal(depth), "in_place={in_place}: canonical pixel {i}");
                     } else {
                         assert_eq!(actual, if in_place { *value } else { -7. },
-                            "untouched canonical pixel {i}");
+                            "in_place={in_place}: untouched canonical pixel {i}");
                     }
                 }
             }
