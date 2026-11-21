@@ -840,12 +840,16 @@ impl PreviewDeclaration {
         ContentVersion::derive(recipe(&pass),&distinct)
     }
     pub fn matches_metadata(&self,candidate:&Self)->Result<bool,GpuRasterError> {
-        if self.target!=candidate.target || self.quality!=candidate.quality || self.inputs.len()!=candidate.inputs.len()
+        if self.contact()!=candidate.contact() || self.target!=candidate.target || self.quality!=candidate.quality || self.inputs.len()!=candidate.inputs.len()
             || self.wetness_before!=candidate.wetness_before || self.transport_outputs!=candidate.transport_outputs
             || !self.commands.iter().map(|command|(command.index,&command.outputs))
                 .eq(candidate.commands.iter().map(|command|(command.index,&command.outputs))) {return Ok(false);}
-        if !self.selection.as_ref().zip(candidate.selection.as_ref()).is_some_and(|(held,current)|held.same_selection(current)) {return Ok(false);}
+        if !self.same_selection(candidate) {return Ok(false);}
         for (target,held) in &self.inputs {if candidate.inputs.get(target).is_none_or(|input|held.version.matches(&input.version)!=Some(true)) {return Ok(false);}}
+        if self.in_contact() && self.fill.is_none() && candidate.fill.is_none() {
+            let mut committed=true;
+            return Ok(self.context==candidate.context && self.versions.changes(&candidate.versions,|_|committed=false) && committed);
+        }
         match (self.program_version(),candidate.program_version()) {
             (Ok(held),Ok(wanted))=>Ok(held.matches(&wanted)==Some(true)),
             (Err(GpuRasterError::NotReady),_)|(_,Err(GpuRasterError::NotReady))=>Ok(false),
@@ -855,8 +859,27 @@ impl PreviewDeclaration {
     pub fn matches_history(&self,mut current:impl FnMut(RasterPlane,[u32;2],PreviewPass)->Option<ContentVersion>)->bool {
         self.required_seed_inputs().into_iter().all(|(plane,coordinate,pass)| {
             let key=AcceptedKey {plane:raster::contents::index(plane),coordinate,stage:PreviewStage::Seed,pass};
-            self.seed_inputs.get(&key).is_some_and(|(held,_)|current(plane,coordinate,pass).is_some_and(|current|held.matches(&current)==Some(true)))
+            match self.seed_inputs.get(&key) {
+                Some((held,_))=>current(plane,coordinate,pass).is_some_and(|current|held.matches(&current)==Some(true)),
+                None=>pass!=PreviewPass::StrokeStart && self.accepted(coordinate),
+            }
         })
+    }
+    fn contact(&self)->Option<*const PreviewStamps> {self.stamps.as_ref().map(|(stamps,_)|Arc::as_ptr(stamps))}
+    fn same_selection(&self,other:&Self)->bool {self.selection.as_ref().zip(other.selection.as_ref()).is_some_and(|(held,current)|held.same_selection(current))}
+    pub fn retain(self:&Arc<Self>,ticket:&mut PreviewVersion,stage:PreviewStage)->Result<bool,GpuRasterError> {
+        if Arc::ptr_eq(&ticket.declaration.accepted,&self.accepted) {return Ok(true);}
+        let (from,plane,coordinate)=(&ticket.declaration,ticket.plane,ticket.coordinate);
+        if ticket.step.is_some() || ticket.pass!=plane_pass(plane) || from.contact()!=self.contact() {return Ok(false);}
+        if self.in_contact() {
+            if from.fill.is_some() || self.fill.is_some() || from.target!=self.target || from.quality!=self.quality || from.context!=self.context || !from.same_selection(self)
+                || from.versions.tile(plane,coordinate).matches(&self.versions.tile(plane,coordinate))!=Some(true) {return Ok(false);}
+            let bounds=region_bounds(page_rect(coordinate).intersect(PixelRect::full(self.source.view().target_extent(self.target))));
+            let mut memo=self.memo.lock().unwrap();
+            for stage in [stage,PreviewStage::Final] {memo.insert(PreviewRequest {plane:raster::contents::index(plane),bounds,stage,pass:ticket.pass},ticket.version.clone());}
+        } else if self.version(self.target,plane,coordinate,stage)?.matches(&ticket.version)!=Some(true) {return Ok(false);}
+        ticket.declaration=self.clone();ticket.stage=stage;
+        Ok(true)
     }
     pub fn target(&self)->SourceTarget {self.target}
     pub(crate) fn contact_outputs(&self)->Option<impl Iterator<Item=[u32;2]>+'_> {

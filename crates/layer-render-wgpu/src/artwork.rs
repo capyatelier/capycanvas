@@ -58,14 +58,16 @@ impl Frame {
         })
     }
 
-    pub fn same_preview_inputs(&self, packet: FramePacket<'_>) -> bool {
+    pub fn same_preview_inputs<'a>(&'a self, packet: FramePacket<'a>) -> bool {
         let batches=packet.dab_batches.iter().filter(|batch|batch.kind==DabBatchKind::Preview);
         self.previews.len()==batches.clone().count()
             && self.previews
             .iter()
             .zip(batches)
             .all(|(old,batch)| {
-                *old==DabBatch {first_dab:old.first_dab,..batch.clone()}
+                let placed=|DabBatch {material_update,preview_end,stroke_id,target,kind,stroke_start,stroke_end,first_dab:_,dab_count,style,damage}:&'a DabBatch|
+                    (*material_update,*preview_end,*stroke_id,*target,*kind,*stroke_start,*stroke_end,*dab_count,style,*damage);
+                placed(old)==placed(batch)
                     && packet.dabs.get(batch.first_dab as usize..(batch.first_dab+batch.dab_count) as usize)
                         == self.preview_dabs.get(old.first_dab as usize..(old.first_dab+old.dab_count) as usize)
             })

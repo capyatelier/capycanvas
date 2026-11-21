@@ -21,6 +21,7 @@ pub(super) struct Contact {
     exit:std::sync::OnceLock<Option<Arc<SignatureFrame>>>,
     preview_level:std::sync::OnceLock<u32>,
     cells:Vec<(PixelRect,crate::scene::sources::Inputs)>,
+    shown:BTreeMap<[u32;2],Vec<crate::scene::sources::Lease>>,
     inputs:crate::scene::sources::AcceptedInputs,
     pub(super) pages:IdMap<pages::Key,pages::Held>,
     level:Option<u32>,
@@ -133,7 +134,8 @@ fn stroke(packet:FramePacket<'_>)->Option<(layer_core::StrokeId,SourceTarget)> {
 impl Contact {
     fn reduced_tiles(&self,phase:[u32;2],reach:impl Iterator<Item=[u32;2]>)->BTreeSet<[u32;2]> {
         let changed=self.next.iter().flat_map(|(_,changed,..)|changed.iter().flat_map(|tile|phased_tiles(*tile,phase)));
-        let tiles=reach.chain(changed).chain(self.stale.keys().copied());
+        let previewed=self.next.as_ref().map_or(&self.previewed,|(_,_,_,previewed)|previewed);
+        let tiles=reach.chain(changed).chain(self.stale.keys().copied().filter(|stale|!previewed.iter().any(|tile|phased_tiles(*tile,phase).any(|phased|phased==*stale))));
         if self.frame.watercolor(self.target) {tiles.flat_map(crate::scene::watercolor_stencil).flatten().collect()}else {tiles.collect()}
     }
 }
@@ -274,7 +276,7 @@ impl Cache {
         let previewed=r.preview_input_tiles(target);let stale=previewed.iter().map(|tile|(*tile,page_rect(*tile))).collect();
         self.gesture=Some(Contact {id:NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed),stroke,target,plan:self.plan,window,root,tiled,frame,composed,predicted,
             previewed,next:None,
-            footprints,tainted,guard,generation:std::sync::Mutex::new(generation),exit:std::sync::OnceLock::new(),preview_level,cells,inputs,pages,level,
+            footprints,tainted,guard,generation:std::sync::Mutex::new(generation),exit:std::sync::OnceLock::new(),preview_level,cells,shown:BTreeMap::new(),inputs,pages,level,
             stale,written:IdMap::default(),submissions:Vec::new(),stamps:Arc::default(),reduced,baselines:BTreeMap::new(),drawn_directly,reduced_from:BTreeMap::new()});
         Ok(())
     }
@@ -406,6 +408,7 @@ impl Cache {
         let contact=self.gesture.as_mut()?;
         let target=contact.target;let wet=contact.frame.watercolor(target);
         let current=r.current_raster_versions(target).ok()?;
+        let uncomposed=contact.next.take().map_or_default(|(_,changed,..)|changed);
         let mut changed=BTreeSet::new();
         if !contact.composed.changes(&current,|coordinate|{changed.insert(coordinate);}) {return None;}
         let predicted:BTreeSet<_>=match &r.preview_declaration {
@@ -413,16 +416,15 @@ impl Cache {
             Some(_)=>return None,
             None=>BTreeSet::new(),
         };
-        let persistent=changed.clone();
-        changed.extend(contact.predicted.iter().chain(&predicted).copied());
         let previewed=r.preview_input_tiles(target);
+        let refreshed:BTreeSet<_>=changed.iter().chain(&uncomposed).chain(&contact.predicted).chain(&predicted).chain(&contact.previewed).chain(&previewed).copied().collect();
+        let planes:&[layer_core::raster::RasterPlane]=if wet {&[layer_core::raster::RasterPlane::Color,layer_core::raster::RasterPlane::WatercolorWetness]}else {&[layer_core::raster::RasterPlane::Color]};
+        let accepted=contact.inputs.refresh_contact(r,packet.scene,target,planes,refreshed,&changed,encoder)?;
+        changed.extend(accepted.into_iter().chain(uncomposed));
         let stale=contact.footprints.iter().filter(|(local,_)|changed.iter().any(|tile|!page_rect(*tile).intersect(*local).is_empty()))
             .flat_map(|(_,cells)|cells.iter().copied()).collect::<Vec<_>>();
         let all=pages::coordinates(contact.plan.bounds,contact.plan.level).collect::<Vec<_>>();
         let reached=stale.iter().map(|index|pages::bounds(all[*index],contact.plan.level,contact.plan.extent)).collect();
-        let refreshed:BTreeSet<_>=changed.iter().chain(&contact.previewed).chain(&previewed).copied().collect();
-        let planes:&[layer_core::raster::RasterPlane]=if wet {&[layer_core::raster::RasterPlane::Color,layer_core::raster::RasterPlane::WatercolorWetness]}else {&[layer_core::raster::RasterPlane::Color]};
-        if !contact.inputs.refresh_contact(r,packet.scene,target,planes,refreshed,&persistent,encoder) {return None;}
         for region in scene.scale_sources.entries.get(&target).into_iter().flat_map(|source|&source.damage.regions) {for tile in page_coordinates(*region) {
             let rect=contact.stale.entry(tile).or_insert(PixelRect::EMPTY);*rect=rect.union(region.intersect(page_rect(tile)));
         }}
@@ -491,7 +493,7 @@ impl Cache {
             if !reductions.is_empty() {reads.updates.push((target,reductions.len()));}
             if !reads.ready(scene,r,encoder,start,Class::Visible)? {return Err(GpuRasterError::NotReady);}
             let input=input_plan(self.plan,packet.scene,Some(self.graph.objects()));
-            let mut units=vec![reads];let mut composed=Vec::new();let mut blocked=Vec::new();let mut fresh=Vec::new();
+            let mut units=vec![reads];let mut composed=Vec::new();let mut blocked=Vec::new();let mut fresh=Vec::new();let mut shown=Vec::new();
             for (region,drawn) in composes.into_iter().zip(drawn) {
                 let start=scene.jobs.len();let mut unit=Unit::default();
                 let cell=[region.min_x()/span,region.min_y()/span];
@@ -519,6 +521,7 @@ impl Cache {
                             .map(|changed|paint_transform::texel_rect(changed.window_local(region),side)).filter(|[_,_,width,height]|width*height!=0);
                         if let Some(texels)=texels {crop(&mut scene.jobs[start..],texels);}
                         if let Some((stroked,reads))=now {fresh.push((cell,stroked,reads));}
+                        shown.push((cell,unit.sources.to_vec()));
                         unit.work=scene.planned_work(start);units.push(unit);
                         composed.push(texels.map_or(region,|[x,y,width,height]|PixelRect::new(x*side,y*side,(x+width)*side,(y+height)*side).translated([region.min_x(),region.min_y()]).intersect(region)));
                     },
@@ -527,11 +530,12 @@ impl Cache {
                 }
             }
             self.encode_units(scene,r,encoder,units)?;
-            Ok((composed,blocked,fresh))
+            Ok((composed,blocked,fresh,shown))
         })();
         let contact=self.gesture.as_mut().expect("live contact");
         contact.inputs=inputs;contact.cells=cells;contact.stale=stale;contact.baselines=baselines;
-        let (composed,blocked,fresh)=match result {Ok(done)=>done,Err(error)=>{scene.discard_jobs_from(start);return Err(error);}};
+        let (composed,blocked,fresh,shown)=match result {Ok(done)=>done,Err(error)=>{scene.discard_jobs_from(start);return Err(error);}};
+        contact.shown.extend(shown);
         let submission=encoder.submission();
         contact.baselines.extend(fresh.into_iter().map(|(cell,stroked,reads)|(cell,Baseline {submission:submission.clone(),stroked,reads})));
         for (tile,now) in witnessed {match now {Some(now)=>{contact.reduced_from.insert(tile,now);},None=>{contact.reduced_from.remove(&tile);}}}
@@ -553,8 +557,9 @@ impl Cache {
             for (_,(key,region,_)) in contact.written.iter().filter(|(tile,_)|!contact.predicted.contains(*tile)) {store.materialize_source(key,*region,key.level,frame);}
         }
         self.requeue_keyless_cells();
-        let Contact {inputs,pages,..}=contact;
+        let Contact {inputs,pages,shown,..}=contact;
         inputs.track(encoder);
         for page in pages.into_values() {page.track(encoder);}
+        for leases in shown.into_values() {crate::scene::sources::Lease::track(leases,encoder);}
     }
 }
