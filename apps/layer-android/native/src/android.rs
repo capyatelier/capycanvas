@@ -736,17 +736,36 @@ impl App {
             }
         };
         self.frame_cost[1] = elapsed() - self.frame_cost[0];
+        let complete = surface.completed_frames.clone();
+        let frame = surface.submitted_frames + 1;
+        let observer = surface.completion_observer.clone();
+        let raster_frame = observer.as_ref().map_or(0, |_| gpu.submitted_updates());
+        let object_revision = observer.as_ref().map_or(u64::MAX,|_|gpu.canvas_preview_revision());
+        let submitted = observer.as_ref().map(|_| Arc::new(AtomicU64::new(monotonic_ns())));
+        let submitted_ns = submitted.clone();
         surface
             .presenter
-            .present(
+            .present_then(
                 gpu,
                 &target.texture.create_view(&Default::default()),
                 view,
                 surround,
+                move || {
+                    complete.fetch_max(frame, Ordering::Release);
+                    if waiter.swap(false, Ordering::AcqRel) { completed(); }
+                    if let Some((observer, submitted_ns)) = observer.zip(submitted_ns) {
+                        let completed_ns = monotonic_ns();
+                        let mut rows = observer.lock().unwrap();
+                        if rows.len() < 32768 { rows.push([frame, submitted_ns.load(Ordering::Acquire), completed_ns, raster_frame, consumed_paint_ns, object_revision]); }
+                    }
+                    // Callback service time is an upper bound on GPU completion,
+                    // not scanout or physical pen-to-photon latency.
+                    unsafe { ndk_sys::ATrace_setCounter(c"Capy canvas completed".as_ptr(), frame as i64); }
+                },
             )
             .map_err(error)?;
         self.frame_cost[2] = elapsed() - self.frame_cost[0] - self.frame_cost[1];
-        let submitted_ns = surface.completion_observer.as_ref().map_or(0, |_| monotonic_ns());
+        if let Some(submitted) = submitted { submitted.store(monotonic_ns(), Ordering::Release); }
         if surface.ink { gpu.queue().present(target); }
         else { surface.pending_target = gpu.queue().try_present(target).err().map(|target| (target, launch)); }
         if surface.pending_target.is_none() { surface.track_launch(gpu, launch, wake); }
@@ -756,27 +775,8 @@ impl App {
         if self.blank_presented && self.host.startup.canvas_ready {
             self.host.canvas_frame_rate.submitted();
         }
-        {
-            let complete = surface.completed_frames.clone();
-            let frame = surface.submitted_frames;
-            let observer = surface.completion_observer.clone();
-            let raster_frame = observer.as_ref().map_or(0, |_| gpu.submitted_updates());
-            let object_revision = observer.as_ref().map_or(u64::MAX,|_|gpu.canvas_preview_revision());
-            if object_revision != u64::MAX {
-                unsafe { ndk_sys::ATrace_setCounter(c"Capy artwork revision".as_ptr(), object_revision as i64); }
-            }
-            gpu.on_gpu_done(move || {
-                complete.fetch_max(frame, Ordering::Release);
-                if waiter.swap(false, Ordering::AcqRel) { completed(); }
-                if let Some(observer) = observer {
-                    let completed_ns = monotonic_ns();
-                    let mut rows = observer.lock().unwrap();
-                    if rows.len() < 32768 { rows.push([frame, submitted_ns, completed_ns, raster_frame, consumed_paint_ns, object_revision]); }
-                }
-                // Callback service time is an upper bound on GPU completion,
-                // not scanout or physical pen-to-photon latency.
-                unsafe { ndk_sys::ATrace_setCounter(c"Capy canvas completed".as_ptr(), frame as i64); }
-            });
+        if object_revision != u64::MAX {
+            unsafe { ndk_sys::ATrace_setCounter(c"Capy artwork revision".as_ptr(), object_revision as i64); }
         }
         // Shared-image submissions are not distinct displayed frames. Perfetto
         // records producer progress here, not scanout or input visibility.

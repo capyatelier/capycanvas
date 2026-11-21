@@ -230,8 +230,8 @@ after submission returns and before Present; it is an upper bound on the CPU
 submission boundary, not GPU completion or display time.
 
 `FramePacing::IN_FLIGHT` controls both GPU drawing depth and the DXGI maximum
-frame latency. Pacing tracks the drawing submission returned by the presenter;
-an additional submission after Present would also include unrelated queued work.
+frame latency. Pacing follows the completion the presenter binds to its drawing
+submission; one registered after Present would also wait for later queued work.
 
 ### Runtime filter packages
 

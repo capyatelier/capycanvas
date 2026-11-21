@@ -646,19 +646,21 @@ impl CapyHost {
                     });
                 }
                 if let Some(trace)=&mut self.presentation_progress {trace.candidate=None;}
+                gpu.on_encoder_done(&encoder,self.pacing.occupy(self.native.wake_callback()));
                 gpu.queue().submit_for_present([encoder.finish()]);gpu.queue().present(target);
-                self.native.canvas_frame_rate.submitted();self.pacing.submitted(gpu,self.native.wake_callback());
+                self.native.canvas_frame_rate.submitted();
                 self.surface_ready.submitted(gpu, &self.chrome, None, None);
             }
             self.poll_services()?;
             return Ok(i32::from(self.native.frame_demand() != layer_render::FrameDemand::Wait));
         }
         let target = self.target.take().ok_or("Missing acquired surface target")?;
-        presenter.present(
+        presenter.present_then(
             gpu,
             &target.texture.create_view(&Default::default()),
             view,
             surround,
+            self.pacing.occupy(self.native.wake_callback()),
         ).map_err(err)?;
         if let Some(trace)=&mut self.presentation_progress {
             trace.candidate=presenter.content_revision(gpu)
@@ -669,7 +671,6 @@ impl CapyHost {
         gpu.queue().present(target);
         if let Some(timing) = &mut self.frame_timing { timing.presented_ns = crate::frame_timing::now(); }
         if draw { self.native.canvas_frame_rate.submitted(); }
-        self.pacing.submitted(gpu, self.native.wake_callback());
         let document=self.native.session.engine().document().composition().size;
         let ready=composition.staged&&presenter.chrome_ready();
         let launch=if ready {self.native.launch_frame()}else{None};

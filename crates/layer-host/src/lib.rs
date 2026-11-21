@@ -1643,8 +1643,8 @@ mod tests {
                 scene::SceneDisplay { scale: 1., headroom: 1., blank_presented: true, compositor_hdr: false }).unwrap();
             if host.withheld_frame(&composition).is_none() {
                 let gpu = host.session.engine().backend().0.as_ref().unwrap();
-                presenter.present(gpu, &target.create_view(&Default::default()), host.session.state().camera.view(), [0.2; 4]).unwrap();
-                gpu.on_gpu_done({ let wake = host.wake_callback(); move || wake() });
+                let wake = host.wake_callback();
+                presenter.present_then(gpu, &target.create_view(&Default::default()), host.session.state().camera.view(), [0.2; 4], move || wake()).unwrap();
                 host.session.renderer_mut().0.as_mut().unwrap().after_present();
             }
         };

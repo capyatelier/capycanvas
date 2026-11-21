@@ -993,6 +993,15 @@ int main() {
     assert(NextCanvasRenderStep(false,idleWork,queries)==CanvasRenderStep::Wait&&NextCanvasRenderStep(true,idleWork,queries)==CanvasRenderStep::Frame);
     assert(CanvasAcquisitionWaitEnds(4,false,false,true)&&!CanvasAcquisitionWaitEnds(4,false,false,false));
     assert(!CanvasAcquisitionWaitEnds(0,false,false,true)&&CanvasAcquisitionWaitEnds(0,true,false,false)&&CanvasAcquisitionWaitEnds(4,false,true,false));
+    {
+        std::vector<int32_t> attempts;
+        auto acquire=[&](std::vector<int32_t> results){return [&attempts,results=std::move(results)]{attempts.push_back(results[attempts.size()]);return attempts.back();};};
+        assert(AcquireCanvasFrame(acquire({4,1}),[]{return true;})==1&&attempts==std::vector<int32_t>({4,1}));
+        attempts.clear();assert(AcquireCanvasFrame(acquire({4,4}),[]{return true;})==4&&attempts.size()==2);
+        attempts.clear();assert(AcquireCanvasFrame(acquire({4}),[]{return false;})==4&&attempts.size()==1);
+        attempts.clear();bool waited=false;
+        assert(AcquireCanvasFrame(acquire({0}),[&]{waited=true;return true;})==0&&attempts.size()==1&&!waited);
+    }
     for(auto kind:{CanvasQueryKind::Filters,CanvasQueryKind::Thumbnails,CanvasQueryKind::LayerMenu,CanvasQueryKind::Workspace,CanvasQueryKind::Document,CanvasQueryKind::Papers}){
         assert(queries.Push({kind,"retry",{}}));
         assert(NextCanvasRenderStep(false,idleWork,queries)==CanvasRenderStep::Answer);

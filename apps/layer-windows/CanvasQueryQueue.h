@@ -57,6 +57,11 @@ inline bool CanAnswerCanvasQueryAfterFrame(bool closing){return !closing;}
 
 inline bool CanvasAcquisitionWaitEnds(int32_t acquired,bool closing,bool resize,bool servicesReady){return closing||resize||(acquired==4&&servicesReady);}
 
+template<class Acquire,class Completed> int32_t AcquireCanvasFrame(Acquire acquire,Completed completed){
+    auto acquired=acquire();
+    return acquired==4&&completed()?acquire():acquired;
+}
+
 class CanvasSurfacePoll {
     std::optional<std::chrono::steady_clock::time_point> due;
 public:
