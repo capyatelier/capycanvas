@@ -2598,6 +2598,10 @@ pub(super) mod query_tests {
     }
 
     fn display(document:&layer_core::Document,source:&Arc<layer_core::color::source::SourceImage>,level:u32)->WgpuRasterizer {
+        display_window(document,source,level,PixelRect::full(document.composition().size))
+    }
+
+    fn display_window(document:&layer_core::Document,source:&Arc<layer_core::color::source::SourceImage>,level:u32,window:PixelRect)->WgpuRasterizer {
         let extent=document.composition().size;
         let mut renderer=crate::memory::memory_tests::legacy_scene_renderer(document.composition().color);
         renderer.ensure_document_metadata(extent,document.scene()).unwrap();
@@ -2616,7 +2620,7 @@ pub(super) mod query_tests {
         }
         renderer.uploads.finish(&encoder);encoder.submit(&renderer.queue);crate::test_support::complete(&renderer);
         let mut scene=renderer.scene.take().unwrap_or_else(||Scene::new(&renderer).unwrap());
-        let mut cache=Cache::new(&renderer,Request {plan:display_mips::Plan::at(extent,level),evaluation:Evaluation::Display},document.scene().order().len());
+        let mut cache=Cache::new(&renderer,Request {plan:display_mips::Plan::window(extent,level,window),evaluation:Evaluation::Display},document.scene().order().len());
         let mut commands=RegionRecords::new(&renderer);
         let mut encoder=submission::CommandEncoder::new(&renderer.device,&Default::default());
         scene.begin_frame();commands.begin();scene.scale_sources.prepare(&renderer,frame,&[]);
@@ -2705,9 +2709,10 @@ pub(super) mod query_tests {
             layer_core::DocumentNames {paint:"Pixels".into(),paper:"Paper".into()});
         let source=layer_core::color::source::rgba8_source(extent,|_,_|[40,90,170,255]);
         paint_mut(&mut document,0).base=Some(layer_core::authored::PaintBase::new(source.clone().into()));
-        let mut renderer=display(&document,&source,0);
+        let mut renderer=display_window(&document,&source,0,PixelRect::new(0,0,extent[0]/2,extent[1]));
         let mut cache=renderer.scale_display.take().unwrap();
         let overview=cache.overview.as_mut().unwrap();
+        overview.pixels.ensure_root(&renderer,overview.plan,overview.precision.format(),"unwritten overview",renderer.scene_tiers.windows.charge(0));
         overview.pixels.ensure(&renderer,overview.plan,overview.precision.format(),renderer.scene_tiers.windows.charge(0));
         let key=overview.page_key(overview.graph.root.clone().unwrap(),overview.plan.bounds);
         let claimed=overview.pages.lock().unwrap().claim(&renderer,key.clone(),u64::MAX,WindowId::default(),crate::residency::Class::Visible).unwrap();
@@ -2719,9 +2724,10 @@ pub(super) mod query_tests {
         let cache=renderer.scale_display.as_ref().unwrap();
         assert!(cache.overview.as_ref().is_some_and(|overview|overview.presentable().is_none()));
         assert!(cache.presentable().is_some());
-        let views=renderer.presentation_views().unwrap();
+        let page=renderer.presentation_page().unwrap();
+        let views=page.views();
         assert_eq!(views[0],cache.view());
-        assert_eq!(views[1],cache.presentation().unwrap().views()[2]);
+        assert_eq!((views[1],page.stand_in_scale()),(cache.view(),0.),"an unwritten overview is no stand-in");
         assert!(views.iter().all(|view|view.texture().width()>0 && view.texture().height()>0));
     }
 
