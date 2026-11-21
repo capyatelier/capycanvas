@@ -1151,10 +1151,11 @@ fn a_stroke_started_while_the_last_one_composes_begins_in_contact_and_commits_on
     assert!(counts.composite_commits<=own as u64,"the new stroke's first frame commits {} cells; its dabs reach {own}: {counts:?}",counts.composite_commits);
 }
 
-fn pen_dab(x:f32,style:&layer_render::DabStyle)->layer_render::Dab {
-    let mut dab=material_dab(x,300.,style);dab.radii=[4.5;2];dab.previous=[4.5,4.5,1.,0.];dab.motion=[3.,0.];
+fn sized_dab([x,y]:[f32;2],radius:f32,style:&layer_render::DabStyle)->layer_render::Dab {
+    let mut dab=material_dab(x,y,style);dab.radii=[radius;2];dab.previous=[radius,radius,1.,0.];dab.motion=[3.,0.];
     dab.material[3]=f32::from(style.execution==layer_core::BrushExecution::Liquify);dab
 }
+fn pen_dab(x:f32,style:&layer_render::DabStyle)->layer_render::Dab {sized_dab([x,300.],4.5,style)}
 fn stroked_over_a_layer(extent:[u32;2],painted:bool)->layer_core::Document {
     let mut doc=document_at(extent);
     let paint=primary_paint(&doc);
@@ -1162,6 +1163,41 @@ fn stroked_over_a_layer(extent:[u32;2],painted:bool)->layer_core::Document {
     let below=paint_occurrence(&mut doc,"Below",Some(rgba8_source(extent,|x,y|[(x/3) as u8,(y/2) as u8,140,255])));
     let working=doc.scene().position(doc.working.occurrence.unwrap()).unwrap();
     insert_occurrence(&mut doc,below,working+1);
+    doc
+}
+const RECORD_ROW_SIZES:[f32;1]=[2000.];
+const FRAME_ROW_SIZES:[(f32,usize);1]=[(600.,4)];
+fn grayed_copy(doc:&layer_core::Document)->layer_core::Document {
+    let mut doc=doc.clone();
+    let paint=primary_paint(&doc);doc.artwork.paint.get_mut(paint).unwrap().color_mode=layer_core::color::LayerColorMode::Grayscale;doc.revision+=1;doc
+}
+fn celled(preset:DefaultBrushPreset,cell_size:u32)->layer_render::DabStyle {
+    let style=crate::layer_tests::preset_style(preset);
+    layer_render::DabStyle {blender:layer_core::BrushBlender {cell_size:cell_size as f32,..style.blender},..style}
+}
+fn sized_writers()->Vec<(String,layer_render::DabStyle,bool,usize,bool)> {
+    use DefaultBrushPreset::*;
+    let style=crate::layer_tests::preset_style;
+    let mut writers=vec![("a Pencil".to_string(),style(Pencil),true,1,false),("a Pencil stored write-only".into(),style(Pencil),false,1,false),
+        ("a smudge".into(),style(Smudge),true,0,false),("wet paint".into(),style(WetRound),true,0,false),("a wet-edged brush".into(),wet_edged_brush(),true,0,false),
+        ("a clone stamp".into(),clone_stamp(),true,1,true),("a Liquify push".into(),style(LiquifyPush),true,0,true),("a Liquify twirl".into(),style(LiquifyTwirl),true,0,true)];
+    for cell_size in [1,4,layer_core::BLENDER_CELL_SIZE_LIMIT] {
+        writers.push((format!("a Dither blender with {cell_size} px cells"),celled(DitherBlender,cell_size),true,0,true));
+        writers.push((format!("a Scatter blender with {cell_size} px cells"),celled(ScatterBlender,cell_size),true,0,true));
+    }
+    writers
+}
+fn swept_reach(size:f32)->f32 {(0.75*size).ceil()+1.}
+fn sized_drawing(size:f32)->layer_core::Document {
+    let reach=swept_reach(size) as u32;
+    stroked_over_a_layer([540+reach,520+reach],true)
+}
+fn over_paper(mut doc:layer_core::Document,paper:bool)->layer_core::Document {
+    if paper {
+        let paper=doc.artwork.occurrences.iter().find(|(_,_,occurrence)|occurrence.kind()==LayerKind::Effect).unwrap().0;
+        let below=doc.scene().order().len();
+        insert_occurrence(&mut doc,paper,below);
+    }
     doc
 }
 const STROKE:[(f32,f32);12]=[(480.,486.),(486.,492.),(492.,498.),(498.,504.),(504.,510.),(510.,516.),(516.,522.),(522.,516.),(522.,510.),(522.,510.),(522.,510.),(528.,534.)];
@@ -1191,10 +1227,10 @@ fn redraw_whole(r:&mut WgpuRasterizer,frame:FramePacket<'_>,target:SourceTarget,
     for cell in cells {cache.evict_window(*cell);}
     stroke_frame(r,frame,target,style,tips,false,step).composed_texels
 }
-struct Stroked<'a> {label:&'a str,doc:&'a layer_core::Document,style:layer_render::DabStyle,tips:usize,in_place:bool}
+struct Stroked<'a> {label:String,doc:&'a layer_core::Document,style:layer_render::DabStyle,tips:usize,in_place:bool,radius:f32,shift:[f32;2],frames:usize,display:wgpu::TextureFormat}
 impl<'a> Stroked<'a> {
-    fn new(label:&'a str,doc:&'a layer_core::Document,preset:DefaultBrushPreset,tips:usize)->Self {
-        Self {label,doc,style:crate::layer_tests::preset_style(preset),tips,in_place:true}
+    fn new(label:impl Into<String>,doc:&'a layer_core::Document,preset:DefaultBrushPreset,tips:usize)->Self {
+        Self {label:label.into(),doc,style:crate::layer_tests::preset_style(preset),tips,in_place:true,radius:4.5,shift:[0.;2],frames:STROKE.len(),display:wgpu::TextureFormat::Rgba16Float}
     }
     fn started(&self)->(WgpuRasterizer,FramePacket<'a>,SourceTarget) {
         let extent=self.doc.composition().size;
@@ -1203,14 +1239,15 @@ impl<'a> Stroked<'a> {
         if !self.in_place {crate::test_support::write_only_dry_material(&mut r);}
         select_retouch(&mut r,target,&self.style);
         crate::test_support::submit_settled(&mut r,frame);
+        assert_eq!(r.scale_display.as_ref().unwrap().pixels.root().unwrap().texture.format(),self.display,"{}: the window's format",self.label);
         (r,frame,target)
     }
-    fn dabs(&self,(ink,tip):(f32,f32))->[layer_render::Dab;3] {[pen_dab(ink,&self.style),pen_dab(tip,&self.style),pen_dab(tip+9.,&self.style)]}
+    fn dabs(&self,(ink,tip):(f32,f32))->[layer_render::Dab;3] {[ink,tip,tip+9.].map(|x|sized_dab([x+self.shift[0],300.+self.shift[1]],self.radius,&self.style))}
     fn patched_and_whole_texels(&self,mut before:impl FnMut(usize,&mut WgpuRasterizer))->Vec<[u64;2]> {
-        let Self {label,style,tips,..}=self;
+        let Self {label,style,tips,frames,..}=self;
         let (mut r,frame,target)=self.started();
         let mut sequence=None;
-        STROKE.into_iter().enumerate().map(|(step,at)| {
+        let texels=STROKE.into_iter().take(*frames).enumerate().map(|(step,at)| {
             before(step,&mut r);
             let dabs=self.dabs(at);
             let patched=stroke_frame(&mut r,frame,target,style,&dabs[..=*tips],true,step).composed_texels;
@@ -1223,15 +1260,26 @@ impl<'a> Stroked<'a> {
             sequence=held;
             assert!(step==0 || bits(&r)==shown,"{label} frame {step}: a patched frame differs from a whole redraw of the same cells");
             [patched,whole]
-        }).skip(1).collect()
+        }).skip(1).collect();
+        let last=self.dabs(STROKE[frames-1])[0];
+        let lift=layer_render::DabBatch {stroke_id:layer_core::StrokeId(1),stroke_start:false,stroke_end:true,..crate::test_support::dab_batch(target,style.clone(),last.bounds())};
+        crate::test_support::submit_settled(&mut r,FramePacket {dabs:std::slice::from_ref(&last),dab_batches:std::slice::from_ref(&lift),time_seconds:0.1*(frames+1) as f32,..frame});
+        let settled=bits(&r);
+        evict_view(&r);
+        crate::test_support::submit_settled(&mut r,frame);
+        assert!(bits(&r)==settled,"{label}: the picture settled after pen up differs from a whole redraw of the window");
+        texels
     }
 }
 fn sums(texels:&[[u64;2]])->[u64;2] {[0,1].map(|renderer|texels.iter().map(|frame|frame[renderer]).sum())}
 
-fn tile_read(r:&WgpuRasterizer,target:SourceTarget,tile:[u32;2],preview:bool)->(crate::resident::Input,Vec<[u32;4]>) {
+type PageReads=BTreeMap<[u32;2],(crate::resident::Input,Vec<[u32;4]>)>;
+fn page_reads(r:&WgpuRasterizer,target:SourceTarget,preview:bool)->PageReads {
     let pages=if preview {&r.preview_pages}else {&r.paint_layers.iter().find(|layer|layer.id==target).unwrap().pages};
-    let read=r.read_color_page(target,pages.iter().find(|page|page.coordinate==tile).unwrap(),preview,None).unwrap();
-    (read.input(),crate::test_support::float_pixels(r,&read.value().texture).into_iter().map(|pixel|pixel.map(f32::to_bits)).collect())
+    pages.iter().filter_map(|page| {
+        let read=r.read_color_page(target,page,preview,None).ok()?;
+        Some((page.coordinate,(read.input(),crate::test_support::float_pixels(r,&read.value().texture).into_iter().map(|pixel|pixel.map(f32::to_bits)).collect())))
+    }).collect()
 }
 fn differing_outside(rect:PixelRect,now:&[[u32;4]],then:&[[u32;4]])->usize {
     (0..PAGE_SIZE*PAGE_SIZE).filter(|index| {
@@ -1239,46 +1287,75 @@ fn differing_outside(rect:PixelRect,now:&[[u32;4]],then:&[[u32;4]])->usize {
         !(rect.min_x()..rect.max_x()).contains(&x) || !(rect.min_y()..rect.max_y()).contains(&y)
     }).filter(|index|now[*index as usize]!=then[*index as usize]).count()
 }
+struct Written {label:String,doc:layer_core::Document,style:layer_render::DabStyle,in_place:bool,tips:usize,radius:f32,at:[f32;2]}
+impl Written {
+    fn is_bounded_by_its_page_records(&self) {
+        let Self {label,doc,style,in_place,tips,radius,at}=self;
+        let extent=doc.composition().size;let target=doc.active_target().unwrap();
+        let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
+        let mut r=renderer(doc);
+        if !in_place {crate::test_support::write_only_dry_material(&mut r);}
+        select_retouch(&mut r,target,style);
+        crate::test_support::submit_settled(&mut r,frame);
+        let dabs=|step:usize|[0.,3.].map(|ahead|sized_dab([at[0]+3.*step as f32+ahead,at[1]],*radius,style));
+        for step in 0..2 {stroke_frame(&mut r,frame,target,style,&dabs(step)[..=*tips],true,step);}
+        let before=page_reads(&r,target,false);
+        let [ink,tip]=dabs(2);
+        stroke_frame(&mut r,frame,target,style,&[ink,tip][..=*tips],true,2);
+        let written=page_reads(&r,target,false);
+        let grid=extent.map(|side|side.next_multiple_of(PAGE_SIZE));
+        let cells=if crate::destination_material::blender(style).cells {style.blender.cell_size as u32-1}else {0};
+        let reached=|dab:&layer_render::Dab,coordinate:[u32;2]| {
+            let page=page_rect(coordinate);crate::pixel_rect::pixel_rect(dab.bounds(),grid).expand(cells,grid).intersect(page).window_local(page)
+        };
+        let past_the_edge=|coordinate:[u32;2]|page_rect(coordinate).intersect(PixelRect::full(extent))!=page_rect(coordinate);
+        let mut partial=0;
+        for (coordinate,(page,now)) in &written {
+            let Some((earlier,then))=before.get(coordinate).filter(|(earlier,_)|!page.same(earlier)) else {continue;};
+            let Some(rect)=page.changed_since(earlier).or_else(||page.seed().filter(|(from,_)|from.same(earlier)).map(|(_,rect)|rect)) else {
+                assert!(style.blender.kind==layer_core::BlenderKind::Scatter && past_the_edge(*coordinate),"{label}: the stroke's write to page {coordinate:?} is recorded against the version before the frame");
+                continue;
+            };
+            let reach=reached(&ink,*coordinate);
+            assert!(!rect.is_empty() && rect.union(reach)==reach,"{label}: the record of page {coordinate:?} names no more than its dab reaches: {rect:?} in {reach:?}");
+            assert_eq!(differing_outside(rect,now,then),0,"{label}: page {coordinate:?} changed outside its recorded rectangle {rect:?}");
+            partial+=usize::from(rect.area()<u64::from(PAGE_SIZE).pow(2));
+        }
+        assert!(partial>0,"{label}: a record names less than its page");
+        if *tips==0 {return;}
+        let tipped=page_reads(&r,target,true);
+        assert!(!tipped.is_empty(),"{label}: the tip is drawn");
+        for (coordinate,(page,shown)) in &tipped {
+            let (under,now)=&written[coordinate];
+            let (from,rect)=page.seed().unwrap_or_else(||panic!("{label}: the tip's write to page {coordinate:?} is recorded"));
+            let reach=reached(&tip,*coordinate);
+            assert!(from.same(under) && rect.union(reach)==reach,"{label}: the tip on page {coordinate:?} is recorded as a copy of the page it was drawn over: {rect:?} in {reach:?}");
+            assert_eq!(differing_outside(rect,shown,now),0,"{label}: the tip differs from page {coordinate:?} outside its recorded rectangle {rect:?}");
+        }
+    }
+}
 
 #[test]
 fn each_page_record_bounds_what_its_stroke_frame_wrote() {
     use DefaultBrushPreset::*;
-    let extent=[768,512];let doc=stroked_over_a_layer(extent,true);let target=doc.active_target().unwrap();
-    let mut graying=doc.clone();
-    let paint=primary_paint(&graying);graying.artwork.paint.get_mut(paint).unwrap().color_mode=layer_core::color::LayerColorMode::Grayscale;graying.revision+=1;
-    let quarter=u64::from(PAGE_SIZE).pow(2)/4;
+    let doc=stroked_over_a_layer([768,512],true);
     let style=crate::layer_tests::preset_style;
     let locked=layer_render::DabStyle {alpha_locked:true,..style(Pencil)};
-    let dither=style(DitherBlender);
-    let fine=layer_render::DabStyle {blender:layer_core::BrushBlender {cell_size:1.,..dither.blender},..dither.clone()};
     let colored=[("a Pencil",style(Pencil),true,1),("an alpha-locked Pencil",locked,true,1),("an ink pen",style(GPen),true,1),
         ("an eraser",style(Eraser),true,1),("a paintbrush",style(Paintbrush),true,1),("a multiply glaze",style(MultiplyGlaze),true,1),
         ("a Pencil stored write-only",style(Pencil),false,1),("an ink pen stored write-only",style(GPen),false,1),("a smudge",style(Smudge),true,0),("wet paint",style(WetRound),true,0),
         ("a wet-edged brush",wet_edged_brush(),true,0)];
-    let grayed=[("a Dither blender",dither,true,0),("a Dither blender without cells",fine,true,0),("a Scatter blender",style(ScatterBlender),true,0),
+    let grayed=[("a Dither blender",style(DitherBlender),true,0),("a Dither blender without cells",celled(DitherBlender,1),true,0),("a Scatter blender",style(ScatterBlender),true,0),
         ("a clone stamp",clone_stamp(),true,1),("a clone stamp stored write-only",clone_stamp(),false,1),("a Liquify push",style(LiquifyPush),true,0)];
-    for (doc,(label,style,in_place,tips)) in colored.into_iter().map(|row|(&doc,row)).chain(grayed.into_iter().map(|row|(&graying,row))) {
-        let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
-        let mut r=renderer(doc);
-        if !in_place {crate::test_support::write_only_dry_material(&mut r);}
-        select_retouch(&mut r,target,&style);
-        crate::test_support::submit_settled(&mut r,frame);
-        let dabs=|step:usize|[pen_dab(300.+3.*step as f32,&style),pen_dab(303.+3.*step as f32,&style)];
-        for step in 0..2 {stroke_frame(&mut r,frame,target,&style,&dabs(step)[..=tips],true,step);}
-        let (before,then)=tile_read(&r,target,[1,1],false);
-        stroke_frame(&mut r,frame,target,&style,&dabs(2)[..=tips],true,2);
-        let (written,now)=tile_read(&r,target,[1,1],false);
-        let rect=written.changed_since(&before).unwrap_or_else(|| {
-            let (from,rect)=written.seed().unwrap_or_else(||panic!("{label}: the stroke's write is recorded"));
-            assert!(from.same(&before),"{label}: the page is recorded as a copy of the version before the frame");rect
-        });
-        assert!(!rect.is_empty() && rect.area()<quarter,"{label}: the record names a small rectangle: {rect:?}");
-        assert_eq!(differing_outside(rect,&now,&then),0,"{label}: the page changed outside its recorded rectangle {rect:?}");
-        if tips==0 {continue;}
-        let (tip,shown)=tile_read(&r,target,[1,1],true);
-        let (from,rect)=tip.seed().unwrap_or_else(||panic!("{label}: the tip's write is recorded"));
-        assert!(from.same(&written) && rect.area()<quarter,"{label}: the tip is recorded as a copy of the page it was drawn over: {rect:?}");
-        assert_eq!(differing_outside(rect,&shown,&now),0,"{label}: the tip differs from the page outside its recorded rectangle {rect:?}");
+    for (gray,(label,style,in_place,tips)) in colored.into_iter().map(|row|(false,row)).chain(grayed.into_iter().map(|row|(true,row))) {
+        Written {label:label.into(),doc:if gray {grayed_copy(&doc)}else {doc.clone()},style,in_place,tips,radius:4.5,at:[300.;2]}.is_bounded_by_its_page_records();
+    }
+    for size in RECORD_ROW_SIZES {
+        let doc=sized_drawing(size);
+        for (label,style,in_place,tips,gray) in sized_writers() {
+            Written {label:format!("{label} of {size} px"),doc:if gray {grayed_copy(&doc)}else {doc.clone()},style,in_place,tips,radius:size/2.,at:[480.+swept_reach(size),300.+swept_reach(size)]}
+                .is_bounded_by_its_page_records();
+        }
     }
 }
 
@@ -1295,10 +1372,10 @@ fn stays_whole<'a>(strokes:impl IntoIterator<Item=Stroked<'a>>) {
     }
 }
 
-#[test]
-fn every_patched_frame_equals_a_whole_frame_bit_for_bit_for_each_kind_of_page_record() {
+fn patches_bit_for_bit_for_each_kind_of_page_record(paper:bool) {
     use DefaultBrushPreset::*;
-    let painted=stroked_over_a_layer([768,512],true);let unpainted=stroked_over_a_layer([768,512],false);
+    let display=if paper {wgpu::TextureFormat::Rgba32Float}else {wgpu::TextureFormat::Rgba16Float};
+    let [painted,unpainted]=[true,false].map(|painted|over_paper(stroked_over_a_layer([768,512],painted),paper));
     patches_bit_for_bit([
         Stroked::new("a page written in place under a tip",&painted,Pencil,1),
         Stroked {in_place:false,..Stroked::new("a page copied to its other surface under a tip",&painted,Pencil,1)},
@@ -1309,7 +1386,22 @@ fn every_patched_frame_equals_a_whole_frame_bit_for_bit_for_each_kind_of_page_re
         Stroked {style:clone_stamp(),..Stroked::new("a page a clone stamp copied onto under its tip",&painted,CloneStamp,1)},
         Stroked::new("a page Liquify pushed in place without a tip",&painted,LiquifyPush,0),
         Stroked {style:wet_edged_brush(),..Stroked::new("a page a wet-edged brush drew on in place without a tip",&painted,Pencil,0)},
-    ]);
+    ].map(|stroked|Stroked {display,..stroked}));
+    for (size,frames) in FRAME_ROW_SIZES {
+        let doc=over_paper(sized_drawing(size),paper);
+        patches_bit_for_bit(sized_writers().into_iter().map(|(label,style,in_place,tips,_)|Stroked {style,in_place,radius:size/2.,shift:[swept_reach(size);2],frames,display,
+            ..Stroked::new(format!("{label} of {size} px shown as {display:?}"),&doc,Pencil,tips)}));
+    }
+}
+
+#[test]
+fn every_patched_frame_equals_a_whole_frame_bit_for_bit_for_each_kind_of_page_record() {
+    patches_bit_for_bit_for_each_kind_of_page_record(false);
+}
+
+#[test]
+fn every_patched_frame_over_paper_equals_a_whole_frame_bit_for_bit_for_each_kind_of_page_record() {
+    patches_bit_for_bit_for_each_kind_of_page_record(true);
 }
 
 #[test]
@@ -1329,7 +1421,7 @@ fn every_patched_frame_equals_a_whole_frame_bit_for_bit_for_each_layer_setup() {
     let occurrence=faded.artwork.occurrences.get_mut(owner).unwrap();occurrence.opacity=0.6;occurrence.blend=layer_core::LayerBlend::Multiply;
     reindex(&mut faded);
     patches_bit_for_bit([
-        Stroked::new("partial cells at the drawing's edge",&partial,Pencil,1),Stroked::new("a float drawing",&float,Pencil,1),
+        Stroked::new("partial cells at the drawing's edge",&partial,Pencil,1),Stroked {display:wgpu::TextureFormat::Rgba32Float,..Stroked::new("a float drawing",&float,Pencil,1)},
         Stroked::new("a layer above",&covered,Pencil,1),Stroked::new("a clipped layer",&clipped,Pencil,1),
         Stroked::new("a faded multiply layer",&faded,Pencil,1),
     ]);
@@ -1360,7 +1452,8 @@ fn a_cell_drawn_by_more_than_whole_cell_draws_composes_whole_cells_and_the_same_
     };
     let [blurred,inverted]=["gaussian_blur","invert"].map(above);
     stays_whole([Stroked::new("an offset layer",&offset,Pencil,1),Stroked::new("a masked layer",&masked,Pencil,1),
-        Stroked::new("a blur above",&blurred,Pencil,1),Stroked::new("an adjustment above",&inverted,Pencil,1)]);
+        Stroked {display:wgpu::TextureFormat::Rgba32Float,..Stroked::new("a blur above",&blurred,Pencil,1)},
+        Stroked {display:wgpu::TextureFormat::Rgba32Float,..Stroked::new("an adjustment above",&inverted,Pencil,1)}]);
 }
 
 #[test]
