@@ -49,11 +49,13 @@ impl WgpuRasterizer {
         self.publish_memory();
         self.publish_samples();
         self.factory.memory_budget().flush_reports();
-        self.memory.retention_grant().saturating_add(self.scene_tiers.retiring.used()) >= self.scene_tiers.display.used()
+        self.memory.retention_grant() >= self.live_display_bytes()
     }
     pub fn warm_bytes(&self) -> u64 {
-        self.resident_bytes().saturating_sub(self.scene_tiers.retiring.used()).saturating_sub(self.retired_display_bytes.used())
-            .saturating_sub(self.device.transient_display.used())
+        self.live_display_bytes().saturating_add(self.non_display_bytes())
+    }
+    fn live_display_bytes(&self) -> u64 {
+        self.scene_tiers.display.used().saturating_sub(self.retired_display_bytes.used()).saturating_sub(self.source_tiles.borrow().retired_tier().used())
     }
     /// Phones, Web and 4 GB tablets keep 64 MiB of background drawings,
     /// larger tablets 192 MiB and desktops 512 MiB.

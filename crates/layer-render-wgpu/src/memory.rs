@@ -578,7 +578,10 @@ impl WgpuRasterizer {
     }
     pub fn display_bytes(&self)->u64 {self.scene_tiers.display.used()}
     pub(crate) fn resident_bytes(&self)->u64 {
-        [&self.scene_tiers.display,&self.raster_tiers.raster,&self.device.transient_display,&self.scene_tiers.ram,&self.scene_tiers.decodes,&self.raster_buffers.working]
+        self.scene_tiers.display.used().saturating_add(self.device.transient_display.used()).saturating_add(self.non_display_bytes())
+    }
+    pub(crate) fn non_display_bytes(&self)->u64 {
+        [&self.raster_tiers.raster,&self.scene_tiers.ram,&self.scene_tiers.decodes,&self.raster_buffers.working]
             .into_iter().map(|tier|tier.used()).sum::<u64>().saturating_add(self.uncharged_bytes())
     }
     fn uncharged_bytes(&self)->u64 {
