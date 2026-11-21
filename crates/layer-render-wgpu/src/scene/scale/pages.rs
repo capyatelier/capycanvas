@@ -1888,13 +1888,13 @@ impl Cache {
             drop(frame.expected_key(&Key {coordinate,..template.clone()},bounds(coordinate,self.plan.level,self.plan.extent),self.required_input_level()));
         }
     }
-    pub(super) fn key_contact_cells(&self,frame:&SignatureFrame,predicted:&BTreeSet<[u32;2]>) {
+    pub(super) fn key_contact_cells(&self,frame:&SignatureFrame,tips:&[PixelRect]) {
         let Some((mut cells,_store,template))=self.cells() else {return;};
         let (plan,input_level)=(self.plan,self.required_input_level());
         for (cell,coordinate) in cells.cells.iter_mut().zip(coordinates(plan.bounds,plan.level)) {
             let Some(shown)=cell.shown.as_mut().filter(|shown|shown.unnamed()) else {continue;};
             let region=bounds(coordinate,plan.level,plan.extent);
-            shown.recorded=page_coordinates(region).all(|tile|!predicted.contains(&tile))
+            shown.recorded=tips.iter().all(|tip|tip.intersect(region).is_empty())
                 .then(||materialize(frame,&Key {coordinate,..template.clone()},region,input_level).ok()).flatten();
             if shown.recorded.is_none() {cell.invalidate();}
         }

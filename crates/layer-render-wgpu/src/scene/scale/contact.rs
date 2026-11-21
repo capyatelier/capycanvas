@@ -6,6 +6,7 @@ pub(super) struct Contact {
     stroke:layer_core::StrokeId,
     target:SourceTarget,
     plan:display_mips::Plan,
+    source:SourceFrame,
     window:wgpu::Texture,
     root:graph::Node,
     tiled:bool,
@@ -118,7 +119,6 @@ fn reads(node:&graph::Node,target:SourceTarget,tainted:&mut crate::IdSet<usize>)
     read
 }
 
-fn source_phase(scene:&Scene,target:SourceTarget)->[u32;2] {scene.scale_sources.entries.get(&target).map_or([0;2],|source|source.phase)}
 fn phased_tiles(tile:[u32;2],phase:[u32;2])->impl Iterator<Item=[u32;2]> {page_coordinates(page_rect(tile).translated(phase))}
 fn reductions<'a>(source:&'a sources::Source,r:&'a WgpuRasterizer,target:SourceTarget,level:u32,tiles:&'a BTreeSet<[u32;2]>)->impl Iterator<Item=(pages::Key,PixelRect,[u32;2])>+'a {
     let valid=PixelRect::full(source.valid_extent(level));
@@ -135,8 +135,9 @@ fn stroke(packet:FramePacket<'_>)->Option<(layer_core::StrokeId,SourceTarget)> {
 }
 
 impl Contact {
-    fn reduced_tiles(&self,phase:[u32;2],reach:impl Iterator<Item=[u32;2]>)->BTreeSet<[u32;2]> {
-        let changed=self.next.iter().flat_map(|(_,changed,..)|changed.iter().flat_map(|tile|phased_tiles(*tile,phase)));
+    fn phased(&self,tiles:&BTreeSet<[u32;2]>)->impl Iterator<Item=[u32;2]> {tiles.iter().flat_map(|tile|phased_tiles(*tile,self.source.phase))}
+    fn reduced_tiles(&self,reach:impl Iterator<Item=[u32;2]>)->BTreeSet<[u32;2]> {
+        let changed=self.next.iter().flat_map(|(_,changed,..)|self.phased(changed));
         let tiles=reach.chain(changed).chain(self.stale.keys().copied());
         if self.frame.watercolor(self.target) {tiles.flat_map(crate::scene::watercolor_stencil).flatten().collect()}else {tiles.collect()}
     }
@@ -198,7 +199,7 @@ impl Cache {
         let frame=kept.then(||Arc::new(contact.frame.composed(contact.target,contact.composed.clone())));
         if let Some(frame)=&frame {
             self.pages.lock().unwrap().set_expected(frame.clone());
-            self.key_contact_cells(frame,&contact.predicted);
+            self.key_contact_cells(frame,&contact.phased(&contact.predicted).map(|tile|contact.source.document(page_rect(tile)).in_frame(contact.plan.extent)).collect::<Vec<_>>());
         }
         drop(contact.exit.set(frame));
     }
@@ -265,8 +266,8 @@ impl Cache {
         let required=self.dab_cells(packet).into_iter().chain(touched.iter().filter(|cell|!cell.intersect(plan.bounds).is_empty()).copied()).collect::<Vec<_>>();
         let ready=scope.into_iter().filter(|cell|!self.pivot_missing(*cell)).collect::<Vec<_>>();
         if required.iter().any(|cell|!ready.contains(cell)) {return Ok(());}
-        let phase=source_phase(scene,target);
-        let reduced=local_reach(packet,target,phase).into_iter().flat_map(page_coordinates).collect();
+        let source=source_frame(Some(&scene.scale_sources),packet.scene,target);
+        let reduced=local_reach(packet,target,source.phase).into_iter().flat_map(page_coordinates).collect();
         let Some(Declared {cells,inputs,pages,level})=self.declare_contact(scene,r,packet,encoder,retained,budget,&frame,&root,target,tiled,None,ready,&required,&reduced)? else {return Ok(());};
         if required.iter().any(|region|!cells.iter().any(|(cell,_)|cell==region)) {return Ok(());}
         let footprints=frame.reader_regions(target,self.plan.level).into_iter().map(|(local,regions)|(local,regions.into_iter().flat_map(|region|self.reached_cells(region)).collect())).collect();
@@ -275,11 +276,12 @@ impl Cache {
         let predicted=frame.preview_for(target).and_then(|preview|preview.contact_outputs().map(Iterator::collect)).unwrap_or_default();
         static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);
         self.pixels.hold_current(&frame);
-        let previewed=r.preview_input_tiles(target);let stale=previewed.iter().flat_map(|tile|phased_tiles(*tile,phase)).map(|tile|(tile,page_rect(tile))).collect();
-        self.gesture=Some(Contact {id:NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed),stroke,target,plan:self.plan,window,root,tiled,frame,composed,predicted,
-            previewed,next:None,
+        let mut contact=Contact {id:NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed),stroke,target,plan:self.plan,source,window,root,tiled,frame,composed,predicted,
+            previewed:r.preview_input_tiles(target),next:None,
             footprints,tainted,guard,generation:std::sync::Mutex::new(generation),exit:std::sync::OnceLock::new(),preview_level,cells,inputs,pages,level,
-            stale,written:IdMap::default(),submissions:Vec::new(),stamps:Arc::default(),reduced,baselines:BTreeMap::new(),drawn_directly,reduced_from:BTreeMap::new()});
+            stale:BTreeMap::new(),written:IdMap::default(),submissions:Vec::new(),stamps:Arc::default(),reduced,baselines:BTreeMap::new(),drawn_directly,reduced_from:BTreeMap::new()};
+        contact.stale=contact.phased(&contact.previewed).map(|tile|(tile,page_rect(tile))).collect();
+        self.gesture=Some(contact);
         Ok(())
     }
     #[expect(clippy::too_many_arguments,reason="A contact grows with the frame's scene, encoding and budget into the cells its stroke reaches")]
@@ -291,8 +293,7 @@ impl Cache {
         let Some(current)=contact.next.as_ref().map(|(current,..)|current.clone()) else {return Ok(true);};
         let frame=Arc::new(contact.frame.advanced(target,current,r.preview_declaration.clone()));
         let known=contact.cells.iter().map(|(cell,_)|*cell).collect::<Vec<_>>();
-        let phase=source_phase(scene,target);
-        let tiles=contact.reduced_tiles(phase,local_reach(packet,target,phase).into_iter().flat_map(page_coordinates))
+        let tiles=contact.reduced_tiles(local_reach(packet,target,contact.source.phase).into_iter().flat_map(page_coordinates))
             .into_iter().filter(|tile|!contact.reduced.contains(tile)).collect::<BTreeSet<_>>();
         let scope=self.stroke_scope(packet,reached,from);
         let view=work_view(packet,0);
@@ -445,11 +446,10 @@ impl Cache {
         let drawn=self.unnamed_writes(&composes);
         let contact=self.gesture.as_mut().expect("live contact");
         let (root,tiled,target)=(contact.root.clone(),contact.tiled,contact.target);
-        let (plan,frame)=(contact.plan,source_frame(Some(&scene.scale_sources),packet.scene,target));
+        let (plan,frame)=(contact.plan,contact.source);
         let patch=Patch::of(contact,tiled,frame);
         let (side,span)=(1u32<<plan.level,PAGE_SIZE<<plan.level);
-        let phase=source_phase(scene,target);
-        let reduced=contact.reduced_tiles(phase,std::iter::empty());
+        let reduced=contact.reduced_tiles(std::iter::empty());
         let mut inputs=std::mem::take(&mut contact.inputs);
         let cells=std::mem::take(&mut contact.cells);
         let stale=std::mem::take(&mut contact.stale);
@@ -526,7 +526,7 @@ impl Cache {
         for (tile,now) in witnessed {match now {Some(now)=>{contact.reduced_from.insert(tile,now);},None=>{contact.reduced_from.remove(&tile);}}}
         if let Some((versions,_,predicted,previewed))=contact.next.take() {contact.composed=versions;contact.predicted=predicted;contact.previewed=previewed;}
         {
-            let tipped:BTreeSet<_>=contact.previewed.iter().flat_map(|tile|phased_tiles(*tile,phase)).collect();
+            let tipped:BTreeSet<_>=contact.phased(&contact.previewed).collect();
             let mut store=self.pages.lock().unwrap();
             for (key,region,tile,_) in reductions {
                 if !tipped.contains(&tile) {contact.stale.remove(&tile);}
@@ -539,8 +539,9 @@ impl Cache {
     pub(super) fn end_contact(&mut self,encoder:&mut submission::CommandEncoder) {
         let Some(contact)=self.gesture.take() else {return;};
         if let Some(Some(frame))=contact.exit.get() && !contact.written.values().any(|(_,_,submission)|submission.discarded()) {
+            let tipped:BTreeSet<_>=contact.phased(&contact.predicted).collect();
             let mut store=self.pages.lock().unwrap();
-            for (_,(key,region,_)) in contact.written.iter().filter(|(tile,_)|!contact.predicted.contains(*tile)) {store.materialize_source(key,*region,key.level,frame);}
+            for (_,(key,region,_)) in contact.written.iter().filter(|(tile,_)|!tipped.contains(*tile)) {store.materialize_source(key,*region,key.level,frame);}
         }
         self.requeue_keyless_cells();
         let Contact {inputs,pages,..}=contact;
