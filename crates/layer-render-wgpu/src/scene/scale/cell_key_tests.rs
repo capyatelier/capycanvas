@@ -179,3 +179,53 @@ fn a_pen_pause_during_contact_writes_nothing_back_and_keeps_the_contact() {
     assert_eq!([counts.unit_acceptances,counts.declarations,counts.store_gets],[0;3],"the stroke continues its contact after the pause");
     assert_eq!(counts.expected_keys,0,"the continued contact keys none of the cells it composes");
 }
+
+#[path="authored_mutation_tests.rs"]
+mod authored_mutations;
+
+struct Cell {name:ContentVersion,pixels:Vec<[u32;4]>}
+fn fresh_render(hardware:&WgpuRasterizer,document:&Document)->BTreeMap<[u32;2],Cell> {
+    let extent=document.composition().size;
+    let mut r=crate::test_support::staged_renderer(hardware,document.composition().color);
+    crate::test_support::submit_settled(&mut r,FramePacket {blend_space:document.composition().blend,..packet(document.scene(),extent)});
+    let cache=r.scale_display.as_ref().unwrap();let names=expected(&r);let shown=display_pixels(&r);
+    assert_eq!((cache.plan.level,cache.plan.bounds),(0,PixelRect::full(extent)),"a fresh render shows the whole drawing at full size");
+    pages::coordinates(cache.plan.bounds,cache.plan.level).map(|coordinate| {
+        let region=pages::bounds(coordinate,cache.plan.level,cache.plan.extent);
+        let name=names.expected_key(&cache.page_key(cache.graph.root.clone().unwrap(),region),region,cache.required_input_level()).unwrap().into_version();
+        let pixels=(region.min_y()..region.max_y()).flat_map(|y|shown[(y*extent[0]+region.min_x()) as usize..(y*extent[0]+region.max_x()) as usize].iter().map(|pixel|pixel.map(f32::to_bits))).collect();
+        (coordinate,Cell {name,pixels})
+    }).collect()
+}
+fn admitted(artwork:&Artwork)->Option<Document> {
+    Document::from_artwork(artwork.clone()).ok().filter(|document|document.validate(Default::default()).is_ok())
+}
+
+#[test]
+fn a_changed_input_renames_every_cell_whose_fresh_pixels_differ() {
+    let hardware=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut visible=BTreeMap::<&'static str,bool>::new();let mut unnamed=Vec::new();
+    for scene in authored_mutations::base_scenes() {
+        let unchanged=fresh_render(&hardware,&admitted(&scene.artwork).unwrap());
+        for (coordinate,cell) in fresh_render(&hardware,&admitted(&scene.artwork).unwrap()) {
+            assert!(cell.pixels==unchanged[&coordinate].pixels && cell.name.matches(&unchanged[&coordinate].name)==Some(true),
+                "a second fresh render of the {} scene keeps the pixels and the name of cell {coordinate:?}",scene.name);
+        }
+        for mutation in authored_mutations::mutations(&scene) {
+            let changed=visible.entry(mutation.input).or_default();
+            let Some(document)=admitted(&mutation.artwork) else {continue;};
+            let rendered=fresh_render(&hardware,&document);
+            for (coordinate,cell) in &unchanged {
+                let after=rendered.get(coordinate);
+                if after.is_some_and(|after|after.pixels==cell.pixels) {continue;}
+                *changed=true;
+                if after.is_some_and(|after|after.name.matches(&cell.name)!=Some(false)) {
+                    unnamed.push(format!("{} of {} in the {} scene, cell {coordinate:?}",mutation.input,mutation.record,scene.name));
+                }
+            }
+        }
+    }
+    assert!(unnamed.is_empty(),"a cell whose fresh pixels differ has a different name:\n{}",unnamed.join("\n"));
+    let silent:Vec<_>=visible.iter().filter(|(_,changed)|!**changed).map(|(input,_)|*input).collect();
+    assert!(silent.is_empty(),"every mutation changes the pixels of a cell in a base scene: {silent:?}");
+}
