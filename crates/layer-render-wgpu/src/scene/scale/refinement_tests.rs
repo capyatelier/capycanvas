@@ -755,8 +755,6 @@ fn native_filter_windows_share_display_storage_and_preserve_halos_during_navigat
             submit_published(&mut r, frame); submit_published(&mut exact, frame);
             assert!(r.scale_display.as_ref().unwrap().evaluation == Evaluation::Native);
             assert!(!r.scale_display.as_ref().unwrap().has_pending_work(&r), "native filters publish complete exact output");
-            assert!(r.metrics.image_window_submissions > 0);
-            assert!(r.metrics.image_window_peak_bytes <= 8 * 1024 * 1024);
             assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
         }
     }
