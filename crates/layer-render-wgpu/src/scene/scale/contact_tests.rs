@@ -275,6 +275,45 @@ fn a_retracted_prediction_recomposes_its_tiles_like_a_fresh_renderer() {
 }
 
 #[test]
+fn a_contact_ended_under_a_predicted_tip_draws_the_tip_away_like_a_twin_that_composes_every_frame() {
+    let extent=[2048,512];let style=crate::layer_tests::preset_style(DefaultBrushPreset::Pencil);
+    let bytes=(0..PAGE_SIZE*PAGE_SIZE).flat_map(|_|[0.1f32,0.8,0.2,1.]).flat_map(f32::to_le_bytes).collect::<Vec<_>>();
+    for divisor in [1u32,2] {for (offset,ink,tip) in [([0i64,0],300.,1080.),([256,0],40.,1400.),([259,-5],40.,1400.),([-130,77],300.,1080.)] {
+        let case=format!("a layer offset by {offset:?} at 1/{divisor}");
+        let mut doc=document_at(extent);let owner=doc.working.occurrence.unwrap();let target=primary_target(&doc);
+        let other=paint_occurrence(&mut doc,"Other",None);set_root_entries(&mut doc,vec![other,owner]);
+        let other_target=doc.scene().source_target(other).unwrap();
+        doc.artwork.occurrences.get_mut(owner).unwrap().offset=offset;
+        let at=(((200+offset[1])/i64::from(divisor))*i64::from(extent[0]/divisor)+(tip as i64+offset[0])/i64::from(divisor)) as usize;
+        let inked=|step:usize|sized_dab([if step==0 {tip-24.}else {ink+12.*step as f32},200.],4.5,&style);
+        let drawn=|composite_all:bool| {
+            let mut frame=packet(doc.scene(),extent);frame.composite_all=composite_all;frame.view=view_at(extent,divisor);
+            let mut r=renderer(&doc);crate::test_support::submit_settled(&mut r,frame);
+            let mut below=stroke_dab(100.,400.);below.radii=[60.;2];
+            crate::test_support::submit_ready(&mut r,FramePacket {dabs:std::slice::from_ref(&below),dab_batches:std::slice::from_ref(&stroke_batch(other_target,&below,true,true)),..frame}).unwrap();
+            crate::test_support::submit_settled(&mut r,frame);
+            stroke_frame(&mut r,frame,target,&style,&[inked(0)],true,0);
+            for step in 1..3 {stroke_frame(&mut r,frame,target,&style,&[inked(step),sized_dab([tip,200.],4.5,&style)],true,step);}
+            let (held,tipped)=(r.scale_display.as_ref().unwrap().contact_id(),display_pixels(&r)[at]);
+            crate::test_support::upload_layer_page(&mut r,doc.scene(),other_target,[0,1],&bytes);
+            for step in 3..6 {stroke_frame(&mut r,frame,target,&style,&[inked(step)],true,step);}
+            let (ended,cleared)=(held.is_some() && r.scale_display.as_ref().unwrap().contact_id()!=held,display_pixels(&r)[at]);
+            let last=inked(6);
+            let lift=layer_render::DabBatch {stroke_start:false,stroke_end:true,..crate::test_support::dab_batch(target,style.clone(),last.bounds())};
+            crate::test_support::submit_settled(&mut r,FramePacket {dabs:std::slice::from_ref(&last),dab_batches:std::slice::from_ref(&lift),time_seconds:1.,..frame});
+            crate::test_support::submit_settled(&mut r,frame);
+            (ended,tipped,cleared,display_pixels(&r))
+        };
+        let [(ended,tipped,cleared,settled),(_,_,twin_cleared,twin)]=[false,true].map(drawn);
+        assert!(ended,"{case}: the write to another layer ends a contact that holds a tip");
+        assert!(max_error(&[tipped],&[twin_cleared])>0.05,"{case}: the tip was shown: {tipped:?} against {twin_cleared:?}");
+        assert!(max_error(&[cleared],&[twin_cleared])<1e-4,"{case}: three frames after the contact ended the cell that held its tip shows {cleared:?}, a twin {twin_cleared:?}");
+        let error=max_error(&settled,&twin);
+        assert!(error<1e-4,"{case}: the picture after pen up differs from a twin that composes every frame by {error}");
+    }}
+}
+
+#[test]
 fn a_zoom_during_a_held_contact_names_its_own_frame_and_settles_like_a_fresh_renderer() {
     let extent=[2048,1024];let doc=document_at(extent);let target=primary_target(&doc);
     let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
