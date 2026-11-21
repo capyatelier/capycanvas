@@ -3633,7 +3633,34 @@ fn native_header_overflow_input() {
         d.w.surface.width() <= 800,
         "run with LAYER_MOTION_VIEWPORT=640x600"
     );
-    let baseline = state(&d.w).workspace.layout.header;
+    let workspace = state(&d.w).workspace;
+    let baseline = workspace.layout.header.clone();
+    let mut labels = workspace.clone();
+    let menu = labels.layout.header.zones.iter_mut().flatten()
+        .find(|entry| entry.item == HeaderItem::Menu).unwrap();
+    menu.item = HeaderItem::MenuLabels;
+    let menu_labels = menu.id;
+    d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(labels.clone()) });
+    pump(250);
+    let english = layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
+    let new_drawing_from = |d: &mut Driver, origin: &str| {
+        d.click_label(&ApplicationMenu::File.localized_label(&english));
+        d.click_label(&CommandId::NewDocument.localized_label(&english));
+        until(
+            || d.w.visible_dialog().is_some_and(|dialog| dialog.widget_name() == "new-drawing-dialog"),
+            &format!("New drawing from {origin}"),
+        );
+        d.click_name("new-drawing-cancel");
+        until(|| d.w.visible_dialog().is_none(), "New drawing closes");
+    };
+    assert!(
+        d.named(&format!("header-item-{menu_labels}")).is_mapped(),
+        "narrow menu labels collapse into their own menu, not into More"
+    );
+    d.click_name("header-menu-labels-compact");
+    new_drawing_from(&mut d, "compact Menu Labels");
+    d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+    pump(250);
     for size in HeaderSize::ALL {
         d.w.dispatch(HeaderAction::SetSize { size }.action());
         pump(240);

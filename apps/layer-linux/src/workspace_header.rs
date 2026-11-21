@@ -95,7 +95,7 @@ struct Item {
     grip: Option<gtk::Image>,
 }
 impl Item {
-    fn switcher_width(&self) -> f32 {
+    fn full_width(&self) -> f32 {
         self.content
             .downcast_ref::<gtk::Stack>()
             .and_then(|s| s.child_by_name("full"))
@@ -570,7 +570,9 @@ impl Header {
                     button.update_property(&[gtk::accessible::Property::Label(&caption)]);
                     item.root.update_property(&[gtk::accessible::Property::Label(&caption)]);
                 }
-            if let Some(compact) = &item.compact {
+            if item.entry.item == HeaderItem::Workspaces
+                && let Some(compact) = &item.compact
+            {
                 let caption = w.localization().text(layer_ui::MessageId::WORKSPACE_HEADER_SWITCH_WORKSPACE);
                 compact.set_tooltip_text(Some(&caption));
                 compact.update_property(&[gtk::accessible::Property::Label(&caption)]);
@@ -631,6 +633,22 @@ impl Header {
         let mut compact = None;
         let mut placeholder_label = None;
         let mut editing_grip = None;
+        let main_menu = || {
+            let menu = w.chrome_menu(ApplicationMenu::Primary);
+            let image = crate::icons::image("layer-menu-symbolic");
+            image.set_pixel_size(size.icon());
+            menu.set_child(Some(&image));
+            menu
+        };
+        let collapsible = |full: &gtk::Widget, menu: &gtk::MenuButton| {
+            let stack = gtk::Stack::new();
+            stack.set_hhomogeneous(false);
+            stack.set_vhomogeneous(false);
+            stack.add_named(full, Some("full"));
+            stack.add_named(menu, Some("compact"));
+            stack.set_visible_child_name("full");
+            stack
+        };
         let content: gtk::Widget = match entry.item {
             HeaderItem::Capy => {
                 let image = gtk::Image::new();image.set_pixel_size(size.capy_icon());image.add_css_class("header-readout");
@@ -706,14 +724,11 @@ impl Header {
                 button = Some(b.clone());
                 b.upcast()
             }
-            HeaderItem::Menu => {
-                let menu = w.chrome_menu(ApplicationMenu::Primary);
-                menu.set_child(Some(&crate::icons::image("layer-menu-symbolic")));
-                menu.upcast()
-            }
+            HeaderItem::Menu => main_menu().upcast(),
             HeaderItem::MenuLabels => {
                 let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
                 row.add_css_class("header-menu-labels");
+                row.set_valign(gtk::Align::Center);
                 let menus: Vec<_> = ApplicationMenu::ALL.into_iter().map(|id| (id, w.chrome_menu(id))).collect();
                 for (id, menu) in &menus {
                     let motion = gtk::EventControllerMotion::new();
@@ -733,14 +748,14 @@ impl Header {
                     menu.add_controller(motion);
                     row.append(menu);
                 }
-                row.upcast()
+                let menu = main_menu();
+                menu.set_widget_name("header-menu-labels-compact");
+                let stack = collapsible(row.upcast_ref(), &menu);
+                compact = Some(menu);
+                stack.upcast()
             }
             HeaderItem::Workspaces => {
-                let stack = gtk::Stack::new();
-                stack.set_hhomogeneous(false);
-                stack.set_vhomogeneous(false);
                 w.workspaces.switcher.set_halign(gtk::Align::Center);
-                stack.add_named(&w.workspaces.switcher, Some("full"));
                 let menu = gtk::MenuButton::builder()
                     .label(w.localization().text(layer_ui::MessageId::WORKSPACE_WORKSPACES).as_ref())
                     .tooltip_text(w.localization().text(layer_ui::MessageId::WORKSPACE_HEADER_SWITCH_WORKSPACE).as_ref())
@@ -757,8 +772,7 @@ impl Header {
                         button.set_popover(Some(&w.workspaces.switcher_popup(&w)));
                     }
                 ));
-                stack.add_named(&menu, Some("compact"));
-                stack.set_visible_child_name("full");
+                let stack = collapsible(w.workspaces.switcher.upcast_ref(), &menu);
                 compact = Some(menu);
                 stack.upcast()
             }
@@ -767,19 +781,6 @@ impl Header {
             HeaderItem::Battery => w.system_status.battery.clone().upcast(),
             HeaderItem::Space => gtk::Box::new(gtk::Orientation::Horizontal, 0).upcast(),
         };
-        fn size_images(widget: &gtk::Widget, size: i32) {
-            if let Some(image) = widget.downcast_ref::<gtk::Image>() {
-                image.set_pixel_size(size);
-            }
-            let mut child = widget.first_child();
-            while let Some(widget) = child {
-                child = widget.next_sibling();
-                size_images(&widget, size);
-            }
-        }
-        if entry.item == HeaderItem::Menu {
-            size_images(&content, size.icon());
-        }
         let content = if matches!(entry.item, HeaderItem::Clock | HeaderItem::Battery) {
             let stack = gtk::Stack::new();
             stack.set_hhomogeneous(false);
@@ -817,10 +818,7 @@ impl Header {
         content.set_valign(
             if matches!(
                 entry.item,
-                HeaderItem::MenuLabels
-                    | HeaderItem::Workspaces
-                    | HeaderItem::Clock
-                    | HeaderItem::Battery
+                HeaderItem::Workspaces | HeaderItem::Clock | HeaderItem::Battery
             ) {
                 gtk::Align::Center
             } else {
@@ -888,7 +886,8 @@ impl Header {
                 }
                 let grip = if self.editing.get() { 20. } else { 0. };
                 let natural = match item.entry.item {
-                    HeaderItem::Workspaces => item.switcher_width().max(144.),
+                    HeaderItem::Workspaces => item.full_width().max(144.),
+                    HeaderItem::MenuLabels => item.full_width().max(size.tile()),
                     HeaderItem::DocumentTitle => 180.,
                     HeaderItem::Space
                     | HeaderItem::Settings
@@ -904,6 +903,7 @@ impl Header {
                 };
                 let compact = match item.entry.item {
                     HeaderItem::Workspaces => 144.,
+                    HeaderItem::MenuLabels => size.tile(),
                     HeaderItem::DocumentTitle => 80.,
                     _ => natural,
                 };
@@ -1042,7 +1042,7 @@ impl Header {
                 if item.compact.is_some()
                     && let Some(stack) = item.content.downcast_ref::<gtk::Stack>()
                 {
-                    let full = item.switcher_width();
+                    let full = item.full_width();
                     let grip = if self.editing.get() { 20. } else { 0. };
                     stack.set_visible_child_name(
                         if full > 0. && a.bounds.width - grip + 0.01 >= full {
