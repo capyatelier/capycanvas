@@ -83,12 +83,7 @@ fn an_ordered_correction_resumes_each_pending_page_with_its_own_inputs() {
     crate::memory::memory_tests::declare_source_budget(&mut r,frame,8,16<<20,64<<20);
     assert!(r.source_tiles.borrow().free_slots()>=2);
     let mut scene=Scene::new(&r).unwrap();scene.ordered=true;
-    pollster::block_on(compile::Needs::capture_scene(&r,doc.scene(),false).prepare(&r.compilation)).unwrap();
-    pollster::block_on(r.compilation.prepare_all([r.scene_pipelines.source.for_format(wgpu::TextureFormat::Rgba8Unorm)])).unwrap();
-    for pass in 0..doc.scene().effect(effect).unwrap().program.passes.len().max(1) {
-        scene.effects.prepare(&r,doc.scene(),&[effect],effects::Execution::Image(pass),frame.time_seconds,0,frame.blend_space).unwrap();
-    }
-    pollster::block_on(scene.effects.needs().prepare(&r.compilation)).unwrap();
+    compile_correction(&r,&mut scene,frame,effect);
     let full=PixelRect::full(extent);let window=DocRect::from(full);
     submit_encoded(&mut r,|r,encoder| {
         let result=scene.prepare_region(r,frame,(full,window),full,false,encoder);
@@ -122,6 +117,17 @@ fn an_ordered_correction_resumes_each_pending_page_with_its_own_inputs() {
 #[derive(Clone, Copy)]
 enum CorrectionChange { Discard, Scope, Opacity, RepeatedDamage }
 
+const KEPT_PAGE: [f32; 4] = [0.125, 0.25, 0.5, 1.];
+
+fn compile_correction(r: &WgpuRasterizer, scene: &mut Scene, frame: layer_render::FramePacket<'_>, effect: OccurrenceHandle) {
+    pollster::block_on(compile::Needs::capture_scene(r, frame.scene, false).prepare(&r.compilation)).unwrap();
+    pollster::block_on(r.compilation.prepare_all([r.scene_pipelines.source.for_format(wgpu::TextureFormat::Rgba8Unorm)])).unwrap();
+    for pass in 0..frame.scene.effect(effect).unwrap().program.passes.len().max(1) {
+        scene.effects.prepare(r, frame.scene, &[effect], effects::Execution::Image(pass), frame.time_seconds, 0, frame.blend_space).unwrap();
+    }
+    pollster::block_on(scene.effects.needs().prepare(&r.compilation)).unwrap();
+}
+
 fn correction_progress(change: CorrectionChange) {
     use crate::scene::scale::tests::source_progress::{photo, color, EXTENT};
     use crate::tests::native_effects::{insert_effect, refresh};
@@ -140,45 +146,42 @@ fn correction_progress(change: CorrectionChange) {
     crate::memory::memory_tests::declare_source_budget(&mut r, frame, 64, 16 << 20, 44 << 20);
     assert!(r.source_tiles.borrow().free_slots() >= 64);
     let mut scene = Scene::new(&r).unwrap();
+    compile_correction(&r, &mut scene, frame, effect);
     let full = PixelRect::full(EXTENT);
+    let target = doc.active_target().unwrap();
+    let layer_core::SourceTarget::Paint(paint) = target else { unreachable!() };
     if matches!(change, CorrectionChange::RepeatedDamage) {
-        r.transform_damage.push((doc.active_target().unwrap(), full));
+        r.transform_damage.push((target, full));
     }
     let window = DocRect { min: [0; 2], max: EXTENT.map(i64::from) };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let mut interrupted = false;
-    for _ in 0..256 {
-        assert!(std::time::Instant::now() < deadline, "correction never produced an incomplete input prefix");
-        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        r.drain_image_decodes(&mut encoder).unwrap();
-        let frame = layer_render::FramePacket { blend_space: layer_core::BlendSpace::Linear, ..crate::test_support::packet(doc.scene(), EXTENT) };
-        let result = scene.prepare_region(&mut r, frame, (full, window), full, false, &mut encoder);
-        assert!(result.is_ok() || matches!(result, Err(GpuRasterError::NotReady)), "{result:?}");
-        let remaining = scene.images.stages.iter().find(|stage| stage.id == effect)
-            .and_then(|stage| stage.input_gather.as_ref()).map(|gather| gather.pages.len());
-        r.uploads.finish(&encoder);
-        if remaining.is_some_and(|pages| pages > 0 && pages < 80) {
-            if matches!(change, CorrectionChange::Discard) {
-                drop(encoder);
-                assert!(!scene.valid.load(std::sync::atomic::Ordering::Acquire));
-            } else {
-                encoder.submit(&r.queue);
-                crate::test_support::complete(&r);
-                assert!(scene.valid.load(std::sync::atomic::Ordering::Acquire));
-            }
-            interrupted = true;
-            break;
-        }
+    let source = doc.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.storage();
+    submit_encoded(&mut r, |r, encoder| {
+        let decoded = crate::prepare_image_tile(source, [0, 0], r.device.working_space(), &r.device.source_samples, None).unwrap();
+        Scene::decode_prepared_for(r, encoder, source, [0, 0], decoded, crate::scene::sources::SourceUse::Exact, crate::residency::Class::Visible).unwrap();
+    });
+    crate::test_support::complete(&r);
+    let held = crate::test_support::GatedStore::new(&layer_core::Editor::new(doc.clone()).retained_tiles(), false);
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    let result = scene.prepare_region(&mut r, frame, (full, window), full, false, &mut encoder);
+    assert!(matches!(result, Err(GpuRasterError::NotReady)), "{result:?}");
+    r.uploads.finish(&encoder);
+    let pages = page_coordinates(full).count();
+    let gather = scene.images.stages.iter().find(|stage| stage.id == effect).and_then(|stage| stage.input_gather.as_ref())
+        .expect("the held pages keep the correction gathering");
+    assert!(gather.pages.len() == pages - 1 && !gather.pages.contains(&[0, 0]),
+        "only the decoded page may commit while the others are held: {:?}", gather.pages);
+    if matches!(change, CorrectionChange::Discard) {
+        drop(encoder);
+        assert!(!scene.valid.load(std::sync::atomic::Ordering::Acquire));
+    } else {
         encoder.submit(&r.queue);
         crate::test_support::complete(&r);
-        std::thread::sleep(std::time::Duration::from_millis(1));
+        assert!(scene.valid.load(std::sync::atomic::Ordering::Acquire));
     }
-    assert!(interrupted, "correction must encode an incomplete input prefix");
     let revision = doc.revision;
     match change {
         CorrectionChange::Discard => {
             let source = layer_core::color::source::rgba8_source(EXTENT, |x, y| color(x, y, 17));
-            let layer_core::SourceTarget::Paint(paint) = doc.active_target().unwrap() else { unreachable!() };
             doc.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::PaintBase::new(source.into()));
             doc.revision += 1;
         }
@@ -196,42 +199,47 @@ fn correction_progress(change: CorrectionChange) {
             doc.artwork.occurrences.get_mut(source).unwrap().opacity = 0.5;
             refresh(&mut doc);
         }
-        CorrectionChange::RepeatedDamage => (),
+        CorrectionChange::RepeatedDamage => {
+            let committed = &scene.images.stages.iter().find(|stage| stage.id == effect).unwrap().input.texture;
+            let texels: Vec<_> = (0..PAGE_SIZE * PAGE_SIZE).flat_map(|_| KEPT_PAGE.into_iter().flat_map(f32::to_le_bytes)).collect();
+            r.queue.write_texture(committed.as_image_copy(), &texels,
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(PAGE_SIZE * 16), rows_per_image: Some(PAGE_SIZE) },
+                wgpu::Extent3d { width: PAGE_SIZE, height: PAGE_SIZE, depth_or_array_layers: 1 });
+        }
     }
     if !matches!(change, CorrectionChange::Discard) { assert_eq!(doc.revision, revision); }
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let mut remaining = 80;
-    let mut progressed = false;
-    let mut ready = false;
-    for _ in 0..256 {
-        assert!(std::time::Instant::now() < deadline, "changed correction stalled with {remaining} input pages");
-        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        r.drain_image_decodes(&mut encoder).unwrap();
-        let frame = layer_render::FramePacket { blend_space: layer_core::BlendSpace::Linear, ..crate::test_support::packet(doc.scene(), EXTENT) };
-        let result = scene.prepare_region(&mut r, frame, (full, window), full, false, &mut encoder);
-        assert!(result.is_ok() || matches!(result, Err(GpuRasterError::NotReady)), "{result:?}");
+    held.gate.entered();
+    held.gate.release();
+    let frame = layer_render::FramePacket { blend_space: layer_core::BlendSpace::Linear, ..crate::test_support::packet(doc.scene(), EXTENT) };
+    let mut remaining = if matches!(change, CorrectionChange::RepeatedDamage) { pages - 1 } else { pages };
+    wait_until("the changed correction must finish its remaining input pages", || {
+        let result = submit_encoded(&mut r, |r, encoder| {
+            r.drain_image_decodes(encoder).unwrap();
+            scene.prepare_region(r, frame, (full, window), full, false, encoder)
+        });
+        crate::test_support::complete(&r);
         if let Some(gather) = scene.images.stages.iter().find(|stage| stage.id == effect).and_then(|stage| stage.input_gather.as_ref()) {
             assert_eq!(gather.revision, doc.revision);
             assert!(gather.pages.len() <= remaining, "a committed input prefix was restarted: {} > {remaining}", gather.pages.len());
             remaining = gather.pages.len();
-            progressed |= remaining > 0 && remaining < 80;
         }
-        r.uploads.finish(&encoder); encoder.submit(&r.queue);
-        crate::test_support::complete(&r);
-        if result.is_ok() { ready = true; break; }
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
-    assert!(ready && progressed, "changed correction must finish after forward input progress");
+        match result {
+            Ok(()) => Ok(()),
+            Err(GpuRasterError::NotReady) => { crate::test_support::settle_decodes(&mut r); Err(remaining) }
+            Err(error) => panic!("{error}"),
+        }
+    });
     let stage = scene.images.stages.iter().find(|stage| stage.id == effect).unwrap();
     assert!(stage.valid && stage.input_gather.is_none());
     let pixels = crate::test_support::float_pixels(&r, &stage.output.texture);
     assert_eq!(pixels.len(), EXTENT[0] as usize * EXTENT[1] as usize);
     let seed = if matches!(change, CorrectionChange::Discard | CorrectionChange::Scope) { 17 } else { 0 };
     let alpha = if matches!(change, CorrectionChange::Opacity) { 0.5 } else { 1. };
-    let palette: Vec<[f32; 4]> = (0..80).map(|tile| {
+    let mut palette: Vec<[f32; 4]> = (0..80).map(|tile| {
         let rgba = color(tile % 10 * PAGE_SIZE, tile / 10 * PAGE_SIZE, seed);
         std::array::from_fn(|c| if c == 3 { alpha } else { alpha * doc.composition().color.space.decode(f64::from(rgba[c]) / 255.) as f32 })
     }).collect();
+    if matches!(change, CorrectionChange::RepeatedDamage) { palette[0] = KEPT_PAGE; }
     for (index, pixel) in pixels.iter().enumerate() {
         let x = index as u32 % EXTENT[0]; let y = index as u32 / EXTENT[0];
         let expected = palette[(x / PAGE_SIZE + 10 * (y / PAGE_SIZE)) as usize];
