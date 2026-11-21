@@ -363,13 +363,13 @@ fn a_late_bake_source_failure_is_admitted_before_any_authored_frame_work() {
     let batch=DabBatch {kind:DabBatchKind::RasterOperation(0),dab_count:0,..crate::test_support::dab_batch(target,
         crate::tests::test_style(BrushExecution::Dry),layer_core::Rect::from_extent(extent))};
     let batches=[batch];let packet=FramePacket {dab_batches:&batches,..crate::test_support::packet(document.scene(),extent)};
-    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(20);let mut first_ready=false;
-    while !r.raster_dependencies_ready(packet,None) {
+    let mut first_ready=false;
+    crate::test_support::wait_until("invalid source did not resolve its preparation",|| {
+        if r.raster_dependencies_ready(packet,None) {return Ok(());}
         first_ready|=r.prepared_bake(target,0,[0;2]).is_some();
         assert_eq!(r.read_layer_color(target,[0;2],&live.into(),None).unwrap().value().texture,texture);
-        assert!(std::time::Instant::now()<deadline,"invalid source did not resolve its preparation");
-        r.wait_idle().unwrap();std::thread::sleep(std::time::Duration::from_millis(1));
-    }
+        r.wait_idle().unwrap();Err(())
+    });
     assert!(first_ready,"a complete private page must precede the invalid source");
     let submissions=r.metrics.submissions;assert!(r.submit(packet).is_err());assert_eq!(r.metrics.submissions,submissions);
     assert_eq!(r.read_layer_color(target,[0;2],&live.into(),None).unwrap().value().texture,texture);
@@ -408,10 +408,10 @@ fn an_empty_restore_cohort_is_consumed_even_when_it_has_no_candidate_pages() {
     let document=paint_document([64;2],"empty reset");let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let frame=FramePacket {reset_layers:true,..crate::test_support::packet(document.scene(),[64;2])};
     for _ in 0..3 {
-        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);
-        while !r.raster_dependencies_ready(frame,None) {
-            assert!(std::time::Instant::now()<deadline);r.wait_idle().unwrap();std::thread::sleep(std::time::Duration::from_millis(1));
-        }
+        crate::test_support::wait_until("the reset frame's dependencies must become ready",|| {
+            if r.raster_dependencies_ready(frame,None) {return Ok(());}
+            r.wait_idle().unwrap();Err(())
+        });
         r.submit(frame).unwrap();r.wait_idle().unwrap();
         assert!(r.paint_layers.iter().all(|layer|layer.pages.is_empty()));
         assert!(r.raster.as_ref().unwrap().targets.values().all(|target|target.contents.data().tiles.is_empty()));
@@ -464,14 +464,13 @@ fn redundant_display_damage_does_not_recompose_unchanged_authored_inputs() {
     let extent=[96;2];let mut document=paint_document(extent,"Retained picture");
     crate::layer_tests::placement::paint_mut(&mut document).base=Some(layer_core::authored::PaintBase::new(
         layer_core::color::source::rgba8_source(extent,|_,_|[31,71,113,255]).into()));
-    let mut renderer=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
-    let frame=crate::test_support::packet(document.scene(),extent);
-    crate::test_support::submit_published(&mut renderer,frame);
+    let mut fixture=crate::test_support::Fixture::new(document);let (renderer,frame)=fixture.frame();
+    crate::test_support::submit_published(renderer,frame);
     let (artwork,composite)=(renderer.artwork_revision,renderer.composite_revision);
-    let expected=crate::scene::scale::tests::display_pixels(&renderer);
+    let expected=crate::scene::scale::tests::display_pixels(renderer);
     renderer.document_damage.push(PixelRect::full(extent));
-    crate::test_support::submit_published(&mut renderer,frame);
-    assert_eq!(crate::scene::scale::tests::display_pixels(&renderer),expected);
+    crate::test_support::submit_published(renderer,frame);
+    assert_eq!(crate::scene::scale::tests::display_pixels(renderer),expected);
     assert_eq!(renderer.composite_revision,composite,"damage is a scheduling hint; selected input names did not change");
     assert_eq!(renderer.artwork_revision,artwork,"derived display damage must not look like an authored edit");
 }

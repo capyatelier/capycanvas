@@ -140,17 +140,16 @@ fn prediction_covers_normal_and_fallback_fragment_bindings() {
                 let pixels = [0.125_f32, 0.25, 0.5, 0.75].into_iter().flat_map(f32::to_le_bytes).collect::<Vec<_>>().repeat(PAGE_SIZE.pow(2) as usize);
                 let intent = r.raster_intent(target, layer_core::raster::RasterPlane::Color, [0; 2]).unwrap();
                 let name = layer_core::raster::ContentName::fresh();
-                let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
-                let receipt = encoder.submission();
-                let write = page.primary.initialize(&receipt).unwrap();
-                crate::test_support::upload_written_page(&mut r.uploads, &mut encoder, &write, &pixels);
-                write.encoded(name).publish(&receipt);
-                let written = page.primary.read(name, Some(&receipt)).unwrap().replace(&intent, &receipt);
-                page.primary_needs_clear = false;
-                r.paint_layers.iter_mut().find(|layer| layer.id == target).unwrap().pages = vec![page];
-                r.record_raster_write(target, written).unwrap();
-                r.uploads.finish(&encoder);
-                encoder.submit(&r.queue);
+                crate::test_support::submit_encoded(&mut r, |r, encoder| {
+                    let receipt = encoder.submission();
+                    let write = page.primary.initialize(&receipt).unwrap();
+                    crate::test_support::upload_written_page(&mut r.uploads, encoder, &write, &pixels);
+                    write.encoded(name).publish(&receipt);
+                    let written = page.primary.read(name, Some(&receipt)).unwrap().replace(&intent, &receipt);
+                    page.primary_needs_clear = false;
+                    r.paint_layers.iter_mut().find(|layer| layer.id == target).unwrap().pages = vec![page];
+                    r.record_raster_write(target, written).unwrap();
+                });
             }
             crate::test_support::prepare_scene_effects(&mut r, frame);
             let dabs=[crate::tests::test_dab([128.;2],[0.2,0.4,0.6,1.],1.)];
@@ -175,13 +174,13 @@ fn prediction_covers_normal_and_fallback_fragment_bindings() {
                 declaration.accept_inputs(target,RasterPlane::Color,[0;2],PreviewStage::AfterBatch(0),PreviewPass::Color,Vec::new()).unwrap();
                 let name=declaration.version(target,RasterPlane::Color,[0;2],PreviewStage::Final).unwrap();
                 let mut page=r.create_page([0;2],"prediction preview");
-                let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
-                let receipt=encoder.submission();
-                let write=page.primary.initialize(&receipt).unwrap();
-                drop(encoder.color_pass("prediction preview",&write.value().view,wgpu::LoadOp::Clear(wgpu::Color {r:0.2,g:0.4,b:0.6,a:1.})));
-                write.publish(&name);
-                page.primary_needs_clear=false;
-                encoder.submit(&r.queue);
+                crate::test_support::submit_encoded(&mut r,|_,encoder| {
+                    let receipt=encoder.submission();
+                    let write=page.primary.initialize(&receipt).unwrap();
+                    drop(encoder.color_pass("prediction preview",&write.value().view,wgpu::LoadOp::Clear(wgpu::Color {r:0.2,g:0.4,b:0.6,a:1.})));
+                    write.publish(&name);
+                    page.primary_needs_clear=false;
+                });
                 assert!(page.primary.read(&name,None).is_some());
                 r.preview_declaration=Some(declaration);
                 r.preview_layer_id = Some(target);

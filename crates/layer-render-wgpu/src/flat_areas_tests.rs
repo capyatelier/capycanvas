@@ -11,10 +11,7 @@ fn source(extent:[u32;2], ink:impl Fn(u32,u32)->bool)->Document {
     document
 }
 fn frame(r:&mut WgpuRasterizer,document:&Document,extent:[u32;2]) {
-    let mut packet=packet(document.scene(),extent);
-    packet.reset_layers=true;
-    packet.view=layer_render::ViewState {width_px:128,height_px:128,document_to_surface:[0.01,0.,0.,0.01,0.,0.]};
-    submit_ready(r,packet).unwrap();
+    submit_ready(r,FramePacket {reset_layers:true,view:layer_render::ViewState {width_px:128,height_px:128,document_to_surface:[0.01,0.,0.,0.01,0.,0.]},..packet(document.scene(),extent)}).unwrap();
 }
 fn receive(r:&mut WgpuRasterizer,document:&Document)->RasterRevision {receive_source(r,RegionSource::Source(target(document)),false)}
 fn receive_source(r:&mut WgpuRasterizer,source:RegionSource,close_gaps:bool)->RasterRevision {
@@ -22,15 +19,8 @@ fn receive_source(r:&mut WgpuRasterizer,source:RegionSource,close_gaps:bool)->Ra
         contiguous:false,selection:None,limit:None,enclosure:None,reference_count:None,paper:None,fill:None,fill_areas:Some(layer_core::FillAreas::TransparentOrWhite),
         colour_mode:Default::default(),refinement:RegionRefinement {close_gaps,edges:RegionEdges::LineMiddle,smooth_edges:false}};
     assert!(r.request_region(RegionTask::FlatAreas(request)).unwrap());
-    let deadline=std::time::Instant::now()+crate::READBACK_TIMEOUT;
-    loop {
-        if let Some(output)=r.take_region() {
-            let RegionOutput::FlatAreas {request_id,raster}=output.unwrap() else {panic!("expected flat areas raster")};
-            assert_eq!(request_id,83);return raster;
-        }
-        assert!(std::time::Instant::now()<deadline,"flat areas readback timed out");
-        std::thread::yield_now();
-    }
+    let RegionOutput::FlatAreas {request_id,raster}=crate::test_support::wait_until("flat areas readback timed out",||r.take_region().ok_or(())).unwrap() else {panic!("expected flat areas raster")};
+    assert_eq!(request_id,83);raster
 }
 fn pixels(raster:&RasterRevision,extent:[u32;2])->Vec<[u8;4]> {
     let mut pixels=vec![[0;4];(extent[0]*extent[1])as usize];

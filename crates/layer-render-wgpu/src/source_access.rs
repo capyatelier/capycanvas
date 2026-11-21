@@ -271,12 +271,10 @@ mod tests {
         let base=PaintBase::new(rgba8_source([PAGE_SIZE;2],codes).into());
         let samples=(0..PAGE_SIZE).flat_map(|y|(0..PAGE_SIZE).flat_map(move|x|codes(x,y))).collect::<Vec<_>>();
         let blob=Arc::new(TileBlob::encode(r.document_color().paint_descriptor(),&samples).unwrap());
-        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        let tile=crate::test_support::query_ready(&mut r,&mut encoder,|r,encoder| {
+        let tile=crate::test_support::submit_encoded(&mut r,|r,encoder|crate::test_support::query_ready(r,encoder,|r,encoder| {
             if raster {r.backed_raster_tile(&blob,RgbSpace::Srgb,encoder)}
             else {r.paint_base_tile(&base,[0;2],encoder).map(|tile|tile.unwrap())}
-        });
-        submit(&mut r,encoder);
+        }));
         let pixels=crate::test_support::float_pixels(&r,&tile.texture);
         assert_eq!(pixels.len(),PAGE_SIZE.pow(2) as usize);
         for (index,pixel) in pixels.into_iter().enumerate() {
@@ -297,27 +295,25 @@ mod tests {
         let source = rgba8_source([300,270],codes);
         let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         let base = PaintBase {image:source.clone().into(),offset:[17,31],policy:Default::default()};
-        let mut encoder = crate::submission::CommandEncoder::new(&r.device,&Default::default());
         let mut requested=scene::sources::Inputs::default();
         requested.base(&base,[1,1],r.document_color().space);
         let inputs=requested.accept_query(&mut r,None).unwrap();
         let plan=scene::sources::accepted_base(&inputs,&base,[1,1]).unwrap().unwrap();
         assert_eq!(plan.pending.len(),4);
         drop((plan,inputs));
-        let tile = crate::test_support::query_ready(&mut r,&mut encoder,|r,encoder|r.paint_base_tile(&base,[1,1],encoder)).unwrap();
-        submit(&mut r,encoder);
+        let tile = crate::test_support::submit_encoded(&mut r,|r,encoder|crate::test_support::query_ready(r,encoder,|r,encoder|r.paint_base_tile(&base,[1,1],encoder))).unwrap();
         for (i,actual) in crate::test_support::float_pixels(&r,&tile.texture).into_iter().enumerate() {
             let [x,y]=[i as u32%PAGE_SIZE+239,i as u32/PAGE_SIZE+225];
             let expected=if x<300 && y<270 {expected(x,y)} else {[0.;4]};
             assert!(actual.into_iter().zip(expected).all(|(a,b)|(a-b).abs()<2e-6),"{x},{y}: {actual:?} != {expected:?}");
         }
         let aligned=PaintBase {offset:[PAGE_SIZE;2],..base};
-        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        let direct=crate::test_support::query_ready(&mut r,&mut encoder,|r,encoder|r.paint_base_tile(&PaintBase::new(source.clone().into()),[0,0],encoder)).unwrap();
-        let shifted=crate::test_support::query_ready(&mut r,&mut encoder,|r,encoder|r.paint_base_tile(&aligned,[1,1],encoder)).unwrap();
-        assert_eq!(direct.view,shifted.view);
-        assert!(r.paint_base_tile(&aligned,[0,0],&mut encoder).unwrap().is_none());
-        submit(&mut r,encoder);
+        crate::test_support::submit_encoded(&mut r,|r,encoder| {
+            let direct=crate::test_support::query_ready(r,encoder,|r,encoder|r.paint_base_tile(&PaintBase::new(source.clone().into()),[0,0],encoder)).unwrap();
+            let shifted=crate::test_support::query_ready(r,encoder,|r,encoder|r.paint_base_tile(&aligned,[1,1],encoder)).unwrap();
+            assert_eq!(direct.view,shifted.view);
+            assert!(r.paint_base_tile(&aligned,[0,0],encoder).unwrap().is_none());
+        });
     }
 
     fn document(offset: bool) -> (Document,SourceTarget) {

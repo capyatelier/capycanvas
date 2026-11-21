@@ -51,10 +51,9 @@ fn first_lit_frame_gates_its_variant_without_idle_frames_from_any_warm_class() {
     renderer.prepare_startup(&document, &brush, false).unwrap();
     crate::test_support::submit_settled(&mut renderer, crate::test_support::packet(document.scene(), [128; 2]));
     let deadline = Instant::now() + Duration::from_secs(60);
-    while !renderer.poll_startup().unwrap().complete || renderer.paper_shade().is_none() {
-        assert!(Instant::now() < deadline, "paper startup must complete");
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    crate::test_support::wait_until("paper startup must complete", || {
+        if renderer.poll_startup().unwrap().complete && renderer.paper_shade().is_some() { Ok(()) } else { Err(()) }
+    });
     renderer.prepare_context(&document, &brush, layer_render::PreparationContext {
         next: layer_render::PreparationUses {selection_paint: true, ..Default::default()},
         brushes: vec![layer_core::default_brush(layer_core::DefaultBrushPreset::Paintbrush)],
@@ -97,15 +96,16 @@ fn first_lit_frame_gates_its_variant_without_idle_frames_from_any_warm_class() {
     renderer.queue.submit([encoder.finish()]);
     drop(batch);
     renderer.shader_idle(true, true);
-    while crate::compile::tests::queued_recipes(&renderer.compilation)
-        + crate::compile::tests::queued_recipes(&renderer.context_compilation) != 0 {
+    crate::test_support::wait_until("every idle family must finish warming", || {
+        let queued = crate::compile::tests::queued_recipes(&renderer.compilation)
+            + crate::compile::tests::queued_recipes(&renderer.context_compilation);
+        if queued == 0 { return Ok(()); }
         renderer.compilation.check().unwrap();
         renderer.context_compilation.check().unwrap();
         assert!(renderer.poll_startup().unwrap().complete, "warming must keep startup complete");
         assert!(renderer.frame_demand()!=layer_render::FrameDemand::Work,"unused warming must not demand an idle frame");
-        assert!(Instant::now() < deadline, "every idle family must finish warming");
-        std::thread::sleep(Duration::from_millis(1));
-    }
+        Err(queued)
+    });
     assert!(paper.iter().all(crate::Deferred::ready));
     assert!(presenter.pipeline[1..].iter().all(crate::Deferred::ready));
     assert!(renderer.poll_startup().unwrap().complete);
@@ -161,12 +161,11 @@ fn unused_picker_is_prepared_after_construction_when_idle() {
     assert!(presenter.picker.bounds().is_none());
     r.shader_idle(true, true);
     drop(batch);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while !presenter.picker.pipeline.ready() {
+    crate::test_support::wait_until("constructor-declared optional picker must run while idle", || {
+        if presenter.picker.pipeline.ready() { return Ok(()); }
         r.compilation.check().unwrap();
-        assert!(std::time::Instant::now() < deadline, "constructor-declared optional picker must run while idle");
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
+        Err(())
+    });
     assert!(presenter.picker.bounds().is_none());
 }
 
@@ -241,11 +240,11 @@ fn optional_picker_completion_repaints_without_parking_the_canvas() {
     pollster::block_on(r.compilation.prepare_all(presenter.overview_pipeline.iter())).unwrap();
     assert!(!presenter.needs_present(&r, view, [0.; 4]), "a hidden overview does not invalidate presentation");
     drop(batch);
-    while !presenter.picker.pipeline.ready() || wakes.load(Ordering::Relaxed) == 0 {
+    crate::test_support::wait_until("the waiting picker must wake when its recipe completes", || {
+        if presenter.picker.pipeline.ready() && wakes.load(Ordering::Relaxed) != 0 { return Ok(()); }
         r.compilation.check().unwrap();
-        assert!(Instant::now() < deadline, "the waiting picker must wake when its recipe completes");
-        std::thread::sleep(Duration::from_millis(1));
-    }
+        Err(())
+    });
     assert_eq!(wakes.load(Ordering::Relaxed), 1);
     assert!(presenter.needs_present(&r, view, [0.; 4]), "the newly ready picker must repaint");
     presenter.encode(&r, &mut encoder, &target, view, [0.; 4]).unwrap();

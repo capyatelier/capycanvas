@@ -140,14 +140,11 @@ fn staged_paper_relief_follows_a_new_scale_at_once_and_reports_only_its_own_bake
     let shading = |pixels: &[u8]| (34..94).flat_map(|y| (34..94).map(move |x| (y * 128 + x) * 4))
         .map(|i| f64::from(pixels[i]) - f64::from(baseline[i])).collect::<Vec<_>>();
     fn settle(r: &mut WgpuRasterizer, paper: &layer_core::paper::PaperBinding, present: &mut impl FnMut(&WgpuRasterizer) -> (Vec<u8>, bool)) -> Vec<u8> {
-        let deadline = Instant::now() + Duration::from_secs(60);
-        loop {
+        crate::test_support::wait_until("the slope pipelines and bake prepare on demand", || {
             r.poll_startup().unwrap();
             let (pixels, lit) = present(r);
-            if r.paper_overlay_ready(paper) && lit { return pixels; }
-            assert!(Instant::now() < deadline, "the slope pipelines and bake prepare on demand");
-            std::thread::sleep(Duration::from_millis(1));
-        }
+            if r.paper_overlay_ready(paper) && lit { Ok(pixels) } else { Err(()) }
+        })
     }
     let (real, doubled) = (paper(1.), paper(2.));
     r.set_paper_overlay(Some(layer_render::PaperOverlay { paper: real.clone(), opacity: 1., moving: false }));

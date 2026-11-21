@@ -525,13 +525,13 @@ fn refinement_chunks_follow_the_timed_pace_of_the_gpu() {
     if !timed {
         return;
     }
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    while r.refine_chunk().unwrap().0 == initial {
-        assert!(std::time::Instant::now() < deadline, "timed chunks change the budget");
+    crate::test_support::wait_until("timed chunks change the budget", || {
+        if r.refine_chunk().unwrap().0 != initial { return Ok(()); }
         modify(&mut r, from_bytes(&square), &steps, None);
         crate::test_support::complete(&r);
         let _ = r.take_region();
-    }
+        Err(())
+    });
     let exact = bytes_of(&modify(&mut r, from_bytes(&square), &steps, None).pixels);
     assert_eq!(exact, gaussian(&square, 60.).iter().zip(&exact).map(|(e, a)| if e.abs_diff(*a) <= 1 { *a } else { *e }).collect::<Vec<_>>(), "any budget keeps the result");
 }

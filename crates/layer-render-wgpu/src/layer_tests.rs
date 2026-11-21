@@ -47,13 +47,7 @@ fn limited_renderer(storage_binding_bytes: u64) -> WgpuRasterizer {
     renderer
 }
 
-fn view() -> ViewState {
-    ViewState {
-        width_px: 128,
-        height_px: 128,
-        document_to_surface: [1., 0., 0., 1., 0., 0.],
-    }
-}
+fn view() -> ViewState { crate::test_support::view([128; 2]) }
 pub(super) fn dab(color: [f32; 4]) -> Dab {
     Dab {
         center: Point { x: 64., y: 64. },

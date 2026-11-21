@@ -156,14 +156,7 @@ fn filtered_query_crops_match_full_resolution_and_reject_excessive_dependencies(
     submit_settled(&mut r, frame(&doc));
     let visible = crate::test_support::document_texture(&r).clone();
     let full = crate::layer_tests::page_bytes(&r, &visible);
-    let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
-    r.encode_clear_value(
-        &mut encoder,
-        r.scale_display.as_ref().unwrap().view(),
-        "poison display only",
-        1.,
-    );
-    encoder.submit(&r.queue);
+    crate::test_support::submit_encoded(&mut r, |r, encoder| r.encode_clear_value(encoder, r.scale_display.as_ref().unwrap().view(), "poison display only", 1.));
     for position in [[0u32, 0], [253, 255], [256, 257], [512, 272]] {
         let mut sum = [0.; 4];
         let mut count = 0.;
@@ -315,17 +308,15 @@ fn exact_preview_after_mask_upload(execution: BrushExecution) {
     }).unwrap();
     assert!(r.texture_sets.is_empty());
     let (destination, _) = create_color_target(&r.device, extent, "exact preview capture");
-    let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
     let quality=(r.preview_level,r.preview_contribution,r.preview_requires_base);
-    let result=Capture::default().region_into(&mut r, packet(doc.scene(), extent), PixelRect::full(extent),
-        &destination, &mut encoder);
-    if result.is_err() {
-        assert_eq!((r.preview_level,r.preview_contribution,r.preview_requires_base),quality,
-            "a refused exact preview must preserve its published quality");
-    }
-    result.unwrap();
-    r.uploads.finish(&encoder);
-    encoder.submit(&r.queue);
+    crate::test_support::submit_encoded(&mut r, |r, encoder| {
+        let result=Capture::default().region_into(r, packet(doc.scene(), extent), PixelRect::full(extent), &destination, encoder);
+        if result.is_err() {
+            assert_eq!((r.preview_level,r.preview_contribution,r.preview_requires_base),quality,
+                "a refused exact preview must preserve its published quality");
+        }
+        result.unwrap();
+    });
     r.wait_idle().unwrap();
     assert_eq!(r.preview_level, 0);
     assert!(!r.texture_sets.is_empty());
