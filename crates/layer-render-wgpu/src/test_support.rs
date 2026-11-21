@@ -677,7 +677,7 @@ pub(crate) fn submit_published_observing(r: &mut WgpuRasterizer, frame: FramePac
 pub(crate) fn edit_working_layer(r: &mut WgpuRasterizer, frame: FramePacket<'_>, target: SourceTarget) {
     let mut still = crate::layer_tests::dab([0.; 4]);
     still.flow = 0.;
-    let batch = DabBatch { stroke_end: true, ..dab_batch(target, crate::tests::test_style(layer_core::BrushExecution::Dry), still.bounds()) };
+    let batch = DabBatch { stroke_end: true, ..dab_batch(target, crate::tests::unfed_erase_style(), still.bounds()) };
     submit_settled(r, FramePacket { dabs: std::slice::from_ref(&still), dab_batches: std::slice::from_ref(&batch), composite_all: false, reset_layers: false, ..frame });
 }
 
