@@ -256,7 +256,7 @@ impl Needs {
         required.render.extend(r.scene_pipelines.for_scene(r,view,&[]).cloned());
         required.compute.extend([r.scene_pipelines.constant.2.clone(),r.scene_pipelines.fold.pipeline.clone()]);
         required.compute.extend([r.recipes.display.reduce.clone(),r.recipes.display.fused_reduce.clone()]);
-        required.compute.extend(r.scene_pipelines.scale_pipelines(wgpu::TextureFormat::Rgba32Float).into_iter().cloned());
+        required.compute.extend(r.scene_pipelines.scale_pipelines(wgpu::TextureFormat::Rgba32Float).cloned());
         required.compute.extend(r.transforms.as_ref().unwrap().placement_pipelines());
         if r.device.portable_blend() { required.compute.extend(r.portable_blend.pipelines.iter().cloned()); }
         if watercolor {
@@ -440,10 +440,7 @@ impl WgpuRasterizer {
             else { frame_demand::Outstanding::Blocked(frame_demand::Input::Compile) })
     }
     fn scene_scale_pipelines(&self,scene:SceneView<'_>)->impl Iterator<Item=&Deferred<wgpu::ComputePipeline>> {
-        let format=self.display_precision(scene).format();
-        let scale=&self.scene_pipelines.scale;
-        self.scene_pipelines.scale_pipelines(format).into_iter()
-            .chain((format!=wgpu::TextureFormat::Rgba32Float).then_some([&scale.full.reduce,&scale.output(format).project]).into_iter().flatten())
+        self.scene_pipelines.scale_pipelines(self.display_precision(scene).format())
     }
     pub(super) fn scene_scale_ready(&self,scene:SceneView<'_>) -> bool {
         self.compilation.require(self.scene_scale_pipelines(scene).chain([

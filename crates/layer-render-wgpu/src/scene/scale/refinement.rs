@@ -22,10 +22,6 @@ fn refining(r: &WgpuRasterizer) -> bool {
     r.moving_layer.is_none() && !r.transform_preview.as_ref().is_some_and(|preview| preview.moving)
 }
 
-fn fold_kernels(r: &WgpuRasterizer) -> [&Deferred<wgpu::ComputePipeline>; 5] {
-    r.scene_pipelines.scale_pipelines(r.device.working_format())
-}
-
 enum Outcome {Committed,Waiting(crate::frame_demand::Input),Refused(PixelRect,crate::residency::Blocked),Skipped,Deferred}
 
 struct Admitted {interest:pages::Interest,view:layer_render::ViewState,work:u64,waiting:Option<crate::frame_demand::Input>}
@@ -155,15 +151,13 @@ impl Cache {
     }
     fn pivot_input(&self,r:&WgpuRasterizer)->Option<crate::frame_demand::Outstanding> {
         use crate::frame_demand::{Input,Outstanding::{Blocked,Runnable}};
-        let folding=!self.pivot_halves().is_empty() && !fold_kernels(r).iter().all(|kernel|kernel.ready());
-        self.pivot_pending.then(||if folding {Blocked(Input::Compile)}else if r.image_decode_waiting() {Blocked(Input::Decode)}else {Runnable})
+        self.pivot_pending.then(||if r.image_decode_waiting() {Blocked(Input::Decode)}else {Runnable})
     }
     pub(super) fn pivot_inputs_pending(&self,scene:&Scene,r:&WgpuRasterizer,packet:FramePacket<'_>)->bool {
         if self.graph.parts.is_none() || self.pivot_missing(self.plan.bounds) {return false;}
         let root=self.graph.root.clone().unwrap();
         let tiled=use_tiles(r,self.plan,packet,Some(scene)) && !(self.plan.level>0 && root.fused_transform(r));
-        !self.pivot_halves().is_empty() && !r.compilation.require(fold_kernels(r),crate::startup::DOCUMENT)
-            || self.region_sources(scene,r,packet,self.plan.bounds,tiled).iter().any(|(id,request)|!self.source_ready(scene,r,*id,request))
+        self.region_sources(scene,r,packet,self.plan.bounds,tiled).iter().any(|(id,request)|!self.source_ready(scene,r,*id,request))
     }
 
     pub(super) fn refine(

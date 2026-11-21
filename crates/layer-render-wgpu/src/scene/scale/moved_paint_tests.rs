@@ -141,6 +141,7 @@ fn a_moved_layer_settles_its_reduced_predictions_to_exact_reduction() {
     frame.composite_all = false;
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
     for renderer in [&mut r, &mut exact] { crate::test_support::submit_published(renderer, frame); }
+    crate::test_support::edit_working_layer(&mut r, frame, target);
     let dabs = [[300., 200.], [520., 330.]].map(|at| {
         let mut dab = crate::tests::test_dab(at, [0.9, 0.2, 0.1, 0.8], 1.);
         dab.radii = [70.; 2];
