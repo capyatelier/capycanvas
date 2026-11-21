@@ -249,10 +249,8 @@ fn idle_refinement_presents_completion_and_never_holds_new_input() {
 }
 
 #[test]
-fn idle_refinement_batches_pages_and_yields_to_new_artwork() {
-    for (extent, expected_pages, expected_pixels) in [
-        ([1537, 1025], 14, 1537 * 512), ([4609, 769], SOURCE_SLOTS, 4096 * 256),
-    ] {
+fn publication_stays_within_frame_grants_and_held_refinement_yields_to_new_artwork() {
+    for extent in [[1537, 1025], [4609, 769]] {
         for (visible,opacity) in [(true,1.),(false,1.),(true,0.35)] {
             let mut doc = document_at(extent);
             let fill_id=add_fill(&mut doc, layer_core::color::RgbColor::WHITE);
@@ -265,17 +263,19 @@ fn idle_refinement_batches_pages_and_yields_to_new_artwork() {
             let mut frame = packet(doc.scene(), extent);
             frame.composite_all = false;
             frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-            for renderer in [&mut r, &mut exact] { submit_published(renderer, frame); }
-            let work = r.metrics.composited_pixels;
-            let passes = r.metrics.command_passes;
-            crate::test_support::submit_ready(&mut r, frame).unwrap();
-            let refined = r.metrics.composited_pixels - work;
-            assert!(r.metrics.command_passes - passes <= 5, "resident pages share one composition pass");
-            assert_eq!(r.metrics.frame_composited_pages.len(), expected_pages, "idle work fills one bounded strip");
-            assert_eq!(refined, expected_pixels, "idle work stops at the strip boundary");
-            let strip = r.scale_display.as_ref().unwrap().exact_tile.as_ref().unwrap();
-            assert!(refined <= u64::from(strip.texture.width()) * u64::from(strip.texture.height()));
-            assert!(r.next_frame()==layer_render::FrameDemand::Work);
+            let frames=std::cell::Cell::new(0);
+            let within_grant=|r:&WgpuRasterizer| {
+                frames.set(frames.get()+1);
+                let [granted,charged]=r.test.frame_work;
+                assert!(charged<=granted,"frame {} charged {charged} work units of the {granted} it was granted: fill visible={visible}, opacity={opacity}",frames.get());
+            };
+            submit_published(&mut exact, frame);
+            crate::test_support::submit_published_observing(&mut r, frame, within_grant);
+            let area=PixelRect::full(extent).area();
+            assert!(frames.get()<=page_coordinates(PixelRect::full(extent)).count()+3,"publication took {} frames",frames.get());
+            assert_eq!(r.metrics.composited_pixels, area, "publication composes each native texel once");
+            assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
+            assert_eq!(r.metrics.composited_pixels, area, "a published view has no refinement left");
             let completed = r.background_ready.clone();
             r.hold_background(false);
             completed.store(true, std::sync::atomic::Ordering::Release);
@@ -298,11 +298,22 @@ fn idle_refinement_batches_pages_and_yields_to_new_artwork() {
             assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
             let mut changed=doc.clone();
             changed.artwork.occurrences.get_mut(fill_id).unwrap().visible= !visible;
+            let edited=FramePacket {scene:changed.scene(),..frame};
             r.background_ready=Arc::new(std::sync::atomic::AtomicBool::new(false));
             r.background_refinement=true;
             let submissions=r.metrics.submissions;
-            crate::test_support::submit_ready(&mut r, FramePacket {scene:changed.scene(),..frame}).unwrap();
+            crate::test_support::submit_ready(&mut r, edited).unwrap();
             assert!(r.metrics.submissions>submissions,"fill visibility edits bypass unfinished idle backpressure");
+            r.background_ready.store(true, std::sync::atomic::Ordering::Release);
+            submit_published(&mut exact, edited);
+            crate::test_support::submit_settled_observing(&mut r, edited, within_grant);
+            let cache=r.scale_display.as_ref().unwrap();
+            assert_reduction(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan, cache.texture().format(), 2e-5,
+                format_args!("settled fill visibility edit: fill visible={visible}, opacity={opacity}"));
+            assert_presentation_mip(&r);
+            let work=r.metrics.composited_pixels;
+            crate::test_support::submit_ready(&mut r, edited).unwrap();
+            assert_eq!(r.metrics.composited_pixels, work, "a settled edit has no further work");
         }
     }
 }
@@ -591,6 +602,7 @@ fn settled_photo_pages_survive_warm_zoom_and_pan() {
 #[test]
 fn settled_composition_reuses_every_zoom_and_refines_only_changed_pages() {
     let mut doc = document_at([769, 513]);
+    composition_mut(&mut doc).color.depth = SampleDepth::F32;
     let extent = doc.composition().size;
     let mut r = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
     let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
@@ -603,11 +615,9 @@ fn settled_composition_reuses_every_zoom_and_refines_only_changed_pages() {
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
     assert_eq!(r.scale_display.as_ref().unwrap().texture(), &drawing_target, "settling repairs the drawing texture in place");
     assert!(r.scale_display.as_ref().unwrap().retained_ready());
-    let cache = r.scale_display.as_ref().unwrap();
-    let strip = cache.exact_tile.as_ref().expect("refinement uses a bounded render attachment");
-    assert_eq!([strip.texture.width(), strip.texture.height()], exact_strip(extent));
-    assert!(retained_root_pages(cache).iter().all(|page|page.texture!=strip.texture));
-    let zooms=[0.5,1.,2.,0.25,0.125];
+    assert!(r.scale_display.as_ref().unwrap().exact_cells().iter().all(|(_, exact)| *exact), "the settled view is exact");
+    assert_eq!(r.metrics.composited_pixels, PixelRect::full(extent).area(), "publishing and settling compose each native texel once");
+    let zooms=[1.,2.,0.25,0.125,0.5];
     for zoom in zooms {
         frame.view.document_to_surface=[zoom,0.,0.,zoom,-40.,-20.];
         crate::test_support::submit_ready(&mut r,frame).unwrap();
@@ -636,13 +646,14 @@ fn settled_composition_reuses_every_zoom_and_refines_only_changed_pages() {
     exact.test.reference = true;
     submit_published(&mut exact, frame);
     assert_eq!(r.scale_display.as_ref().unwrap().texture(), &drawing_target, "drawing updates the resident level");
-    let cache=r.scale_display.as_ref().unwrap();
-    let coverage=cache.coverage_snapshot();
-    assert!(page_coordinates(cache.plan.bounds).filter(|coordinate|*coordinate!=[0,0])
-        .all(|coordinate|pages::Coverage::covers(&coverage.exact,page_rect(coordinate).intersect(cache.plan.bounds))),"only the damaged page may lose exactness");
+    let touched=crate::pixel_rect::pixel_rect(dab.bounds(),extent);
+    let cells=r.scale_display.as_ref().unwrap().exact_cells();
+    assert!(cells.len()>1 && cells.iter().all(|(cell,exact)|*exact==cell.intersect(touched).is_empty()),"only the display cell under the dab loses exactness: {cells:?}");
     let work = r.metrics.composited_pixels;
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
-    assert!(r.metrics.composited_pixels-work<=u64::from(PAGE_SIZE).pow(2),"idle repair stays within the one touched page");
+    let repaired=r.metrics.composited_pixels-work;
+    assert!(repaired>0 && repaired<=u64::from(PAGE_SIZE).pow(2),"idle repair redoes the one touched page and nothing else: {repaired} texels");
+    assert!(r.scale_display.as_ref().unwrap().exact_cells().iter().all(|(_,exact)|*exact),"the repaired view is exact again");
     assert_eq!(r.scale_display.as_ref().unwrap().texture(), &drawing_target, "dirty repair preserves the presentation binding");
     frame.view.document_to_surface = [1., 0., 0., 1., 0., 0.];
     crate::test_support::submit_ready(&mut r, frame).unwrap();

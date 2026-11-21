@@ -682,6 +682,10 @@ pub(crate) fn edit_working_layer(r: &mut WgpuRasterizer, frame: FramePacket<'_>,
 }
 
 pub(crate) fn submit_settled(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
+    submit_settled_observing(r, frame, |_| {});
+}
+
+pub(crate) fn submit_settled_observing(r: &mut WgpuRasterizer, frame: FramePacket<'_>, mut observe: impl FnMut(&WgpuRasterizer)) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let idle = FramePacket { dabs: &[], dab_batches: &[], restore_rasters: &[],
         reset_layers: false, composite_all: false, ..frame };
@@ -699,6 +703,7 @@ pub(crate) fn submit_settled(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
         if r.can_submit() && let std::task::Poll::Ready(result) = r.submit_when_ready(next, preview.as_ref()) {
             result.unwrap();
             first = false;
+            observe(r);
         }
         r.wait_idle().unwrap();
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
