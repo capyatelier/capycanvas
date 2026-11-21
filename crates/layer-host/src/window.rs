@@ -1206,6 +1206,28 @@ mod tests {
     }
 
     #[test]
+    fn warm_switches_between_two_equal_blank_drawings_present_each_retained_drawing() {
+        let mut host = host();
+        let mut window = Window::default();
+        presented(&mut host);
+        let first = window.documents.selected();
+        let blank = layer_core::Document::new(layer_core::authored::PortableId::random(), 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        let next = prepared(&window, &host, blank);
+        open_with(&mut window, &mut host, next);
+        presented(&mut host);
+        for target in [first, window.documents.selected(), first] {
+            assert!(host.warm.0.iter().any(|(id, _)| *id == target), "drawing {target} stays warm in the background");
+            warm_switch(&mut window, &mut host, target);
+            for frames in 0..2 {
+                let gpu = host.session.engine().backend();
+                assert!(layer_render::CanvasRenderer::showing_drawing(gpu) && gpu.0.as_ref().unwrap().has_presentable_frame(), "drawing {target} presents its retained picture after {frames} frames");
+                host.prepare_canvas_frame(0, 0, true).unwrap();
+            }
+        }
+        finish(host, window);
+    }
+
+    #[test]
     fn a_dab_after_a_warm_switch_is_accepted_within_two_frames() {
         let mut host = host();
         let mut window = Window::default();

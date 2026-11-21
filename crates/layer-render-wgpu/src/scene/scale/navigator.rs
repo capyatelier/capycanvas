@@ -33,6 +33,11 @@ impl Navigator {
             .is_none_or(|v| v.load(std::sync::atomic::Ordering::Acquire)))
             .and_then(|c| c.pixels.committed_root()).map(pages::CommittedImage::view)
     }
+    pub(crate) fn content_revision(&self)->Option<(u64,u64)> {
+        let cache=self.cache.as_ref().filter(|cache|!self.stale && self.view().is_some() && cache.presented_matches_expected()==Some(true))?;
+        let store=cache.pages.lock().unwrap();let scene=store.expected()?.scene();
+        Some((scene.owner(),scene.revision()))
+    }
     pub fn scale(&self) -> f32 { self.cache.as_ref().map_or(1., |c| (1 << c.plan.level) as f32) }
     pub fn storage_bytes(&self) -> u64 { self.cache.as_ref().map_or(0, Cache::window_bytes) }
     pub(crate) fn release(&mut self) { self.cache = None; }

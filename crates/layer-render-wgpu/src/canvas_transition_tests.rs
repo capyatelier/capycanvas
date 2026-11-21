@@ -148,3 +148,74 @@ fn a_settled_canvas_demands_no_frame_and_wakes_its_host_for_five_seconds() {
     assert_eq!(r.next_frame(),layer_render::FrameDemand::Wait);
     assert!(woken.recv_timeout(Duration::from_secs(5)).is_err(),"a settled canvas woke its host");
 }
+
+const PAPER: [u32; 2] = [128; 2];
+const SURFACE: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+
+fn gray_paper() -> layer_core::Document {
+    let mut document = crate::layer_tests::paper_shade::rough_gray_paper();
+    crate::layer_tests::paper_shade::set_paper(&mut document, &[(layer_core::paper::RELIEF, layer_core::EffectValue::Number(0.))]);
+    document
+}
+
+fn canvas(r: &WgpuRasterizer) -> Vec<u8> {
+    let mut presenter = ViewportPresenter::for_surface(r, SURFACE, SdrSurfaceColor::Srgb).unwrap();
+    pollster::block_on(presenter.prepare(r)).unwrap();
+    let (texture, target) = crate::create_target(&r.device, PAPER, SURFACE, "presented canvas");
+    presenter.present(r, &target, crate::test_support::view(PAPER), [0.2, 0.3, 0.4, 1.]).unwrap();
+    crate::layer_tests::page_bytes(r, &texture)
+}
+
+fn navigator(r: &WgpuRasterizer) -> Vec<u8> {
+    let mut presenter = ViewportPresenter::for_overview_surface(r, SURFACE, SdrSurfaceColor::Srgb).unwrap();
+    presenter.set_overviews(r, &[crate::OverviewPlacement { bounds: [0., 0., 128., 128.], clip: None, work_area: [[-1000.; 2]; 4], outline_linear: [0.; 3], scale: 1., opacity: 1. }]);
+    pollster::block_on(presenter.prepare(r)).unwrap();
+    let (texture, target) = crate::create_target(&r.device, PAPER, SURFACE, "presented Navigator");
+    presenter.present_overviews(r, &target, PAPER).unwrap();
+    crate::layer_tests::page_bytes(r, &texture)
+}
+
+#[test]
+fn a_second_drawing_with_equal_pixels_shows_from_the_committed_windows_without_composing() {
+    let (first, second) = (gray_paper(), gray_paper());
+    assert_ne!((first.owner, first.artwork.id), (second.owner, second.artwork.id));
+    let mut r = WgpuRasterizer::new_native_headless(first.composition().color).unwrap();
+    submit_settled(&mut r, packet(first.scene(), PAPER));
+    assert!(r.showing_drawing() && r.showing_navigator());
+    let before = (r.composite_revision, r.navigator.revision, r.metrics.composited_pixels);
+    let counts = crate::test_support::PassCounts::snapshot();
+    submit_settled(&mut r, packet(second.scene(), PAPER));
+    let counts = crate::test_support::PassCounts::snapshot().delta(counts);
+    assert_eq!((r.composite_revision, r.navigator.revision, r.metrics.composited_pixels), before, "an equal picture needs no pixel operation");
+    assert_eq!((counts.composed_texels, counts.destination_units, counts.projected_copies, counts.composite_commits), (0, 0, 0, 0), "an equal picture needs no pixel operation");
+    assert!(r.showing_drawing() && r.showing_navigator(), "the committed windows already hold the second drawing");
+    let mut fresh = WgpuRasterizer::new_native_headless(second.composition().color).unwrap();
+    submit_settled(&mut fresh, packet(second.scene(), PAPER));
+    assert!(fresh.showing_drawing() && fresh.showing_navigator());
+    assert_eq!(canvas(&r), canvas(&fresh), "the reused renderer presents the second drawing like a fresh one");
+    assert_eq!(navigator(&r), navigator(&fresh), "the reused Navigator presents the second drawing like a fresh one");
+}
+
+#[test]
+fn a_second_drawing_with_other_pixels_stays_hidden_until_its_own_picture_publishes() {
+    let (first, mut second) = (gray_paper(), gray_paper());
+    let layer_core::SourceTarget::Paint(paint) = second.working.target.unwrap() else { unreachable!() };
+    second.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::authored::PaintBase::new(
+        layer_core::color::source::rgba8_source(PAPER, |_, _| [0, 0, 255, 255]).into()));
+    let mut r = WgpuRasterizer::new_native_headless(first.composition().color).unwrap();
+    submit_settled(&mut r, packet(first.scene(), PAPER));
+    assert!(r.showing_drawing());
+    let old = canvas(&r);
+    let revision = r.composite_revision;
+    let mut hidden = 0;
+    crate::test_support::submit_published_observing(&mut r, packet(second.scene(), PAPER), |r| {
+        assert!(canvas(r).chunks_exact(4).zip(old.chunks_exact(4)).all(|(shown, old)| shown != old), "the first drawing's window never presents as the second drawing");
+        if !r.showing_drawing() { hidden += 1; }
+    });
+    assert!(hidden > 0, "the second drawing waits for its source while the first drawing's window is still committed");
+    submit_settled(&mut r, FramePacket { composite_all: false, ..packet(second.scene(), PAPER) });
+    assert!(r.showing_drawing() && r.composite_revision != revision);
+    let mut fresh = WgpuRasterizer::new_native_headless(second.composition().color).unwrap();
+    submit_settled(&mut fresh, packet(second.scene(), PAPER));
+    assert_eq!(canvas(&r), canvas(&fresh));
+}
