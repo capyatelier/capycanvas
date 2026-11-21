@@ -730,6 +730,42 @@ fn global_filters_evict_optional_levels_before_rejecting_the_document() {
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
 }
 
+fn visible_pixels(r:&WgpuRasterizer,view:layer_render::ViewState)->Vec<[f32;4]> {
+    let cache=r.scale_display.as_ref().unwrap();let plan=cache.plan;
+    let area=paint_transform::aligned(display_mips::view_bounds(view,plan.extent,0).unwrap(),1<<plan.level,plan.extent).intersect(plan.bounds);
+    window_pixels(r,cache.pixels.root().unwrap(),display_mips::Plan::window(plan.extent,plan.level,area))
+}
+
+fn finish_exact_refinement(r:&mut WgpuRasterizer,frame:FramePacket<'_>,woken:&std::sync::mpsc::Receiver<()>,bound:u64,context:&str) {
+    let units=|counts:crate::test_support::PassCounts|crate::test_support::PassCounts::snapshot().delta(counts).destination_units;
+    let (counts,deadline)=(crate::test_support::PassCounts::snapshot(),std::time::Instant::now()+READBACK_TIMEOUT);
+    let mut audit=crate::frame_demand::DemandAudit::default();
+    while woken.try_recv().is_ok() {}
+    loop {
+        r.poll_startup().unwrap();r.poll_pending(frame.view).unwrap();
+        match r.next_frame() {
+            layer_render::FrameDemand::Work=>{},
+            _ if r.settled()=>break,
+            _=>{
+                assert!(woken.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).is_ok(),
+                    "{context}: exact refinement waits without a wake: {:?}",r.outstanding_terms());
+                continue;
+            },
+        }
+        assert!(std::time::Instant::now()<deadline,"{context}: exact refinement keeps demanding frames: {:?}",r.outstanding_terms());
+        audit.begin(r);
+        crate::test_support::submit_ready(r,frame).unwrap();r.wait_idle().unwrap();
+        audit.end(r,format_args!("{context}"));
+        assert!(units(counts)<=bound,"{context}: exact refinement attempted {} units, more than one for each of its {bound} native pages and window cells",units(counts));
+    }
+    for _ in 0..3 {
+        let (counts,before)=(crate::test_support::PassCounts::snapshot(),(r.metrics.composited_pixels,r.composite_revision,r.navigator.revision));
+        crate::test_support::submit_ready(r,frame).unwrap();r.wait_idle().unwrap();
+        assert_eq!((units(counts),(r.metrics.composited_pixels,r.composite_revision,r.navigator.revision)),(0,before),"{context}: a frame after exact refinement does work");
+        assert!(r.settled() && r.next_frame()!=layer_render::FrameDemand::Work,"{context}: a frame after exact refinement leaves demand: {:?}",r.outstanding_terms());
+    }
+}
+
 #[test]
 fn native_filter_windows_share_display_storage_and_preserve_halos_during_navigation() {
     for space in layer_core::BlendSpace::ALL {
@@ -743,8 +779,12 @@ fn native_filter_windows_share_display_storage_and_preserve_halos_during_navigat
         insert_occurrence(&mut doc,effect,0);
         let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(8 * 1024 * 1024);
+        let (wake, woken) = std::sync::mpsc::channel();
+        r.set_preparation_wake(Arc::new(move || { let _ = wake.send(()); }));
         let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         exact.test.reference = true;
+        let cells = |cache: &Cache| pages::coordinates(cache.plan.bounds, cache.plan.level).count();
+        let mut camera = None;
         for (zoom, x, opacity) in [(0.5, -192., 0.8), (0.5, -384., 0.8), (1., -512., 0.8), (1., -512., 0.4), (0.125, 0., 0.4)] {
             occurrence_mut(&mut doc,1).opacity = opacity;
             let mut frame = packet(doc.scene(), extent);
@@ -753,8 +793,15 @@ fn native_filter_windows_share_display_storage_and_preserve_halos_during_navigat
             frame.view.height_px = 64;
             frame.view.document_to_surface = [zoom, 0., 0., zoom, x, -32.];
             submit_published(&mut r, frame); submit_published(&mut exact, frame);
-            assert!(r.scale_display.as_ref().unwrap().evaluation == Evaluation::Native);
-            assert!(!r.scale_display.as_ref().unwrap().has_pending_work(&r), "native filters publish complete exact output");
+            let cache = r.scale_display.as_ref().unwrap();
+            assert!(cache.evaluation == Evaluation::Native);
+            let context = format!("{space:?}, zoom {zoom}, x {x}, opacity {opacity}");
+            let units = page_coordinates(PixelRect::full(extent)).count() + cells(cache) + cache.overview.as_deref().map_or(0, cells) + r.navigator.cache().map_or(0, cells);
+            let published = visible_pixels(&r, frame.view);
+            finish_exact_refinement(&mut r, FramePacket { composite_all: false, ..frame }, &woken, units as u64, &context);
+            if camera.replace(frame.view) == Some(frame.view) {
+                assert!(visible_pixels(&r, frame.view) == published, "{context}: exact refinement changed the picture the opacity change had published");
+            }
             assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
         }
     }
