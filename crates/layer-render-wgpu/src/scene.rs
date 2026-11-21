@@ -381,6 +381,7 @@ pub(super) struct Scene {
     scale_commands: Option<scale::RegionRecords>,
     pool: Vec<PageSurface>,
     used: Vec<scratch::Usage>,
+    operation_scratch: Vec<scratch::Lease>,
     declaring: bool,
     jobs: Vec<Job>,
     source_jobs: Vec<std::ops::Range<usize>>,
@@ -752,6 +753,7 @@ impl Scene {
             material_bounds: Default::default(),
             pool: Vec::new(),
             used: Vec::new(),
+            operation_scratch: Vec::new(),
             declaring: false,
             jobs: Vec::new(),
             source_jobs: Vec::new(),ordered:false,
@@ -842,6 +844,17 @@ impl Scene {
         self.used[id].reset();
     }
     fn own(&mut self, id: usize) -> scratch::Lease { self.used[id].lease(id) }
+    fn hold_operation_scratch(&mut self,r:&WgpuRasterizer,pages:usize)->Result<(),GpuRasterError> {
+        for _ in self.operation_scratch.len()..pages {let page=self.reserve(r)?;let lease=self.own(page);self.operation_scratch.push(lease);}
+        Ok(())
+    }
+    pub(crate) fn hold_settling_scratch(&mut self,r:&WgpuRasterizer,target:SourceTarget,kind:&RasterOperationKind,damage:PixelRect,extent:[u32;2],
+        outputs:impl Iterator<Item=[u32;2]>)->Result<(),GpuRasterError> {
+        if !settles(kind,damage,extent) || !r.paint_layers.iter().any(|layer|layer.id==target && layer.watercolor.is_some()) {return Ok(());}
+        let mut pages:Vec<_>=outputs.filter(|page|!damage.page_local(*page).is_empty()).collect();
+        self.hold_operation_scratch(r,scratch::settle(&mut pages))
+    }
+    pub(crate) fn release_operation_scratch(&mut self) {self.operation_scratch.clear();}
     fn keep(&mut self, lease: scratch::Lease) -> usize { self.used[lease.index].keep(lease) }
     pub(super) fn trim_scratch(&mut self, keep: usize) -> Vec<PageSurface> {
         if !self.jobs.is_empty() { return Vec::new(); }
@@ -1718,11 +1731,7 @@ impl Scene {
             return Ok(());
         };
         let stored=&r.paint_layers[stored_index];
-        let settles = match op.kind {
-            RasterOperationKind::ApplyMask => true,
-            RasterOperationKind::Erase { .. } => damage == PixelRect::full(extent),
-            _ => false,
-        };
+        let settles = settles(&op.kind,damage,extent);
         let mut coordinates: Vec<_> = if preview {&r.preview_pages}else{&stored.pages}
             .iter()
             .filter(|p| !damage.page_local(p.coordinate).is_empty())
@@ -1733,11 +1742,20 @@ impl Scene {
             r.accepted_raster_output(target,if preview {RasterOutput::PreviewColor(*coordinate)}else {RasterOutput::Color(*coordinate)})?;
         }
         let watercolor = stored.watercolor.is_some() && settles;
+        let record=watercolor.then(||r.layer_style_records.get(&handle).copied().ok_or(GpuRasterError::MissingPaintLayer(target))).transpose()?;
         let erase = f32::from(matches!(op.kind, RasterOperationKind::Erase { .. }));
         let gradient = if let RasterOperationKind::Gradient {gradient,..}=&op.kind {Some(crate::gradient::texture(r,gradient)?)} else {None};
         let underfill_coverage = layer_masks::underfill_coverage(op);
         let declaration=self.capture_declaration(r,packet)?.with_raw_layers();
-        for c in coordinates {
+        let pages=if watercolor {scratch::settle(&mut coordinates)}else {coordinates.len().min(1)};
+        self.hold_operation_scratch(r,pages)?;
+        let mut spare=std::mem::take(&mut self.operation_scratch);
+        let resolve=record.and_then(|record|spare.pop().map(|page|(page,record)));
+        let mut frontier=scratch::Frontier::new(if watercolor {&coordinates}else {&[]});
+        let publish=|this:&mut Self,spare:&mut Vec<scratch::Lease>,(output,copy,publication):(scratch::Lease,Option<Job>,resident::Encoding)| {
+            this.jobs.extend(copy);this.publish_surface(target,publication);spare.push(output);
+        };
+        for &c in &coordinates {
             let intent=r.raster_intent(target,RasterPlane::Color,c)?;
             let input=preview.then(||r.preview_expected(target,RasterPlane::Color,c,PreviewStage::BeforeFill)).transpose()?;
             let ticket=preview.then(||r.preview_version(target,RasterPlane::Color,c,PreviewStage::Final)).transpose()?;
@@ -1759,38 +1777,36 @@ impl Scene {
             };
             let mut accepted=self.accept_capture(r,packet,None,&declaration,|this,r,accepted|inputs(this,r,accepted).map(drop))?;
             let (mask,underfill,views)=inputs(self,r,&mut accepted)?;
-            let out = self.alloc(r, wgpu::Color::TRANSPARENT)?;
-            let _out = self.own(out);
+            let resolved=views.zip(resolve.as_ref()).map(|(views,(page,record))| {
+                let view=self.pool[page.index].view.clone();
+                self.jobs.push(Job::Clear(view.clone(),wgpu::Color::TRANSPARENT));
+                self.jobs.push(Job::Watercolor {
+                    coordinates: (r.target_bind_group.clone(), r.layer_target_offset(target, c)),
+                    target: view.clone(),
+                    views,
+                    record: *record,
+                });
+                view
+            });
+            for output in frontier.read(c) {publish(self,&mut spare,output);}
+            let output=spare.pop().ok_or(GpuRasterError::Invariant("operation outputs exceed their admitted scratch"))?;
+            let out=output.index;
+            self.jobs.push(Job::Clear(self.pool[out].view.clone(),wgpu::Color::TRANSPARENT));
             match op.kind {
                 RasterOperationKind::ColorMode(_) | RasterOperationKind::Transform(_) | RasterOperationKind::Bake { .. } | RasterOperationKind::FrequencyDetail { .. }
                     | RasterOperationKind::Coverage => {
                     unreachable!("transforms, bakes and mask coverage run before page operations")
                 }
-                RasterOperationKind::ApplyMask | RasterOperationKind::Erase { .. } => {
-                    let mut resolved = None;
-                    if let Some(views)=views {
-                        let p = self.alloc(r, wgpu::Color::TRANSPARENT)?;
-                        let held = self.own(p);
-                        self.jobs.push(Job::Watercolor {
-                            coordinates: (r.target_bind_group.clone(), r.layer_target_offset(target, c)),
-                            target: self.pool[p].view.clone(),
-                            views,
-                            record: *r.layer_style_records.get(&handle).ok_or(GpuRasterError::MissingPaintLayer(target))?,
-                        });
-                        resolved = Some(held);
-                    }
-                    self.draw(
-                        r,
-                        out,
-                        resolved.as_ref().map_or(source, |p| self.pool[p.index].view.clone()),
-                        Some(mask.view.clone()),
-                        [0., 0., 256., 256.],
-                        [3., 2., erase, 0.],
-                        false,
-                        Convert::None,
-                    );
-                    drop(resolved);
-                }
+                RasterOperationKind::ApplyMask | RasterOperationKind::Erase { .. } => self.draw(
+                    r,
+                    out,
+                    resolved.unwrap_or(source),
+                    Some(mask.view.clone()),
+                    [0., 0., 256., 256.],
+                    [3., 2., erase, 0.],
+                    false,
+                    Convert::None,
+                ),
                 RasterOperationKind::Fill { .. }
                 | RasterOperationKind::Gradient { .. }
                 | RasterOperationKind::Figure(_) => {
@@ -1854,20 +1870,22 @@ impl Scene {
             } else {
                 PixelRect::full([PAGE_SIZE; 2])
             };
-            if !written.is_empty() {
+            let copy = (!written.is_empty()).then(|| {
                 let origin = [written.min_x(), written.min_y()];
-                self.jobs.push(Job::Copy {
+                Job::Copy {
                     source: self.pool[out].texture.clone(),
                     source_origin: origin,
                     destination,
                     origin,
                     width: written.width(),
                     height: written.height(),
-                });
-            }
-            self.publish_surface(target,publication);
-            self.free(out);accepted.track(encoder);
+                }
+            });
+            if let Some(output)=frontier.hold(c,(output,copy,publication)) {publish(self,&mut spare,output);}
+            accepted.track(encoder);
         }
+        spare.extend(resolve.map(|(page,_)|page));
+        self.operation_scratch=spare;
         self.encode_jobs(r, encoder)?;
         self.fill_capture=None;
         if settles {
@@ -3067,6 +3085,13 @@ pub(super) fn fill_texture(kind: &RasterOperationKind) -> Option<&layer_core::Fi
     kind.fill_texture().filter(|texture| texture.strength > 0. && texture.paper.is_some())
 }
 
+pub(crate) fn settles(kind: &RasterOperationKind, damage: PixelRect, extent: [u32; 2]) -> bool {
+    match kind {
+        RasterOperationKind::ApplyMask => true,
+        RasterOperationKind::Erase { .. } => damage == PixelRect::full(extent),
+        _ => false,
+    }
+}
 pub(crate) fn reads_coverage_pages(kind: &RasterOperationKind) -> bool {
     !matches!(kind, RasterOperationKind::ColorMode(_) | RasterOperationKind::Erase { alpha_locked: true } | RasterOperationKind::Bake { .. }
         | RasterOperationKind::FrequencyDetail { .. } | RasterOperationKind::Transform(_) | RasterOperationKind::Coverage)
