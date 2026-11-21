@@ -558,7 +558,8 @@ mod tests {
             assert_eq!(app.launch_state(LAUNCH_READY).frame, ready.frame);
             assert!(!app.launch_presented(0, LAUNCH_READY));
             assert!(app.launch_presented(ready.frame.unwrap(), LAUNCH_READY));
-            assert!(!app.launch_state(LAUNCH_READY).visible);
+            let revealing = app.launch_state(LAUNCH_READY);
+            assert!(!revealing.visible && revealing.finished, "a presented launch fades its cover without taking input");
         }
     }
 

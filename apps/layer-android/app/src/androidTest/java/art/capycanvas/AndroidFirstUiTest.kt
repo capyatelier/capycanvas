@@ -3,6 +3,7 @@ package art.capycanvas
 import android.graphics.Bitmap
 import android.os.SystemClock
 import android.provider.Settings
+import android.view.MotionEvent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.platform.WindowRecomposerFactory
@@ -11,6 +12,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
@@ -604,6 +606,45 @@ class AndroidFirstUiTest {
             CanvasHost.beforeGpuAttachForTest = null
             scenario?.close()
             if (android.os.Build.VERSION.SDK_INT >= 31 && previousNight != null) night?.setApplicationNightMode(previousNight)
+        }
+    }
+
+    @Test fun stylusStrokeUnderTheFadingSplashPaints() {
+        var scenario: ActivityScenario<MainActivity>? = null
+        try {
+            scenario = ActivityScenario.launch(MainActivity::class.java)
+            val activity = scenario.activity()
+            val host = activity.host
+            host.awaitMain("the launch reveal starts", 120_000, { "launch=${host.snapshot?.objectOrNull("launch")}" }, compose) {
+                host.launchFinished() && !host.launchHolding(activity.launchSplash.reveal)
+            }
+            compose.mainClock.autoAdvance = false
+            compose.mainClock.advanceTimeBy(host.bootstrap!!.getLong("launch_reveal_ms") / 2)
+            fun checkpoint() = runBlocking {
+                host.withNative { JSONObject(Native.sessionStamp(it, host.drawingTabs.selected)).getLong("checkpoint") }
+            }
+            val blank = checkpoint()
+            var center = Offset.Zero
+            instrumentation.runOnMainSync {
+                val origin = IntArray(2)
+                activity.window.decorView.descendant<CanvasSurfaceView>()!!.getLocationOnScreen(origin)
+                val area = host.snapshot!!.getJSONObject("state").getJSONObject("camera").getJSONArray("work_area")
+                center = Offset(origin[0] + (area.getDouble(0) + area.getDouble(2) / 2).toFloat(),
+                    origin[1] + (area.getDouble(1) + area.getDouble(3) / 2).toFloat())
+            }
+            val down = SystemClock.uptimeMillis()
+            for ((action, x) in listOf(MotionEvent.ACTION_DOWN to -40f, MotionEvent.ACTION_MOVE to 0f, MotionEvent.ACTION_UP to 40f)) {
+                val event = motion(MotionEvent.TOOL_TYPE_STYLUS, action, center + Offset(x, 0f), down)
+                try { assertTrue(instrumentation.uiAutomation.injectInputEvent(event, true)) } finally { event.recycle() }
+            }
+            assertTrue("The launch cover still draws over the stroke", activity.launchSplash.hadNativeVisual ||
+                compose.onAllNodesWithTag("launch-splash").fetchSemanticsNodes().isNotEmpty())
+            val until = SystemClock.uptimeMillis() + 10_000
+            while (checkpoint() == blank && SystemClock.uptimeMillis() < until) SystemClock.sleep(25)
+            assertNotEquals("A stylus stroke under the fading launch cover paints", blank, checkpoint())
+        } finally {
+            compose.mainClock.autoAdvance = true
+            scenario?.close()
         }
     }
 

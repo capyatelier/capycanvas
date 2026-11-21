@@ -267,7 +267,6 @@ void CanvasWindow::HideLaunchCover(bool animate) {
     if(launchCover.Visibility()!=Visibility::Visible)return;
     if(!animate||!uiSettings.AnimationsEnabled()){if(launchFade)launchFade.Stop();launchCover.Visibility(Visibility::Collapsed);return;}
     if(launchFade)return;
-    launchCover.IsHitTestVisible(false);
     auto duration=std::chrono::milliseconds(static_cast<int64_t>(bootstrap.GetNamedNumber(L"launch_reveal_ms")));
     Animation::DoubleAnimation opacity;opacity.From(launchCover.Opacity());opacity.To(0.);opacity.Duration(DurationHelper::FromTimeSpan(duration));
     Animation::Storyboard::SetTarget(opacity,launchCover);Animation::Storyboard::SetTargetProperty(opacity,L"Opacity");
@@ -318,11 +317,12 @@ void CanvasWindow::ApplyLaunchCover(Windows::Data::Json::JsonObject const& model
     AutomationProperties::SetName(launchCover,launchCaption.Text());
     if(statusFailed||!str(model,L"error").empty()||!str(state,L"host_error").empty()){HideLaunchCover(false);return;}
     if(!launch.Size())return;
+    launchCover.IsHitTestVisible(flag(launch,L"visible"));
     if(!flag(launch,L"visible")){if(!flag(launch,L"finished"))HideLaunchCover(false);return;}
     CancelLaunchReveal();
     if(launchFade){launchFade.Stop();launchFade=nullptr;}
     if(launchCover.Visibility()!=Visibility::Visible){
-        launchCover.Visibility(Visibility::Visible);launchCover.IsHitTestVisible(true);
+        launchCover.Visibility(Visibility::Visible);
         ArmLaunchCaption();
     }
     launchCover.Opacity(LaunchCoverOpacity);
