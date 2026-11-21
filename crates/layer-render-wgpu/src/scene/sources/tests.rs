@@ -1088,7 +1088,7 @@ fn cold_restores_own_their_source_before_decode_completion() {
         let store = crate::test_support::GatedStore::new(&layer_core::Editor::new(document.clone()).retained_tiles(), false);
         let mut dab = crate::layer_tests::dab([0.; 4]);
         dab.center = layer_core::Point {x: 128., y: 128.};
-        let batch = crate::test_support::dab_batch(target(&document), crate::tests::test_style(layer_core::BrushExecution::Dry), dab.bounds());
+        let batch = crate::test_support::dab_batch(target(&document), crate::tests::unfed_erase_style(), dab.bounds());
         let frame = layer_render::FramePacket {dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch),
             reset_layers: true, ..crate::test_support::packet(document.scene(), [PAGE_SIZE; 2])};
         wait_until(format_args!("decode worker did not request stored source bytes: base={base}"), || {

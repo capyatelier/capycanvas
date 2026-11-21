@@ -144,7 +144,7 @@ fn candidate_errors(name: &str) -> [f32; 2] {
                     let visible = PixelRect::new(610, 270, 610 + (43 << level), 270 + (25 << level)).intersect(PixelRect::full(extent));
                     let side = (1u32 << level) as f32;
                     let mut dab = crate::tests::test_dab([610. + 21.5 * side, 270. + 12.5 * side], [0.; 4], 1.); dab.radii = [43. * side; 2];
-                    let stroke = |end: bool| layer_render::DabBatch { stroke_end: end, ..dab_batch(SourceTarget::Paint(paint), crate::tests::test_style(layer_core::BrushExecution::Dry), dab.bounds()) };
+                    let stroke = |end: bool| layer_render::DabBatch { stroke_end: end, ..dab_batch(SourceTarget::Paint(paint), crate::tests::unfed_erase_style(), dab.bounds()) };
                     let [held, ended] = [stroke(false), stroke(true)];
                     for _ in 0..64 {
                         for renderer in [&mut window, &mut exact] { crate::test_support::submit_ready(renderer, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&held), composite_all: false, ..frame }).unwrap(); }
