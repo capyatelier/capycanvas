@@ -360,11 +360,12 @@ fn object_frame_work_uses_the_scene_grant_beyond_cache_retention() {
         ObjectWindow {origin: [0.; 2], side: 1., size: [3000, 2000]});
     assert!(u64::from(request.window.size[0]) * u64::from(request.window.size[1]) * 16
         > (crate::memory::OBJECT_CACHE_BYTES / 2) + r.memory.working_limit());
-    assert!(matches!(scene.object_results.resolve_collection(&r, doc.scene(), &request,None), Ok(None)));
+    let mut reader=crate::scene::sources::AcceptedInputs::default();
+    assert!(matches!(scene.object_results.resolve_collection(&r, doc.scene(), &request,Some(&mut reader)), Ok(None)));
     let empty=super::super::object_cache::ObjectCache::for_scene(&scene,false);
     let mut cache=std::mem::replace(&mut scene.object_results,empty);
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    pollster::block_on(r.compilation.prepare_all(r.scene_pipelines.objects.pipelines())).unwrap();
+    pollster::block_on(r.compilation.prepare_all(r.scene_pipelines.objects.pipelines().into_iter().chain([&r.scene_pipelines.constant.2]))).unwrap();
     {let mut work=crate::test_support::work(false);cache.advance(&mut r, &mut scene, &mut encoder,&mut work).unwrap();}
     assert!(cache.pinned_gpu_bytes() > crate::memory::OBJECT_CACHE_BYTES / 2);
     r.uploads.finish(&encoder);
