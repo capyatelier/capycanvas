@@ -988,9 +988,11 @@ fn a_24mp_fit_reshow_finishes_within_two_frames_once_its_real_inputs_are_residen
     let hide=FramePacket {scene:hidden.scene(),composite_all:false,time_seconds:0.1,..frame};
     crate::test_support::submit_settled(&mut r,hide);crate::test_support::complete(&r);
     drop(r.scale_display.take());r.navigator=Default::default();
-    r.scene.as_ref().unwrap().scale_pages.lock().unwrap().trim(0,crate::residency::Class::Visible);
+    crate::test_support::evict_sources(&mut r);
+    let scene=r.scene.as_ref().unwrap();
+    for _ in 0..2 {scene.advance_demand_epoch();}
+    scene.trim_pages_by(u64::MAX,crate::residency::Class::Visible);
     assert!(r.scene.as_ref().unwrap().scale_pages.lock().unwrap().retained_pages().is_empty(),"source and composite Store pages must really be evicted");
-    *r.source_tiles.get_mut()=crate::scene::sources::DecodedTiles::within(&r.scene_tiers.display,r.device.working_space());
     r.memory.invalidate_limits();r.publish_memory();r.refresh_memory_limits();
     let coordinates=page_coordinates(area).collect::<Vec<_>>();assert_eq!(coordinates.len(),384);
     assert!(coordinates.iter().all(|coordinate|r.source_tiles.borrow().prepared_view(&image,*coordinate).is_none()));
