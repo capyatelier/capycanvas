@@ -137,6 +137,7 @@ fn assert_pixels(
     alpha: AlphaAssociation,
     region: [u32; 4],
     sentinel: u32,
+    case: &str,
 ) {
     let mut errors = [0; 4];
     let mut first = None;
@@ -166,24 +167,18 @@ fn assert_pixels(
     }
     assert_eq!(
         errors, [0; 4],
-        "{depth:?} {space:?} {alpha:?} first={first:?}"
+        "{case}: {depth:?} {space:?} {alpha:?} first={first:?}"
     );
 }
 
 #[test]
-fn native_writeback_codes_boundaries_and_partial_tiles() { writeback_corpus(false); }
-
-#[test]
-fn native_in_place_writeback_codes_boundaries_and_partial_tiles() { writeback_corpus(true); }
-
-#[test]
-fn four_storage_buffer_devices_batch_rgba_and_bound_gray_native_writes() {
-    portable_native_writes(4);
+fn native_writeback_codes_boundaries_and_partial_tiles_with_and_without_in_place_storage() {
+    for in_place in [false, true] { writeback_corpus(in_place); }
 }
 
 #[test]
-fn eight_storage_buffer_devices_batch_rgba_and_bound_gray_native_writes() {
-    portable_native_writes(8);
+fn four_and_eight_storage_buffer_devices_batch_rgba_and_bound_gray_native_writes() {
+    for storage_buffers in [4, 8] { portable_native_writes(storage_buffers); }
 }
 
 fn portable_native_writes(storage_buffers: u32) {
@@ -192,7 +187,7 @@ fn portable_native_writes(storage_buffers: u32) {
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default()
     })).unwrap();
-    assert_ne!(adapter.get_info().device_type, wgpu::DeviceType::Cpu);
+    assert_ne!(adapter.get_info().device_type, wgpu::DeviceType::Cpu, "{storage_buffers}-buffer device");
     let features = adapter.features() & (wgpu::Features::FLOAT32_FILTERABLE
         | wgpu::Features::FLOAT32_BLENDABLE | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
     let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
@@ -201,7 +196,7 @@ fn portable_native_writes(storage_buffers: u32) {
         required_features: features, required_limits: limits, ..Default::default()
     })).unwrap();
     let mut r = WgpuRasterizer::native_capture_on_gpu(adapter, device.into(), queue, Default::default()).unwrap();
-    assert_eq!(r.device.limits().max_storage_buffers_per_shader_stage, storage_buffers);
+    assert_eq!(r.device.limits().max_storage_buffers_per_shader_stage, storage_buffers, "{storage_buffers}-buffer device");
     let working: Vec<_> = (0..2).map(|_| texture(&r, wgpu::TextureFormat::Rgba32Float)).collect();
     let canonical: Vec<_> = (0..2).map(|_| texture(&r, wgpu::TextureFormat::Rgba32Float)).collect();
     let rgba: Vec<_> = (0..2).map(|_| texture(&r, wgpu::TextureFormat::Rgba8Uint)).collect();
@@ -228,7 +223,8 @@ fn portable_native_writes(storage_buffers: u32) {
             submit(&r, &encoder, &[batch]);
             for i in 0..2 {
                 if mode == LayerColorMode::FullColor {
-                    assert_pixels(&page_bytes(&r, &rgba[i]), &pixels, SampleDepth::U8, RgbSpace::Srgb, AlphaAssociation::Straight, [0, 0, 256, 256], 0);
+                    assert_pixels(&page_bytes(&r, &rgba[i]), &pixels, SampleDepth::U8, RgbSpace::Srgb, AlphaAssociation::Straight, [0, 0, 256, 256], 0,
+                        &format!("{storage_buffers}-buffer device in_place={in_place}"));
                 } else {
                     let actual = pollster::block_on(crate::local_tone::read_buffer_async(&r.device, &r.queue, &gray[i])).unwrap();
                     let expected = if mode == LayerColorMode::TwoTone { [255, 255] }
@@ -331,7 +327,7 @@ fn before_endpoint_encoder(r: &WgpuRasterizer, in_place: bool) -> NativeTileEnco
                 let source = source.replace("\r\n", "\n");
                 let decode = "fn decode_quantized(code:u32)->f32 {\n    if code==0u {return 0.;}\n    if code==65535u {return 1.;}\n    return transfer[code].x;\n}\n";
                 let endpoints = "    if value==0. {return 0u;}\n    if value==1. {return settings.maximum;}\n";
-                assert!(source.contains(decode) && source.contains(endpoints));
+                assert!(source.contains(decode) && source.contains(endpoints), "in_place={in_place} {name} tracked={tracked} count={count}");
                 let source = source.replace(decode, "").replace(endpoints, "")
                     .replace("vec3(decode_quantized(code.r),decode_quantized(code.g),decode_quantized(code.b))",
                         "vec3(transfer[code.r].x,transfer[code.g].x,transfer[code.b].x)");
@@ -485,8 +481,9 @@ fn writeback_corpus(in_place: bool) {
                         } else {
                             0x3939
                         },
+                        &format!("in_place={in_place} mode={mode}"),
                     );
-                    if !in_place { assert!(page_bytes(&r, &working) == bytes, "writeback modified working source"); }
+                    if !in_place { assert!(page_bytes(&r, &working) == bytes, "in_place={in_place}: writeback modified working source"); }
                     for (i, encoded) in canonical_bytes.as_chunks::<16>().0.iter().enumerate() {
                         let x = i as u32 % 256;
                         let y = i as u32 / 256;
@@ -497,7 +494,7 @@ fn writeback_corpus(in_place: bool) {
                         {
                             assert!(
                                 encoded == &bytes[i * 16..i * 16 + 16],
-                                "canonical changed outside region at {i}"
+                                "in_place={in_place}: canonical changed outside region at {i}"
                             );
                             continue;
                         }
@@ -519,12 +516,12 @@ fn writeback_corpus(in_place: bool) {
                             };
                             if mode == 11 && (coverage == 0. || coverage == 1.) {
                                 assert_eq!(actual.to_bits(), expected.to_bits(),
-                                    "endpoint canonical {depth:?} {space:?} {alpha:?} pixel={i} component={c}");
+                                    "endpoint canonical in_place={in_place} {depth:?} {space:?} {alpha:?} pixel={i} component={c}");
                             }
                             assert!(
                                 (actual - expected).abs()
                                     <= 0.00000024 * expected.abs().max(0.0000001),
-                                "canonical {depth:?} {space:?} {alpha:?} pixel={i} component={c} actual={actual} expected={expected}"
+                                "canonical in_place={in_place} {depth:?} {space:?} {alpha:?} pixel={i} component={c} actual={actual} expected={expected}"
                             );
                         }
                     }
