@@ -1728,18 +1728,23 @@ if ("onpointerrawupdate" in globalThis) {
     canvasPointer(e, 2);
   }, { passive: true });
 }
+const pressButtons = new Map();
 function pointerInput(e, stage, point = position(e)) {
+  const id = corePointerId(e);
+  const button = (stage === 3 && pressButtons.get(id)) || (
+    e.pointerType === "pen" || e.button === 0 || e.button === 5 || !!(e.buttons & 1)
+      ? "primary"
+      : e.button === 1 || e.button === 2 || !!(e.buttons & 6)
+        ? "pan"
+        : "other");
+  if (stage === 1) pressButtons.set(id, button);
+  else if (stage === 3 || stage === 4) pressButtons.delete(id);
   return input({
     type: "pointer",
-    id: BigInt(corePointerId(e)),
+    id: BigInt(id),
     phase: ["move", "down", "move", "up", "cancel"][stage],
     kind: e.pointerType || "mouse",
-    button:
-      e.pointerType === "pen" || e.button === 0 || e.button === 5 || !!(e.buttons & 1)
-        ? "primary"
-        : e.button === 1 || e.button === 2 || !!(e.buttons & 6)
-          ? "pan"
-          : "other",
+    button,
     position: point,
     time_ns: BigInt(Math.round((e.timeStamp || 0) * 1e6)),
   });

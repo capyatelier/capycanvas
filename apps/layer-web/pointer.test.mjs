@@ -379,6 +379,22 @@ test("mouse moves forward held buttons and terminal releases", () => {
   assert.deepEqual(h.samples().map(s => s[1]), [1, 2, 3]);
 });
 
+test("a mouse chord releases with the button its contact was pressed with", () => {
+  for (const [chord, buttons] of [
+    [[[0, 1], [2, 3], [0, 2], [-1, 2], [2, 0]], ["primary", "primary", "primary", "pan", "primary"]],
+    [[[2, 2], [0, 3], [2, 1], [-1, 1], [0, 0]], ["pan", "primary", "primary", "primary", "pan"]],
+  ]) {
+    const h = harness();
+    chord.forEach(([button, held], i) => h.send(
+      i === 0 ? "pointerdown" : i === chord.length - 1 ? "pointerup" : "pointermove",
+      { pointerType: "mouse", button, buttons: held }));
+    assert.deepEqual(h.phases.map(p => p.phase), ["down", "move", "move", "move", "up"]);
+    assert.deepEqual(h.phases.map(p => p.button), buttons);
+    h.send("pointerup", { pointerType: "mouse", button: 1, buttons: 0 });
+    assert.equal(h.phases.at(-1).button, "pan", "a release without a press keeps its own button");
+  }
+});
+
 test("mouse cancellation and touch/pan routing retain their semantics", () => {
   const mouse = harness();
   mouse.send("pointerdown", { pointerType: "mouse" });
