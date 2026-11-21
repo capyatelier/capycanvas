@@ -4360,13 +4360,16 @@ impl WgpuRasterizer {
             return Err(error);
         }
         self.release_presentation(Self::frame_preparation_pending);
-        if self.composite_revision != revision && self.has_presentable_frame()
-            && matches!(packet.scene.scope(), None | Some(layer_core::SceneScope::All)) {
-            self.presentation.showing = true;
-        }
-        if self.presentation.showing && self.navigator.revision != navigator_revision
-            && matches!(packet.scene.scope(), None | Some(layer_core::SceneScope::All)) {
-            self.presentation.navigator = true;
+        if matches!(packet.scene.scope(), None | Some(layer_core::SceneScope::All)) {
+            let scene = Some((packet.scene.owner(), packet.scene.revision()));
+            if !self.presentation.showing && (self.composite_revision != revision && self.has_presentable_frame()
+                || self.scale_display.as_ref().and_then(scene::scale::Cache::content_revision) == scene) {
+                self.presentation.showing = true;
+            }
+            if self.presentation.showing && !self.presentation.navigator
+                && (self.navigator.revision != navigator_revision || self.navigator.content_revision() == scene) {
+                self.presentation.navigator = true;
+            }
         }
         if self.metrics.submissions != submitted {
             let context = self.submitted_context.as_ref().unwrap();
