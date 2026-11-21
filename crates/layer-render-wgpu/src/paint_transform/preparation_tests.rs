@@ -10,21 +10,14 @@ fn cold_reduced_preview_retains_its_cursor_across_more_than_sixty_four_sources()
     let mut state=ImageTransformState::new(&r.device);
     state.sources[0]=Some(TileSnapshot {pages:Default::default(),base:Some(layer_core::authored::PaintBase::new(source.clone().into())),
         backing:None,bounds:PixelRect::full(extent)});
-    let deadline=std::time::Instant::now()+Duration::from_secs(30);
-    loop {
-        let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
-        let result=state.prepare_reduced(&mut r,&mut encoder,None,None,extent,1);
-        r.uploads.finish(&encoder);encoder.submit(&r.queue);
-        match result {
-            Ok(())=>break,
-            Err(GpuRasterError::NotReady)=>{
+    crate::test_support::wait_until("the reduced preview finishes preparing",||
+        match crate::test_support::submit_encoded(&mut r,|r,encoder|state.prepare_reduced(r,encoder,None,None,extent,1)) {
+            Err(pending@GpuRasterError::NotReady)=>{
                 assert!(state.reduced.as_ref().unwrap().pending.is_some());
-                assert!(std::time::Instant::now()<deadline);
-                r.wait_idle().unwrap();std::thread::sleep(Duration::from_millis(1));
+                r.wait_idle().unwrap();Err(pending)
             },
-            Err(error)=>panic!("{error}"),
-        }
-    }
+            result=>Ok(result.unwrap()),
+        });
     assert!(state.reduced.as_ref().unwrap().pending.is_none());
     assert!(r.paint_layers.is_empty());
     let image=&state.reduced.as_ref().unwrap().image;

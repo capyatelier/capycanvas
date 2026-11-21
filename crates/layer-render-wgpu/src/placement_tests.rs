@@ -53,9 +53,6 @@ pub(crate) fn reveal_all(domain: [u32; 2], offset: [i64; 2]) -> CoverageSnapshot
 fn batch(target: SourceTarget) -> DabBatch {
     crate::test_support::dab_batch(target, crate::tests::test_style(BrushExecution::Dry), Rect::from_extent([128; 2]))
 }
-fn submit(r: &mut WgpuRasterizer, doc: &Document, dabs: &[Dab], batches: &[DabBatch], reset: bool) {
-    crate::test_support::submit_ready(r, FramePacket { dabs, dab_batches: batches, reset_layers: reset, ..packet(doc.scene(), [128; 2]) }).unwrap();
-}
 
 
 #[test]
@@ -219,33 +216,33 @@ fn offset_photo_mask_linking_preserves_position_and_apply_preserves_pixels() {
     );
     set_mask(&mut layer, mask);
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    submit(&mut r, &layer, &[], &[], true);
+    crate::test_support::submit_ready(&mut r, FramePacket { reset_layers: true, ..packet(layer.scene(), [128; 2]) }).unwrap();
     let original = r.readback_srgb_rgba8().unwrap();
     assert_eq!(pixel(&mut r, 40, 30), [255; 4]);
     assert_eq!(pixel(&mut r, 20, 30), [0; 4]);
     let owner = occurrence(&layer).clone();
     occurrence_mut(&mut layer).mask.as_mut().unwrap().set_linked(false, &owner).unwrap();
-    submit(&mut r, &layer, &[], &[], false);
+    crate::test_support::submit_ready(&mut r, packet(layer.scene(), [128; 2])).unwrap();
     assert_eq!(
         r.readback_srgb_rgba8().unwrap(),
         original,
         "unlink does not move coverage"
     );
     occurrence_mut(&mut layer).offset[0] += 10;
-    submit(&mut r, &layer, &[], &[], false);
+    crate::test_support::submit_ready(&mut r, packet(layer.scene(), [128; 2])).unwrap();
     assert_eq!(pixel(&mut r, 35, 30), [255; 4]);
     assert_eq!(pixel(&mut r, 85, 30), [0; 4]);
     let unlinked = r.readback_srgb_rgba8().unwrap();
     let owner = occurrence(&layer).clone();
     occurrence_mut(&mut layer).mask.as_mut().unwrap().set_linked(true, &owner).unwrap();
-    submit(&mut r, &layer, &[], &[], false);
+    crate::test_support::submit_ready(&mut r, packet(layer.scene(), [128; 2])).unwrap();
     assert_eq!(
         r.readback_srgb_rgba8().unwrap(),
         unlinked,
         "relink does not move coverage"
     );
     occurrence_mut(&mut layer).offset[0] += 10;
-    submit(&mut r, &layer, &[], &[], false);
+    crate::test_support::submit_ready(&mut r, packet(layer.scene(), [128; 2])).unwrap();
     assert_eq!(pixel(&mut r, 35, 30), [0; 4]);
     assert_eq!(pixel(&mut r, 85, 30), [255; 4]);
     let before_apply = r.readback_srgb_rgba8().unwrap();
@@ -266,10 +263,10 @@ fn offset_photo_mask_linking_preserves_position_and_apply_preserves_pixels() {
     };
     Arc::make_mut(&mut paint_mut(&mut layer).operations).push(op);
     paint_mut(&mut layer).raster = layer_core::raster::RasterRevision::pending();
-    submit(&mut r, &layer, &[], &[command], false);
+    crate::test_support::submit_ready(&mut r, FramePacket { dab_batches: &[command], ..packet(layer.scene(), [128; 2]) }).unwrap();
     paint(&layer).raster.wait_data().unwrap();
     Arc::make_mut(&mut paint_mut(&mut layer).operations).clear();
-    submit(&mut r, &layer, &[], &[], false);
+    crate::test_support::submit_ready(&mut r, packet(layer.scene(), [128; 2])).unwrap();
     assert_eq!(
         r.readback_srgb_rgba8().unwrap(),
         before_apply,
@@ -287,7 +284,7 @@ fn offset_photo_edits_and_restores_tiles_outside_canvas_bounds() {
     let mut layer = paint_document([128; 2], "offset editable photo");
     set_source(&mut layer, source.clone());
     occurrence_mut(&mut layer).offset = [-560, -440];
-    submit(&mut r, &layer, &[], &[], true);
+    crate::test_support::submit_ready(&mut r, FramePacket { reset_layers: true, ..packet(layer.scene(), [128; 2]) }).unwrap();
     let before = paint(&layer).raster.clone();
     paint_mut(&mut layer).raster = RasterRevision::pending();
     let mut ink = dab([1., 0., 0., 1.]);
@@ -304,7 +301,7 @@ fn offset_photo_edits_and_restores_tiles_outside_canvas_bounds() {
         ])
         .unwrap(),
     ));
-    submit(&mut r, &layer, &[ink], &[stroke], false);
+    crate::test_support::submit_ready(&mut r, FramePacket { dabs: &[ink], dab_batches: &[stroke], ..packet(layer.scene(), [128; 2]) }).unwrap();
     let data = paint(&layer).raster.wait_data().unwrap();
     assert!(data.tiles.keys().any(|key| key.coordinate == [2, 1]));
     assert_eq!(pixel(&mut r, 64, 64), [255, 0, 0, 255]);
@@ -315,14 +312,14 @@ fn offset_photo_edits_and_restores_tiles_outside_canvas_bounds() {
     );
     let after = paint(&layer).raster.clone();
     paint_mut(&mut layer).raster = before;
-    submit(&mut r, &layer, &[], &[], false);
+    crate::test_support::submit_ready(&mut r, packet(layer.scene(), [128; 2])).unwrap();
     assert_eq!(pixel(&mut r, 64, 64), [255; 4]);
     paint_mut(&mut layer).raster = after;
-    submit(&mut r, &layer, &[], &[], false);
+    crate::test_support::submit_ready(&mut r, packet(layer.scene(), [128; 2])).unwrap();
     assert_eq!(pixel(&mut r, 64, 64), [255, 0, 0, 255]);
     // Recreate the renderer to exercise cold restoration, not just resident history.
     let mut reopened = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    submit(&mut reopened, &layer, &[], &[], true);
+    crate::test_support::submit_ready(&mut reopened, FramePacket { reset_layers: true, ..packet(layer.scene(), [128; 2]) }).unwrap();
     assert_eq!(pixel(&mut reopened, 64, 64), [255, 0, 0, 255]);
 }
 
@@ -535,15 +532,12 @@ fn layer_tiles_beside_the_largest_offset_keep_their_exact_pixels() {
         set_source(&mut layer, source.clone());
         occurrence_mut(&mut layer).offset = [offset, 3];
         let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-        submit(&mut r, &layer, &[], &[], true);
+        crate::test_support::submit_ready(&mut r, FramePacket { reset_layers: true, ..packet(layer.scene(), [128; 2]) }).unwrap();
         let mut scene = crate::scene::Scene::new(&r).unwrap();
         let first = u32::try_from(offset.div_euclid(i64::from(PAGE_SIZE))).unwrap();
         (first..first + 3).map(|x| {
-            let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-            let tile = crate::test_support::query_ready(&mut r, &mut encoder, |r, encoder|
-                scene.layer_tile_for_query(r,crate::test_support::packet(layer.scene(),r.document_extent),target(&layer),[x,0],encoder));
-            r.uploads.finish(&encoder);
-            encoder.submit(&r.queue);
+            let tile = crate::test_support::submit_encoded(&mut r, |r, encoder| crate::test_support::query_ready(r, encoder, |r, encoder|
+                scene.layer_tile_for_query(r,crate::test_support::packet(layer.scene(),r.document_extent),target(&layer),[x,0],encoder)));
             crate::layer_tests::page_bytes(&r, &tile.texture)
         }).collect::<Vec<_>>()
     };
@@ -799,9 +793,8 @@ fn watercolor_microbatches_never_lower_the_wetness_of_their_update() {
                 ..packet(layer.scene(), [512; 2]) }).unwrap();
             send(&[], &[], true);
             send(&[ink], std::slice::from_ref(&base), false);
-            let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
             let coordinates: Vec<_> = r.paint_layers[0].watercolor_wetness_pages.iter().map(|page| page.coordinate).collect();
-            for coordinate in coordinates {
+            crate::test_support::submit_encoded(&mut r, |r, encoder| for coordinate in coordinates {
                 let intent = r.raster_intent(target(&layer), layer_core::raster::RasterPlane::WatercolorWetness, coordinate).unwrap();
                 let receipt = encoder.submission();
                 let (view, output) = {
@@ -809,10 +802,9 @@ fn watercolor_microbatches_never_lower_the_wetness_of_their_update() {
                     let write = page.write(page.active_secondary, &intent, &receipt).unwrap();
                     (write.value().view.clone(), write.encoded(layer_core::raster::ContentName::fresh()))
                 };
-                r.encode_clear_value(&mut encoder, &view, "prior wetness", 0.5);
+                r.encode_clear_value(encoder, &view, "prior wetness", 0.5);
                 r.record_raster_write(target(&layer), output.publish(&encoder.submission())).unwrap();
-            }
-            encoder.submit(&r.queue);
+            });
             let update: Vec<_> = dabs.iter().enumerate().take(microbatches).map(|(i, dab)| DabBatch {
                 stroke_id: StrokeId(2), stroke_start: i == 0, stroke_end: false, first_dab: i as u32, damage: dab.bounds(),
                 style: DabStyle { alpha_locked, ..style.clone() }, ..base.clone()

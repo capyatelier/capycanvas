@@ -292,12 +292,7 @@ fn renderer_cancellation_discards_the_old_result_before_replacement() {
     assert!(renderer.take_content_bounds().is_none());
     paint(&mut document).raster = raster(RasterPlane::Color, document.composition().color, |x, y| if x == 55 && y == 63 { 1. } else { 0. });
     assert!(renderer.request_content_bounds(ContentBoundsRequest::new(&document, ContentScope::All)).unwrap());
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    let result = loop {
-        if let Some(result) = renderer.take_content_bounds() { break result.unwrap(); }
-        assert!(std::time::Instant::now() < deadline, "replacement bounds complete");
-        std::thread::sleep(std::time::Duration::from_millis(2));
-    };
+    let result = crate::test_support::wait_until("replacement bounds complete", || renderer.take_content_bounds().ok_or(())).unwrap();
     assert_eq!(result, rect(55., 63., 56., 64.));
     assert!(renderer.take_content_bounds().is_none());
 }
