@@ -1322,6 +1322,7 @@ fn every_patched_frame_equals_a_whole_frame_bit_for_bit_for_each_layer_setup() {
     insert_occurrence(&mut covered,above,position);
     let mut clipped=painted.clone();
     let owner=working(&clipped);set_attachment(clipped.artwork.occurrences.get_mut(owner).unwrap(),true);reindex(&mut clipped);
+    let mut grouped=painted.clone();group_working_layer(&mut grouped);
     let mut faded=painted.clone();
     let owner=working(&faded);
     let occurrence=faded.artwork.occurrences.get_mut(owner).unwrap();occurrence.opacity=0.6;occurrence.blend=layer_core::LayerBlend::Multiply;
@@ -1329,7 +1330,7 @@ fn every_patched_frame_equals_a_whole_frame_bit_for_bit_for_each_layer_setup() {
     patches_bit_for_bit([
         Stroked::new("partial cells at the drawing's edge",&partial,Pencil,1),Stroked::new("a float drawing",&float,Pencil,1),
         Stroked::new("a layer above",&covered,Pencil,1),Stroked::new("a clipped layer",&clipped,Pencil,1),
-        Stroked::new("a faded multiply layer",&faded,Pencil,1),
+        Stroked::new("a faded multiply layer",&faded,Pencil,1),Stroked::new("a layer in a group",&grouped,Pencil,1),
     ]);
 }
 
@@ -1351,13 +1352,15 @@ fn a_cell_drawn_by_more_than_whole_cell_draws_composes_whole_cells_and_the_same_
     let owner=working(&masked);
     coverage_mask(&mut masked,owner,[0,0],Some(layer_core::Selection::polygon(vec![
         layer_core::Point {x:100.,y:100.},layer_core::Point {x:700.,y:120.},layer_core::Point {x:680.,y:480.},layer_core::Point {x:120.,y:460.}]).unwrap()));
+    let mut covered=plain.clone();
+    let owner=working(&covered);coverage_mask(&mut covered,owner,[0,0],None);
     let above=|name:&str| {
         let mut doc=plain.clone();
         let effect=effect_occurrence(&mut doc,layer_core::EffectInstance::new(crate::tests::fixture(name).program()),name);
         insert_occurrence(&mut doc,effect,0);doc
     };
     let [blurred,inverted]=["gaussian_blur","invert"].map(above);
-    stays_whole([Stroked::new("an offset layer",&offset,Pencil,1),Stroked::new("a masked layer",&masked,Pencil,1),
+    stays_whole([Stroked::new("an offset layer",&offset,Pencil,1),Stroked::new("a masked layer",&masked,Pencil,1),Stroked::new("a layer under a mask that covers it",&covered,Pencil,1),
         Stroked::new("a blur above",&blurred,Pencil,1),Stroked::new("an adjustment above",&inverted,Pencil,1)]);
 }
 
@@ -1434,6 +1437,15 @@ fn a_stroke_inside_one_cell_composes_whole_cells_twice_and_then_only_its_patch()
     }
 }
 
+fn group_working_layer(doc:&mut Document) {
+    let owner=doc.working.occurrence.unwrap();
+    let mut entries=doc.artwork.stacks.get(doc.composition().result).unwrap().entries.clone();
+    let group=stack_occurrence(doc,"Group",vec![owner]);
+    doc.artwork.occurrences.get_mut(group).unwrap().opacity=0.7;
+    for entry in &mut entries {if *entry==owner {*entry=group;}}
+    set_root_entries(doc,entries);
+}
+const OFFSETS:[(&str,[i64;2]);3]=[("a layer offset by 3 and 5",[3,5]),("a layer offset by 259 and -5",[259,-5]),("a layer offset by -130 and 77",[-130,77])];
 fn zoomed_scene(scene:&str,extent:[u32;2])->Document {
     let image=|seed:u32|rgba8_source(extent,move |x,y|[(x/(3+seed)) as u8,(y/2) as u8,(60*seed) as u8,((x*7+y*(13+seed))%256) as u8]);
     let mut doc=if scene=="a drawing without Paper" {document_at(extent)}else {
@@ -1452,7 +1464,6 @@ fn zoomed_scene(scene:&str,extent:[u32;2])->Document {
             let position=doc.scene().position(owner).unwrap();
             insert_occurrence(&mut doc,layer,position+index/2);
         },
-        "a layer offset by a few pixels"=>doc.artwork.occurrences.get_mut(owner).unwrap().offset=[3,5],
         "a masked layer"=>{
             let [width,height]=extent.map(|side|side as f32);
             coverage_mask(&mut doc,owner,[0,0],Some(layer_core::Selection::polygon(vec![layer_core::Point {x:width*0.1,y:height*0.1},
@@ -1460,14 +1471,8 @@ fn zoomed_scene(scene:&str,extent:[u32;2])->Document {
         },
         "a layer under an adjustment"=>above(&mut doc,"invert"),
         "a layer under a blur"=>above(&mut doc,"gaussian_blur"),
-        "a layer in a group"=>{
-            let mut entries=doc.artwork.stacks.get(doc.composition().result).unwrap().entries.clone();
-            let group=stack_occurrence(&mut doc,"Group",vec![owner]);
-            doc.artwork.occurrences.get_mut(group).unwrap().opacity=0.7;
-            for entry in &mut entries {if *entry==owner {*entry=group;}}
-            set_root_entries(&mut doc,entries);
-        },
-        _=>{},
+        "a layer in a group"=>group_working_layer(&mut doc),
+        _=>if let Some((_,offset))=OFFSETS.into_iter().find(|(name,_)|*name==scene) {doc.artwork.occurrences.get_mut(owner).unwrap().offset=offset;},
     }
     doc
 }
@@ -1484,7 +1489,10 @@ impl Redrawn {
 impl<'a> Zoomed<'a> {
     fn new(scene:&'a str,brush:&str,style:layer_render::DabStyle,tips:usize,zoom:f32)->Self {Self {scene,brush:brush.into(),style,zoom,diameter:9.,tips,frames:STROKE.len(),redraws:true}}
     fn level(&self)->u32 {(1./self.zoom).log2().floor() as u32}
-    fn at(&self,x:f32)->layer_render::Dab {sized_dab([(x-256.)*(1u32<<self.level()) as f32,257.],self.diameter/2.,&self.style)}
+    fn at(&self,x:f32)->layer_render::Dab {
+        let [left,top]=OFFSETS.into_iter().find(|(name,_)|*name==self.scene).map_or([0.;2],|(_,offset)|offset.map(|side|side as f32));
+        sized_dab([(x-256.)*(1u32<<self.level()) as f32-left,257.-top],self.diameter/2.,&self.style)
+    }
     fn redrawn(&self)->Redrawn {
         let Self {scene,brush,style,zoom,diameter,tips,frames,redraws}=self;
         let level=self.level();let extent=[320<<level,140<<level];
@@ -1573,7 +1581,7 @@ fn below_full_size_every_patched_frame_equals_whole_cells_for_each_layer_setup()
 #[test]
 fn below_full_size_a_cell_drawn_through_a_mask_an_effect_or_an_offset_composes_whole_cells_and_the_same_pixels() {
     for zoom in ZOOMS {
-        for scene in ["a masked layer","a layer under an adjustment","a layer under a blur","a layer offset by a few pixels"] {
+        for scene in ["a masked layer","a layer under an adjustment","a layer under a blur","a layer offset by 3 and 5"] {
             for stroke in pencil_and_smudge(scene,zoom) {stroke.stays_whole();}
         }
     }
