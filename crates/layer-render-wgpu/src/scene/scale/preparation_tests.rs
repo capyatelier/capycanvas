@@ -96,3 +96,69 @@ fn a_retained_cold_lookup_does_not_block_an_independent_ready_unit() {
     reference.uploads.finish(&encoder);encoder.submit(&reference.queue);crate::test_support::complete(&reference);
     assert_eq!(pixels(&r,&pending),pixels(&reference,&expected));
 }
+
+#[test]
+fn a_prepared_drawing_shows_its_first_stroke_on_the_first_admitted_frame_and_compiles_only_its_display_kernels() {
+    for (case,depth,zoom,offset,layers,kind) in [
+        ("half reduced preview",SampleDepth::U8,0.125,[0;2],1,DabBatchKind::Preview),
+        ("half reduced commit",SampleDepth::U8,0.125,[0;2],1,DabBatchKind::Persistent),
+        ("full reduced preview",SampleDepth::F32,0.125,[0;2],1,DabBatchKind::Preview),
+        ("half full-size preview",SampleDepth::U8,1.,[0;2],1,DabBatchKind::Preview),
+        ("half offset layer preview",SampleDepth::U8,0.125,[3,5],1,DabBatchKind::Preview),
+        ("half pivot commit",SampleDepth::U8,0.25,[0;2],3,DabBatchKind::Persistent),
+    ] {
+        let mut doc=document_at([517,259]);
+        composition_mut(&mut doc).color.depth=depth;
+        let photo=doc.scene().order()[0];
+        let mut entries:Vec<_>=(1..layers).map(|index| {
+            let copy=copy_paint(&mut doc,0);
+            doc.artwork.occurrences.get_mut(copy).unwrap().opacity=0.17+index as f32*0.02;
+            copy
+        }).collect();
+        entries.push(photo);
+        let stroked=(layers-1)/2;
+        let ink=paint_occurrence(&mut doc,"Ink",None);
+        doc.artwork.occurrences.get_mut(ink).unwrap().offset=offset;
+        entries.insert(stroked,ink);set_root_entries(&mut doc,entries);
+        let extent=doc.composition().size;
+        let mut exact=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let mut r=crate::test_support::staged_renderer(&exact,doc.composition().color);
+        exact.test.reference=true;
+        r.shader_idle(false,false);
+        r.prepare_startup(&doc,&layer_core::default_brush(DefaultBrushPreset::GPen),false).unwrap();
+        crate::test_support::wait_startup(&mut r,std::time::Instant::now()+std::time::Duration::from_secs(60),|progress|progress.brush_ready,format_args!("{case}: startup"));
+        let mut frame=FramePacket {blend_space:doc.composition().blend,..packet(doc.scene(),extent)};
+        frame.view.document_to_surface=[zoom,0.,0.,zoom,0.,0.];
+        crate::test_support::submit_settled(&mut r,frame);
+        crate::test_support::submit_published(&mut exact,frame);
+        let original=display_pixels(&r);
+        let mut dab=crate::tests::test_dab([255.,129.],[0.9,0.02,0.1,0.7],1.);
+        dab.radii=[45.;2];
+        let style=layer_render::DabStyle {blend_space:doc.composition().blend,..crate::layer_tests::preset_style(DefaultBrushPreset::GPen)};
+        let batch=DabBatch {kind,..dab_batch(source_at(&doc,stroked),style,dab.bounds())};
+        let stroke=FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),composite_all:false,..frame};
+        let _held=r.compilation.batch();
+        r.poll_pending(stroke.view).unwrap();
+        crate::test_support::pace(&mut r);
+        assert!(matches!(r.submit_when_ready(stroke,None),std::task::Poll::Ready(Ok(()))),"{case}: a prepared drawing admits its first stroke at once");
+        let shown=display_pixels(&r);
+        assert!(shown.iter().zip(&original).any(|(shown,original)|shown!=original),"{case}: the first admitted stroke frame shows ink");
+        assert!(!publication_pending(&r),"{case}: the first admitted stroke frame presents the stroked artwork: {:?}",r.outstanding_terms());
+        crate::test_support::submit_published(&mut exact,stroke);
+        let cache=r.scale_display.as_ref().unwrap();
+        let (plan,format)=(cache.plan,cache.texture().format());
+        let error=quality(&shown,&pixels(&exact,crate::test_support::document_texture(&exact)),plan,format);
+        assert!(error[0]<0.003,"{case}: the first stroke frame stays close to the exact reduction: {error:?}");
+        crate::test_support::submit_settled(&mut r,FramePacket {composite_all:false,..frame});
+        assert_eq!(crate::compile::tests::queued_recipes(&r.compilation),0,"{case}: the stroke and its refinement wait on no compilation");
+        let half=format==wgpu::TextureFormat::Rgba16Float;
+        assert_eq!(half,depth==SampleDepth::U8,"{case}");
+        let scale=&r.scene_pipelines.scale;
+        let compiled:Vec<_>=[("full",&scale.full),("half",&scale.half)].into_iter().flat_map(|(precision,kernels)|
+            [("compose",&kernels.compose),("reduce",&kernels.reduce),("reduce_phased",&kernels.reduce_phased),("reduce_pair",&kernels.reduce_pair),("project",&kernels.project)]
+                .into_iter().filter(|(_,kernel)|kernel.ready()).map(move|(name,_)|format!("{precision}.{name}"))).collect();
+        let expected:&[&str]=if half {&["full.compose","full.reduce","full.reduce_phased","half.compose","half.reduce","half.reduce_pair","half.project"]}
+            else {&["full.compose","full.reduce","full.reduce_phased","full.reduce_pair"]};
+        assert_eq!(compiled,expected,"{case}: a display compiles the kernels it can run and no others");
+    }
+}

@@ -131,6 +131,11 @@ impl Pipelines {
     pub fn output(&self,format:wgpu::TextureFormat)->&OutputPipelines {
         match format {wgpu::TextureFormat::Rgba16Float=>&self.half,wgpu::TextureFormat::Rgba32Float=>&self.full,_=>unreachable!()}
     }
+    pub fn display(&self,format:wgpu::TextureFormat)->impl Iterator<Item=&Deferred<wgpu::ComputePipeline>> {
+        let (working,window)=(&self.full,self.output(format));
+        [&working.reduce,&working.reduce_phased,&window.reduce_pair,&working.compose].into_iter()
+            .chain((format!=wgpu::TextureFormat::Rgba32Float).then_some([&window.reduce,&window.compose,&window.project]).into_iter().flatten())
+    }
 }
 
 pub(super) struct Encoding<'a> {
