@@ -404,9 +404,10 @@ impl WgpuRasterizer {
         let tiles=if rectangular {
             let Some(restore)=&self.restore_preflight else {return prepared_raster_output(None);};
             let Key::Frame {outputs,..}=&restore.key else {return prepared_raster_output(None);};
-            std::borrow::Cow::Owned(rectangular_preview_pages(outputs,batch,context.target_extent).map(|coordinate|BrushTile {
-                coordinate,local:PixelRect::full([PAGE_SIZE;2]),
-                dabs:context.tiles.iter().find(|tile|tile.coordinate==coordinate).map_or(batch.first_dab..batch.first_dab,|tile|tile.dabs.clone()),indices:Vec::new(),
+            std::borrow::Cow::Owned(rectangular_preview_pages(outputs,batch,context.target_extent).map(|coordinate| {
+                let planned=context.tiles.iter().find(|tile|tile.coordinate==coordinate);
+                BrushTile {coordinate,local:planned.map_or(PixelRect::EMPTY,|tile|tile.local),
+                    dabs:planned.map_or(batch.first_dab..batch.first_dab,|tile|tile.dabs.clone()),indices:Vec::new()}
             }).collect())
         } else {std::borrow::Cow::Borrowed(context.tiles)};
         for tile in tiles.iter() {

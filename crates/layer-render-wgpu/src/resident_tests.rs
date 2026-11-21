@@ -451,3 +451,27 @@ fn a_seeded_record_names_its_source_weakly() {
     drop((first, source, back));
     assert!(copy.seed().is_none(), "two surfaces that seed each other keep neither alive");
 }
+
+#[test]
+fn copies_between_two_surfaces_in_one_submission_are_recorded_from_the_version_before_it() {
+    use crate::resident::Delta;
+    let opened = receipt(SubmissionState::Submitted);
+    let (mut first, mut second, mut shown) = (Resident::unwritten(0u32), Resident::unwritten(0u32), Resident::unwritten(0u32));
+    let start = certified(&mut first, &opened, Delta::Unknown);
+    let frame = receipt(SubmissionState::Encoding);
+    let one = certified(&mut second, &frame, Delta::reseeded(&start, area(4), &frame));
+    assert!(one.seed().is_some_and(|(from, rect)| from.same(&start) && rect == area(4)));
+    let two = certified(&mut first, &frame, Delta::reseeded(&one, area(20), &frame));
+    assert!(two.seed().is_some_and(|(from, rect)| from.same(&start) && rect == area(4).union(area(20))), "a copy of a copy names the first source");
+    let three = certified(&mut second, &frame, Delta::reseeded(&two, area(40), &frame));
+    assert!(three.seed().is_some_and(|(from, rect)| from.same(&start) && rect == area(4).union(area(40))), "a later copy onto a surface the submission wrote keeps its record");
+    let tip = certified(&mut shown, &frame, Delta::seeded(&three, crate::pixel_rect::PixelRect::EMPTY));
+    assert!(tip.seed().is_some_and(|(from, rect)| from.same(&three) && rect.is_empty()), "a copy onto another page names the page it read");
+    let drawn = certified(&mut shown, &frame, Delta::InPlace(area(8)));
+    assert!(drawn.seed().is_some_and(|(from, rect)| from.same(&three) && rect == area(8)), "drawing in place on a copy widens what differs from its source");
+    frame.0.store(SubmissionState::Submitted as u8, Ordering::Release);
+    let next = receipt(SubmissionState::Encoding);
+    let later = certified(&mut first, &next, Delta::reseeded(&three, area(60), &next));
+    assert!(later.seed().is_some_and(|(from, rect)| from.same(&three) && rect == area(60)), "a copy of an earlier submission's page names that page");
+    assert!(certified(&mut first, &next, Delta::Unknown).seed().is_none());
+}
