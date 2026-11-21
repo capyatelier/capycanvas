@@ -377,6 +377,12 @@ impl RestorePreflight {
     fn complete(&self)->bool {self.failure.is_some() || self.targets.iter().flatten().all(TargetRestore::complete)}
     fn waiting(&self)->bool {!self.complete() || self.failure.is_none() && self.refused.is_some()}
 }
+fn rectangular_preview_pages<'a>(outputs:&'a [(SourceTarget,Output)],batch:&'a DabBatch,extent:[u32;2])->impl Iterator<Item=[u32;2]>+'a {
+    let damage=batch_pixel_rect(batch,extent);
+    outputs.iter().filter_map(move |(target,output)|match output {
+        Output::PreviewColor(coordinate) if *target==batch.target && !page_rect(*coordinate).intersect(damage).is_empty()=>Some(*coordinate),_=>None,
+    })
+}
 impl WgpuRasterizer {
     pub(crate) fn accepted_raster_output(&self,target:SourceTarget,output:Output)->Result<(),GpuRasterError> {
         let accepted=self.restore_preflight.as_ref().is_some_and(|restore|match &restore.key {
@@ -398,12 +404,9 @@ impl WgpuRasterizer {
         let tiles=if rectangular {
             let Some(restore)=&self.restore_preflight else {return prepared_raster_output(None);};
             let Key::Frame {outputs,..}=&restore.key else {return prepared_raster_output(None);};
-            let damage=batch_pixel_rect(batch,context.target_extent);
-            std::borrow::Cow::Owned(outputs.iter().filter_map(|(target,output)|match output {
-                Output::PreviewColor(coordinate) if *target==batch.target && !page_rect(*coordinate).intersect(damage).is_empty()=>Some(BrushTile {
-                    coordinate:*coordinate,local:PixelRect::full([PAGE_SIZE;2]),
-                    dabs:context.tiles.iter().find(|tile|tile.coordinate==*coordinate).map_or(batch.first_dab..batch.first_dab,|tile|tile.dabs.clone()),indices:Vec::new(),
-                }),_=>None,
+            std::borrow::Cow::Owned(rectangular_preview_pages(outputs,batch,context.target_extent).map(|coordinate|BrushTile {
+                coordinate,local:PixelRect::full([PAGE_SIZE;2]),
+                dabs:context.tiles.iter().find(|tile|tile.coordinate==coordinate).map_or(batch.first_dab..batch.first_dab,|tile|tile.dabs.clone()),indices:Vec::new(),
             }).collect())
         } else {std::borrow::Cow::Borrowed(context.tiles)};
         for tile in tiles.iter() {
@@ -1012,6 +1015,13 @@ impl WgpuRasterizer {
         let bases=retained.iter().filter_map(|(target,scene)|scene.paint_base(*target).map(|base|(*target,Arc::as_ptr(base.image.storage()) as usize,base.offset))).collect();
         let (outputs,transforms)=self.raster_outputs(packet,plans);
         for (target,output) in outputs.iter().filter(|(_,output)|!output.preview()) {required.entry(*target).or_default().insert(output.coordinate());}
+        if self.preview_from_persistent(packet.dab_batches) && !Self::sparse_preview(packet.dab_batches) {
+            for batch in packet.dab_batches.iter().filter(|batch|batch.kind==DabBatchKind::Preview && matches!(batch.target,SourceTarget::Paint(_))) {
+                let offsets=self.material_offsets(batch);
+                required.entry(batch.target).or_default().extend(rectangular_preview_pages(&outputs,batch,packet.scene.target_extent(batch.target))
+                    .flat_map(|coordinate|source_access::neighborhood(coordinate,offsets)));
+            }
+        }
         let clear_starts=packet.dab_batches.iter().zip(plans).any(|(batch,tiles)|self.clears_stroke_starts(batch,tiles,packet.scene.target_extent(batch.target)));
         let key=Key::Frame {color:self.document_color(),extent:packet.document_extent,reset,clear_starts,roots,bases,
             required:required.iter().map(|(target,coordinates)|(*target,coordinates.iter().copied().collect())).collect(),outputs,

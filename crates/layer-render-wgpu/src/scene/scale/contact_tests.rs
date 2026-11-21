@@ -1435,3 +1435,59 @@ fn a_stroke_inside_one_cell_composes_whole_cells_twice_and_then_only_its_patch()
         }
     }
 }
+
+#[test]
+fn a_blender_prediction_over_a_rectangle_prepares_the_neighbors_of_every_page_it_writes() {
+    use layer_core::color::SampleDepth;
+    use layer_engine::{CanvasEngine, InstantFeedbackConfig, PenEvent, PenPhase, SampleFlags, ViewTransform, input_queue};
+
+    let extent = [4248, 2832];
+    let photo = rgba8_source(extent, |x, y| [(x * 3 % 251) as u8, (y * 5 % 241) as u8, ((x + y) % 197) as u8, 255]);
+    let mut project = layer_color::photo_project(Arc::unwrap_or_clone(photo), Default::default(), "Photo".into(), SampleDepth::U8).unwrap();
+    crate::test_support::add_paint(&mut project.artwork, "Paint", extent);
+    let mut document = layer_core::Document::from_artwork(project.artwork).unwrap();
+    assert_eq!(document.composition().size, extent);
+    let photo = document.scene().order().iter().copied()
+        .find(|id| document.scene().occurrence(*id).unwrap().name.as_ref() == "Photo").unwrap();
+    document.working.occurrence = Some(photo);
+    document.working.target = document.scene().source_target(photo);
+    assert!(document.scene().paint_base(document.working.target.unwrap()).is_some());
+
+    let [zoom, x, y] = [0.33686438, 286.50006, 181.00003];
+    let view = layer_render::ViewState { width_px: 1920, height_px: 1200, document_to_surface: [zoom, 0., 0., zoom, x, y] };
+    let transform = ViewTransform { revision: 5, surface_to_document: [1. / zoom, 0., 0., 1. / zoom, -x / zoom, -y / zoom] };
+    let mut rasterizer = renderer(&document);
+    crate::test_support::write_only_dry_material(&mut rasterizer);
+    let (mut input, consumer) = input_queue(2048);
+    let mut engine = CanvasEngine::new(rasterizer, document, consumer, view, transform).unwrap();
+    let brush = layer_core::BrushSnapshot { diameter: 512., ..layer_core::default_brush(DefaultBrushPreset::DitherBlender) };
+    engine.set_brush(brush).unwrap();
+    engine.set_instant_feedback(InstantFeedbackConfig {
+        enabled: true, use_platform_prediction: false, prediction_horizon_micros: 16_000, ..Default::default()
+    }).unwrap();
+    let mut clock = 1_000_000_000;
+    let mut sequence = 0;
+    settle_engine(&mut engine, &mut clock);
+    for (label, samples) in [("prime", 300), ("second", 25)] {
+        let start = clock + 16_666_667;
+        let mut next_frame = start;
+        for step in 0..=samples {
+            let sample_ns = start + step * 5_000_000;
+            while next_frame < sample_ns {
+                engine.render_frame_at(next_frame).unwrap_or_else(|error| panic!("{label}, before sample {step}: {error}"));
+                engine.backend_mut().wait_idle().unwrap();
+                next_frame += 16_666_667;
+            }
+            let angle = step as f32 * 0.005 * std::f32::consts::TAU;
+            let phase = if step == 0 { PenPhase::Down } else if step == samples { PenPhase::Up } else { PenPhase::Move };
+            sequence += 1;
+            input.push(PenEvent {
+                timestamp_ns: sample_ns, view_revision: 5, pressure: if phase == PenPhase::Up { 0. } else { 1. },
+                ..crate::test_support::pen(sequence, phase, [1002. + 185. * angle.cos(), 658. + 90. * angle.sin()], SampleFlags::PRIMARY)
+            }).unwrap();
+        }
+        clock = next_frame;
+        settle_engine(&mut engine, &mut clock);
+        assert!(engine.can_undo(), "{label} Dither contact should commit");
+    }
+}
