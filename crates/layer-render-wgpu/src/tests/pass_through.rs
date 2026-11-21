@@ -126,6 +126,16 @@ fn nested() -> (Document, OccurrenceHandle) {
     (b.0, outer)
 }
 
+/// `nested` with its top layer drawn Normal at 70% opacity.
+fn nested_under_a_normal_layer() -> (Document, OccurrenceHandle) {
+    let (mut document, outer) = nested();
+    let top = document.scene().order()[0];
+    let layer = document.artwork.occurrences.get_mut(top).unwrap();
+    layer.blend = LayerBlend::Normal;
+    layer.opacity = 0.7;
+    (document, outer)
+}
+
 /// The live composite of `document`, in its blend space.
 fn render(r: &mut WgpuRasterizer, document: &Document) -> Vec<[f32; 4]> {
     let document = Document::from_artwork(document.artwork.clone()).unwrap();
@@ -226,6 +236,17 @@ fn pass_through_groups_composite_as_their_layers_ungrouped() {
     }
 }
 
+#[test]
+fn a_fully_visible_group_with_a_blur_displays_exactly_its_export() {
+    let mut r = WgpuRasterizer::new_native_headless(COLOR).expect("physical GPU required");
+    let (document, _) = nested_under_a_normal_layer();
+    assert_eq!(document.composition().blend, BlendSpace::Linear);
+    let displayed = render(&mut r, &document);
+    let export = exported(&r, &document);
+    let differing = displayed.iter().zip(&export).filter(|(a, b)| a.map(f32::to_bits) != b.map(f32::to_bits)).count();
+    assert_eq!(differing, 0, "pixels that differ from the export, by at most {}", largest_difference(&displayed, &export));
+}
+
 /// The mask's coverage at each pixel, from an isolated group that holds one
 /// opaque layer.
 fn coverage(r: &mut WgpuRasterizer, mask: &CoverageSnapshot) -> Vec<f32> {
@@ -246,10 +267,7 @@ fn coverage(r: &mut WgpuRasterizer, mask: &CoverageSnapshot) -> Vec<f32> {
 #[test]
 fn opacity_and_mask_fade_between_the_backdrop_and_the_groups_result() {
     let mut r = WgpuRasterizer::new_native_headless(COLOR).expect("physical GPU required");
-    let (mut document, outer) = nested();
-    let first = document.scene().order()[0];
-    document.artwork.occurrences.get_mut(first).unwrap().blend = LayerBlend::Normal;
-    document.artwork.occurrences.get_mut(first).unwrap().opacity = 0.7;
+    let (document, outer) = nested_under_a_normal_layer();
     let mut mask = CoverageSnapshot::reveal_all(CoverageHandle::from_index(0), EXTENT, [9, 4]);
     mask.source.default_coverage = 0.25;
     crate::test_support::materialize_mask(&mut mask.source,
