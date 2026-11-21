@@ -1665,15 +1665,15 @@ fn pencil_and_smudge(scene:&str,zoom:f32)->[Zoomed<'_>;2] {
 fn below_full_size_every_patched_frame_equals_whole_cells_for_each_layer_setup() {
     for zoom in ZOOMS {
         Zoomed::new("a blank layer","a Pencil",crate::layer_tests::preset_style(DefaultBrushPreset::Pencil),1,zoom).patches();
-        for scene in ["the middle layer of five","a layer in a group","a drawing without Paper"] {for stroke in pencil_and_smudge(scene,zoom) {stroke.patches();}}
+        for scene in ["the middle layer of five","a layer in a group","a drawing without Paper","a masked layer"] {for stroke in pencil_and_smudge(scene,zoom) {stroke.patches();}}
     }
     for zoom in [0.37,0.14] {for stroke in pencil_and_smudge("a photo layer",zoom) {stroke.patches();}}
 }
 
 #[test]
-fn below_full_size_a_cell_drawn_through_a_mask_an_effect_or_an_offset_composes_whole_cells_and_the_same_pixels() {
+fn below_full_size_a_cell_drawn_through_an_effect_or_on_an_offset_layer_composes_whole_cells_and_the_same_pixels() {
     for zoom in ZOOMS {
-        for scene in ["a masked layer","a layer under an adjustment","a layer under a blur","a layer offset by 3 and 5"] {
+        for scene in ["a layer under an adjustment","a layer under a blur"].into_iter().chain(OFFSETS.map(|(scene,_)|scene)) {
             for stroke in pencil_and_smudge(scene,zoom) {stroke.stays_whole();}
         }
     }

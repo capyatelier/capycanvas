@@ -68,7 +68,7 @@ fn drawn_directly(node:&graph::Node,tainted:&crate::IdSet<usize>)->bool {
     match node.as_ref() {
         graph::Expression::Source {..}=>true,
         graph::Expression::Opacity {input,..}=>drawn_directly(input,tainted),
-        graph::Expression::Combine {front,back,flags,..}=>flags&(32|64)==0 && drawn_directly(front,tainted) && drawn_directly(back,tainted),
+        graph::Expression::Combine {front,back,flags,..}=>flags&64==0 && drawn_directly(front,tainted) && drawn_directly(back,tainted),
         _=>false,
     }
 }
