@@ -302,7 +302,8 @@ impl Cache {
         let ahead=self.stroke_lead(scene,packet.scene,target,frame.watercolor(target),&scope,None);
         let ready=scope.into_iter().filter(|cell|!self.pivot_missing(*cell)).collect::<Vec<_>>();
         if required.iter().any(|cell|!ready.contains(cell)) {return Ok(());}
-        let reduced=local_reach(packet,target,source_phase(scene,target)).into_iter().flat_map(page_coordinates).collect();
+        let phase=source_phase(scene,target);
+        let reduced=local_reach(packet,target,phase).into_iter().flat_map(page_coordinates).collect();
         let Some(Declared {cells,inputs,pages,level})=self.declare_contact(scene,r,packet,encoder,retained,budget,&frame,&root,target,tiled,None,ready,&required,&reduced)? else {return Ok(());};
         if required.iter().any(|region|!cells.iter().any(|(cell,_)|cell==region)) {return Ok(());}
         request_ahead(r,packet.scene,&frame,encoder,target,source_phase(scene,target),ahead.iter().copied());
@@ -312,7 +313,7 @@ impl Cache {
         let predicted=frame.preview_for(target).and_then(|preview|preview.contact_outputs().map(Iterator::collect)).unwrap_or_default();
         static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);
         self.pixels.hold_current(&frame);
-        let previewed=r.preview_input_tiles(target);let stale=previewed.iter().map(|tile|(*tile,page_rect(*tile))).collect();
+        let previewed=r.preview_input_tiles(target);let stale=previewed.iter().flat_map(|tile|phased_tiles(*tile,phase)).map(|tile|(tile,page_rect(tile))).collect();
         self.gesture=Some(Contact {id:NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed),stroke,target,plan:self.plan,window,root,tiled,frame,composed,predicted,
             previewed,next:None,
             ahead,
@@ -491,7 +492,8 @@ impl Cache {
         let (plan,frame)=(contact.plan,source_frame(Some(&scene.scale_sources),packet.scene,target));
         let patch=Patch::of(contact,tiled,frame);
         let (side,span)=(1u32<<plan.level,PAGE_SIZE<<plan.level);
-        let reduced=contact.reduced_tiles(source_phase(scene,target),std::iter::empty());
+        let phase=source_phase(scene,target);
+        let reduced=contact.reduced_tiles(phase,std::iter::empty());
         let mut inputs=std::mem::take(&mut contact.inputs);
         let cells=std::mem::take(&mut contact.cells);
         let stale=std::mem::take(&mut contact.stale);
@@ -568,9 +570,10 @@ impl Cache {
         for (tile,now) in witnessed {match now {Some(now)=>{contact.reduced_from.insert(tile,now);},None=>{contact.reduced_from.remove(&tile);}}}
         if let Some((versions,_,predicted,previewed))=contact.next.take() {contact.composed=versions;contact.predicted=predicted;contact.previewed=previewed;}
         {
+            let tipped:BTreeSet<_>=contact.previewed.iter().flat_map(|tile|phased_tiles(*tile,phase)).collect();
             let mut store=self.pages.lock().unwrap();
             for (key,region,tile,_) in reductions {
-                if !contact.previewed.contains(&tile) {contact.stale.remove(&tile);}
+                if !tipped.contains(&tile) {contact.stale.remove(&tile);}
                 store.forget(&key,region);contact.written.insert(tile,(key,region,submission.clone()));
             }
         }
