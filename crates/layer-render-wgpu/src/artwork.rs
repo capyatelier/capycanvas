@@ -217,7 +217,7 @@ impl Capture {
         if region.width() > destination.width() || region.height() > destination.height() {
             return Err(GpuRasterError::InvalidExtent);
         }
-        r.ensure_exact_preview(encoder)?;
+        r.ensure_exact_preview(packet.scene, encoder)?;
         let (window, bytes) = self.image_bytes(packet, region)?;
         let retiring = self.retiring.take();
         if self.retires_window(window) {
@@ -290,8 +290,9 @@ fn source_tile_decodes(r: &WgpuRasterizer, scene: SceneView<'_>, tile: [u32; 2])
 }
 
 impl WgpuRasterizer {
-    pub(super) fn ensure_exact_preview(&mut self, encoder: &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError> {
-        if self.preview_level == 0 { return Ok(()); }
+    pub(super) fn ensure_exact_preview(&mut self, destination: SceneView<'_>, encoder: &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError> {
+        let drawn = self.preview_layer_id.and_then(|target| destination.source_owner(target)).is_some_and(|owner| destination.visible(owner));
+        if self.preview_level == 0 || !drawn { return Ok(()); }
         let frame = self.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?;
         let packet = frame.packet(self.document_extent);
         self.validate_and_prepare_brush_resources(packet.dab_batches)?;
