@@ -326,6 +326,7 @@ impl Graph {
         let halves: HashSet<&Node> = parts.iter().flat_map(|parts| [&parts.nodes[0], &parts.nodes[2]]).chain(self.motion.iter().flatten()).chain(self.prepared.iter().flatten()).collect();
         self.cached = all.into_iter().filter(|n| !Arc::ptr_eq(n, &root)
             && (matches!(n.as_ref(), Expression::Objects {..} | Expression::Vector { .. } | Expression::Effect { .. }) || halves.contains(n))
+            && !matches!(n.as_ref(), Expression::Color(_))
             && !matches!(n.as_ref(), Expression::Combine { front, .. } if matches!(front.as_ref(), Expression::VectorPreview { .. } | Expression::VectorMotion { .. }))).collect();
         self.content = content;
         self.root = Some(root);

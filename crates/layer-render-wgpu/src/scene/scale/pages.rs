@@ -720,6 +720,21 @@ impl Store {
         let keys=self.pages.iter().filter(|(key,page)|key.source.is_none() && key.expression==*expression && !page.optional).map(|(key,_)|key.clone()).collect::<Vec<_>>();
         for key in keys {self.set_optional(&key);}
     }
+    pub(super) fn adopt_content(&mut self,from:&graph::Node,to:&graph::Node) {
+        let Some(frame)=self.expected.clone() else {return;};
+        let keys=self.pages.iter().filter(|(key,page)|key.source.is_none() && key.expression==*from && !self.inputs.contains_key(*key) && !page.versions.is_empty()
+            && page.versions.values().all(|recorded|recorded.matches_as(&frame,to,recorded.input_level)==Some(true))).map(|(key,_)|key.clone()).collect::<Vec<_>>();
+        for key in keys {
+            let adopted=Key {expression:to.clone(),..key.clone()};
+            if self.pages.contains_key(&adopted) {continue;}
+            let mut page=self.pages.remove(&key).unwrap();
+            for recorded in page.versions.values_mut() {recorded.key=adopted.clone();}
+            self.index.remove(&key);self.index.insert(&adopted);self.ids.insert(page.id,adopted.clone());
+            for (_,held) in &mut self.unconfirmed {if *held==key {*held=adopted.clone();}}
+            self.touch(&key);self.touch(&adopted);
+            self.pages.insert(adopted,page);
+        }
+    }
     pub(super) fn set_transient(&mut self,key:&Key) {self.pages.get_mut(key).unwrap().transient=true;self.set_optional(key);}
     pub(super) fn release_transient(&mut self,key:&Key,encoder:&submission::CommandEncoder) {
         if self.pages.get(key).is_some_and(|page|page.transient) {encoder.hold(self.remove(key)._charge);}
@@ -1636,8 +1651,11 @@ impl Cache {
                 Err(GpuRasterError::NotReady)=>{cell.blocked=Some(crate::frame_demand::Input::Name);cell.name=None;cell.arrivals=since;selection.waiting|=!region.intersect(visible).is_empty();continue;},
                 Err(error)=>return Err(error),
             }
-            let current=cell.shown.as_ref().filter(|shown|shown.recorded.as_ref().is_some_and(|recorded|Key {expression:key.expression.clone(),format:key.format,..recorded.key.clone()}==key
-                && recorded.matches_as(&frame,&key.expression,input_level)==Some(true))).map(|shown|shown.exact);
+            let current=cell.shown.as_mut().filter(|shown|shown.recorded.as_ref().is_some_and(|recorded|Key {expression:key.expression.clone(),format:key.format,..recorded.key.clone()}==key
+                && recorded.matches_as(&frame,&key.expression,input_level)==Some(true))).map(|shown| {
+                    if let Some(recorded)=&mut shown.recorded {recorded.key.expression=key.expression.clone();}
+                    shown.exact
+                });
             let exact_key=if store.pages.get(&key).is_some_and(|page|Coverage::covers(&page.coverage.exact,region)) {key.clone()}
                 else {Key {format:wgpu::TextureFormat::Rgba32Float,..key.clone()}};
             let exact=(current!=Some(true)).then(||store.get(&exact_key,region,Accuracy::Exact,exact_input_level,class(region)).map(|image|(exact_key.clone(),image,true))).flatten();
@@ -1879,6 +1897,11 @@ impl Cache {
             [index]=>cells.cells[index].shown.as_ref().filter(|shown|shown.unnamed()).map(|shown|shown.submission.clone()),
             _=>None,
         }).collect()
+    }
+    pub(super) fn unsettled_cells(&self)->Vec<PixelRect> {
+        let Some((cells,_store,_))=self.cells() else {return Vec::new();};
+        cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level)).filter(|(cell,_)|cell.pending())
+            .map(|(_,coordinate)|bounds(coordinate,self.plan.level,self.plan.extent)).collect()
     }
     pub(super) fn contact_cells(&self)->Vec<PixelRect> {
         let Some((cells,_store,_))=self.cells() else {return Vec::new();};
@@ -3577,6 +3600,7 @@ pub(super) struct RetainedPage {
     pub written:PageSet,
     pub current:PageSet,
     pub exact:PageSet,
+    pub written_at:u64,
 }
 #[cfg(test)]
 impl Store {
@@ -3604,7 +3628,7 @@ impl Store {
         self.pages.iter().filter(|(_,page)|page.submission.as_ref().is_none_or(|submission|!submission.discarded()))
             .map(|(key,page)|RetainedPage {key:key.clone(),texture:page.image.texture.clone(),
                 written:page.coverage.written.clone(),current:PageSet {level:page.coverage.written.level,entries:page.coverage.written.iter().copied().filter(|coordinate|
-                    page.matches(self.expected.as_deref(),bounds(*coordinate,page.coverage.written.level,key.extent),key.level)==Some(true)).collect()},exact:page.coverage.exact.clone()}).collect()
+                    page.matches(self.expected.as_deref(),bounds(*coordinate,page.coverage.written.level,key.extent),key.level)==Some(true)).collect()},exact:page.coverage.exact.clone(),written_at:page.written_at}).collect()
     }
 }
 
