@@ -324,8 +324,8 @@ full-size coverage fork is needed. Reduction weights partial edge texels by thei
 actual document area. Changing or cancelling a tail invalidates its old footprint;
 committing it still executes the authoritative full-resolution brush.
 
-Exact queries replay a compact tail through the existing exact tile executor
-using retained preview contacts. Full-size prediction pages evaluate every native
+Exact captures that draw the stroked layer replay a compact tail through the existing
+exact tile executor using retained preview contacts. Full-size prediction pages evaluate every native
 pixel; compact prediction pages retain their display sampling density. Replay happens on demand,
 once for that tail, replacing the compact scratch pages. The already-composed display stays valid;
 the next live tail returns to compact scratch. Save/undo history contains only

@@ -162,3 +162,165 @@ fn a_prepared_drawing_shows_its_first_stroke_on_the_first_admitted_frame_and_com
         assert_eq!(compiled,expected,"{case}: a display compiles the kernels it can run and no others");
     }
 }
+
+const FIRST_DAB:[f32;2]=[243.,129.];
+
+#[derive(Clone,Copy,PartialEq,Debug)]
+enum FirstContact {OnTop,Beneath,PhotoSelectedAtPenDown,PhotoSelectedAtPenDownAfterAStroke}
+
+fn overlaid_photo(depth:SampleDepth,contact:FirstContact)->(Document,[OccurrenceHandle;3]) {
+    let mut doc=document_at([517,259]);
+    composition_mut(&mut doc).color.depth=depth;
+    let photo=doc.scene().order()[0];
+    let above=copy_paint(&mut doc,0);
+    doc.artwork.occurrences.get_mut(above).unwrap().opacity=0.35;
+    let ink=paint_occurrence(&mut doc,"Ink",None);
+    set_root_entries(&mut doc,if contact==FirstContact::OnTop {vec![ink,above,photo]}else {vec![above,ink,photo]});
+    (doc,[above,ink,photo])
+}
+
+fn at_quarter_size(doc:&Document)->FramePacket<'_> {
+    let mut frame=FramePacket {blend_space:doc.composition().blend,..packet(doc.scene(),doc.composition().size)};
+    frame.view=layer_render::ViewState {width_px:130,height_px:65,document_to_surface:[0.25,0.,0.,0.25,0.,0.]};
+    frame
+}
+
+fn warm_and_fresh(doc:&Document,working:OccurrenceHandle)->[WgpuRasterizer;2] {
+    let color=doc.composition().color;
+    let mut fresh=WgpuRasterizer::new_native_headless(color).unwrap();
+    let mut warm=crate::test_support::staged_renderer(&fresh,color);
+    for r in [&mut warm,&mut fresh] {layer_render::CanvasRenderer::set_working_layer(r,Some(working));}
+    warm.shader_idle(false,false);
+    warm.prepare_startup(doc,&layer_core::default_brush(DefaultBrushPreset::GPen),false).unwrap();
+    crate::test_support::wait_startup(&mut warm,std::time::Instant::now()+std::time::Duration::from_secs(60),
+        |progress|progress.brush_ready,format_args!("brush readiness"));
+    let scale=&warm.scene_pipelines.scale;
+    let kernels=[&scale.full,&scale.half].into_iter().flat_map(|set|[&set.compose,&set.reduce,&set.reduce_phased,&set.reduce_pair,&set.project]);
+    pollster::block_on(warm.compilation.prepare_all(kernels)).unwrap();
+    [warm,fresh]
+}
+
+fn ink_dab(x:f32)->layer_render::Dab {
+    let mut dab=crate::tests::test_dab([x,FIRST_DAB[1]],[0.9,0.02,0.1,0.7],1.);
+    dab.radii=[25.;2];dab
+}
+
+fn stroke_packet<'a>(frame:FramePacket<'a>,dab:&'a layer_render::Dab,batch:&'a DabBatch,time:f32)->FramePacket<'a> {
+    FramePacket {time_seconds:time,composite_all:false,dabs:std::slice::from_ref(dab),dab_batches:std::slice::from_ref(batch),..frame}
+}
+
+fn commit_stroke(r:&mut WgpuRasterizer,frame:FramePacket<'_>,target:SourceTarget,style:&layer_render::DabStyle,stroke:u64,xs:[f32;2]) {
+    for (step,x) in xs.into_iter().enumerate() {
+        let dab=ink_dab(x);
+        let batch=DabBatch {stroke_id:layer_core::StrokeId(stroke),stroke_start:step==0,stroke_end:step==1,..dab_batch(target,style.clone(),dab.bounds())};
+        crate::test_support::submit_ready(r,stroke_packet(frame,&dab,&batch,0.016*(step+2) as f32)).unwrap();
+    }
+    crate::test_support::submit_settled(r,FramePacket {composite_all:false,..frame});
+}
+
+fn committed(r:&mut WgpuRasterizer,doc:&Document)->Vec<Vec<u8>> {
+    let scene=doc.scene();
+    let pages=scene.order().iter().filter_map(|owner|scene.source_target(*owner))
+        .flat_map(|target|page_coordinates(PixelRect::full(scene.target_extent(target))).map(move|coordinate|(target,coordinate))).collect::<Vec<_>>();
+    pages.into_iter().map(|(target,coordinate)| {
+        let tile=crate::test_support::submit_encoded(r,|r,encoder|crate::test_support::query_ready(r,encoder,|r,encoder|r.raw_layer_tile(target,coordinate,encoder)));
+        tile.map_or_else(Vec::new,|tile|crate::layer_tests::page_bytes(r,&tile.texture))
+    }).collect()
+}
+
+fn the_first_preview_frame_shows_its_ink_and_commits_like_a_fresh_renderer(contact:FirstContact) {
+    for (depth,format) in [(SampleDepth::U8,wgpu::TextureFormat::Rgba16Float),(SampleDepth::F32,wgpu::TextureFormat::Rgba32Float)] {
+        let (doc,[_,ink,photo])=overlaid_photo(depth,contact);
+        let frame=at_quarter_size(&doc);
+        let style=layer_render::DabStyle {blend_space:doc.composition().blend,..crate::layer_tests::preset_style(DefaultBrushPreset::GPen)};
+        let on_photo=matches!(contact,FirstContact::PhotoSelectedAtPenDown|FirstContact::PhotoSelectedAtPenDownAfterAStroke);
+        let target=doc.scene().source_target(if on_photo {photo}else {ink}).unwrap();
+        let [mut r,mut fresh]=warm_and_fresh(&doc,ink);
+        for r in [&mut r,&mut fresh] {
+            crate::test_support::submit_settled(r,frame);
+            if contact==FirstContact::PhotoSelectedAtPenDownAfterAStroke {commit_stroke(r,frame,doc.scene().source_target(ink).unwrap(),&style,1,[120.,124.]);}
+            if on_photo {layer_render::CanvasRenderer::set_working_layer(r,Some(photo));}
+        }
+        let cache=r.scale_display.as_ref().unwrap();
+        assert_eq!((cache.texture().format(),cache.plan.size,cache.plan.level),(format,[130,65],2));
+        let centre=(FIRST_DAB[1] as usize/4)*130+FIRST_DAB[0] as usize/4;
+        let before=display_pixels(&r)[centre][0];
+
+        let dab=ink_dab(FIRST_DAB[0]);
+        let batch=DabBatch {kind:DabBatchKind::Preview,stroke_id:layer_core::StrokeId(2),stroke_end:false,..dab_batch(target,style.clone(),dab.bounds())};
+        let preview=stroke_packet(frame,&dab,&batch,0.016);
+        r.poll_pending(preview.view).unwrap();
+        crate::test_support::pace(&mut r);
+        let compiling=r.compilation.batch();
+        let counts=PassCounts::snapshot();
+        assert!(matches!(r.submit_when_ready(preview,None),std::task::Poll::Ready(Ok(()))),"{format:?} {contact:?}: the first preview frame is accepted without waiting");
+        let counts=PassCounts::snapshot().delta(counts);
+        assert_eq!(crate::compile::tests::queued_recipes(&r.compilation),0,"{format:?} {contact:?}: the first preview frame waits for no pipeline");
+        assert!(!publication_pending(&r),"{format:?} {contact:?}: the first preview frame covers the view");
+        let shown=display_pixels(&r)[centre][0]-before;
+        assert!(shown>0.3,"{format:?} {contact:?}: the first preview frame adds {shown} red at its dab centre");
+        assert!(r.preview_level>0,"{format:?} {contact:?}: the stroke keeps its preview below full size");
+        if contact!=FirstContact::OnTop {assert!(counts.fold_inputs>0,"{format:?} {contact:?}: the first preview frame builds its backdrop halves: {counts:?}");}
+        drop(compiling);
+        let moved=ink_dab(FIRST_DAB[0]+4.);
+        let batch=DabBatch {damage:moved.bounds(),..batch};
+        crate::test_support::submit_ready(&mut r,stroke_packet(frame,&moved,&batch,0.032)).unwrap();
+        let shown=display_pixels(&r)[centre][0]-before;
+        assert!(!publication_pending(&r) && shown>0.3,"{format:?} {contact:?}: the second preview frame shows {shown} red where the first dab was");
+        assert!(committed(&mut r,&doc)==committed(&mut fresh,&doc),"{format:?} {contact:?}: a preview changes no committed layer");
+
+        for r in [&mut r,&mut fresh] {commit_stroke(r,frame,target,&style,2,[FIRST_DAB[0],FIRST_DAB[0]+4.]);}
+        assert!(committed(&mut r,&doc)==committed(&mut fresh,&doc),"{format:?} {contact:?}: the stroke commits what a fresh renderer commits");
+        let error=crate::test_support::max_error(&display_pixels(&r),&display_pixels(&fresh));
+        assert!(error<1e-4,"{format:?} {contact:?}: the settled view differs from a fresh renderer's by {error}");
+    }
+}
+
+#[test]
+fn the_first_preview_frame_on_the_top_layer_shows_its_ink_and_commits_like_a_fresh_renderer() {
+    the_first_preview_frame_shows_its_ink_and_commits_like_a_fresh_renderer(FirstContact::OnTop);
+}
+
+#[test]
+fn the_first_preview_frame_on_a_layer_beneath_another_shows_its_ink_and_commits_like_a_fresh_renderer() {
+    the_first_preview_frame_shows_its_ink_and_commits_like_a_fresh_renderer(FirstContact::Beneath);
+}
+
+#[test]
+fn the_first_preview_frame_on_a_photo_selected_at_pen_down_shows_its_ink_and_commits_like_a_fresh_renderer() {
+    the_first_preview_frame_shows_its_ink_and_commits_like_a_fresh_renderer(FirstContact::PhotoSelectedAtPenDown);
+}
+
+#[test]
+fn the_first_preview_frame_on_a_photo_selected_at_pen_down_after_a_stroke_on_another_layer_shows_its_ink_and_commits_like_a_fresh_renderer() {
+    the_first_preview_frame_shows_its_ink_and_commits_like_a_fresh_renderer(FirstContact::PhotoSelectedAtPenDownAfterAStroke);
+}
+
+#[test]
+fn an_exact_query_replays_a_reduced_preview_only_when_it_draws_the_stroked_layer() {
+    let (doc,[_,ink,photo])=overlaid_photo(SampleDepth::U8,FirstContact::Beneath);
+    let frame=at_quarter_size(&doc);
+    let style=layer_render::DabStyle {blend_space:doc.composition().blend,..crate::layer_tests::preset_style(DefaultBrushPreset::GPen)};
+    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    layer_render::CanvasRenderer::set_working_layer(&mut r,Some(ink));
+    crate::test_support::submit_settled(&mut r,frame);
+    let dab=ink_dab(FIRST_DAB[0]);
+    let batch=DabBatch {kind:DabBatchKind::Preview,stroke_end:false,..dab_batch(doc.scene().source_target(ink).unwrap(),style,dab.bounds())};
+    crate::test_support::submit_ready(&mut r,stroke_packet(frame,&dab,&batch,0.016)).unwrap();
+    let reduced=r.preview_level;
+    assert!(reduced>0,"the stroke previews below full size");
+
+    let centre=FIRST_DAB[1] as usize*PAGE_SIZE as usize+FIRST_DAB[0] as usize;
+    let query=|r:&mut WgpuRasterizer,member:OccurrenceHandle| {
+        let scope=SceneScope::Members([member].into());
+        let accepted=r.artwork_frame.clone().unwrap();
+        let mut capture=crate::artwork::Capture::default();
+        let tile=crate::test_support::submit_encoded(r,|r,encoder|crate::test_support::query_ready(r,encoder,|r,encoder|
+            capture.region(r,FramePacket {scene:accepted.scene.view().with_scope(&scope),..accepted.packet(r.document_extent)},PixelRect::full([PAGE_SIZE;2]),[PAGE_SIZE;2],encoder)));
+        pixels(r,&tile.texture)[centre]
+    };
+    assert!(query(&mut r,photo)[3]>0.99,"the photo alone is opaque under the dab");
+    assert_eq!(r.preview_level,reduced,"a query of a layer that does not draw the stroked one keeps the reduced preview");
+    assert!(query(&mut r,ink)[3]>0.5,"a query of the stroked layer shows its previewed dab");
+    assert_eq!(r.preview_level,0,"a query that draws the stroked layer replays the preview at full size");
+}
