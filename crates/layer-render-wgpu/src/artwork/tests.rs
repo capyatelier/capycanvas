@@ -81,7 +81,7 @@ fn composite_queries_ignore_inspection_and_need_no_display_texture() {
         let mut r = crate::memory::memory_tests::renderer(color, layer_core::DeviceMemoryFacts {
             budget_bytes: Some(4 << 30), unified: true, ..Default::default()
         }).unwrap();
-        crate::memory::memory_tests::cold_color_pressure(&mut r);
+        crate::memory::memory_tests::lower_memory_to_floor(&mut r);
         submit_settled(&mut r, frame(&doc));
         let visible = r.scale_display.as_ref().unwrap().texture().clone();
         let before = crate::layer_tests::page_bytes(&r, &visible);
