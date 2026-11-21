@@ -5064,14 +5064,14 @@ impl WgpuRasterizer {
                     let source=if new_preview_requires_base {
                         self.paint_layers.iter().find(|layer|layer.id==layer_id).ok_or(GpuRasterError::MissingPaintLayer(layer_id))?
                             .pages.iter().find(|page|page.coordinate==coordinate).map(|page|page.active().read(intent.version(),Some(&receipt))
-                                .map(|read|(read.value().texture.clone(),read.version().clone())).ok_or(GpuRasterError::Invariant("prepared submit frame inner state is inconsistent"))).transpose()?
+                                .map(|read|(read.value().texture.clone(),read.input())).ok_or(GpuRasterError::Invariant("prepared submit frame inner state is inconsistent"))).transpose()?
                     }else {None};
                     let ticket=self.preview_version(layer_id,RasterPlane::Color,coordinate,scene::PreviewStage::Seed)?;
                     let preview=prepared_raster_output(self.preview_pages.iter_mut().find(|page|page.coordinate==coordinate))?;
                     let write=preview.primary.overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
-                    if let Some((texture,_))=source {write.value().copy_from(&texture,texture.size(),&mut encoder);}
-                    else {write.value().clear(&self.zero_pages,&mut encoder);}
-                    write.publish(ticket.version());preview.derived=Some(ticket);
+                    let copied=if let Some((texture,committed))=&source {write.value().copy_from(texture,texture.size(),&mut encoder);resident::Delta::seeded(committed,PixelRect::EMPTY)}
+                    else {write.value().clear(&self.zero_pages,&mut encoder);resident::Delta::Unknown};
+                    write.encoded(ticket.version().clone()).certified(copied).publish(&receipt);preview.derived=Some(ticket);
                 }
             }
             if new_preview_requires_base && !new_preview_from_persistent
