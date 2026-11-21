@@ -422,6 +422,10 @@ impl Cache {
         for region in scene.scale_sources.entries.get(&target).into_iter().flat_map(|source|&source.damage.regions) {for tile in page_coordinates(*region) {
             let rect=contact.stale.entry(tile).or_insert(PixelRect::EMPTY);*rect=rect.union(region.intersect(page_rect(tile)));
         }}
+        if contact.source.phase!=[0;2] {
+            let tipped=contact.phased(&contact.previewed).chain(contact.phased(&previewed)).map(|tile|(tile,page_rect(tile))).collect::<Vec<_>>();
+            contact.stale.extend(tipped);
+        }
         contact.next=Some((current,changed,predicted,previewed));
         self.invalidate_cells(stale);
         Some(reached)
