@@ -268,7 +268,7 @@ fn native_pointwise_captures_reuse_source_bindings_across_strips() {
     let expected = display_pixels(&r);
     let target = doc.scene().order().iter().find_map(|handle| doc.scene().source_target(*handle)).unwrap();
     let mut dab = crate::tests::test_dab([extent[0] as f32 / 2., extent[1] as f32 / 2.], [0.; 4], 1.); dab.radii = [extent[0] as f32; 2];
-    let held = layer_render::DabBatch { stroke_start: true, ..dab_batch(target, crate::tests::test_style(layer_core::BrushExecution::Dry), dab.bounds()) };
+    let held = layer_render::DabBatch { stroke_start: true, ..dab_batch(target, crate::tests::unfed_erase_style(), dab.bounds()) };
     #[expect(clippy::mutable_key_type,reason="Texture view keys use stable resource identities")]
     let mut frames = Vec::new();
     for _ in 0..8 {

@@ -16,7 +16,7 @@ pub(super) fn plan_packet(packet:FramePacket<'_>,extent:impl Fn(SourceTarget)->[
                     return Err(GpuRasterError::InvalidDabRange);
                 }
             }
-        Ok(plan(batch,dabs,extent(batch.target)))
+        Ok(plan(batch,dabs,extent(batch.target),packet.scene.color_mode(batch.target)))
     }).collect()
 }
 
@@ -419,7 +419,19 @@ fn capsule_touches_quad(motion: [f64; 2], radius: f64, corners: [[f64; 2]; 4]) -
     distance <= radius * radius
 }
 
-pub(super) fn plan(batch: &DabBatch, dabs: &[Dab], extent: [u32; 2]) -> Vec<BrushTile> {
+fn changes_pages_only_where_fed(batch: &DabBatch, color: layer_core::color::LayerColorMode) -> bool {
+    let style = &batch.style;
+    batch.kind == DabBatchKind::Persistent && matches!(batch.target, SourceTarget::Paint(_))
+        && color == layer_core::color::LayerColorMode::FullColor
+        && style.execution == BrushExecution::Dry && style.mode == DabMode::Paint && !style.alpha_locked
+        && !style.contact.is_some_and(|contact| contact.bristles.is_some())
+}
+
+fn feeds_no_paint(dab: &Dab) -> bool {
+    dab.flow == 0. || dab.color_rgba_linear[3] == 0.
+}
+
+pub(super) fn plan(batch: &DabBatch, dabs: &[Dab], extent: [u32; 2], color: layer_core::color::LayerColorMode) -> Vec<BrushTile> {
     if let Some(context) = &batch.style.liquify && context.amount.is_some() {
         return context.field.iter().flat_map(|f| f.tiles()).map(|coordinate| BrushTile {
             coordinate, local: PixelRect::full([PAGE_SIZE; 2]), dabs: 0..0, indices: Vec::new(),
@@ -445,8 +457,12 @@ pub(super) fn plan(batch: &DabBatch, dabs: &[Dab], extent: [u32; 2]) -> Vec<Brus
     let contact = batch.style.contact.as_ref();
     let fan = contact.is_some_and(|c| c.bristles.is_some());
     let end = preview_end_bounds(batch, dabs);
+    let unfed_dabs_are_identities = changes_pages_only_where_fed(batch, color);
     let mut tiles = std::collections::BTreeMap::<_, BrushTile>::new();
     for (index, original) in dabs.iter().enumerate() {
+        if unfed_dabs_are_identities && feeds_no_paint(original) {
+            continue;
+        }
         let lift = end.is_some() && original.preview_tag() == layer_render::DabPreview::LiftOnly;
         if lift && end.is_some_and(|end| original.bounds().intersect(end).is_empty()) {
             continue;
@@ -611,7 +627,7 @@ mod tests {
         batch.first_dab = 7;
         batch.dab_count = dabs.len() as u32;
         batch.preview_end = Some(3);
-        let tiles = plan(&batch, &dabs, [1024, 256]);
+        let tiles = plan(&batch, &dabs, [1024, 256], Default::default());
         assert_eq!(
             tiles.iter().map(|tile| tile.coordinate).collect::<Vec<_>>(),
             [[1, 0], [2, 0]]
@@ -633,9 +649,9 @@ mod tests {
         };
         let mut batch=crate::test_support::dab_batch(SourceTarget::Paint(layer_core::PaintHandle::from_index(1)),style,ordinary.bounds());
         batch.dab_count=1;
-        let full=plan(&batch,&[ordinary],[1024;2]);
+        let full=plan(&batch,&[ordinary],[1024;2],Default::default());
         let completed=ordinary.completion([-1.,0.],[0.,1.],1.);
-        let tiles=plan(&batch,&[completed],[1024;2]);
+        let tiles=plan(&batch,&[completed],[1024;2],Default::default());
         assert!(tiles.len()<full.len());
         for y in (0..1024).step_by(8) {for x in (0..1024).step_by(8) {
             let offset=[x as f32-512.,y as f32-512.];
@@ -643,7 +659,7 @@ mod tests {
             assert!(tiles.iter().any(|t|t.coordinate==[x/256,y/256]),"missing outer contact at {x},{y}");
         }}
         let cap=ordinary.completion([-1.,0.],[0.;2],1.);
-        assert_eq!(plan(&batch,&[cap],[1024;2]).len(),full.len());
+        assert_eq!(plan(&batch,&[cap],[1024;2],Default::default()).len(),full.len());
     }
 
     #[test]
@@ -779,13 +795,53 @@ mod tests {
             let mut batch = crate::test_support::dab_batch(SourceTarget::Paint(layer_core::PaintHandle::from_index(1)), style, PixelRect::full([1024, 256]).to_rect());
             batch.first_dab = 7;
             batch.dab_count = dabs.len() as u32;
-            let tiles = plan(&batch, &dabs, [1024, 256]);
+            let tiles = plan(&batch, &dabs, [1024, 256], Default::default());
             assert_eq!(tiles.len(), 2);
             assert_eq!(tiles[0].coordinate, [0, 0]);
             assert_eq!(tiles[0].indices, [7, 9]);
             assert!(tiles[1].indices.is_empty());
             assert_eq!(tiles[1].dabs, 8..9);
         }
+    }
+
+    #[test]
+    fn persistent_paint_plans_no_page_under_dabs_that_feed_no_paint() {
+        use layer_core::{color::LayerColorMode, DefaultBrushPreset as Preset};
+        let paint = SourceTarget::Paint(layer_core::PaintHandle::from_index(1));
+        let at = |x: f32, alpha: f32, flow: f32| Dab {
+            center: layer_core::Point { x, y: 64. }, radii: [20.; 2], previous: [20., 20., 1., 0.], flow,
+            ..crate::layer_tests::dab([0.2, 0.4, 0.6, alpha])
+        };
+        let batch = |style: &layer_render::DabStyle, count: u32| DabBatch {
+            first_dab: 7, dab_count: count, stroke_end: false,
+            ..crate::test_support::dab_batch(paint, style.clone(), PixelRect::full([1024, 256]).to_rect())
+        };
+        let pages = |batch: &DabBatch, dabs: &[Dab], color| plan(batch, dabs, [1024, 256], color).iter().map(|tile| tile.coordinate).collect::<Vec<_>>();
+        let unfed = [at(64., 0., 1.), at(64., 1., 0.), at(64., -0., 1.)];
+        let fed = at(832., 1., 1.);
+        let dry = crate::tests::test_style(BrushExecution::Dry);
+        let selected = layer_core::Selection::polygon([[0., 0.], [512., 0.], [512., 256.], [0., 256.]].map(|[x, y]| layer_core::Point { x, y }).to_vec()).unwrap();
+        for style in [Preset::GPen, Preset::Pencil, Preset::PastelBlock, Preset::Airbrush, Preset::Marker].map(crate::layer_tests::preset_style)
+            .into_iter().chain([dry.clone(), layer_render::DabStyle { opacity: 0.4, ..dry.clone() },
+                layer_render::DabStyle { selection: Some(Arc::new(selected)), ..dry.clone() }]) {
+            for dab in unfed {
+                assert!(pages(&batch(&style, 1), &[dab], LayerColorMode::FullColor).is_empty(), "{style:?} {dab:?}");
+            }
+            assert_eq!(pages(&batch(&style, 1), &[fed], LayerColorMode::FullColor), [[3, 0]], "{style:?}");
+            let tiles = plan(&batch(&style, 4), &[unfed[0], fed, Dab { center: fed.center, ..unfed[1] }, fed], [1024, 256], LayerColorMode::FullColor);
+            assert_eq!(tiles.iter().map(|tile| (tile.coordinate, tile.dabs.clone(), tile.indices.clone())).collect::<Vec<_>>(), [([3, 0], 8..11, vec![8, 10])], "{style:?}");
+        }
+        let planned = |batch: DabBatch, color| unfed.iter().all(|dab| pages(&batch, std::slice::from_ref(dab), color) == [[0, 0]]);
+        assert!(planned(DabBatch { kind: DabBatchKind::Preview, ..batch(&dry, 1) }, LayerColorMode::FullColor));
+        assert!(planned(DabBatch { target: SourceTarget::Coverage(layer_core::CoverageHandle::from_index(1)), ..batch(&dry, 1) }, LayerColorMode::FullColor));
+        for color in [LayerColorMode::Grayscale, LayerColorMode::TwoTone] { assert!(planned(batch(&dry, 1), color), "{color:?}"); }
+        for style in [layer_render::DabStyle { mode: DabMode::Erase, ..dry.clone() }, layer_render::DabStyle { alpha_locked: true, ..dry.clone() },
+            crate::layer_tests::preset_style(Preset::Eraser), crate::layer_tests::preset_style(Preset::BristlePaintbrush),
+            crate::layer_tests::preset_style(Preset::CloneStamp), crate::layer_tests::preset_style(Preset::DitherBlender)] {
+            assert!(planned(batch(&style, 1), LayerColorMode::FullColor), "{style:?}");
+        }
+        let edged = layer_render::DabStyle { rendering: layer_core::BrushRendering { edge_after_stroke: true, ..dry.rendering }, ..dry.clone() };
+        assert_eq!(pages(&batch(&edged, 1), &unfed[..1], LayerColorMode::FullColor).len(), 4);
     }
 
     #[test]
@@ -855,7 +911,7 @@ mod tests {
                 },
             };
             let mut planned = vec![false; 1600 * 1600];
-            for tile in plan(&batch, &[dab], [1600, 1600]) {
+            for tile in plan(&batch, &[dab], [1600, 1600], Default::default()) {
                 let origin = [tile.coordinate[0] * PAGE_SIZE, tile.coordinate[1] * PAGE_SIZE];
                 for y in origin[1] + tile.local.min_y()..origin[1] + tile.local.max_y() {
                     let row = y as usize * 1600;

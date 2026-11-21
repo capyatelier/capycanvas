@@ -25,6 +25,12 @@ fn native_pixels(doc: &Document, view: layer_render::ViewState) -> Vec<[f32; 4]>
     pixels(&exact, crate::test_support::document_texture(&exact))
 }
 
+fn committed_color(r: &WgpuRasterizer, target: SourceTarget, coordinate: [u32; 2]) -> (layer_core::raster::ContentStamp, Vec<[u32; 4]>) {
+    let page = r.paint_layers.iter().find(|layer| layer.id == target).unwrap().pages.iter().find(|page| page.coordinate == coordinate).unwrap();
+    let read = r.read_color_page(target, page, false, None).unwrap();
+    (read.input().version().identity(), pixels(r, &read.value().texture).into_iter().map(|pixel| pixel.map(f32::to_bits)).collect())
+}
+
 fn assert_pixels_equal(actual: &[[f32; 4]], expected: &[[f32; 4]], width: u32, context: impl std::fmt::Debug) {
     assert_eq!(actual.len(), expected.len(), "{context:?} pixel count");
     let mut changed = 0;
@@ -222,7 +228,7 @@ fn native_alpha_reuse_admits_warm_pages_beside_cold_output_pages() {
         crate::test_support::submit_settled(&mut r, frame);
         let mut dab=crate::tests::test_dab([258.5,129.5],[0.,0.,0.,0.],1.);
         dab.radii=[260.,131.];
-        let batch=dab_batch(target,crate::layer_tests::preset_style(DefaultBrushPreset::GPen),dab.bounds());
+        let batch=dab_batch(target,crate::tests::unfed_erase_style(),dab.bounds());
         for _ in 0..2 {
             crate::test_support::submit_settled(&mut r, FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame});
         }
@@ -695,12 +701,12 @@ fn native_alpha_reuse_idle_preparation_preserves_flags_until_the_next_contact() 
         dab.radii = [13.25, 11.75];
         let batch = dab_batch(target, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
         crate::test_support::submit_ready(&mut r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
-        for _ in 0..2 { crate::test_support::submit_ready(&mut r, frame).unwrap(); r.wait_idle().unwrap(); }
-        let before = display_pixels(&r);
         let flags = r.changed_cells.as_ref().unwrap().buffer(target, [0, 0]).unwrap().clone();
         let read = |r: &WgpuRasterizer| pollster::block_on(crate::local_tone::read_buffer_async(&r.device, &r.queue, &flags)).unwrap();
         let prior = read(&r);
         assert!(prior[16..].as_chunks::<4>().0.iter().any(|cell| u32::from_le_bytes(*cell) != 0), "{name} actual tracked stores must mark changed cells");
+        crate::test_support::submit_settled(&mut r, frame);
+        let before = display_pixels(&r);
         let mut cells = r.changed_cells.take().unwrap();
         r.document_damage.clear(); r.transform_damage.clear();
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
@@ -715,20 +721,151 @@ fn native_alpha_reuse_idle_preparation_preserves_flags_until_the_next_contact() 
         assert!(cells.reusable(target, [0, 0]).is_none(), "{name} background work must retain forced cells");
         assert_eq!(read(&r), prior, "{name} background work must retain tracked GPU flags");
         r.changed_cells = Some(cells);
-        let candidates = r.metrics.native_effect_reuse_candidate_cells;
-        dab.color_rgba_linear = [0.; 4];
+        let exact = |r: &WgpuRasterizer| { let cache = r.scale_display.as_ref().unwrap(); cache.coverage_snapshot().ready(cache.plan.bounds, pages::Accuracy::Exact) };
+        let cleared = |r: &WgpuRasterizer| read(r)[16..].as_chunks::<4>().0.iter().all(|cell| u32::from_le_bytes(*cell) == 0);
+        assert!(exact(&r), "{name} the settled stroke must be exact before the next contact");
+        let committed = committed_color(&r, target, [0, 0]);
+        let width = r.scale_display.as_ref().unwrap().plan.size[0];
+        let (work, candidates) = (r.metrics.composited_pixels, r.metrics.native_effect_reuse_candidate_cells);
+        let unfed = Dab { color_rgba_linear: [0.; 4], ..dab };
+        crate::test_support::submit_ready(&mut r, FramePacket { dabs: std::slice::from_ref(&unfed), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
+        assert!(r.changed_cells.as_ref().unwrap().reusable(target, [0, 0]).is_some(), "{name} next contact must restore eligible reuse");
+        assert!(cleared(&r), "{name} next unchanged contact must clear prior flags before stores");
+        assert!(committed_color(&r, target, [0, 0]) == committed, "{name} a contact that feeds no paint must leave the committed page and its name unchanged");
+        assert!(exact(&r), "{name} a contact that feeds no paint must leave its footprint exact");
+        assert_pixels_equal(&display_pixels(&r), &before, width, name);
+        crate::test_support::submit_settled(&mut r, frame);
+        assert_eq!([r.metrics.composited_pixels, r.metrics.native_effect_reuse_candidate_cells], [work, candidates], "{name} a contact that feeds no paint must recompose nothing");
+        assert_pixels_equal(&display_pixels(&r), &before, width, name);
         crate::test_support::submit_ready(&mut r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
-        assert!(r.metrics.native_effect_reuse_candidate_cells > candidates, "{name} next contact must restore eligible reuse");
-        assert!(r.changed_cells.as_ref().unwrap().reusable(target, [0, 0]).is_some());
-        assert!(read(&r)[16..].as_chunks::<4>().0.iter().all(|cell| u32::from_le_bytes(*cell) == 0), "{name} next unchanged contact must clear prior flags before stores");
-        assert_pixels_equal(&display_pixels(&r), &before, r.scale_display.as_ref().unwrap().plan.size[0], name);
+        assert!(r.metrics.native_effect_reuse_candidate_cells > candidates, "{name} a painted contact must recompose through eligible reuse");
+        assert!(r.changed_cells.as_ref().unwrap().reusable(target, [0, 0]).is_some() && !cleared(&r), "{name} a painted contact must mark the cells it changed");
+        let painted = committed_color(&r, target, [0, 0]);
+        assert!(painted.0 != committed.0 && painted.1 != committed.1, "{name} a painted page must be renamed");
+        assert!(!exact(&r), "{name} a painted page must invalidate its footprint");
+        crate::test_support::submit_settled(&mut r, frame);
+        assert!(exact(&r) && r.metrics.composited_pixels > work, "{name} a painted page must be repainted");
+        let shown = display_pixels(&r);
         let before_format = r.scale_display.as_ref().unwrap().texture().format();
         let plan = r.scale_display.as_ref().unwrap().plan;
         crate::test_support::submit_ready(&mut r, FramePacket { view: crate::test_support::view(extent), composite_all: true, ..frame }).unwrap();
         let native = pixels(&r, crate::test_support::document_texture(&r));
-        let error = quality(&before, &native, plan, before_format);
+        let error = quality(&shown, &native, plan, before_format);
         assert!(error[2] < 2e-5, "{name} preserved idle flags must retain native paint output: {error:?}");
     }
+}
+
+#[test]
+fn a_stroke_mixing_fed_and_unfed_dabs_writes_only_the_pages_it_feeds() {
+    let extent = [1029, 259];
+    for preset in [DefaultBrushPreset::GPen, DefaultBrushPreset::Pencil, DefaultBrushPreset::Airbrush] {
+        let doc = document_at(extent);
+        let target = source_at(&doc, 0);
+        let mut frame = packet(doc.scene(), extent);
+        frame.composite_all = false;
+        frame.view.document_to_surface = [0.5, 0., 0., 0.5, 0., 0.];
+        let style = crate::layer_tests::preset_style(preset);
+        let at = |center: [f32; 2], alpha: f32| {
+            let mut dab = crate::tests::test_dab(center, [0.1, 0.1, 0.1, alpha], 0.8);
+            dab.radii = [13.25, 11.75];
+            if let Some(dry) = style.contact.and_then(|contact| contact.dry) {
+                let relief = dry.pose(0.5).relief;
+                dab.previous = [dab.radii[0], dab.radii[1], 1., 0.];
+                dab.motion = [4., 1.];
+                dab.contact = [0.7, relief[0], relief[1], relief[2]];
+                dab.previous_contact = dab.contact;
+            }
+            dab
+        };
+        let stroke = |id: u64, dabs: &[Dab], [start, end]: [bool; 2]| DabBatch { stroke_id: layer_core::StrokeId(id), dab_count: dabs.len() as u32, stroke_start: start, stroke_end: end,
+            ..dab_batch(target, style.clone(), dabs.iter().fold(layer_core::Rect::EMPTY, |damage, dab| damage.union(dab.bounds()))) };
+        let seeds = [at([125.5, 126.5], 0.6), at([700.5, 126.5], 0.6)];
+        let unfed = [at([125.5, 126.5], 0.), Dab { flow: 0., ..at([700.5, 126.5], 0.6) }];
+        let mixed = [at([700.5, 126.5], 0.6), Dab { flow: 0., ..at([704.5, 127.5], 0.6) }, at([708.5, 128.5], 0.6), at([712.5, 129.5], 0.)];
+        let fed = [mixed[0], mixed[2]];
+        let mut mixing = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let mut feeding = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        for r in [&mut mixing, &mut feeding] {
+            submit_published(r, frame);
+            crate::test_support::submit_settled(r, FramePacket { dabs: &seeds, dab_batches: &[stroke(1, &seeds, [true; 2])], ..frame });
+        }
+        let cells = |r: &WgpuRasterizer| r.scale_display.as_ref().unwrap().exact_cells();
+        assert!(cells(&mixing).len() > 1 && cells(&mixing).iter().all(|(_, exact)| *exact), "{preset:?} the seeded view must be exact");
+        let unfed_page = committed_color(&mixing, target, [0, 0]);
+        let fed_page = committed_color(&mixing, target, [2, 0]);
+        crate::test_support::submit_ready(&mut mixing, FramePacket { dabs: &unfed, dab_batches: &[stroke(2, &unfed, [true, false])], ..frame }).unwrap();
+        assert!(cells(&mixing).iter().all(|(_, exact)| *exact), "{preset:?} a stroke start that feeds no paint must leave every cell exact");
+        crate::test_support::submit_ready(&mut mixing, FramePacket { dabs: &mixed, dab_batches: &[stroke(2, &mixed, [false, true])], ..frame }).unwrap();
+        crate::test_support::submit_ready(&mut feeding, FramePacket { dabs: &fed, dab_batches: &[stroke(2, &fed, [true; 2])], ..frame }).unwrap();
+        let reached = crate::pixel_rect::pixel_rect(fed[0].bounds().union(fed[1].bounds()), extent);
+        for (cell, exact) in cells(&mixing) {
+            assert_eq!(exact, cell.intersect(reached).is_empty(), "{preset:?} only the cell under the fed dabs may lose exactness: {cell:?}");
+        }
+        for r in [&mut mixing, &mut feeding] { crate::test_support::submit_settled(r, frame); }
+        assert!(committed_color(&mixing, target, [0, 0]) == unfed_page, "{preset:?} a page under only unfed dabs must keep its name and pixels");
+        let painted = committed_color(&mixing, target, [2, 0]);
+        assert!(painted.0 != fed_page.0 && painted.1 != fed_page.1, "{preset:?} the fed page must be renamed and repainted");
+        assert!(painted.1 == committed_color(&feeding, target, [2, 0]).1, "{preset:?} unfed dabs among fed ones must change no texel");
+        assert_pixels_equal(&display_pixels(&mixing), &display_pixels(&feeding), mixing.scale_display.as_ref().unwrap().plan.size[0], preset);
+    }
+}
+
+#[test]
+fn a_stroke_that_feeds_no_paint_is_one_history_step_that_stores_no_page() {
+    use layer_engine::{CanvasEngine, PenEvent, PenPhase, SampleFlags, ViewTransform, input_queue};
+    let extent = [517, 259];
+    let mut doc = document_at(extent);
+    let owner = doc.scene().order()[0];
+    let target = source_at(&doc, 0);
+    doc.working.occurrence = Some(owner); doc.working.target = Some(target);
+    let mut view = crate::test_support::view([160, 90]);
+    view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+    let (mut input, consumer) = input_queue(64);
+    let renderer = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut engine = CanvasEngine::new(renderer, doc, consumer, view, ViewTransform { revision: 0, surface_to_document: [4., 0., 0., 4., 0., 0.] }).unwrap();
+    let drain = |engine: &mut CanvasEngine<WgpuRasterizer>, settle: bool| {
+        let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+        loop {
+            engine.render_frame().unwrap(); engine.backend_mut().wait_idle().unwrap();
+            if !engine.has_pending_input() && (!settle || !engine.has_pending_document_edits() && engine.backend().next_frame() != layer_render::FrameDemand::Work) { break; }
+            assert!(std::time::Instant::now() < deadline);
+        }
+    };
+    let mut sequence = 0;
+    let mut stroke = |engine: &mut CanvasEngine<WgpuRasterizer>, alpha: f32| {
+        let mut brush = layer_core::default_brush(DefaultBrushPreset::GPen);
+        brush.diameter = 31.5; brush.color_rgba_linear = [0.017, 0.031, 0.13, alpha];
+        engine.set_brush(brush).unwrap();
+        for i in 0..=8 {
+            let phase = if i == 0 { PenPhase::Down } else if i == 8 { PenPhase::Up } else { PenPhase::Move };
+            sequence += 1;
+            input.push(PenEvent { timestamp_ns: sequence * 8_333_333, pressure: 0.8,
+                ..crate::test_support::pen(sequence, phase, [(235.5 + i as f32 * 4.) / 4., (117.5 + i as f32 * 2.) / 4.], SampleFlags::PRIMARY) }).unwrap();
+            drain(engine, false);
+        }
+        drain(engine, true);
+    };
+    let stored = |engine: &CanvasEngine<WgpuRasterizer>| paint_at(engine.document(), 0).raster.wait_data().unwrap().tiles.iter()
+        .map(|(key, tile)| (*key, tile.content_version().identity())).collect::<Vec<_>>();
+    drain(&mut engine, true);
+    let blank = native_pixels(engine.document(), view);
+    stroke(&mut engine, 0.);
+    assert_eq!(engine.metrics().committed_strokes, 1, "a stroke that feeds no paint is still a committed stroke");
+    assert!(stored(&engine).is_empty(), "a stroke that feeds no paint must store no page");
+    stroke(&mut engine, 0.63);
+    let painted = native_pixels(engine.document(), view);
+    let pages = stored(&engine);
+    assert!(painted != blank && !pages.is_empty(), "a painted stroke must store its pages");
+    stroke(&mut engine, 0.);
+    assert_eq!(engine.metrics().committed_strokes, 3);
+    assert!(stored(&engine) == pages, "a stroke that feeds no paint must leave the stored pages unchanged");
+    for (redo, expected) in [(false, &painted), (false, &blank), (false, &blank), (true, &blank), (true, &painted), (true, &painted)] {
+        assert!(if redo { engine.redo().unwrap() } else { engine.undo().unwrap() }, "each stroke is one history step");
+        drain(&mut engine, true);
+        assert_pixels_equal(&native_pixels(engine.document(), view), expected, extent[0], redo);
+    }
+    assert!(!engine.redo().unwrap(), "three strokes are three history steps");
+    assert!(stored(&engine) == pages, "redoing a stroke that feeds no paint must restore the stored pages unchanged");
 }
 
 #[test]
