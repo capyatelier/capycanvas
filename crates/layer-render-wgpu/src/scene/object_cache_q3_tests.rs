@@ -6,6 +6,42 @@ impl ObjectCache {
     pub(in crate::scene) fn for_scene(scene:&Scene,retains:bool)->Self {
         Self::new(&scene.tiers,scene.object_results.keys.clone(),retains)
     }
+    pub(in crate::scene) fn owner(&self) -> u64 { self.owner }
+    pub fn evict_to(&mut self, gpu: u64) -> u64 {
+        let used = self.gpu.used().saturating_sub(self.retiring.iter().map(|task| task.gpu.bytes()).sum::<u64>());
+        self.gpu.heap().evict(used.saturating_sub(gpu), Class::Fallback);
+        self.retire_evicted()
+    }
+    pub fn request_windows(&self) -> Vec<(std::sync::Weak<AtomicBool>, OccurrenceHandle, objects::ObjectWindow)> {
+        self.tasks.values().filter_map(|task| task.collection.as_ref().map(|collection|
+            (Arc::downgrade(&task.valid), collection.request.owner, collection.request.window))).collect()
+    }
+    pub fn completed_windows(&self) -> Vec<(std::sync::Weak<AtomicBool>, OccurrenceHandle, objects::ObjectWindow)> {
+        self.tasks.values().filter(|task| task.complete).filter_map(|task| task.collection.as_ref().map(|collection|
+            (Arc::downgrade(&task.valid), collection.request.owner, collection.request.window))).collect()
+    }
+    pub fn work_progress(&self) -> (usize, usize, u64) {
+        (self.tasks.len(), self.tasks.values().filter(|task|task.complete).count(), self.tasks.values().map(|task|task.step + task.tile as u64 * 1000000 + task.phase as u64 * 1000000000 + task.collection.as_ref().map_or(0,|c|c.part as u64 * 1000000000000)).sum())
+    }
+    pub fn bytes(&self) -> u64 { let [ram, gpu] = self.memory_bytes(); ram + gpu }
+    pub fn memory_bytes(&self) -> [u64; 2] { [self.ram.used() + self.retired.used(), self.gpu.used() + self.retired_gpu.used()] }
+    pub fn walked_bytes(&self) -> [u64; 3] {
+        let tasks = || self.tasks.values().chain(self.retiring.iter());
+        let gpu = self.uniform.as_ref().map_or(0, |(uniform, _)| uniform.size()) + self.retired_gpu.used() + tasks().map(Task::gpu_bytes).sum::<u64>();
+        let ram = self.damage.values().map(|damage| std::mem::size_of::<(u32, scale::Damage)>() as u64 + damage.regions.capacity() as u64 * std::mem::size_of::<PixelRect>() as u64).sum::<u64>()
+            + self.retired.used() + self.coordinates.values().filter_map(std::sync::Weak::upgrade).map(|coordinates| { let state = coordinates.lock().unwrap(); std::mem::size_of::<Option<crate::object_image_mips::CoordinateResult>>() as u64 + state.result.as_ref().and_then(|result| result.as_ref().ok()).map_or(0, |bytes| bytes.capacity() as u64) }).sum::<u64>()
+            + self.coordinates.capacity() as u64 * (std::mem::size_of::<CoordinateKey>() + std::mem::size_of::<crate::object_image_mips::CoordinateDestination>()) as u64
+            + self.queue_bytes() + tasks().map(Task::ram_bytes).sum::<u64>();
+        let pinned = self.retired_gpu.used() + self.retiring.iter().map(Task::gpu_bytes).sum::<u64>()
+            + self.tasks.values().filter(|task| task.used == self.frame || task.pin.strong_count() > usize::from(task.hold.is_some()) || !self.retains).map(Task::gpu_bytes).sum::<u64>();
+        [ram, gpu, pinned]
+    }
+    pub fn pinned_gpu_bytes(&self) -> u64 { self.pinned.used() }
+    pub fn advance(&mut self,r:&mut WgpuRasterizer,scene:&mut Scene,encoder:&mut crate::submission::CommandEncoder,budget:&mut WorkBudget)->Result<u64,GpuRasterError> {
+        let allowance=budget.allowance(Class::Prefetch);
+        let used=self.advance_with_memory(r,scene,encoder,|_|allowance)?;
+        budget.spend(used);Ok(used)
+    }
 }
 
 #[test]

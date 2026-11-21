@@ -438,11 +438,6 @@ impl Vectors {
     }
     /// Paths the canvas thread derived or waited for.
     pub fn derived_paths(&self) -> u64 { self.derived_paths + self.layers.values().map(|layer| layer.derived_paths).sum::<u64>() }
-    #[cfg(test)]
-    pub fn storage_bytes(&self) -> u64 {
-        self.pool.as_ref().map_or(0, Pool::storage_bytes) + self.batches.storage_bytes()
-            + self.motion.as_ref().map_or(0, |motion| motion.image.bytes()) + self.spare_motion.as_ref().map_or(0, super::Image::bytes)
-    }
     pub(super) fn motion_image(&mut self, r: &WgpuRasterizer, plan: display_mips::Plan) -> super::Image {
         let size = plan.size.map(|n| n.div_ceil(256) * 256);
         let fits = |image: &super::Image| image.texture.width() >= plan.size[0] && image.texture.height() >= plan.size[1]
@@ -810,8 +805,6 @@ impl Vectors {
         batch.build(&layers, origin.map(|v| v.div_euclid(side)), size);
         batch
     }
-    #[cfg(test)]
-    pub(crate) fn replacement_count(&self) -> usize { self.replacements.len() }
     fn release_replacements(&mut self) {
         let Some(pool) = self.pool.as_mut() else { return };
         for (_, entry) in self.replacements.drain() { if let Some(base) = entry.base { pool.retire(base, &entry.geometry); } }

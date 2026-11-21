@@ -455,23 +455,6 @@ impl Inputs {
         }
         bytes
     }
-    #[cfg(test)]
-    pub(in crate::scene) fn take_reads(&self)->(usize,usize) {
-        READS.with(|reads| {let reads=std::mem::take(&mut *reads.borrow_mut());
-            (reads.len(),reads.iter().filter(|read|!self.tiles.iter().any(|(key,_,_,_)|key.matches(read))).count())})
-    }
-    #[cfg(test)]
-    pub(in crate::scene) fn begin_accepted_reads() {
-        RESIDENT_READS.with(|reads|reads.borrow_mut().clear());
-        ACCEPTED_RESIDENT_SET.with(|set|set.borrow_mut().clear());
-        ACCEPTED_READ_RESULTS.with(|results|*results.borrow_mut()=Some(Vec::new()));
-    }
-    #[cfg(test)]
-    pub(in crate::scene) fn take_accepted_read_results()->Vec<(usize,Vec<String>)> {
-        let results=ACCEPTED_READ_RESULTS.with(|results|results.borrow_mut().take().unwrap_or_default());
-        RESIDENT_READS.with(|reads|reads.borrow_mut().clear());
-        ACCEPTED_RESIDENT_SET.with(|set|set.borrow_mut().clear());results
-    }
     pub(crate) fn acquire(&self,r:&WgpuRasterizer,class:crate::residency::Class)->Result<AcceptedInputs,GpuRasterError> {
         let mut accepted=Vec::new();
         for (key,color,pixels,use_) in &self.tiles {
@@ -870,12 +853,6 @@ impl AcceptedInputs {
         let replaced=resident_witnesses(fresh.decisions.0.into_iter().chain(written).filter_map(|(address,choice)|self.decisions.0.insert(address,choice)));
         encoder.hold(replaced);
         true
-    }
-    #[cfg(test)]
-    pub(in crate::scene) fn differing(&self,declared:&Inputs)->(usize,Vec<String>) {
-        let same=|held:&[Option<Selected>;2],wanted:&[Option<Selected>;2]|held.iter().zip(wanted).all(|(a,b)|match (a,b) {(None,None)=>true,(Some(a),Some(b))=>a.matches(b),_=>false});
-        (declared.decisions.0.len(),declared.decisions.0.iter().filter(|(address,(raw,wanted))|!self.decisions.0.get(address).is_some_and(|(held_raw,held)|held_raw==raw && same(held,wanted)))
-            .map(|((_,plane,coordinate),_)|format!("{plane:?} {coordinate:?}")).collect())
     }
     pub(in crate::scene) fn adopt(&mut self,other:Self)->Result<(),GpuRasterError> {
         for (address,choice) in other.decisions.0 {self.decisions.0.entry(address).or_insert(choice);}
@@ -1418,10 +1395,6 @@ impl DecodedTiles {
         let evictable = self.decoded.used().saturating_sub(self.pinned_bytes()).saturating_sub(self.non_slot_bytes());
         (self.decoded.headroom(crate::residency::Class::Visible).saturating_add(evictable) / NORMALIZED_PAGE_BYTES) as usize
     }
-    #[cfg(test)]
-    pub(crate) fn allocated_slots(&self)->usize {self.slots.len()}
-    #[cfg(test)]
-    pub(crate) fn leased_bytes(&self)->u64 {self.leased.used()}
     pub fn prepared_view(
         &self,
         source: &Arc<SourceImage>,
@@ -1477,22 +1450,8 @@ impl DecodedTiles {
         self.leased.used() + self.retired_bytes.used()
     }
 
-    #[cfg(test)]
-    pub(in crate::scene) fn plan(
-        &mut self,
-        r: &WgpuRasterizer,
-        source: &Arc<SourceImage>,
-        coordinate: [u32; 2],
-    ) -> Result<(RawTile, Option<Arc<PendingTile>>), GpuRasterError> {
-        self.plan_image(r,source,coordinate,SourceUse::Native)
-    }
     pub(in crate::scene) fn plan_exact(&mut self,r:&WgpuRasterizer,source:&Arc<SourceImage>,coordinate:[u32;2])->Result<(RawTile,Option<Arc<PendingTile>>),GpuRasterError> {
         self.plan_image(r,source,coordinate,SourceUse::Exact)
-    }
-    #[cfg(test)]
-    pub(crate) fn fixture_image_plan(&mut self,r:&WgpuRasterizer,source:&Arc<SourceImage>,coordinate:[u32;2],use_:SourceUse)
-        ->Result<(RawTile,Option<Arc<PendingTile>>),GpuRasterError> {
-        self.plan_image(r,source,coordinate,use_)
     }
     fn plan_image(&mut self,r:&WgpuRasterizer,source:&Arc<SourceImage>,coordinate:[u32;2],use_:SourceUse)->Result<(RawTile,Option<Arc<PendingTile>>),GpuRasterError> {
         let (tile,write)=self.plan_key_for(r,Key::Image(Arc::downgrade(source),coordinate),use_)?;

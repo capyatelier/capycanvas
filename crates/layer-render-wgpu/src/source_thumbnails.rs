@@ -484,11 +484,3 @@ fn overview_buffer(device: &wgpu::Device) -> wgpu::Buffer {
 #[cfg(test)]
 #[path = "tests/source_thumbnails.rs"]
 pub(crate) mod tests;
-
-#[cfg(test)]
-impl SourceThumbnails {
-    pub(crate) async fn prepare_pipelines(&self, scope: &compile::Scope) {
-        scope.prepare_all([&self.horizontal,&self.vertical]).await.unwrap();
-        scope.prepare_all([&self.display]).await.unwrap();
-    }
-}

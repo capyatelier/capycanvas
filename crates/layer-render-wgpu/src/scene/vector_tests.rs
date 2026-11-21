@@ -6,6 +6,14 @@ use crate::scene::Output;
 
 const HALF_FLOAT_ROUNDING: f32 = 1. / 1024.;
 
+impl Vectors {
+    pub fn storage_bytes(&self) -> u64 {
+        self.pool.as_ref().map_or(0, Pool::storage_bytes) + self.batches.storage_bytes()
+            + self.motion.as_ref().map_or(0, |motion| motion.image.bytes()) + self.spare_motion.as_ref().map_or(0, crate::scene::Image::bytes)
+    }
+    pub(crate) fn replacement_count(&self) -> usize { self.replacements.len() }
+}
+
 fn paint(rgba: [f32; 4]) -> Paint { Paint::color(RgbColor::new(Default::default(), rgba).unwrap()) }
 fn stroke(id: u64, points: &[[f64; 2]], width: f64, rgba: [f32; 4]) -> Record {
     let anchors: Vec<_> = points.iter().map(|p| Anchor::corner(*p)).collect();

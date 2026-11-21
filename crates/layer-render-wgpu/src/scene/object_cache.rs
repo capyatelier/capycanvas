@@ -112,8 +112,6 @@ impl ObjectCache {
             coordinates: HashMap::new(), retains, uniform: None, requester: Class::Visible, evicted: Default::default() }
     }
     pub(super) fn set_requester(&mut self, class: Class) { self.requester = class; }
-    #[cfg(test)]
-    pub(super) fn owner(&self) -> u64 { self.owner }
     pub(super) fn demand(&self, waits: impl Fn(Input, crate::frame_demand::ArrivalToken) -> bool) -> Option<crate::frame_demand::Outstanding> {
         self.schedule.demand(self.owner, |input, since| if input == Input::Gpu { self.in_flight() } else { waits(input, since) })
     }
@@ -194,48 +192,10 @@ impl ObjectCache {
         });
         bytes
     }
-    #[cfg(test)]
-    pub fn evict_to(&mut self, gpu: u64) -> u64 {
-        let used = self.gpu.used().saturating_sub(self.retiring.iter().map(|task| task.gpu.bytes()).sum::<u64>());
-        self.gpu.heap().evict(used.saturating_sub(gpu), Class::Fallback);
-        self.retire_evicted()
-    }
     pub fn clear(&mut self) { self.retire_where(|_| true); self.damage.clear(); self.damage_bytes.resize(0); self.coordinates.clear(); }
     fn retire(&mut self, mut task: Task) { task.coordinates = None; task.group = None; task.lease.hold(); task.hold = Some(task.pin(&self.pinned)); self.retiring.push(task); self.sync_queues(); }
     pub fn pending(&self) -> bool { self.tasks.values().any(Task::unfinished) }
     pub fn in_flight(&self) -> bool { self.in_flight.load(Ordering::Acquire) }
-    #[cfg(test)]
-    pub fn request_windows(&self) -> Vec<(std::sync::Weak<AtomicBool>, OccurrenceHandle, objects::ObjectWindow)> {
-        self.tasks.values().filter_map(|task| task.collection.as_ref().map(|collection|
-            (Arc::downgrade(&task.valid), collection.request.owner, collection.request.window))).collect()
-    }
-    #[cfg(test)]
-    pub fn completed_windows(&self) -> Vec<(std::sync::Weak<AtomicBool>, OccurrenceHandle, objects::ObjectWindow)> {
-        self.tasks.values().filter(|task| task.complete).filter_map(|task| task.collection.as_ref().map(|collection|
-            (Arc::downgrade(&task.valid), collection.request.owner, collection.request.window))).collect()
-    }
-    #[cfg(test)]
-    pub fn work_progress(&self) -> (usize, usize, u64) {
-        (self.tasks.len(), self.tasks.values().filter(|task|task.complete).count(), self.tasks.values().map(|task|task.step + task.tile as u64 * 1000000 + task.phase as u64 * 1000000000 + task.collection.as_ref().map_or(0,|c|c.part as u64 * 1000000000000)).sum())
-    }
-    #[cfg(test)]
-    pub fn bytes(&self) -> u64 { let [ram, gpu] = self.memory_bytes(); ram + gpu }
-    #[cfg(test)]
-    pub fn memory_bytes(&self) -> [u64; 2] { [self.ram.used() + self.retired.used(), self.gpu.used() + self.retired_gpu.used()] }
-    #[cfg(test)]
-    pub fn walked_bytes(&self) -> [u64; 3] {
-        let tasks = || self.tasks.values().chain(self.retiring.iter());
-        let gpu = self.uniform.as_ref().map_or(0, |(uniform, _)| uniform.size()) + self.retired_gpu.used() + tasks().map(Task::gpu_bytes).sum::<u64>();
-        let ram = self.damage.values().map(|damage| std::mem::size_of::<(u32, scale::Damage)>() as u64 + damage.regions.capacity() as u64 * std::mem::size_of::<PixelRect>() as u64).sum::<u64>()
-            + self.retired.used() + self.coordinates.values().filter_map(std::sync::Weak::upgrade).map(|coordinates| { let state = coordinates.lock().unwrap(); std::mem::size_of::<Option<crate::object_image_mips::CoordinateResult>>() as u64 + state.result.as_ref().and_then(|result| result.as_ref().ok()).map_or(0, |bytes| bytes.capacity() as u64) }).sum::<u64>()
-            + self.coordinates.capacity() as u64 * (std::mem::size_of::<CoordinateKey>() + std::mem::size_of::<crate::object_image_mips::CoordinateDestination>()) as u64
-            + self.queue_bytes() + tasks().map(Task::ram_bytes).sum::<u64>();
-        let pinned = self.retired_gpu.used() + self.retiring.iter().map(Task::gpu_bytes).sum::<u64>()
-            + self.tasks.values().filter(|task| task.used == self.frame || task.pin.strong_count() > usize::from(task.hold.is_some()) || !self.retains).map(Task::gpu_bytes).sum::<u64>();
-        [ram, gpu, pinned]
-    }
-    #[cfg(test)]
-    pub fn pinned_gpu_bytes(&self) -> u64 { self.pinned.used() }
     pub fn needs_retirement(&self) -> bool { !self.retiring.is_empty() || (!self.retains && self.tasks.values().any(|task| task.used == self.frame && task.complete)) }
     pub fn flush_retired(&mut self, encoder: &crate::submission::CommandEncoder) {
         if self.retains { self.reset_used(); } else { let frame = self.frame; self.retire_where(|task| task.used == frame && task.complete); }
@@ -372,12 +332,6 @@ impl ObjectCache {
     }
     fn sync_coordinate_slots(&mut self) {
         self.coordinate_slots.resize(self.coordinates.capacity() as u64*(std::mem::size_of::<CoordinateKey>()+std::mem::size_of::<crate::object_image_mips::CoordinateDestination>()) as u64);
-    }
-    #[cfg(test)]
-    pub fn advance(&mut self,r:&mut WgpuRasterizer,scene:&mut Scene,encoder:&mut crate::submission::CommandEncoder,budget:&mut WorkBudget)->Result<u64,GpuRasterError> {
-        let allowance=budget.allowance(Class::Prefetch);
-        let used=self.advance_with_memory(r,scene,encoder,|_|allowance)?;
-        budget.spend(used);Ok(used)
     }
     pub fn advance_with_memory(&mut self, r: &mut WgpuRasterizer, scene:&mut Scene, encoder: &mut crate::submission::CommandEncoder, allowance: impl Fn(Class) -> u64) -> Result<u64, GpuRasterError> {
         let sampler = r.scene_pipelines.objects.clone();

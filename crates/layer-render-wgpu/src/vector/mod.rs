@@ -22,11 +22,6 @@ pub(crate) struct Batch {
     pub size: [u32; 2],
     pub origin: [i64; 2],
 }
-#[cfg(test)]
-impl Batch {
-    pub fn command_count(&self) -> usize { self.commands.len() }
-    pub fn bytes(&self) -> usize { 32 + self.tiles.len() * 16 + self.commands.len() * 16 + self.colors.len() * 16 }
-}
 impl Batch {
     pub fn tile_count(&self) -> usize { self.tiles.len() }
     pub fn build(&mut self, layers: &[Layer], origin: [i64; 2], size: [u32; 2]) { self.build_within(layers, origin, size, None) }
@@ -101,13 +96,7 @@ pub(crate) struct Pool {
     charge: crate::residency::Charge,
 }
 impl Pool {
-    #[cfg(test)]
-    pub fn new(limit_bytes: u64) -> Self { Self::charged(limit_bytes, &Default::default()) }
     pub(crate) fn charged(limit_bytes: u64, tier: &std::sync::Arc<crate::residency::Tier>) -> Self { Self { buffer: None, capacity: 0, limit: (limit_bytes / 4).min(u64::from(u32::MAX)) as u32, free: BTreeMap::new(), pending: Vec::new(), retired: Vec::new(), charge: tier.charge(0) } }
-    #[cfg(test)]
-    pub fn used_words(&self) -> u32 { self.capacity - self.free.values().sum::<u32>() }
-    #[cfg(test)]
-    pub fn storage_bytes(&self) -> u64 { self.buffer.as_ref().map_or(0, wgpu::Buffer::size) }
     pub fn allocate(&mut self, geometry: &std::sync::Arc<LevelGeometry>) -> Option<u32> {
         let words = (geometry.words.len() as u32).max(1);
         let found = self.free.iter().find(|(_, len)| **len >= words).map(|(offset, len)| (*offset, *len));
@@ -196,8 +185,6 @@ pub(crate) struct Arena { buffer: Option<wgpu::Buffer>, used: u64, charge: Optio
 impl Arena {
     pub(crate) fn charged(tier: &std::sync::Arc<crate::residency::Tier>) -> Self { Self { charge: Some(tier.charge(0)), ..Default::default() } }
     pub fn restart(&mut self) { self.used = 0; }
-    #[cfg(test)]
-    pub fn storage_bytes(&self) -> u64 { self.buffer.as_ref().map_or(0, wgpu::Buffer::size) }
     fn place(&mut self, device: &PipelineDevice, bytes: u64) -> Result<(wgpu::Buffer, u64), GpuRasterError> {
         let limit = device.limits().max_buffer_size;
         if bytes > limit { return Err(GpuRasterError::SizeOverflow); }

@@ -1,10 +1,23 @@
 use super::tiles::{self, Frame, LevelGeometry, capsule, capsule_distance};
-use super::{Batch, Kernel, Layer, Pool};
+use super::{Arena, Batch, Kernel, Layer, Pool};
 use layer_core::authored::vector::*;
 use layer_core::color::RgbColor;
 use std::sync::Arc;
 
 const SIZE: u32 = 256;
+
+impl Batch {
+    pub fn command_count(&self) -> usize { self.commands.len() }
+    pub fn bytes(&self) -> usize { 32 + self.tiles.len() * 16 + self.commands.len() * 16 + self.colors.len() * 16 }
+}
+impl Pool {
+    pub fn new(limit_bytes: u64) -> Self { Self::charged(limit_bytes, &Default::default()) }
+    pub fn used_words(&self) -> u32 { self.capacity - self.free.values().sum::<u32>() }
+    pub fn storage_bytes(&self) -> u64 { self.buffer.as_ref().map_or(0, wgpu::Buffer::size) }
+}
+impl Arena {
+    pub fn storage_bytes(&self) -> u64 { self.buffer.as_ref().map_or(0, wgpu::Buffer::size) }
+}
 
 fn paint(rgba: [f32; 4]) -> Paint { Paint::color(RgbColor::new(Default::default(), rgba).unwrap()) }
 fn smooth(points: &[[f64; 2]], closed: bool) -> Subpath {
