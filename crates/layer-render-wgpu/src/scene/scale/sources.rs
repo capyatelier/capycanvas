@@ -188,7 +188,10 @@ impl Cache {
         let declared=scene.declare(r,placements,declaration,|scene,r,accepted| cells.iter().try_for_each(|cell|
             evaluate(&mut Evaluator {cache:&mut *self,scene:&mut *scene,packet,r:&mut *r,encoder:&mut *encoder,
             region:(*cell).into(),input,tiled,unit:&mut unit,accepted:&mut *accepted,previous_motion:None,retained,approximate:false,preview,class})));
-        self.declaring=false;self.output.truncate(used.len());self.used.truncate(used.len());self.used.clone_from_slice(&used);
+        self.declaring=false;
+        let placeholders=self.output.drain(used.len()..).map(|image|image.bytes()).sum::<u64>();
+        self.output_charge.resize(self.output_charge.bytes()-placeholders);
+        self.used.truncate(used.len());self.used.clone_from_slice(&used);
         declared
     }
     #[expect(clippy::too_many_arguments,reason="A parent unit accepts the declaration of the roots it evaluates")]
