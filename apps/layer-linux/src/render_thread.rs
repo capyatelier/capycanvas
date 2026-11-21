@@ -893,7 +893,9 @@ impl RenderWorker {
                     worker.transition = transition;
                     let signal = preparation.clone();
                     let wake=layer_host::PreparationWake::new(Arc::new(move ||signal.notify()));
-                    wake.install(&mut worker.renderer);worker.preparation_wake=Some(wake);
+                    wake.install(&mut worker.renderer);
+                    worker.device_failure=Some(worker.watch.wake_on_failure(wake.signal()));
+                    worker.preparation_wake=Some(wake);
                     worker.preparation=Some(preparation);
                     worker.run(
                         &receiver,
@@ -1698,6 +1700,7 @@ struct Worker {
     preparation: Option<Arc<PreparationSignal>>,
     preparation_wake:Option<layer_host::PreparationWake>,
     watch: layer_host::DeviceWatch,
+    device_failure: Option<layer_host::gpu::FailureWake>,
     overlays: Option<Arc<Overlays>>,
     // Drop Vulkan's surface before the wl_surface (field declaration order).
     surface: wgpu::Surface<'static>,
@@ -2391,6 +2394,7 @@ impl Worker {
             clock,
             transition: None,
             watch: gpu.watch,
+            device_failure: None,
             preparation:None,preparation_wake:None,
             view_color,
             overlays: None,

@@ -529,6 +529,7 @@ impl CapyHost {
             self.native.error = None;
         }
         self.gpu = gpu_state;
+        self.native.watch_device(&self.gpu);
         self.gpu_luid = adapter_luid;
         self.gpu_generation = self.gpu_generation.saturating_add(1);
         self.pacing = Default::default();
