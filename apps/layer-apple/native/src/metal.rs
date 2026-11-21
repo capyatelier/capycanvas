@@ -144,6 +144,7 @@ impl MetalHost {
         let watch = layer_host::DeviceWatch::for_device(renderer.device());
         let retired = host.replace_renderer(layer_host::Renderer(Some(renderer)))?;
         self.local_tone.clear();
+        host.watch_device(&watch);
         self.watch = watch;
         self.timing = None;
         self.presented_panel_revision = None;
