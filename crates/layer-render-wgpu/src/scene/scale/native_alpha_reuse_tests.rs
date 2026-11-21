@@ -228,7 +228,7 @@ fn native_alpha_reuse_admits_warm_pages_beside_cold_output_pages() {
         crate::test_support::submit_settled(&mut r, frame);
         let mut dab=crate::tests::test_dab([258.5,129.5],[0.,0.,0.,0.],1.);
         dab.radii=[260.,131.];
-        let batch=dab_batch(target,crate::layer_tests::preset_style(DefaultBrushPreset::GPen),dab.bounds());
+        let batch=dab_batch(target,crate::tests::unfed_erase_style(),dab.bounds());
         for _ in 0..2 {
             crate::test_support::submit_settled(&mut r, FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame});
         }
