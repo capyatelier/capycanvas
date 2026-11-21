@@ -704,7 +704,7 @@ fn restore_working_pages(r:&mut WgpuRasterizer,layers:&Document) {
     let extent=layers.composition().size;
     let dabs:Vec<_>=page_coordinates(PixelRect::full(extent)).map(|coordinate| {
         let [x,y]=coordinate.map(|at|(at*PAGE_SIZE+PAGE_SIZE/2) as f32);
-        layer_render::Dab {center:layer_core::Point {x,y},flow:0.,..crate::layer_tests::dab([0.;4])}
+        layer_render::Dab {center:layer_core::Point {x,y},..crate::layer_tests::dab([1.;4])}
     }).collect();
     let damage=dabs.iter().copied().map(layer_render::Dab::bounds).fold(layer_core::Rect::EMPTY,layer_core::Rect::union);
     let batches=[target(layers),mask_target(layers)].map(|id|layer_render::DabBatch {dab_count:dabs.len() as u32,damage,..crate::layer_tests::batch(id)});

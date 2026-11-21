@@ -943,7 +943,7 @@ fn fit_preview_defers_persistent_color_until_zero_dab_end_across_tiles() {
                 let batches=[persistent,preview];
                 if step==1 {
                     let mut plans=batches.iter().map(|batch|crate::brush_tiles::plan(batch,
-                        &dabs[batch.first_dab as usize..(batch.first_dab+batch.dab_count) as usize],extent)).collect::<Vec<_>>();
+                        &dabs[batch.first_dab as usize..(batch.first_dab+batch.dab_count) as usize],extent,Default::default())).collect::<Vec<_>>();
                     crate::liquify::Liquify::extend_plans(&mut r,FramePacket{view,dabs:&dabs,dab_batches:&batches,
                         ..crate::test_support::packet(doc.scene(),extent)},&mut plans);
                     assert!(plans[1].iter().any(|tile|tile.coordinate==[0,0]),
