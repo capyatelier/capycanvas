@@ -1185,6 +1185,74 @@ fn shared_preparation_keeps_the_gpu_worker_frame_queued_without_submitting() {
     assert_eq!(renderer.submissions, 1);assert!(pending.is_empty());
 }
 
+#[test]
+fn a_frame_refused_for_memory_drops_its_contact_and_the_worker_paints_the_next() {
+    use layer_engine::{CanvasEngine, PenEvent, PenPhase, SampleFlags, ToolKind, ViewTransform, input_queue};
+    #[derive(Default)]
+    struct Refusing { refuse: bool, contacts: Vec<layer_core::StrokeId> }
+    impl CanvasRenderer for Refusing {
+        type Error = BackendError;
+        fn is_memory_refusal(error: &Self::Error) -> bool { *error == MEMORY_REFUSED }
+        fn resize_surface(&mut self, _: u32, _: u32) -> Result<(), Self::Error> { Ok(()) }
+        fn prepare_asset(&mut self, _: &AssetId, _: HostImage<'_>) -> Result<(), Self::Error> { Ok(()) }
+        fn release_asset(&mut self, _: &AssetId) {}
+        fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
+            if self.refuse { return Err(MEMORY_REFUSED); }
+            for batch in packet.dab_batches.iter().filter(|batch| batch.dab_count != 0) {
+                if self.contacts.last() != Some(&batch.stroke_id) { self.contacts.push(batch.stroke_id); }
+            }
+            for (_, _, source) in packet.scene.artwork().paint.iter().filter(|(_, _, source)| packet.commit_rasters && source.raster.try_data().is_none()) {
+                source.raster.publish(Ok(Default::default())).unwrap();
+            }
+            Ok(())
+        }
+    }
+    let (mut worker, commands, _chrome, _reply) = RenderWorker::channels(Default::default());
+    worker.geometry = Some(Geometry { position: [0; 2], scale: 1, corner_radius: 0. });
+    let (report, in_flight) = (worker.report.clone(), worker.in_flight.clone());
+    let document = layer_ui::new_drawing(32, 24, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+    let view = ViewState { width_px: 32, height_px: 24, document_to_surface: [1., 0., 0., 1., 0., 0.] };
+    let (mut input, consumer) = input_queue(64);
+    let mut engine = CanvasEngine::new(worker, document, consumer, view, ViewTransform { revision: 0, surface_to_document: [1., 0., 0., 1., 0., 0.] }).unwrap();
+    let pen = |sequence: u64, phase: PenPhase, x: f32| PenEvent { device_id: 1, sequence, timestamp_ns: sequence * 1_000_000, view_revision: 0,
+        surface_position: layer_core::Point { x, y: 12. }, pressure: 1., tilt_radians: [0.; 2], twist_radians: 0., distance: 0., phase, tool: ToolKind::Pen, flags: SampleFlags::PRIMARY };
+    let (mut renderer, mut pending) = (Refusing::default(), VecDeque::new());
+    let draw = |renderer: &mut Refusing, pending: &mut VecDeque<Box<Frame>>| loop {
+        let frame = match commands.try_recv() { Ok(Command::Frame(frame, _)) => Some(frame), Ok(_) => continue, Err(_) => None };
+        let last = frame.is_none();
+        let admitted = admit_frame(frame, pending, |frame| if frame.refused(&report) { Ok(true) } else {
+            match submit_ready_frame(renderer, frame.packet(), frame.transform_preview.as_ref(), &mut std::time::Instant::now(), &report) {
+                std::task::Poll::Pending => Ok(false),
+                std::task::Poll::Ready(result) => result.map(|_| true),
+            }
+        }).expect("a memory refusal leaves the worker running");
+        in_flight.fetch_sub(admitted, Ordering::AcqRel);
+        if last { break; }
+    };
+    input.push(pen(1, PenPhase::Down, 4.)).unwrap();input.push(pen(2, PenPhase::Up, 20.)).unwrap();
+    engine.render_frame().unwrap();draw(&mut renderer, &mut pending);
+    let (document, checkpoint) = (engine.document().clone(), engine.checkpoint());
+    assert!(engine.can_undo() && renderer.contacts.len() == 1, "the first contact commits");
+    input.push(pen(3, PenPhase::Down, 6.)).unwrap();engine.render_frame_at(1_000_000_000).unwrap();
+    input.push(pen(4, PenPhase::Move, 12.)).unwrap();engine.render_frame_at(1_016_000_000).unwrap();
+    assert_eq!(in_flight.load(Ordering::Acquire), 2, "the contact has a frame queued behind the one that will be refused");
+    for (sequence, phase, x) in [(5, PenPhase::Up, 18.), (6, PenPhase::Down, 8.), (7, PenPhase::Up, 24.)] { input.push(pen(sequence, phase, x)).unwrap(); }
+    renderer.refuse = true;draw(&mut renderer, &mut pending);renderer.refuse = false;
+    assert_eq!((in_flight.load(Ordering::Acquire), pending.len(), renderer.contacts.len()), (0, 0, 1), "the refused frame and the frame queued behind it are dropped undrawn");
+    let mut told = 0;
+    for frame in 2..12 {
+        let refusals = engine.backend().stroke_memory_refusals();
+        engine.render_frame_at(frame * 1_000_000_000).unwrap();
+        told += usize::from(engine.backend().stroke_memory_refusals() != refusals);
+        draw(&mut renderer, &mut pending);
+    }
+    assert_eq!(told, 1, "the UI thread is told of the refusal once");
+    assert!(!engine.has_pending_input() && !engine.has_active_stroke() && !engine.has_pending_document_edits(), "the refused contact's remaining samples are consumed");
+    assert_eq!(renderer.contacts.len(), 2, "the same renderer paints the next contact");
+    assert!(engine.undo().unwrap());
+    assert!(engine.document().artwork == document.artwork && engine.checkpoint() == checkpoint && !engine.backend().has_pending_submission(),
+        "the refused contact left the drawing and its history as they were");
+}
 
 #[derive(Default)]
 struct TimedRenderer { ready: bool, readiness: Duration, work: Duration, submissions: usize }
@@ -1217,7 +1285,7 @@ fn a_ready_frame_observes_its_submission_but_not_its_readiness() {
     let document = layer_ui::new_drawing(32, 24, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     let mut renderer = TimedRenderer { ready: true, readiness: Duration::from_millis(40), work: Duration::from_millis(5), ..Default::default() };
     let mut draw_start = std::time::Instant::now();
-    assert_eq!(submit_ready_frame(&mut renderer, timed_packet(&document), None, &mut draw_start), std::task::Poll::Ready(Ok(())));
+    assert_eq!(submit_ready_frame(&mut renderer, timed_packet(&document), None, &mut draw_start, &FrameReport::default()), std::task::Poll::Ready(Ok(true)));
     let observed = draw_start.elapsed();
     assert_eq!(renderer.submissions, 1);
     assert!(observed >= Duration::from_millis(5) && observed < Duration::from_millis(40), "observed draw work {observed:?}");
@@ -1229,7 +1297,7 @@ fn a_pending_frame_submits_nothing_and_keeps_its_draw_start() {
     let mut renderer = TimedRenderer { readiness: Duration::from_millis(5), ..Default::default() };
     let started = std::time::Instant::now();
     let mut draw_start = started;
-    assert_eq!(submit_ready_frame(&mut renderer, timed_packet(&document), None, &mut draw_start), std::task::Poll::Pending);
+    assert_eq!(submit_ready_frame(&mut renderer, timed_packet(&document), None, &mut draw_start, &FrameReport::default()), std::task::Poll::Pending);
     assert_eq!(renderer.submissions, 0);
     assert_eq!(draw_start, started);
 }
