@@ -49,30 +49,48 @@ fn a_resumed_drawing_presents_its_retained_display_without_composing() {
     assert_eq!(PassCounts::snapshot().delta(before).composite_commits, 0, "an unchanged view composes nothing after resuming");
 }
 
+fn pressure(r: &WgpuRasterizer) -> layer_core::MemoryOwner {
+    let budget = r.factory.memory_budget();
+    let device = budget.snapshot().devices[0];
+    let active = budget.register_owner(Kind::Other, MemoryClass::Visible, Some(device.device));
+    active.report(layer_core::MemoryReport { demand_gpu_bytes: device.limit_bytes, ..Default::default() });
+    budget.flush_reports();
+    active
+}
+
 #[test]
 fn memory_pressure_evicts_a_parked_drawing_before_any_active_demand() {
     let (doc, mut r) = parked();
     let budget = r.factory.memory_budget().clone();
-    let device = budget.snapshot().devices[0];
-    let pressure = || {
-        let active = budget.register_owner(Kind::Other, MemoryClass::Visible, Some(device.device));
-        active.report(layer_core::MemoryReport { demand_gpu_bytes: device.limit_bytes, ..Default::default() });
-        budget.flush_reports();
-        active
-    };
-    let active = pressure();
+    let active = pressure(&r);
     assert!(!r.park_warm(&doc, reduced(&doc).view, false), "a drawing parked under pressure is not kept");
     drop(active);
     budget.flush_reports();
     assert!(r.resume_retained(&doc));
     assert!(r.park_warm(&doc, reduced(&doc).view, false));
     assert!(r.keeps_warm());
-    let active = pressure();
+    let active = pressure(&r);
     assert!(!r.keeps_warm(), "an active demand for the whole device takes the parked drawing's display");
     drop(active);
     budget.flush_reports();
     assert!(r.keeps_warm());
     assert!(r.resume_retained(&doc));
+}
+
+#[test]
+fn a_revoked_warm_display_cannot_spend_disjoint_page_retirement_credit() {
+    let (doc, mut r) = parked();
+    assert!(r.park_warm(&doc, reduced(&doc).view, false));
+    complete(&r);
+    let _active = pressure(&r);
+    let (charged, window) = (r.display_bytes(), r.scene_tiers.windows.used());
+    assert!(r.memory.retention_grant() == 0 && window > 0 && charged >= window, "setup: a revoked display of {charged} bytes presents a {window} byte window on a {} byte grant", r.memory.retention_grant());
+    let live = r.warm_bytes();
+    let _retiring = r.scene_tiers.retiring.charge(2 * charged);
+    assert!(!r.keeps_warm(), "pages retiring outside the display tier cover a revoked display of {charged} bytes");
+    assert_eq!(r.warm_bytes(), live, "pages retiring outside the display tier change a parked drawing's size");
+    let _released = [r.retired_display_bytes.charge(charged), r.source_tiles.borrow().retired_tier().charge(charged)];
+    assert_eq!(r.warm_bytes(), live, "scratch and decoded tiles the display has released count as its live size");
 }
 
 #[test]
