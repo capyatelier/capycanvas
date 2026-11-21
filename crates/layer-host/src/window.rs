@@ -138,7 +138,7 @@ impl WarmTabs {
     fn take(&mut self, id: u64, device: Option<&wgpu::Device>) -> Option<Box<WgpuRasterizer>> {
         let index = self.0.iter().position(|(tab, _)| *tab == id)?;
         let gpu = self.0.remove(index).1;
-        if device == Some(gpu.device()) { return Some(gpu); }
+        if device == Some(gpu.device()) && gpu.keeps_warm() { return Some(gpu); }
         let _ = retire_render_resources(gpu);
         None
     }
@@ -1180,12 +1180,24 @@ mod tests {
         settle(host);
     }
 
-    fn warm_switch(window: &mut Window, host: &mut NativeHost, id: u64) {
-        let mut activation = switch(window, host, id);
+    fn install(window: &mut Window, host: &mut NativeHost, mut activation: Activation) {
         activation.work().unwrap();
         let gpu = window.resume(host, &mut activation).unwrap().unwrap();
         host.replace_renderer(Renderer(Some(gpu))).unwrap();
         window.changed(host);
+    }
+
+    fn warm_switch(window: &mut Window, host: &mut NativeHost, id: u64) {
+        let activation = switch(window, host, id);
+        install(window, host, activation);
+    }
+
+    fn pressure(host: &NativeHost, budget: &layer_core::MemoryBudget) -> layer_core::MemoryOwner {
+        let device = host.session.engine().backend().0.as_ref().unwrap().renderer_factory().memory_device();
+        let active = budget.register_owner(layer_core::MemoryOwnerKind::Other, layer_core::MemoryClass::Visible, Some(device));
+        active.report(layer_core::MemoryReport { demand_gpu_bytes: u64::MAX, ..Default::default() });
+        budget.flush_reports();
+        active
     }
 
     #[test]
@@ -1273,12 +1285,9 @@ mod tests {
         let mut parked = std::collections::HashMap::new();
         for target in [drawing, photo, drawing, photo] {
             parked.extend(host.warm.0.iter().map(|(id, gpu)| (*id, gpu.warm_bytes())));
-            let mut activation = switch(&mut window, &mut host, target);
+            let activation = switch(&mut window, &mut host, target);
             assert!(activation.renderer.is_some(), "switching to {target} built a new renderer; parked bytes {parked:?}, cap {cap}");
-            activation.work().unwrap();
-            let gpu = window.resume(&host, &mut activation).unwrap().unwrap();
-            host.replace_renderer(Renderer(Some(gpu))).unwrap();
-            window.changed(&mut host);
+            install(&mut window, &mut host, activation);
             let gpu = host.session.engine().backend();
             assert!(layer_render::CanvasRenderer::showing_drawing(gpu) && gpu.0.as_ref().unwrap().has_presentable_frame(), "switching to {target} presents the retained drawing on its first frame");
             presented(&mut host);
@@ -1404,18 +1413,69 @@ mod tests {
         let first = window.documents.selected();
         open(&mut window, &mut host);
         open(&mut window, &mut host);
+        let third = window.documents.selected();
         assert_eq!(host.warm.0.len(), 2);
-        let id = host.session.engine().backend().0.as_ref().unwrap().renderer_factory().memory_device();
-        let active = budget.register_owner(layer_core::MemoryOwnerKind::Other, layer_core::MemoryClass::Visible, Some(id));
-        active.report(layer_core::MemoryReport { demand_gpu_bytes: u64::MAX, ..Default::default() });
-        budget.flush_reports();
+        let active = pressure(&host, &budget);
         assert!(host.warm.0.iter().all(|(_, gpu)| !gpu.keeps_warm()), "the pressure takes every background display");
-        warm_switch(&mut window, &mut host, first);
+        let activation = switch(&mut window, &mut host, first);
+        let resumed = activation.renderer.as_ref().map(|_| first);
+        install(&mut window, &mut host, activation);
         host.poll_preparation();
-        let stale = host.warm.0.iter().filter(|(_, gpu)| !gpu.keeps_warm()).count();
-        assert!(host.warm.0.is_empty(), "{} background drawings outlived the pressure that took their memory ({stale} over their grant)", host.warm.0.len());
+        let survivors: Vec<_> = host.warm.0.iter().map(|(id, _)| *id).chain(resumed).collect();
+        assert!(survivors.is_empty(), "drawings {survivors:?} outlived the pressure that took their memory");
         drop(active);
+        presented(&mut host);
+        warm_switch(&mut window, &mut host, third);
+        host.wake_callback()();
+        host.poll_preparation();
+        assert!(host.warm.0.iter().map(|(id, _)| *id).eq([first]), "only the drawing parked after the pressure lifted has a grant for its display");
         finish(host, window);
+    }
+
+    fn selects_a_drawing_whose_warm_grant_was_revoked(serviced: bool, closing: bool) {
+        let budget = desktop_memory();
+        let mut host = host_in(layer_ui::Platform::Mac, budget.clone());
+        let mut window = Window::default();
+        fill(&mut host);
+        let first = window.documents.selected();
+        let filled = digests(&host);
+        open(&mut window, &mut host);
+        assert!(host.warm.0.iter().map(|(id, _)| *id).eq([first]));
+        let active = pressure(&host, &budget);
+        if serviced {
+            host.poll_preparation();
+            assert!(host.warm.0.is_empty(), "the serviced pressure evicts the background drawing");
+        }
+        let (activation, closed) = if closing {
+            invoke(&mut host, CommandId::CloseDocument);
+            let prepared = window.prepare_close(&mut host, Default::default()).unwrap();
+            window.commit_close(&mut host, prepared, |_| {}).unwrap()
+        } else {
+            (switch(&mut window, &mut host, first), None)
+        };
+        assert_eq!(window.documents.selected(), first);
+        assert!(activation.renderer.is_none(), "the selected drawing resumes on the renderer its revoked grant no longer covers");
+        drop(active);
+        install(&mut window, &mut host, activation);
+        drop(closed);
+        presented(&mut host);
+        assert_eq!(digests(&host), filled);
+        finish(host, window);
+    }
+
+    #[test]
+    fn pressure_before_a_switch_revokes_the_selected_warm_renderer() {
+        selects_a_drawing_whose_warm_grant_was_revoked(false, false);
+    }
+
+    #[test]
+    fn pressure_serviced_before_a_switch_leaves_the_selected_drawing_cold() {
+        selects_a_drawing_whose_warm_grant_was_revoked(true, false);
+    }
+
+    #[test]
+    fn pressure_before_a_close_revokes_the_selected_warm_renderer() {
+        selects_a_drawing_whose_warm_grant_was_revoked(false, true);
     }
 
     #[test]
