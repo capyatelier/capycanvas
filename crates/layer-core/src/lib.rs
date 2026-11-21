@@ -2394,7 +2394,10 @@ pub struct Editor {
     next_checkpoint: u64,
     ledger: std::sync::Mutex<history_budget::VectorLedger>,
     memory_dirty: bool,
+    amends: Vec<Amend>,
 }
+#[derive(Debug)]
+struct Amend { inverse: Edit, from: u64, to: u64 }
 pub(crate) fn json_len(value: &impl serde::Serialize) -> usize {
     struct Count(usize);
     impl std::io::Write for Count {
@@ -2475,6 +2478,7 @@ impl Editor {
             next_checkpoint: 1,
             ledger: Default::default(),
             memory_dirty: false,
+            amends: Vec::new(),
         };
         if !editor.document.memory.initialized() { editor.report_memory(true); }
         editor
@@ -2801,6 +2805,15 @@ impl Editor {
             self.prune_failed_raster_history();
             return Ok(0);
         }
+        if let Some(from) = self.amends.first().map(|amend| amend.from).filter(|_| self.amends.last().unwrap().to == self.checkpoint) {
+            let mut candidate = self.document.clone();
+            if self.amends.drain(..).rev().try_for_each(|amend| candidate.apply(amend.inverse).map(drop)).is_ok() && !failed(&candidate) {
+                self.document = candidate;
+                self.checkpoint = from;
+                self.prune_failed_raster_history();
+                return Ok(0);
+            }
+        }
         let mut candidate = self.document.clone();
         let mut count = 0;
         let mut checkpoint = self.checkpoint;
@@ -2836,6 +2849,7 @@ impl Editor {
         }
     }
     pub fn finish_raster_submission(&mut self) {
+        self.amends.clear();
         let mut budget = false;
         for state in self.document.artwork.paint.iter().filter_map(|(_, _, s)| s.raster.liquify()) {
             budget |= state.needs_budget();
@@ -2876,9 +2890,13 @@ impl Editor {
                 .ok_or(DocumentError::InvalidLayerOperation(
                     "Document history exhausted",
                 ))?;
-        if edit.requires_history_admission(&self.document) {
-            self.document=self.prepare_history_edit(edit,history_budget::BYTE_BUDGET)?.0;
-        }else {self.document.apply(edit)?;}
+        let inverse = if edit.requires_history_admission(&self.document) {
+            let (document, entry) = self.prepare_history_edit(edit,history_budget::BYTE_BUDGET)?;
+            self.document = document;
+            entry.edit
+        }else {self.document.apply(edit)?};
+        if self.amends.last().is_some_and(|amend| amend.to != self.checkpoint) { self.amends.clear(); }
+        self.amends.push(Amend { inverse, from: self.checkpoint, to: self.next_checkpoint });
         self.checkpoint = self.next_checkpoint;
         self.next_checkpoint = next;
         Ok(())
