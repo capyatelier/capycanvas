@@ -208,6 +208,129 @@ fn a_whole_layer_erase_settles_watercolor_pages_in_any_order() {
     assert!(differing.is_empty(), "{} pixels depend on page order, first {:?}", differing.len(), differing.first());
 }
 
+type Authored = (Option<layer_core::raster::RasterWatercolor>, BTreeMap<TileKey, Vec<u8>>);
+
+fn authored(document: &Document) -> Authored {
+    let data = paint(document).raster.wait_data().unwrap();
+    (data.watercolor, data.tiles.iter().map(|(key, tile)| (*key, tile.wait_backing().unwrap().decode_on_worker().unwrap())).collect())
+}
+
+fn saved(document: &Document) -> Result<Document, String> {
+    use layer_core::package::{ImmutableBacking, codec::{OpenOutcome, PreparedPackage, open}};
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let mut bytes = Vec::new();
+    PreparedPackage::prepare(&document.capture_artwork(Default::default()), None, &cancel)?.write(&mut bytes, &cancel)?;
+    let OpenOutcome::Candidate { artwork, .. } = open(ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes)))?, Default::default(), &cancel)? else {
+        return Err("The saved drawing did not reopen for editing".into());
+    };
+    Document::from_artwork(artwork).map_err(|error| error.to_string())
+}
+
+fn paint_wash(r: &mut WgpuRasterizer, layer: &mut Document, stroke: u64, center: [f32; 2]) {
+    let mut ink = dab([0.2, 0.3, 0.8, 0.8]);
+    ink.center = Point { x: center[0], y: center[1] };
+    ink.radii = [140.; 2];
+    ink.material = [0.5, 0.8, 1., 0.8];
+    let mut wet = batch(target(layer));
+    wet.stroke_id = StrokeId(stroke);
+    wet.style = preset_style(layer_core::DefaultBrushPreset::WatercolorWash);
+    wet.damage = Rect { min: Point { x: center[0] - 140., y: center[1] - 140. }, max: Point { x: center[0] + 140., y: center[1] + 140. } };
+    paint_mut(layer).raster = RasterRevision::pending();
+    frame(r, layer.scene(), &[ink], &[wet], &[]);
+    paint(layer).raster.wait_data().unwrap();
+}
+
+fn restore(r: &mut WgpuRasterizer, layer: &Document) {
+    frame(r, layer.scene(), &[], &[], &[(target(layer), paint(layer).raster.clone())]);
+}
+
+fn applied_mask(r: &mut WgpuRasterizer, layer: &mut Document) -> Vec<RasterOperation> {
+    let mut mask = reveal_all(EXTENT, [0, 0]);
+    mask.source.default_coverage = 0.;
+    crate::test_support::materialize_mask(&mut mask.source, rectangle([0., 0., 500., 300.]), layer.composition().color);
+    set_mask(layer, mask);
+    frame(r, layer.scene(), &[], &[], &[]);
+    let coverage = mask_snapshot(layer);
+    occurrence_mut(layer).mask = None;
+    vec![RasterOperation { placement: layer_core::Affine::IDENTITY, coverage, kind: RasterOperationKind::ApplyMask }]
+}
+
+#[test]
+fn a_settled_watercolor_layer_saves_reopens_and_survives_undo_and_redo() {
+    let erase = |selections: &[Selection]| selections.iter().map(|selection| erase_operation(selection.clone(), false)).collect::<Vec<_>>();
+    let moved = || RasterOperation {
+        placement: layer_core::Affine::IDENTITY, coverage: reveal_all(EXTENT, [0, 0]),
+        kind: RasterOperationKind::Transform(layer_core::ImageTransform::affine(layer_core::Affine::translation(Point { x: 24., y: -16. }))),
+    };
+    let settles: [(&str, &dyn Fn(&mut WgpuRasterizer, &mut Document) -> Vec<RasterOperation>); 6] = [
+        ("Clear Selected", &|_, _| erase(&[rectangle([32., 200., 96., 264.])])),
+        ("Cut", &|_, _| erase(&[rectangle([224., 100., 304., 180.])])),
+        ("Clear Outside", &|_, _| erase(&[Selection { inverted: true, ..rectangle([100., 20., 500., 280.]) }])),
+        ("Crop", &|_, _| erase(&[rectangle([0., 0., 600., 40.]), rectangle([0., 260., 600., 300.])])),
+        ("Resample and crop", &|_, _| std::iter::once(moved()).chain(erase(&[rectangle([560., 0., 600., 300.])])).collect()),
+        ("Apply Mask", &applied_mask),
+    ];
+    let wetness = |tiles: &Authored| tiles.1.keys().filter(|key| key.plane == RasterPlane::WatercolorWetness).count();
+    let dry = |r: &WgpuRasterizer| r.paint_layers[0].watercolor.is_none() && r.paint_layers[0].watercolor_wetness_pages.is_empty();
+    for (name, settle) in settles {
+        let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let mut layer = paint_document(EXTENT, "settled watercolor");
+        paint_wash(&mut r, &mut layer, 1, [384., 150.]);
+        let (wet, before, painted) = (authored(&layer), layer.clone(), image(&mut r));
+        assert!(wet.0.is_some() && wetness(&wet) == 6, "{name}: six wet pages");
+        assert!(authored(&saved(&layer).unwrap()) == wet, "{name}: the wet drawing reopened differently");
+
+        let operations = settle(&mut r, &mut layer);
+        let commands: Vec<_> = operations.iter().enumerate().map(|(index, operation)| DabBatch {
+            kind: DabBatchKind::RasterOperation(index as u32), dab_count: 0,
+            damage: if matches!(operation.kind, RasterOperationKind::Erase { .. }) { Rect::from_extent(EXTENT) } else { operation.bounds(EXTENT) },
+            ..batch(target(&layer))
+        }).collect();
+        paint_mut(&mut layer).operations = Arc::new(operations);
+        paint_mut(&mut layer).raster = RasterRevision::pending();
+        frame(&mut r, layer.scene(), &[], &commands, &[]);
+        let index = paint(&layer).raster.wait_data().unwrap().validate_storage_index(EXTENT, false, layer.composition().color);
+        assert_eq!(index, Ok(()), "{name}");
+        paint_mut(&mut layer).operations = Arc::default();
+        frame(&mut r, layer.scene(), &[], &[], &[]);
+        let (settled, after, erased) = (authored(&layer), layer.clone(), image(&mut r));
+        assert!(settled.0.is_none() && wetness(&settled) == 0 && settled.1.len() == 6, "{name}: six dry Color pages");
+        assert!(dry(&r), "{name}: the renderer kept wetness");
+        assert!(erased != painted, "{name}: nothing was erased");
+        let reopened = saved(&layer).unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert!(authored(&reopened) == settled, "{name}: the settled drawing reopened differently");
+        let mut fresh = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        frame(&mut fresh, reopened.scene(), &[], &[], &[]);
+        assert!(image(&mut fresh) == erased, "{name}: the reopened drawing shows another picture");
+
+        layer = before;
+        restore(&mut r, &layer);
+        assert!(authored(&layer) == wet && r.paint_layers[0].watercolor.is_some(), "{name}: Undo lost the wet layer");
+        assert!(image(&mut r) == painted, "{name}: Undo shows another picture");
+        assert!(authored(&saved(&layer).unwrap_or_else(|error| panic!("{name} then Undo: {error}"))) == wet, "{name}: the restored drawing reopened differently");
+
+        layer = after;
+        restore(&mut r, &layer);
+        assert!(dry(&r), "{name}: Redo kept wetness");
+        assert!(image(&mut r) == erased, "{name}: Redo shows another picture");
+        assert!(authored(&saved(&layer).unwrap_or_else(|error| panic!("{name} then Redo: {error}"))) == settled, "{name}: the redone drawing reopened differently");
+    }
+}
+
+#[test]
+fn a_settled_watercolor_layer_takes_a_new_wash_and_saves() {
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut layer = paint_document(EXTENT, "rewetted watercolor");
+    paint_wash(&mut r, &mut layer, 1, [384., 150.]);
+    let full = Rect { min: Point::default(), max: Point { x: 600., y: 300. } };
+    run(&mut r, &mut layer, erase_operation(rectangle([224., 100., 304., 180.]), false), full, &[]);
+    paint_wash(&mut r, &mut layer, 2, [200., 150.]);
+    let wet = authored(&layer);
+    assert!(wet.0.is_some() && wet.1.keys().any(|key| key.plane == RasterPlane::WatercolorWetness));
+    assert!(r.paint_layers[0].watercolor.is_some());
+    assert!(authored(&saved(&layer).unwrap()) == wet);
+}
+
 #[test]
 fn an_inserted_copy_starts_from_its_restore_source() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();

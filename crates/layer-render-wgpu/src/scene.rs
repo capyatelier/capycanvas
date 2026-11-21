@@ -1871,19 +1871,8 @@ impl Scene {
         self.encode_jobs(r, encoder)?;
         self.fill_capture=None;
         if settles {
-            let intents=r.paint_layers[stored_index].watercolor_wetness_pages.iter().map(|page|
-                r.raster_intent(target,RasterPlane::WatercolorWetness,page.coordinate)).collect::<Result<Vec<_>,_>>()?;
-            let mut written=Vec::with_capacity(intents.len());
             let stored=&mut r.paint_layers[stored_index];
-            for (page,intent) in stored.watercolor_wetness_pages.iter_mut().zip(intents) {
-                let name=layer_core::raster::ContentName::fresh();let receipt=encoder.submission();
-                let active=page.active_secondary;
-                let output=page.surface_mut(active).write(&intent,&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
-                output.value().clear(&r.zero_pages,encoder);written.push(output.encoded(name).publish(&encoder.submission()));
-                let output=page.surface_mut(!active).overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
-                output.value().clear(&r.zero_pages,encoder);output.encoded(name).publish(&encoder.submission());
-                page.pending=None;page.derived=None;page.primary_needs_clear=false;page.secondary_needs_clear=false;
-            }
+            stored.watercolor_wetness_pages.clear();
             for page in &mut stored.coverage_pages {
                 let name=layer_core::raster::ContentName::fresh();let receipt=encoder.submission();
                 for surface in [&mut page.primary,&mut page.secondary] {
@@ -1893,7 +1882,6 @@ impl Scene {
                 page.owner=None;page.state=None;
             }
             stored.watercolor=None;
-            for output in written {r.record_raster_write(target,output)?;}
         }
         Ok(())
     }

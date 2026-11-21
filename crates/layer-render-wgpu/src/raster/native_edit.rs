@@ -467,8 +467,10 @@ impl WgpuRasterizer {
                 };
                 if current.revision!=*revision {frame.publications.clear();return Err(GpuRasterError::Invariant("prepared prepare native rasters state is inconsistent"));}
                 let planned=self.restore_preflight.as_ref().map_or(&[][..],|restore|restore.outputs());
-                let needed=self.native_capture_keys(scene,id,planned.iter().filter_map(|(target,output)|(*target==id).then(||output.native_key()).flatten()));
+                let mut needed=self.native_capture_keys(scene,id,planned.iter().filter_map(|(target,output)|(*target==id).then(||output.native_key()).flatten()));
                 let (physical,watercolor)=self.raster_inputs(id,submission,|key|needed.contains(&key))?;
+                let wet=|key:&TileKey|watercolor.is_some() || key.plane!=RasterPlane::WatercolorWetness;
+                needed.retain(wet);
                 if physical.len()!=needed.len() {frame.publications.clear();return Err(GpuRasterError::Invariant("prepared prepare native rasters state is inconsistent"));}
                 let mut data = RasterData {
                     // Cold, losslessly backed tiles remain part of every new
@@ -476,6 +478,7 @@ impl WgpuRasterizer {
                     tiles: current.contents.data().tiles.clone(),
                     watercolor,
                 };
+                if watercolor.is_none() && data.has_plane(RasterPlane::WatercolorWetness) {data.tiles.retain(|key,_|wet(key));}
                 for (key,pixels) in physical {
                     let intent=current.contents.intent(key);
                     let read=pixels.read(intent.version(),submission).ok_or(GpuRasterError::Invariant("accepted input is not readable"))?;
