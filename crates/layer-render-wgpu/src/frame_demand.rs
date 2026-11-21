@@ -131,7 +131,9 @@ impl WgpuRasterizer {
         #[cfg(debug_assertions)]
         self.assert_blocked_inputs_outstanding();
         let poll = self.lane_polls().then(|| web_time::Instant::now() + LANE_POLL);
-        [self.presentation_due(), poll].into_iter().flatten().min().map_or(FrameDemand::Wait, FrameDemand::WaitUntil)
+        let release = self.d0_release.as_ref().and_then(d0_release::Switch::deadline);
+        if release.is_some_and(|deadline| deadline <= web_time::Instant::now()) { return FrameDemand::Work; }
+        [self.presentation_due(), poll, release].into_iter().flatten().min().map_or(FrameDemand::Wait, FrameDemand::WaitUntil)
     }
     #[cfg(debug_assertions)]
     fn assert_blocked_inputs_outstanding(&self) {

@@ -26,6 +26,10 @@ pub(crate) use sources::Sources;
 pub(crate) use pages::{composite_pages_at,layer_pages};
 pub(super) type Pages=Arc<std::sync::Mutex<pages::Store>>;
 pub(super) fn pages_within(display:&Arc<crate::residency::Tier>)->Pages {Arc::new(std::sync::Mutex::new(pages::Store::within(display)))}
+#[cfg(target_os = "windows")]
+pub(super) fn z3_probe_store(pages: &std::sync::Mutex<pages::Store>) -> crate::memory::Z3StoreBytes {
+    pages.lock().unwrap().z3_probe_bytes(&[])
+}
 pub(super) fn trim_pages_by(pages:&Pages,deficit:u64,class:Class) {let mut store=pages.lock().unwrap();let bytes=store.bytes();store.trim(bytes.saturating_sub(deficit),class);}
 pub(super) fn release_pages_by(pages:&Pages,deficit:u64) {let mut store=pages.lock().unwrap();let bytes=store.bytes();store.release_undemanded(bytes.saturating_sub(deficit));}
 
@@ -912,6 +916,27 @@ impl Cache {
         pages.into_iter().take(limit).map(|coordinate|pages::bounds(coordinate,self.plan.level,self.plan.extent)).collect()
     }
 
+    fn half_nodes(&self) -> Vec<graph::Node> {
+        fn halves(cache: &Cache, nodes: &mut Vec<graph::Node>) {
+            nodes.extend(cache.pivot_halves());
+            for retained in cache.overview.iter().chain(&cache.previous) { halves(retained, nodes); }
+        }
+        let mut nodes = Vec::new();
+        halves(self, &mut nodes);
+        nodes
+    }
+    #[cfg(target_os = "windows")]
+    pub(crate) fn z3_probe_pages(&self) -> crate::memory::Z3StoreBytes {
+        self.pages.lock().unwrap().z3_probe_bytes(&self.half_nodes())
+    }
+    pub(crate) fn in_contact(&self) -> bool { self.contact || self.gesture.is_some() }
+    pub(crate) fn release_settled(&self, switch: &crate::d0_release::Switch, navigator: &Navigator) -> (crate::d0_release::Released, u64) {
+        let views: Vec<_> = std::iter::once(self).chain(self.overview.as_deref()).chain(navigator.cache()).map(|cache| cache.plan).collect();
+        let mut store = self.pages.lock().unwrap();
+        let report = store.release_settled(switch.kinds, &self.half_nodes(), |key| switch.keep_view && views.iter().any(|plan|
+            key.level == plan.level && (key.source.is_some() || !key.plan().bounds.intersect(plan.bounds).is_empty())));
+        (report, store.bytes())
+    }
     pub fn storage_bytes(&self) -> u64 { self.window_bytes()+self.pages.lock().unwrap().bytes() }
     fn window_bytes(&self) -> u64 {
         #[cfg(test)]

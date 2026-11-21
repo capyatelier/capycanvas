@@ -706,6 +706,37 @@ impl Store {
         if self.pages.get(key).is_some_and(|page|page.transient) {encoder.hold(self.remove(key)._charge);}
     }
     pub(super) fn set_visible(&mut self,key:&Key) {if let Some(page)=self.pages.get_mut(key) && page.optional {page.set_optional(false);self.victims.touch(page);self.victims.compact(&self.pages);self.touch(key);}}
+    fn kind(key: &Key, page: &Page, halves: &[super::graph::Node]) -> usize {
+        if key.source.is_some() { 2 }
+        else if halves.contains(&key.expression) { 1 }
+        else if Coverage::covers(&page.coverage.exact, key.plan().bounds) { 0 }
+        else { 3 }
+    }
+    #[cfg(target_os = "windows")]
+    pub(super) fn z3_probe_bytes(&self, halves: &[super::graph::Node]) -> crate::memory::Z3StoreBytes {
+        let mut levels = std::collections::BTreeMap::new();
+        for (key, page) in &self.pages {
+            let class = Self::kind(key, page, halves);
+            let bytes = levels.entry(key.level).or_insert([0u64; 4]);
+            bytes[class] = bytes[class].saturating_add(page._charge.bytes());
+        }
+        (self.bytes(), levels)
+    }
+    pub(super) fn release_settled(&mut self, kinds: [bool; 4], halves: &[super::graph::Node], view: impl Fn(&Key) -> bool) -> crate::d0_release::Released {
+        let mut report = crate::d0_release::Released::default();
+        let mut chosen = Vec::new();
+        for (key, page) in &self.pages {
+            let kind = Self::kind(key, page, halves);
+            let tally = if !kinds[kind] || view(key) { &mut report.kept }
+                else if page.pinned() { &mut report.pinned }
+                else { chosen.push(key.clone()); &mut report.released };
+            let entry = &mut tally.entry(key.level).or_default()[kind];
+            entry[0] += 1;
+            entry[1] += page._charge.bytes();
+        }
+        for key in chosen { let image = self.remove(&key).image; self.retire(image); }
+        report
+    }
     pub fn bytes(&self) -> u64 { self.total.used() }
     pub(in crate::scene) fn metadata_bytes(&self)->u64 {
         self.index.storage_bytes()+self.pages.capacity() as u64*(std::mem::size_of::<(Key,Page)>()+1) as u64

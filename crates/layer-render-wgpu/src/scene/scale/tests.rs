@@ -260,6 +260,9 @@ mod root_fragment;
 #[path = "moved_paint_tests.rs"]
 mod moved_paint;
 
+#[path = "d0_release_tests.rs"]
+mod d0_release;
+
 pub(super) use crate::test_support::submit_published;
 
 fn retained_root_pages(cache: &Cache) -> Vec<pages::RetainedPage> {

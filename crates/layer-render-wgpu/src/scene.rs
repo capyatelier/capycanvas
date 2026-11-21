@@ -546,6 +546,10 @@ impl Scene {
     pub(crate) fn trim_pages_by(&self,deficit:u64,class:crate::residency::Class) {scale::trim_pages_by(&self.scale_pages,deficit,class);}
     pub(crate) fn release_pages_by(&self,deficit:u64) {scale::release_pages_by(&self.scale_pages,deficit);}
     pub(crate) fn advance_demand_epoch(&self) {self.scale_pages.lock().unwrap().advance_epoch();}
+    #[cfg(target_os = "windows")]
+    pub(crate) fn z3_probe_pages(&self) -> crate::memory::Z3StoreBytes {
+        scale::z3_probe_store(&self.scale_pages)
+    }
     pub(crate) fn retained_scale_bytes(&self)->[u64;2] {
         let pages=self.scale_pages.lock().unwrap();[pages.bytes(),pages.pinned_bytes()]
     }

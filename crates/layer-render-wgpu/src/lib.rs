@@ -102,6 +102,7 @@ mod saved_pipelines;
 pub use saved_pipelines::SavedPipelines;
 mod renderer_factory;
 mod memory;
+mod d0_release;
 mod warm;
 pub use memory::new_drawing_working_bytes as new_drawing_memory_requirement;
 pub use renderer_factory::RendererFactory;
@@ -1146,6 +1147,7 @@ pub struct WgpuRasterizer {
     ui_preview_pipeline: Option<Deferred<wgpu::RenderPipeline>>,
     display_pipelines: Option<display_mips::Pipelines>,
     scale_display: Option<scene::scale::Cache>,
+    d0_release: Option<d0_release::Switch>,
     retired_display_bytes: Arc<residency::Tier>,
     scene_tiers: scene::Tiers,
     navigator: scene::scale::Navigator,
@@ -1584,6 +1586,7 @@ impl WgpuRasterizer {
             analysis_backing_waiter: None,
             display_pipelines: None,
             scale_display: None,
+            d0_release: d0_release::Switch::from_env(),
             retired_display_bytes: residency::Tier::within(&scene_tiers.display),
             scene_tiers,
             navigator: Default::default(),
@@ -4171,6 +4174,8 @@ impl CanvasRenderer for WgpuRasterizer {
     fn showing_navigator(&self) -> bool { self.presentation.navigator }
     fn set_canvas_transition(&mut self, fade: layer_render::CanvasFade) { self.canvas_transition=fade; }
     fn telemetry(&self) -> layer_render::RendererTelemetry {
+        #[cfg(target_os = "windows")]
+        self.z3_probe_memory("diagnostics", None);
         let mut t = self.telemetry.snapshot(&self.device, &self.queue);
         #[cfg(not(target_arch = "wasm32"))]
         { t.memory = self.memory_samples.snapshot(); }
@@ -4350,9 +4355,12 @@ impl WgpuRasterizer {
         let revision = self.composite_revision;
         let submitted = self.metrics.submissions;
         let navigator_revision = self.navigator.revision;
+        let steady = self.d0_release.is_some() && packet.dabs.is_empty() && packet.dab_batches.is_empty()
+            && self.artwork_frame.as_ref().is_some_and(|old| old.view == packet.view && old.same_artwork(packet));
         let result = self.submit_frame_inner(packet, native_commit);
         self.end_frame_memory();
         self.fit_grants();
+        self.release_settled_pages(steady && result.is_ok());
         self.brush_inputs=None;
         self.watercolor_written.clear();
         if let Err(error)=result {
@@ -5360,6 +5368,8 @@ impl WgpuRasterizer {
         self.document_damage.clear();
         self.metrics.submissions = self.metrics.submissions.saturating_add(1);
         self.refresh_storage_metrics();
+        #[cfg(target_os = "windows")]
+        self.z3_probe_memory("frame", None);
         performance_trace::counter(c"Capy renderer frames", self.metrics.submissions);
         performance_trace::counter(c"Capy command passes", self.metrics.command_passes);
         performance_trace::counter(c"Capy dabs", self.metrics.dabs);

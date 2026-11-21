@@ -679,6 +679,141 @@ impl WgpuRasterizer {
     }
 }
 
+#[cfg(target_os = "windows")]
+pub(crate) type Z3StoreBytes = (u64, std::collections::BTreeMap<u32, [u64; 4]>);
+
+#[cfg(target_os = "windows")]
+mod z3_probe {
+    use super::Z3StoreBytes;
+    use std::io::{self, Write};
+    use std::sync::{OnceLock, mpsc};
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+    use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn QueryPerformanceCounter(value: *mut i64) -> i32;
+    }
+
+    pub(super) struct Sample {
+        pub qpc: i64,
+        pub unix_ms: u128,
+        pub source: &'static str,
+        pub frame: u64,
+        pub ledger: layer_core::MemoryBudgetSnapshot,
+        pub device: layer_core::MemoryDevice,
+        pub tiers: [u64; 6],
+        pub store: Z3StoreBytes,
+        pub release: Option<String>,
+    }
+
+    impl Sample {
+        fn write(&self, out: &mut impl Write) -> io::Result<()> {
+            let ledger = &self.ledger;
+            let [total, windows, work, objects, moving, retiring] = self.tiers;
+            write!(out, "{{\"qpc\":{},\"unix_ms\":{},\"source\":\"{}\",\"renderer_frame\":{},\"ledger\":{{\"ram_total_bytes\":{},\"ram_limit_bytes\":{},\"ram_physical_bytes\":{},\"ram_pinned_bytes\":{},\"ram_granted_bytes\":{},\"reserved_bytes\":{},\"refusals\":{},\"pressure\":{},\"rows\":[",
+                self.qpc, self.unix_ms, self.source, self.frame, ledger.ram_total_bytes.unwrap_or(0),
+                ledger.ram_limit_bytes, ledger.ram_physical_bytes, ledger.ram_pinned_bytes,
+                ledger.ram_granted_bytes, ledger.reserved_bytes, ledger.refusals, ledger.pressure)?;
+            let kinds = ["Scene", "Objects", "Mips", "DecodedSamples", "RasterPool", "Staging",
+                "ParkedTabs", "Authored", "History", "Other"];
+            let classes = ["Pinned", "Visible", "Warm"];
+            for (kind, rows) in kinds.into_iter().zip(&ledger.rows) {
+                for (class, row) in classes.into_iter().zip(rows) {
+                    let separator = if kind == "Scene" && class == "Pinned" { "" } else { "," };
+                    write!(out, "{separator}{{\"kind\":\"{kind}\",\"class\":\"{class}\",\"owners\":{},\"ram_bytes\":{},\"gpu_bytes\":{},\"pinned_ram_bytes\":{},\"pinned_gpu_bytes\":{},\"granted_ram_bytes\":{},\"granted_gpu_bytes\":{}}}",
+                        row.owners,row.ram_bytes,row.gpu_bytes,row.pinned_ram_bytes,row.pinned_gpu_bytes,
+                        row.granted_ram_bytes,row.granted_gpu_bytes)?;
+                }
+            }
+            write!(out, "],\"device\":")?;
+            if let Some(device) = ledger.devices.iter().find(|device| device.device == self.device) {
+                write!(out, "{{\"unified\":{},\"heap_bytes\":{},\"limit_bytes\":{},\"physical_bytes\":{},\"pinned_bytes\":{},\"granted_bytes\":{},\"pinned_debt_bytes\":{}}}",
+                    device.unified,device.heap_bytes.unwrap_or(0),device.limit_bytes,
+                    device.physical_bytes,device.pinned_bytes,device.granted_bytes,device.pinned_debt_bytes)?;
+            } else {
+                write!(out, "null")?;
+            }
+            let (charge, levels) = &self.store;
+            write!(out, "}},\"display\":{{\"total_bytes\":{total},\"windows_bytes\":{windows},\"working_bytes\":{work},\"objects_bytes\":{objects},\"moving_bytes\":{moving},\"retiring_bytes\":{retiring},\"store_charge_bytes\":{charge},\"levels\":[")?;
+            for (index, (level, [exact, halves, source, other])) in levels.iter().enumerate() {
+                let separator = if index == 0 { "" } else { "," };
+                write!(out, "{separator}{{\"level\":{level},\"exact_full_bytes\":{exact},\"current_halves_bytes\":{halves},\"source_level_bytes\":{source},\"other_composition_bytes\":{other}}}")?;
+            }
+            write!(out, "]}}")?;
+            if let Some(release) = &self.release { write!(out, ",\"d0_release\":{release}")?; }
+            writeln!(out, "}}")
+        }
+    }
+
+    pub(super) fn sample(source: &'static str, make: impl FnOnce(i64, u128) -> Sample) {
+        static WRITER: OnceLock<Option<mpsc::SyncSender<Sample>>> = OnceLock::new();
+        static ORIGIN: OnceLock<Instant> = OnceLock::new();
+        static LAST_MS: AtomicU64 = AtomicU64::new(0);
+        let Some(sender) = WRITER.get_or_init(|| {
+            let path = std::env::var_os("CAPY_Z3_MEMORY_PROBE")?;
+            let (sender, receiver) = mpsc::sync_channel::<Sample>(32);
+            std::thread::Builder::new().name("z3-memory-probe".into()).spawn(move || {
+                let result = (|| -> io::Result<()> {
+                    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(path)?;
+                    for sample in receiver { sample.write(&mut file)?; }
+                    Ok(())
+                })();
+                if let Err(error) = result { eprintln!("Z3 memory probe writer: {error}"); }
+            }).ok()?;
+            Some(sender)
+        }) else { return; };
+        let now_ms = ORIGIN.get_or_init(Instant::now).elapsed().as_millis() as u64 + 1;
+        if source == "frame" {
+            let last = LAST_MS.load(Relaxed);
+            if last != 0 && now_ms.saturating_sub(last) < 250 { return; }
+            if LAST_MS.compare_exchange(last, now_ms, Relaxed, Relaxed).is_err() { return; }
+        }
+        let mut qpc = 0;
+        if unsafe { QueryPerformanceCounter(&mut qpc) } == 0 { return; }
+        let unix_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
+        let _ = sender.try_send(make(qpc, unix_ms));
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl WgpuRasterizer {
+    pub(super) fn z3_probe_memory(&self, source: &'static str, release: Option<String>) {
+        z3_probe::sample(source, |qpc, unix_ms| {
+            let tiers = &self.scene_tiers;
+            let store = if let Some(cache) = &self.scale_display {
+                cache.z3_probe_pages()
+            } else {
+                self.scene.as_ref().map_or_else(Default::default, |scene| scene.z3_probe_pages())
+            };
+            z3_probe::Sample {
+                qpc, unix_ms, source, frame: self.metrics.submissions,
+                ledger: self.factory.memory_budget().snapshot(), device: self.factory.memory_device(),
+                tiers: [tiers.display.used(), tiers.windows.used(), tiers.gpu.used(), tiers.objects.used(),
+                    tiers.moving[0].used(), tiers.retiring.used()],
+                store, release,
+            }
+        });
+    }
+}
+
+impl WgpuRasterizer {
+    pub(super) fn release_settled_pages(&self, steady: bool) {
+        let Some(switch) = &self.d0_release else { return; };
+        if !steady { switch.input(); }
+        let settled = self.transform_preview.is_none() && self.fill_preview.is_none() && self.moving_layer.is_none() && self.moving_pixels.is_none()
+            && self.scale_display.as_ref().is_some_and(|cache| !cache.in_contact()) && !self.frame_preparation_pending();
+        if !switch.due(settled) { return; }
+        let (report, store_bytes) = self.scale_display.as_ref().unwrap().release_settled(switch, &self.navigator);
+        let scene = self.scene.as_deref();
+        if !report.released.is_empty() { self.memory.display.publish(self.display_memory_report(scene, self.composition_memory(scene))); }
+        let Some(line) = switch.finish(&report, store_bytes) else { return; };
+        eprintln!("CAPY_D0_RELEASE {line}");
+        #[cfg(target_os = "windows")]
+        self.z3_probe_memory("d0-release", Some(line));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
