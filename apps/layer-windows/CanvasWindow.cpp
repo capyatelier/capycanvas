@@ -1439,7 +1439,9 @@ void CanvasWindow::Run() {
         auto navigatorWake=std::chrono::steady_clock::now();
         CanvasSurfacePoll surfacePoll;
         for(;prepared;) {
-            if(capy_device_lost(host)){
+            auto deviceFailure=capy_device_failure(host);
+            if(deviceFailure<0){Fail(NativeString(capy_error()).get());break;}
+            if(deviceFailure>0){
                 try {
                     if(++recoveryAttempts>3)throw std::runtime_error("GPU recovery failed repeatedly");
                     if(!RecoverGpu())break;
