@@ -360,7 +360,7 @@ impl Cache {
         let window=scene.cached_capture_window(packet.scene,region);
         let plan=key.plan();
         let destination=Image {texture:r.empty_texture.clone(),view:r.empty_view.clone(),plan};
-        let prepared=r.ensure_exact_preview(encoder).and_then(|()|scene.prepare_region(r,packet,(region,window),PixelRect::EMPTY,false,encoder))
+        let prepared=r.ensure_exact_preview(packet.scene,encoder).and_then(|()|scene.prepare_region(r,packet,(region,window),PixelRect::EMPTY,false,encoder))
             .and_then(|()|scene.declare_capture(r,packet,&destination,&[region],scene::Output::Display,None,None));
         let inputs=match prepared {
             Ok(inputs)=>inputs,
