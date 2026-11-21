@@ -447,23 +447,29 @@ impl Prepared {
     fn source_versions(&self,id:SourceTarget)->Result<&raster::contents::Versions,GpuRasterError> {
         self.snapshot.rasters.get(&id).ok_or(if self.snapshot.scene.view().source_owner(id).is_some() {GpuRasterError::NotReady}else {GpuRasterError::StaleExpression})
     }
-    fn source_version(&self,id:SourceTarget,frame:SourceFrame,extent:[u32;2],region:DocRect,input_level:u32,global:bool)->Result<(ContentVersion,PixelRect),GpuRasterError> {
+    fn clear(&self,level:u32,input_level:u32,global:bool)->ContentVersion {
+        let mut name=Recipe::new();name.add(&(self.snapshot.context,level,input_level,global));name.add(&None::<ContentStamp>);name.add(&(0,[0u32;4]));
+        ContentVersion::derive(name.0,&[])
+    }
+    fn source_version(&self,id:SourceTarget,frame:SourceFrame,extent:[u32;2],region:DocRect,input_level:u32,global:bool)->Result<(ContentVersion,PixelRect,bool),GpuRasterError> {
         let s=&self.snapshot;let scene=s.scene.view();let mut inputs=Vec::new();let mut name=Recipe::new();name.add(&(id,frame,extent,scene.color_mode(id)));
         let moving=s.moving==scene.source_owner(id);let level=s.source_level(id,frame,extent,(!global).then_some(region),input_level,moving);name.add(&level);
         let halo=if frame.aligned() && !moving {0}else {1<<level};let watercolor=s.watercolor.get(&id).copied();name.watercolor(watercolor);
         let local=if global {PixelRect::full(extent)}else {source_footprint(region,frame,extent,level,halo+watercolor.map_or(0,|style|style.radius()))};
-        if let Some(capture)=s.captures.get(&id) {inputs.push(capture.content(region,global)?);}
+        let mut blank=!global && !moving && watercolor.is_none() && matches!(id,SourceTarget::Paint(_)) && scene.paint_base(id).is_none() && bounded(scene);
+        if let Some(capture)=s.captures.get(&id) {inputs.push(capture.content(region,global)?);blank=false;}
         else {
-            if local.is_empty() {return Ok((ContentVersion::derive(name.0,&[]),local));}
+            if local.is_empty() {return Ok((ContentVersion::derive(name.0,&[]),local,blank));}
             let versions=self.source_versions(id)?;let plane=source_plane(id);
+            blank=blank && versions.blank(plane,local);
             inputs.push(if global {versions.root(plane)}else {versions.region(plane,local)});
             if watercolor.is_some() {inputs.push(if global {versions.root(RasterPlane::WatercolorWetness)}else {versions.region(RasterPlane::WatercolorWetness,local)});}
         }
         if let Some(preview)=&s.preview && preview.target()==id && preview.affects(local) {
-            inputs.push(preview.region_version(source_plane(id),local,PreviewStage::Final)?);
+            inputs.push(preview.region_version(source_plane(id),local,PreviewStage::Final)?);blank=false;
             if watercolor.is_some() {inputs.push(preview.region_version(RasterPlane::WatercolorWetness,local,PreviewStage::Final)?);}
         }
-        Ok((ContentVersion::derive(name.0,&inputs),local))
+        Ok((ContentVersion::derive(name.0,&inputs),local,blank))
     }
     fn selected_placement(&self,node:&graph::Expression)->Result<Option<ContentStamp>,GpuRasterError> {
         let scene=self.snapshot.scene.view();let mut name=Recipe::new();
@@ -489,7 +495,12 @@ impl Prepared {
         if !source_chunk {name.add(&self.selected_placement(node)?);}
         match node.as_ref() {
             E::Color(color)=>name.add(&(0,color)),
-            E::Source {id,frame,extent,outside}=>{name.add(&(1,outside));let frame=if source_chunk {SourceFrame {phase:frame.phase,shift:[0;2]}}else {*frame};let (version,local)=self.source_version(*id,frame,*extent,region,input_level,global)?;inputs.push(version);read=Some((*id,local));},
+            E::Source {id,frame,extent,outside}=>{
+                let frame=if source_chunk {SourceFrame {phase:frame.phase,shift:[0;2]}}else {*frame};
+                let (version,local,blank)=self.source_version(*id,frame,*extent,region,input_level,global)?;read=Some((*id,local));
+                if blank && !source_chunk && *outside==0 {return Ok((self.clear(level,input_level,global),read));}
+                name.add(&(1,outside));inputs.push(version);
+            },
             E::Objects {content,preview}=>{
                 let owner=content.owner();name.add(&(2,owner,preview,scene.visible(owner)));
                 let keys=if global {content.keys().to_vec()}else {content.query_at(region,input_level)};
@@ -510,8 +521,9 @@ impl Prepared {
             E::Opacity {input,opacity}=>{name.add(&(6,opacity));inputs.push(child(input,region,global)?);},
             E::Combine {blend:0,flags:0,..}=>{
                 let mut operands=Vec::new();over_operands(node,&mut operands);
-                if let [operand]=operands[..] {return Ok((child(operand,region,global)?,None));}
-                name.add(&(7,0u32,0u32));for operand in operands {inputs.push(child(operand,region,global)?);}
+                let clear=self.clear(level,input_level,global);
+                for operand in operands {let version=child(operand,region,global)?;if version.identity()!=clear.identity() {inputs.push(version);}}
+                match inputs.len() {0=>return Ok((clear,None)),1=>return Ok((inputs.remove(0),None)),_=>name.add(&(7,0u32,0u32))}
             },
             E::Combine {front,back,blend,flags}=>{name.add(&(7,blend,flags));inputs.push(child(front,region,global)?);inputs.push(child(back,region,global)?);},
             E::Effect {input,chain,masks,..}=>{
@@ -1157,6 +1169,25 @@ pub(super) mod tests {
         version(&restored,&node);assert_eq!(restored.memo.lock().unwrap().entries.len(),1);
         restored.expected(&node,PixelRect::new(0,0,256,256).into(),0,1).unwrap();
         assert_eq!(restored.memo.lock().unwrap().entries.len(),2,"the input level is part of the per-frame memo key");
+    }
+
+    #[test]
+    fn a_region_a_paint_layer_has_not_painted_is_named_as_if_the_layer_were_absent() {
+        let (mut document,target)=document();let node=source(target);
+        let paper:graph::Node=Arc::new(graph::Expression::Color([1,2,3,4]));
+        let over=Arc::new(graph::Expression::Combine {front:node.clone(),back:paper.clone(),blend:0,flags:0});
+        let clear:graph::Node=Arc::new(graph::Expression::Color([0;4]));
+        let [near,far]=[PixelRect::new(0,0,256,256),PixelRect::new(768,0,1024,256)];
+        let name=|frame:&Prepared,node:&graph::Node,region:PixelRect|frame.expected(node,region.into(),0,0).unwrap();
+        let empty=prepared(&document);
+        assert_eq!(name(&empty,&node,near).matches(&name(&empty,&clear,near)),Some(true),"an unpainted layer names a region as clear");
+        assert_eq!(name(&empty,&over,near).matches(&name(&empty,&paper,near)),Some(true),"an unpainted layer over paper names the paper");
+        let mut data=RasterData::default();data.tiles.insert(TileKey {plane:RasterPlane::Color,coordinate:[0,0]},tile());
+        install(&mut document,target,data);
+        let painted=Prepared::from_scene(packet(document.scene(),document.composition().size),Declared::default()).unwrap();
+        assert_eq!(name(&painted,&over,near).matches(&name(&empty,&paper,near)),Some(false),"the painted region is renamed");
+        assert_eq!(name(&painted,&over,far).matches(&name(&empty,&paper,far)),Some(true),"a region the paint did not reach keeps the paper's name");
+        assert!(painted.reader_regions(target,0).iter().any(|(local,regions)|*local==far && regions.contains(&far.into())),"the unpainted region still reads the layer, so its first paint renames it");
     }
 
     #[test]

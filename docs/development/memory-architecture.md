@@ -613,6 +613,12 @@ everything above it, and caches only those. An edit to that layer recomposes
 each touched cell from the two halves and the layer, whatever the layer count
 (`pivot_halves_bound_edit_recomposition_independently_of_layer_count_and_preserve_untouched_regions`
 in `crates/layer-render-wgpu/src/scene/scale/tests.rs`).
+A half that is one flat colour, such as Paper under the only layer, is not
+cached. While no spatial filter is visible, a region a paint layer has not
+painted is named as if the layer were absent, and idle refinement repairs only
+the cells whose picture is stale or not yet exact, so the first stroke on an
+empty layer repairs the cells it reaches
+(`crates/layer-render-wgpu/src/scene/scale/stroke_repair_tests.rs`).
 Non-Normal boundaries chain, so a target under k boundaries recomposes at least
 k nodes.
 Native evaluation and exact idle refinement get no branch budget and walk every
