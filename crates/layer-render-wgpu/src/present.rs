@@ -1063,12 +1063,37 @@ impl ViewportPresenter {
         view: ViewState,
         surround_linear: [f32; 4],
     ) -> Result<wgpu::SubmissionIndex, GpuRasterError> {
+        self.submit(renderer, target, view, surround_linear, |_| {})
+    }
+
+    /// `done` runs when the GPU finishes this viewport submission, whatever
+    /// the queue receives after it.
+    pub fn present_then(
+        &mut self,
+        renderer: &WgpuRasterizer,
+        target: &wgpu::TextureView,
+        view: ViewState,
+        surround_linear: [f32; 4],
+        done: impl FnOnce() + Send + 'static,
+    ) -> Result<wgpu::SubmissionIndex, GpuRasterError> {
+        self.submit(renderer, target, view, surround_linear, |encoder| renderer.on_encoder_done(encoder, done))
+    }
+
+    fn submit(
+        &mut self,
+        renderer: &WgpuRasterizer,
+        target: &wgpu::TextureView,
+        view: ViewState,
+        surround_linear: [f32; 4],
+        bind: impl FnOnce(&wgpu::CommandEncoder),
+    ) -> Result<wgpu::SubmissionIndex, GpuRasterError> {
         let mut encoder = renderer
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("viewport presentation"),
             });
         self.encode(renderer, &mut encoder, target, view, surround_linear)?;
+        bind(&encoder);
         let submitted = renderer.device.submit_for_present(&renderer.queue,[encoder.finish()])
             .ok_or_else(||GpuRasterError::WaitFailed("GPU device service retired".into()))?;
         if let Some(timer) = &mut self.timing {
@@ -1833,6 +1858,30 @@ mod tests {
     use super::*;
     impl ViewportPresenter {
         pub(crate) fn presented_camera(&self)->Option<ViewState> {self.presented_view.map(|(view,..)|view)}
+    }
+    #[test]
+    fn a_presented_frame_completes_before_queue_work_submitted_after_it() {
+        use std::{sync::mpsc, time::{Duration, Instant}};
+        let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        assert_ne!(renderer.adapter.get_info().device_type, wgpu::DeviceType::Cpu);
+        let extent = [96; 2];
+        let mut presenter = ViewportPresenter::for_renderer(&renderer, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let (_texture, surface) = crate::create_target(renderer.device(), extent, wgpu::TextureFormat::Rgba8UnormSrgb, "paced frame");
+        pollster::block_on(presenter.prepare(&renderer)).unwrap();
+        let (unused, _duration, raw) = crate::test_support::bounded_outstanding_gpu_work(&renderer);
+        drop(unused);
+        let later = (0..8).map(|_| raw(1)).collect::<Vec<_>>();
+        renderer.device.wait_queue().unwrap();
+        let (drawn, drawing) = mpsc::channel();
+        let (finished, queue) = mpsc::channel();
+        let start = Instant::now();
+        presenter.present_then(&renderer, &surface, crate::test_support::view(extent), [0.; 4], move || { let _ = drawn.send(Instant::now()); }).unwrap();
+        renderer.queue.submit(later);
+        renderer.on_gpu_done(move || { let _ = finished.send(Instant::now()); });
+        let drawn = drawing.recv_timeout(Duration::from_secs(10)).expect("the frame's completion never ran");
+        let finished = queue.recv_timeout(Duration::from_secs(10)).expect("the later work never completed");
+        assert!(finished.duration_since(drawn) >= finished.duration_since(start) / 2,
+            "the frame's completion waited for later queue work: called after {:?}, later work finished after {:?}", drawn - start, finished - start);
     }
     #[test]
     fn waiting_drawing_shows_surround_until_full_composition_and_keeps_transparency_after_edits() {

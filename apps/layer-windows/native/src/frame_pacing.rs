@@ -17,11 +17,10 @@ impl FramePacing {
         !self.saturated()
     }
 
-    pub(crate) fn submitted(&mut self, gpu: &layer_render_wgpu::WgpuRasterizer, wake: Arc<dyn Fn() + Send + Sync>) {
+    pub(crate) fn occupy(&mut self, wake: Arc<dyn Fn() + Send + Sync>) -> impl FnOnce() + Send + 'static + use<> {
         let done = Arc::new(AtomicBool::new(false));
-        let signal = done.clone();
-        gpu.on_gpu_done(move || { signal.store(true, Ordering::Release); wake(); });
-        self.in_flight.push_back(done);
+        self.in_flight.push_back(done.clone());
+        move || { done.store(true, Ordering::Release); wake(); }
     }
 
     fn saturated(&self) -> bool {
@@ -45,7 +44,7 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "windows")]
-    fn completed_drawing_does_not_wait_for_unrelated_queue_work() {
+    fn completed_drawing_opens_its_slot_while_later_queue_work_is_held() {
         use windows::{core::Interface, Win32::Graphics::Direct3D12::{ID3D12Device, ID3D12Fence, D3D12_FENCE_FLAG_NONE}};
         struct Gate(ID3D12Fence);
         impl Drop for Gate { fn drop(&mut self) { let _ = unsafe { self.0.Signal(1) }; } }
@@ -53,8 +52,9 @@ mod tests {
         let (wake, woken) = std::sync::mpsc::channel();
         let wake = std::sync::Mutex::new(wake);
         let mut pacing = FramePacing::default();
-        gpu.queue().submit([]);
-        pacing.submitted(&gpu, Arc::new(move || { let _ = wake.lock().unwrap().send(()); }));
+        let drawing = gpu.device().create_command_encoder(&Default::default());
+        gpu.on_encoder_done(&drawing, pacing.occupy(Arc::new(move || { let _ = wake.lock().unwrap().send(()); })));
+        gpu.submit_commands([drawing.finish()]).unwrap();
         let gate = {
             let native = unsafe { gpu.device().as_hal::<wgpu::hal::api::Dx12>() }.unwrap();
             let device: ID3D12Device = native.raw_device().cast().unwrap();
@@ -63,9 +63,13 @@ mod tests {
             gate
         };
         gpu.queue().submit([]);
+        let services = Arc::new(AtomicBool::new(false));
+        let serviced = services.clone();
+        gpu.on_gpu_done(move || serviced.store(true, Ordering::Release));
         woken.recv_timeout(std::time::Duration::from_secs(10)).expect("the drawing's completion wakes the host");
-        assert!(pacing.ready());
+        assert!(pacing.ready(), "the next frame starts once its drawing completes");
         assert!(pacing.in_flight.is_empty());
+        assert!(!services.load(Ordering::Acquire), "the queue's later work is still held");
         drop(gate);
         gpu.wait_idle().unwrap();
         drop(gpu);
@@ -90,8 +94,8 @@ mod tests {
             assert!(pacing.ready());
             let mut encoder = device.create_command_encoder(&Default::default());
             for _ in 0..2 { encoder.copy_buffer_to_buffer(&source, 0, &target, 0, size); }
-            gpu.queue().submit([encoder.finish()]);
-            pacing.submitted(&gpu, wake.clone());
+            gpu.on_encoder_done(&encoder, pacing.occupy(wake.clone()));
+            gpu.submit_commands([encoder.finish()]).unwrap();
         }
         let start = std::time::Instant::now();
         let ready = pacing.ready();

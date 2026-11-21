@@ -1517,19 +1517,21 @@ void CanvasWindow::Run() {
                 if(closing)break;
                 if(resize&&!resized)continue;
             }
-            lastFrame=std::chrono::steady_clock::now();
+            std::chrono::steady_clock::time_point attempt;uint64_t acquireStart=0;
             // DXGI waits before draining input so a frame uses the freshest arrived samples.
-            auto acquireStart=latencyTrace.enabled?Now():0;
-            auto acquired=capy_acquire(host);
+            auto acquired=AcquireCanvasFrame(
+                [&]{attempt=std::chrono::steady_clock::now();acquireStart=latencyTrace.enabled?Now():0;return capy_acquire(host);},
+                [&]{std::unique_lock lock(mutex);wake.wait(lock,[&]{return CanvasAcquisitionWaitEnds(4,closing,resize,servicesReady);});return !closing&&!resize;});
             auto acquiredAt=latencyTrace.enabled?Now():0;
             if(acquired<0) {if(capy_device_lost(host))continue;Fail(NativeString(capy_error()).get());break;}
             if(acquired==2) {std::lock_guard lock(mutex);resize=true;continue;}
-            if(acquired==0||acquired==4) {
+            if(acquired==4)continue;
+            if(acquired==0) {
                 std::unique_lock lock(mutex);
-                auto ends=[&]{return CanvasAcquisitionWaitEnds(acquired,closing,resize,servicesReady);};
-                if(acquired==4)wake.wait(lock,ends);else wake.wait_for(lock,std::chrono::milliseconds(16),ends);
+                wake.wait_for(lock,std::chrono::milliseconds(16),[&]{return CanvasAcquisitionWaitEnds(0,closing,resize,servicesReady);});
                 continue;
             }
+            lastFrame=attempt;
             std::deque<CanvasWork> pending;
             bool overflow;std::optional<bool> hover;
             // Samples admitted during reconstruction must wait for replacement

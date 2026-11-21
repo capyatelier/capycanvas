@@ -1719,6 +1719,8 @@ impl WgpuRasterizer {
         buffer.map_async(wgpu::MapMode::Read,..,self.device.callback(callback));self.device.request_poll();
     }
     pub fn on_gpu_done(&self,callback:impl FnOnce()+Send+'static) { self.device.on_queue_done(&self.queue,callback); }
+    /// Runs when the GPU finishes the submission that carries `encoder`, whatever the queue receives after it.
+    pub fn on_encoder_done(&self,encoder:&wgpu::CommandEncoder,callback:impl FnOnce()+Send+'static) { self.device.on_encoder_done(encoder,callback); }
 
     pub fn metrics(&self) -> GpuRasterMetrics {
         let mut metrics = self.metrics.clone();
