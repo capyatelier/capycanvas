@@ -234,10 +234,6 @@ impl Scene {
         }
         Ok((tiles.len() as u64).saturating_mul(sources::NORMALIZED_PAGE_BYTES))
     }
-    #[cfg(test)]
-    pub(crate) fn decode_prepared(r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
-        source: &Arc<SourceImage>, coordinate: [u32; 2], pixels: sources::PreparedSourcePixels,
-    ) -> Result<crate::source_access::RawTile, GpuRasterError> { decode_prepared(r, encoder, source, coordinate, pixels) }
     pub(crate) fn decode_prepared_for(r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder,
         source:&Arc<SourceImage>,coordinate:[u32;2],pixels:sources::PreparedSourcePixels,use_:sources::SourceUse,class:Class,
     )->Result<crate::source_access::RawTile,GpuRasterError> {decode_prepared_for(r,encoder,source,coordinate,pixels,use_,class)}
@@ -455,12 +451,6 @@ impl Scene {
 
 }
 
-#[cfg(test)]
-pub(crate) fn decode_prepared(r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
-    source: &Arc<SourceImage>, coordinate: [u32; 2], pixels: sources::PreparedSourcePixels,
-) -> Result<crate::source_access::RawTile, GpuRasterError> {
-    decode_prepared_for(r,encoder,source,coordinate,pixels,sources::SourceUse::Native,Class::Visible)
-}
 pub(crate) fn decode_prepared_for(r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder,
     source:&Arc<SourceImage>,coordinate:[u32;2],pixels:sources::PreparedSourcePixels,use_:sources::SourceUse,class:Class,
 )->Result<crate::source_access::RawTile,GpuRasterError> {

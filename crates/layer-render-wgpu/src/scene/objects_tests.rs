@@ -10,6 +10,14 @@ mod stacked_photos;
 #[path="cold_navigator_stroke_tests.rs"]
 mod cold_navigator_stroke;
 
+impl Scene {
+    pub(crate) fn decode_prepared(r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
+        source: &Arc<SourceImage>, coordinate: [u32; 2], pixels: sources::PreparedSourcePixels,
+    ) -> Result<crate::source_access::RawTile, GpuRasterError> {
+        decode_prepared_for(r,encoder,source,coordinate,pixels,sources::SourceUse::Native,Class::Visible)
+    }
+}
+
 fn image(extent: [u32; 2], color: [u8; 4]) -> AuthoredImage {
     let mut builder = SourceBuilder::new(extent, SourceInterpretation { channels: SourceChannels::Rgba,
         depth: SampleDepth::U8, profile: Default::default(), profile_assumed: false }, 16 * 1024 * 1024).unwrap();

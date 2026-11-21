@@ -2,6 +2,12 @@ use crate::test_support::float_pixels as pixels;
 use super::*;
 use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
 
+impl Plan {
+    pub fn level_size(self, level: u32) -> [u32; 2] {
+        [self.bounds.width(), self.bounds.height()].map(|v| v.div_ceil(1 << level))
+    }
+}
+
 #[test]
 fn large_photo_display_plans_bound_pixels_without_changing_document_dimensions() {
     for extent in [

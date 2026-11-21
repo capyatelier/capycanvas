@@ -1,4 +1,22 @@
 use crate::test_support::{complete,submit_encoded,wait_until};
+impl Dispatch {
+    fn try_take(&self)->Option<DecodeJob> {Self::next(&mut self.jobs.lock().unwrap().0)}
+}
+impl MipDecodeQueue {
+    pub(crate) fn requested_image_tiles(&self)->Vec<(usize,[u32;2])> {
+        let mut tiles:Vec<_>=self.outstanding.iter().filter_map(|request|request.key.as_ref()).filter_map(|key|match key {
+            DecodeKey::Image(source,coordinate)=>Some((source.as_ptr() as usize,*coordinate)),_=>None,
+        }).collect();
+        tiles.sort();tiles
+    }
+    pub(crate) fn working_bytes(&self)->u64 {self.working.used()}
+    pub(crate) fn decoded(&self)->bool {self.ready.load(Ordering::Acquire)>=self.outstanding.len()}
+    pub(crate) fn request(&mut self,id:PortableId,source:Arc<SourceImage>,coordinate:[u32;2])->bool {
+        self.request_for(id,source,coordinate,crate::scene::sources::SourceUse::Native,Class::Visible,false)
+    }
+    pub(crate) fn landed(&self)->bool {self.ready.load(Ordering::Acquire)>=self.outstanding.len()}
+    pub(crate) fn outstanding_classes(&self)->Vec<Class> {self.outstanding.iter().map(|outstanding|outstanding.class).collect()}
+}
 
 fn next_build(images:&mut MovingImages)->Option<(Arc<SourceImage>,[u32;2])> {
     images.next_build(|_|true,|_,_,_|true).map(|(source,coordinate,_)|(source,coordinate))

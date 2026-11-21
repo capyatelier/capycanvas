@@ -72,10 +72,6 @@ impl Plan {
         let size = [bounds.width(), bounds.height()].map(|v| v.div_ceil(1 << level));
         Self { extent, bounds, doc_bounds: bounds.into(), support: PixelRect::full(extent).into(), size, level }
     }
-    #[cfg(test)]
-    pub fn level_size(self, level: u32) -> [u32; 2] {
-        [self.bounds.width(), self.bounds.height()].map(|v| v.div_ceil(1 << level))
-    }
     pub fn pixel_bytes_through(self, last: u32) -> u64 {
         let scratch = (0..=self.level)
             .map(|level| u64::from(PAGE_SIZE >> level).pow(2) * 16)

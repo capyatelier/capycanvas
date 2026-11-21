@@ -735,8 +735,6 @@ impl Dispatch {
             jobs=self.available.wait(jobs).unwrap();
         }
     }
-    #[cfg(test)]
-    fn try_take(&self)->Option<DecodeJob> {Self::next(&mut self.jobs.lock().unwrap().0)}
     fn close(&self) {self.jobs.lock().unwrap().1=true;self.available.notify_all();}
 }
 #[cfg(not(target_arch="wasm32"))]
@@ -908,13 +906,6 @@ impl MipDecodeQueue {
         let dx=a*x+c*y+tx-f64::from(view.width_px)*0.5;let dy=b*x+d*y+ty-f64::from(view.height_px)*0.5;
         (dx*dx+dy*dy).min(u64::MAX as f64) as u64
     }
-    #[cfg(test)]
-    pub(crate) fn requested_image_tiles(&self)->Vec<(usize,[u32;2])> {
-        let mut tiles:Vec<_>=self.outstanding.iter().filter_map(|request|request.key.as_ref()).filter_map(|key|match key {
-            DecodeKey::Image(source,coordinate)=>Some((source.as_ptr() as usize,*coordinate)),_=>None,
-        }).collect();
-        tiles.sort();tiles
-    }
     fn working_limit(&self,class:Class)->u64 {
         #[cfg(not(target_arch="wasm32"))]
         {self.pool.working_limit(class)}
@@ -925,10 +916,6 @@ impl MipDecodeQueue {
     fn admit(&self,bytes:u64,receipt:bool,class:Class)->Option<Charge> {
         self.working.charge_within(self.working_limit(class).max(bytes).saturating_add(if receipt {bytes}else {0}),bytes)
     }
-    #[cfg(test)]
-    pub(crate) fn working_bytes(&self)->u64 {self.working.used()}
-    #[cfg(test)]
-    pub(crate) fn decoded(&self)->bool {self.ready.load(Ordering::Acquire)>=self.outstanding.len()}
     pub(crate) fn new(device:&PipelineDevice,ram:&Arc<Tier>)->Result<Self,GpuRasterError> {
         #[cfg(not(target_arch="wasm32"))]
         {Self::native(device.source_samples.clone(),device.working_space(),ram)}
@@ -961,10 +948,6 @@ impl MipDecodeQueue {
     }
     #[cfg(not(target_arch="wasm32"))]
     pub(crate) fn clear_waker(&self) {let waiter=self.context.waiter.lock().unwrap().take();drop(waiter);}
-    #[cfg(test)]
-    pub(crate) fn request(&mut self,id:PortableId,source:Arc<SourceImage>,coordinate:[u32;2])->bool {
-        self.request_for(id,source,coordinate,crate::scene::sources::SourceUse::Native,Class::Visible,false)
-    }
     pub(crate) fn request_for(&mut self,id:PortableId,source:Arc<SourceImage>,coordinate:[u32;2],use_:crate::scene::sources::SourceUse,class:Class,receipt:bool)->bool {
         let weak=Arc::downgrade(&source);
         self.enqueue(MipDecodeRequest::Image(ImageDecodeRequest {class,use_,id,source,coordinate}),Some(DecodeKey::Image(weak,coordinate)),class,receipt)
@@ -1028,10 +1011,6 @@ impl MipDecodeQueue {
         !self.outstanding.is_empty()
     }
     pub(crate) fn ready(&self)->bool {self.ready.load(Ordering::Acquire)>0}
-    #[cfg(test)]
-    pub(crate) fn landed(&self)->bool {self.ready.load(Ordering::Acquire)>=self.outstanding.len()}
-    #[cfg(test)]
-    pub(crate) fn outstanding_classes(&self)->Vec<Class> {self.outstanding.iter().map(|outstanding|outstanding.class).collect()}
     #[cfg(target_arch="wasm32")]
     pub(crate) fn take_external(&mut self)->Option<(u64,MipDecodeRequest)> {self.external.take()}
     #[cfg(target_arch="wasm32")]

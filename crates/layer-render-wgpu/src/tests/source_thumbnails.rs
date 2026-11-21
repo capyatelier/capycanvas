@@ -3,6 +3,13 @@ use layer_core::{Document, authored::{Artwork, PaintSource, SourceTarget}};
 use layer_core::color::{ColorProfile, SampleDepth, RgbSpace, source::*};
 use layer_render::ThumbnailTarget;
 
+impl SourceThumbnails {
+    pub(crate) async fn prepare_pipelines(&self, scope: &compile::Scope) {
+        scope.prepare_all([&self.horizontal,&self.vertical]).await.unwrap();
+        scope.prepare_all([&self.display]).await.unwrap();
+    }
+}
+
 fn codes(x: u32, y: u32) -> [u16; 4] {
     [
         ((x * 8191 + y * 31) % 65536) as u16,
