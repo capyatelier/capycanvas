@@ -2745,8 +2745,9 @@ impl Scene {
                 let mut draws = draws.iter();
                 let mut resamples = resamples.iter();
                 #[cfg(test)]
-                if jobs[i..end].iter().any(|job|matches!(job,Job::Placement(_) | Job::Reduce {..} | Job::Watercolor {..})) {
-                    crate::test_support::PassCounts {material_batches:1,..Default::default()}.record();
+                {
+                    let placed=jobs[i..end].iter().filter_map(|job|if let Job::Placement(job)=job {Some(job.source_views().count() as u64)}else {None});
+                    crate::test_support::PassCounts {placement_batches:u64::from(placed.clone().next().is_some()),placed_inputs:placed.sum(),..Default::default()}.record();
                 }
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("placed material tiles"), timestamp_writes: None,
