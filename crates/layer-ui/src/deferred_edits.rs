@@ -29,6 +29,7 @@ enum SwitchInput {
 pub(super) struct SwitchContacts {
     request: std::sync::Weak<()>,
     contacts: Vec<u64>,
+    carried: Vec<u64>,
     pen_contact: Option<u64>,
     held: std::collections::VecDeque<(u64, SwitchInput)>,
 }
@@ -76,11 +77,15 @@ impl<R: CanvasRenderer> UiSession<R> {
         });
         DocumentSwitch { _request: request }
     }
+    pub fn carries_switch_contact(&self, id: u64) -> bool {
+        self.switch_contacts.contacts.contains(&id) || self.switch_contacts.carried.contains(&id)
+    }
     pub(super) fn hold_switch_input(&mut self, input: &UiInput) -> Option<InputReply> {
         let UiInput::Pointer { id, phase, kind, .. } = *input else { return None };
         let starts = phase == ContactPhase::Down && (kind != PointerKind::Touch || self.finger_drawing())
             && self.switch_contacts.request.strong_count() > 0;
         let switch = &mut self.switch_contacts;
+        if phase != ContactPhase::Move { switch.carried.retain(|contact| *contact != id); }
         let held = starts || switch.contacts.contains(&id);
         switch.pen_contact = held.then_some(id);
         if !held { return None; }
@@ -107,8 +112,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn release_switch_contacts(&mut self) {
         if self.switch_contacts.request.strong_count() > 0 { return; }
-        let held = std::mem::take(&mut self.switch_contacts).held;
-        if !self.rendering_suspended { self.replay_switch_input(held); }
+        let SwitchContacts { contacts, held, carried, .. } = std::mem::take(&mut self.switch_contacts);
+        self.switch_contacts.carried = carried;
+        if self.rendering_suspended { return; }
+        self.replay_switch_input(held);
+        self.switch_contacts.carried.extend(contacts);
     }
     pub(super) fn adopt_switch_contacts(&mut self, previous: &Self) {
         let open = previous.switch_contacts.request.strong_count() > 0;

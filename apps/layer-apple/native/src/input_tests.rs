@@ -374,7 +374,7 @@ fn packed_pointer_structural_failures_finish_only_matching_real_current_owners()
         assert_eq!(unsafe {capy_apple_pointer(app.0,9,0,0,up.as_ptr(),up.len(),0,revision,0)},0);
         app.draw_until_idle();let expected_prefix=app.pixels();assert_ne!(expected_prefix,baseline);
         app.invoke("undo");app.draw_until_idle();assert_eq!(app.pixels(),baseline);
-        assert!(!app.borrow().host.accepts_pointer_input(0));
+        assert!(!app.borrow().host.accepts_pointer_input(0, 9));
         for case in ["short","null-records","metadata","null-updates","foreign-id","foreign-kind",
             "predicted","correction","stale-sample","stale-short","stale-metadata","stale-null-updates"] {
             eprintln!("packed structure platform={platform} case={case}: begin");

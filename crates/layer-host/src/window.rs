@@ -1504,6 +1504,10 @@ mod tests {
 
     fn pen(host: &mut NativeHost, id: u64, records: &[f64]) {
         let view_revision = host.session.state().camera.revision;
+        pen_at(host, id, records, view_revision);
+    }
+
+    fn pen_at(host: &mut NativeHost, id: u64, records: &[f64], view_revision: u64) {
         host.pointer_batch(crate::PointerBatch { id, tool: 0, button: 0, records, predicted: false, view_revision,
             device_flags: layer_engine::SampleFlags(0) }).unwrap();
     }
@@ -1595,6 +1599,54 @@ mod tests {
         assert_ne!(held, empty);
         assert_eq!(held, drawn_directly(&mut host, &[(7, contact)]));
         finish(host, window);
+    }
+
+    fn a_contact_carried_across_a_switch_ends(lifts_after_the_switch_closes: bool) {
+        let mut host = host();
+        let mut window = Window::default();
+        open(&mut window, &mut host);
+        let carried = stroke(&window, &host, 1, 1_000_000_000);
+        let next = stroke(&window, &host, 1, 2_000_000_000);
+        window.request(&mut host, TabRequest::Prepare { id: 1 }).unwrap();
+        let pressed_view = host.session.state().camera.revision;
+        pen(&mut host, 7, &carried[..18]);
+        let mut activation = switch(&mut window, &mut host, 1);
+        assert!(host.session.state().camera.revision > pressed_view);
+        let committed = host.session.engine().metrics().committed_strokes;
+        if !lifts_after_the_switch_closes { pen_at(&mut host, 7, &carried[18..], pressed_view); }
+        activation.work().unwrap();
+        let gpu = window.resume(&host, &mut activation).unwrap().unwrap();
+        host.session.replace_renderer(Renderer(Some(gpu))).unwrap();
+        window.changed(&mut host);
+        window.request(&mut host, TabRequest::EndSwitch).unwrap();
+        if lifts_after_the_switch_closes {
+            let deadline = Instant::now() + Duration::from_secs(60);
+            let mut now = 50_000_000_000;
+            while !host.session.engine().has_active_stroke() {
+                now += 8_000_000;
+                host.prepare_canvas_frame(now, now, true).unwrap();
+                host.session.engine().backend().0.as_ref().unwrap().device().poll(wgpu::PollType::Poll).unwrap();
+                assert!(Instant::now() < deadline, "the held contact was not replayed: {}", host.session.rendering_diagnostics());
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            pen_at(&mut host, 7, &carried[18..], pressed_view);
+        }
+        pen(&mut host, 8, &next);
+        settle_strokes(&mut host);
+        assert_eq!(host.session.engine().metrics().committed_strokes, committed + 2);
+        assert!(!host.accepts_pointer_input(pressed_view, 7));
+        assert_eq!(digests(&host), drawn_directly(&mut host, &[(7, carried), (8, next)]));
+        finish(host, window);
+    }
+
+    #[test]
+    fn a_contact_carried_across_a_switch_ends_with_the_lift_its_old_view_stamped() {
+        a_contact_carried_across_a_switch_ends(false);
+    }
+
+    #[test]
+    fn a_contact_carried_across_a_switch_ends_with_a_lift_that_arrives_after_the_switch_closes() {
+        a_contact_carried_across_a_switch_ends(true);
     }
 
     #[test]
@@ -2071,7 +2123,7 @@ mod tests {
         assert_eq!(host.session.state().camera.zoom, 1.5);
         assert_eq!(host.logical, [600.,400.]);
         assert!(host.session.state().camera.revision > source_view);
-        assert!(!host.accepts_pointer_input(source_view));
+        assert!(!host.accepts_pointer_input(source_view, 7));
         let work_area = host.session.layout(host.logical).work_area;
         assert_eq!(host.session.state().camera.work_area,
             [work_area.x*2.,work_area.y*2.,work_area.width*2.,work_area.height*2.]);

@@ -922,7 +922,7 @@ unsafe fn apple_pointer(
     let app=&mut *lease_app;
     let ApplePointerInput {id,tool,button,predicted,view_revision}=input;
     app.perform(|a| {
-        if !a.host.accepts_pointer_input(view_revision) { return Ok(()); }
+        if !a.host.accepts_pointer_input(view_revision, id) { return Ok(()); }
         if tool > 3 { return Err("Invalid Apple pointer tool".into()); }
         let invalid = records.is_null()
             || count == 0

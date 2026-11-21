@@ -631,8 +631,8 @@ impl NativeHost {
         self.dirty = true;
     }
 
-    pub fn accepts_pointer_input(&self, view_revision: u64) -> bool {
-        view_revision >= self.document_view_revision
+    pub fn accepts_pointer_input(&self, view_revision: u64, id: u64) -> bool {
+        (view_revision >= self.document_view_revision || self.session.carries_switch_contact(id))
             && !self.session.state().document_file.close_ready
     }
     /// Latest admitted real paint contact, before a frame consumes its input.
@@ -660,7 +660,7 @@ impl NativeHost {
             view_revision,
             ..
         } = batch;
-        if !self.accepts_pointer_input(view_revision) {return Ok(());}
+        if !self.accepts_pointer_input(view_revision, id) {return Ok(());}
         if let Err(error) = batch.validate(updates, correction) {
             if !predicted && !correction {self.cancel_pointer(id, batch.pointer_tool())?;}
             return Err(error.into());
@@ -697,7 +697,7 @@ impl NativeHost {
     /// Capture-time coordinates, axes, timestamps and flags remain unchanged.
     /// The host assigns engine sequence numbers, including inserted cancellations.
     pub fn pointer_event(&mut self, event: PenEvent, button: PointerButton) -> Result<(), String> {
-        if !self.accepts_pointer_input(event.view_revision) {
+        if !self.accepts_pointer_input(event.view_revision, event.device_id) {
             return Ok(());
         }
         self.pointer_event_inner(event, button, false)
@@ -1741,7 +1741,7 @@ mod tests {
                 let drag = |host: &mut NativeHost, from: [f32; 2], to: [f32; 2]| {
                     let transform = layer_core::Affine(host.session.state().camera.document_to_surface());
                     let revision = host.session.state().camera.revision;
-                    assert!(host.accepts_pointer_input(revision));
+                    assert!(host.accepts_pointer_input(revision, 77));
                     let count = if from == to { 2 } else { 22 };
                     let records: Vec<_> = (0..count).flat_map(|i| {
                         let at = transform.map(Point { x: from[0] + (to[0] - from[0]) * i as f32 / (count - 1) as f32, y: from[1] + (to[1] - from[1]) * i as f32 / (count - 1) as f32 });
