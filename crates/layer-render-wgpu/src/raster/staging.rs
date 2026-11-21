@@ -531,9 +531,7 @@ impl WgpuRasterizer {
                         if content.as_ref().is_none_or(|content|content.contains(&c))
                             || packet.scene.paint_base(target).is_some_and(|base|source_access::paint_base_contains(base,c)) {outputs.insert((target,Output::Color(c)));}
                     }
-                    let settles=matches!(operation.kind,layer_core::RasterOperationKind::ApplyMask)
-                        || matches!(operation.kind,layer_core::RasterOperationKind::Erase {..}) && damage==PixelRect::full(packet.scene.target_extent(target));
-                    if settles && self.paint_layers.iter().any(|layer|layer.id==target && layer.watercolor.is_some()) {
+                    if scene::settles(&operation.kind,damage,packet.scene.target_extent(target)) && self.paint_layers.iter().any(|layer|layer.id==target && layer.watercolor.is_some()) {
                         let wet=self.content_pages(packet,target,RasterPlane::WatercolorWetness,&outputs);
                         outputs.extend(wet.into_iter().map(|c|(target,Output::Wetness(c))));
                     }
@@ -576,6 +574,7 @@ impl WgpuRasterizer {
             .collect()
     }
     fn retire_restore(&mut self) {
+        if let Some(scene)=&mut self.scene {scene.release_operation_scratch();}
         let bytes=self.staged_restore_bytes();
         if bytes==0 {self.restore_preflight=None;return;}
         let restore=self.restore_preflight.take().unwrap();
@@ -715,6 +714,9 @@ impl WgpuRasterizer {
                 let accepted=scene.declare_operation_masks(r,packet,target,index,operation,damage)?.accept_lane(r)?;
                 ready&=accepted.prepare(r)?;
                 accepted.track(encoder);
+                let outputs=r.restore_preflight.as_ref().map_or(&[][..],RestorePreflight::outputs).iter()
+                    .filter_map(|(id,output)|match output {Output::Color(page) if *id==target=>Some(*page),_=>None});
+                scene.hold_settling_scratch(r,target,&operation.kind,damage,packet.scene.target_extent(target),outputs)?;
             }
             Ok(ready)
         });
