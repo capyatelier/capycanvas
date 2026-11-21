@@ -1679,6 +1679,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         };
         let result = match result {
             Poll::Pending => { self.pending_frame = Some(frame); return Ok(()); }
+            Poll::Ready(Err(error)) if B::is_memory_refusal(&error) => {
+                self.fail_unsubmitted_edits("Not enough memory to submit the raster edit");
+                self.recover_failed_rasters().map_err(EngineError::Document)?;
+                return Ok(());
+            }
             Poll::Ready(result) => result.map_err(EngineError::Backend),
         };
 
@@ -1800,30 +1805,31 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     /// submitted raster boundaries belong to history; CPU-only sample draining
     /// cannot create a saveable raster edit. The producer must be quiescent.
     pub fn discard_unsubmitted_input(&mut self) {
+        while self.input.pop().is_some() {}
+        self.queued_contacts.clear();
+        self.contact_settings = None;
+        self.fail_unsubmitted_edits("Renderer stopped before raster submission");
+    }
+
+    fn fail_unsubmitted_edits(&mut self, cause: &str) {
         self.pending_frame = None;
         for root in self.document().artwork.paint.iter().map(|(_, _, source)| &source.raster)
             .chain(self.document().artwork.coverage.iter().map(|(_, _, source)| &source.raster))
         {
             if root.try_data().is_none() {
-                let _ = root.publish(Err("Renderer stopped before raster submission".into()));
+                let _ = root.publish(Err(cause.into()));
             }
         }
         self.dabs.clear();
         self.batches.clear();
         self.restore_rasters.clear();
-        while self.input.pop().is_some() {}
-        self.queued_contacts.clear();
-        self.contact_settings = None;
         if self.active_stroke.is_some() {
             self.cancel_active();
         }
         self.pending_up = None;
-        self.completed_stroke = None;
-        self.completed_publication = None;
-        self.completed_before = None;
-        self.completed_at = None;
+        self.liquify_preview = None;
         self.rebuild_completed = false;
-        self.estimates.clear();
+        self.end_corrections();
     }
 
     /// Retired asynchronous frame producers have published their failures.
@@ -3374,6 +3380,63 @@ mod tests {
     }
 
     #[test]
+    fn a_stroke_refused_memory_is_cancelled_and_its_queued_input_is_consumed_in_order() {
+        for lifted in [false, true] {
+            let (mut input, mut canvas) = engine("Refused stroke", 128, 128);
+            input.push(event(1, PenPhase::Down, 20.)).unwrap();
+            input.push(event(2, PenPhase::Up, 80.)).unwrap();
+            canvas.render_frame().unwrap();
+            let document = canvas.document().clone();
+            let checkpoint = canvas.checkpoint();
+            let queued = |input: &mut InputProducer<PenEvent>, lifted: bool| {
+                if !lifted { input.push(event(4, PenPhase::Move, 60.)).unwrap(); }
+                input.push(event(5, PenPhase::Up, 90.)).unwrap();
+                for (sequence, phase) in [(6, PenPhase::Down), (7, PenPhase::Move), (8, PenPhase::Up)] { input.push(event(sequence, phase, 40.)).unwrap(); }
+            };
+            input.push(event(3, PenPhase::Down, 30.)).unwrap();
+            if lifted { queued(&mut input, lifted); }
+            canvas.backend_mut().refuse_memory = true;
+            let retired = canvas.backend().retired_sources;
+            if lifted { canvas.render_frame().unwrap(); } else { canvas.render_frame_at(2_000_000_000).unwrap(); }
+            assert_eq!(canvas.metrics().committed_strokes, if lifted { 2 } else { 1 }, "the frame is refused {}", if lifted { "as the contact commits" } else { "during the contact" });
+            assert!(!canvas.has_active_stroke() && canvas.pending_frame.is_none() && canvas.batches.is_empty() && canvas.dabs.is_empty(),
+                "the refused contact leaves no frame and no paint behind");
+            if !lifted { queued(&mut input, lifted); }
+            assert_eq!(canvas.document().artwork, document.artwork, "the refused stroke leaves the committed pixels in place");
+            assert_eq!(canvas.checkpoint(), checkpoint, "the refused stroke leaves history");
+            assert_eq!(canvas.backend().retired_sources, retired + 1, "the refused stroke releases its renderer sources");
+            canvas.backend_mut().refuse_memory = false;
+            for frame in 3..12 { canvas.render_frame_at(frame * 1_000_000_000).unwrap(); }
+            assert!(!canvas.has_pending_input() && !canvas.has_pending_document_edits() && !canvas.has_active_stroke(),
+                "the input queued behind the refused frame is consumed");
+            assert_eq!(canvas.metrics().input_events, if lifted { 7 } else { 8 }, "every queued sample is delivered in order");
+            assert_eq!(canvas.metrics().committed_strokes, if lifted { 3 } else { 2 }, "the contact after the refused one commits");
+            assert!(canvas.undo().unwrap());
+            assert_eq!(canvas.document().artwork, document.artwork, "undoing the next stroke returns to the pixels from before the refused one");
+            assert_eq!(canvas.checkpoint(), checkpoint);
+            assert!(canvas.redo().unwrap() && canvas.undo().unwrap() && canvas.undo().unwrap() && !canvas.undo().unwrap());
+        }
+    }
+
+    #[test]
+    fn an_amend_refused_memory_returns_to_the_revision_it_replaced() {
+        let (mut input, mut canvas) = engine("Refused amend", 128, 128);
+        input.push(event(1, PenPhase::Down, 20.)).unwrap();
+        input.push(event(2, PenPhase::Up, 80.)).unwrap();
+        canvas.render_frame().unwrap();
+        let (root, checkpoint) = (active_paint(canvas.document()).raster.clone(), canvas.checkpoint());
+        let target = canvas.document().working.target.unwrap();
+        canvas.amend_edit(Edit::SetRaster { target, revision: layer_core::raster::RasterRevision::pending() }).unwrap();
+        canvas.backend_mut().refuse_memory = true;
+        canvas.render_frame().unwrap();
+        assert_eq!((&active_paint(canvas.document()).raster, canvas.checkpoint()), (&root, checkpoint), "the refused amend leaves the committed stroke");
+        canvas.backend_mut().refuse_memory = false;
+        canvas.render_frame().unwrap();
+        assert!(!canvas.has_pending_document_edits());
+        assert!(canvas.undo().unwrap() && active_paint(canvas.document()).raster.is_empty() && !canvas.undo().unwrap(), "the stroke is still one Undo step");
+    }
+
+    #[test]
     fn contact_preview_and_camera_wait_do_not_replace_the_capture_boundary() {
         let (mut input, mut canvas) = engine("Capture boundary",64,64);
         canvas.render_frame_at(1_000_000_000).unwrap();
@@ -3414,6 +3477,8 @@ mod tests {
         (input, engine)
     }
 
+    const MEMORY_REFUSED: &str = "stroke memory refused";
+
     #[derive(Default)]
     struct RecordingRenderer {
         color: layer_core::color::DocumentColor,
@@ -3427,6 +3492,7 @@ mod tests {
         time_seconds: f32,
         phases: Vec<(layer_core::authored::EffectHandle, f32)>,
         fail_submit: bool,
+        refuse_memory: bool,
         pending_preparation: bool,
         fail_resize: bool,
         size: [u32; 2],
@@ -3451,6 +3517,7 @@ mod tests {
 
     impl CanvasRenderer for RecordingRenderer {
         type Error = BackendError;
+        fn is_memory_refusal(error: &Self::Error) -> bool { error.0 == MEMORY_REFUSED }
         fn evaluation_context(&self) -> layer_core::authored::EvaluationContext {
             layer_core::authored::EvaluationContext { elapsed:self.time_seconds, phases:self.phases.clone().into() }
         }
@@ -3523,6 +3590,7 @@ mod tests {
 
         fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
             if self.fail_submit { return Err(BackendError("submission failed")); }
+            if self.refuse_memory { return Err(BackendError(MEMORY_REFUSED)); }
             self.restored_rasters = packet.restore_rasters.iter().map(|(target, raster)| (*target, raster.identity())).collect();
             self.time_seconds = packet.time_seconds;
             self.bake_members = packet.dab_batches.iter().filter_map(|batch| {

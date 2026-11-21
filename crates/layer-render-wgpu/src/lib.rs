@@ -441,6 +441,7 @@ pub enum GpuRasterError {
     Color(String),
     CaptureBudget { required: u64, limit: u64 },
     SourceWorkingSetExceeded,
+    StrokeMemory,
     NotReady,
     NotPublished,
     Invariant(&'static str),
@@ -477,6 +478,7 @@ impl fmt::Display for GpuRasterError {
             Self::Invariant(message) => write!(formatter, "Renderer invariant failed: {message}"),
             Self::StaleExpression => formatter.write_str("Composite expression no longer exists"),
             Self::SourceWorkingSetExceeded => formatter.write_str("Source working set exceeds the decoded tile budget"),
+            Self::StrokeMemory => formatter.write_str("Not enough memory to finish this edit"),
             Self::CaptureBudget { required, limit } => write!(formatter,
                 "Snapshot dependency plan requires {required} bytes; limit is {limit}"),
             Self::Effect(message) => write!(formatter, "effect shader: {message}"),
@@ -3854,6 +3856,7 @@ impl WgpuRasterizer {
 }
 impl CanvasRenderer for WgpuRasterizer {
     fn is_preparation_pending(error: &Self::Error) -> bool { error.is_preparation_pending() }
+    fn is_memory_refusal(error: &Self::Error) -> bool { *error == GpuRasterError::StrokeMemory }
     fn adopt_committed_pages(&mut self, previous:&mut Self) {
         #[cfg(not(target_arch="wasm32"))]
         self.adopt_raster_preparation_wake(previous);
@@ -3959,6 +3962,7 @@ impl CanvasRenderer for WgpuRasterizer {
             && self.brush_batches_ready(packet)
             && self.prepare_raster_restores(packet) && self.bake_analyses_ready(packet) && self.retouch_analyses_ready(packet) && self.retouch_references_ready(packet)
             && self.bake_vectors_ready(packet) && self.prepare_bakes(packet) && self.prepare_fill_edges(packet) && self.prepare_operation_masks(packet) && self.prepare_transform_cancel(packet) && self.prepare_transform_preview(packet,preview);
+        let ready=ready || self.lane_exhausted();
         if !ready {self.upload_window_open(residency::Class::Visible);}
         if let Some(installed) = installed { self.transform_preview = installed; }
         ready
@@ -4425,7 +4429,7 @@ impl WgpuRasterizer {
         self.background_frame = false;
         #[cfg(test)]
         let artwork_revision_before=self.artwork_revision;
-        if let Some(error)=self.take_bake_failure().or_else(||self.take_fill_edges_failure()).or_else(||self.take_restore_failure()) {return Err(error);}
+        if let Some(error)=self.take_lane_failure().or_else(||self.take_bake_failure()).or_else(||self.take_fill_edges_failure()).or_else(||self.take_restore_failure()) {return Err(error);}
         let retained_transition = self.retained_transition_frame(packet, self.transform_preview.as_ref());
         let analysis_dirty = std::mem::take(&mut self.analysis_dirty);
         let packet = FramePacket {composite_all: packet.composite_all || analysis_dirty, ..packet};

@@ -944,6 +944,31 @@ mod tests {
         );
     }
     #[test]
+    fn a_failed_amend_is_withdrawn_to_the_revision_it_replaced() {
+        use crate::{Document, Edit, Editor};
+        let mut editor = Editor::new(Document::new(crate::authored::PortableId::random(), 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
+        let target = editor.document().working.target.unwrap();
+        let amend = |editor: &mut Editor| { let revision = RasterRevision::pending(); editor.amend(Edit::SetRaster { target, revision: revision.clone() }).unwrap(); revision };
+        let first = RasterRevision::backed(RasterData::default());
+        editor.perform(Edit::SetRaster { target, revision: first.clone() }).unwrap();
+        let checkpoint = editor.checkpoint();
+        for chain in [1, 2] {
+            let pending = (0..chain).map(|_| amend(&mut editor)).last().unwrap();
+            assert_eq!((editor.recover_failed_rasters().unwrap(), editor.document().target_raster(target).unwrap()), (0, &pending), "pending is not failed");
+            pending.publish(Err("refused".into())).unwrap();
+            assert_eq!(editor.recover_failed_rasters().unwrap(), 0, "the amended entry stays in history");
+            assert_eq!((editor.document().target_raster(target).unwrap(), editor.checkpoint()), (&first, checkpoint), "{chain} unsubmitted amends return to the revision they replaced");
+        }
+        let second = amend(&mut editor);
+        second.publish(Ok(RasterData::default())).unwrap();
+        editor.finish_raster_submission();
+        let submitted = editor.checkpoint();
+        amend(&mut editor).publish(Err("refused".into())).unwrap();
+        assert_eq!(editor.recover_failed_rasters().unwrap(), 0);
+        assert_eq!((editor.document().target_raster(target).unwrap(), editor.checkpoint()), (&second, submitted), "a submitted amend is the revision a later one returns to");
+        assert!(editor.undo().unwrap() && editor.document().target_raster(target).unwrap().is_empty() && !editor.undo().unwrap(), "the amended entry is still one Undo step");
+    }
+    #[test]
     fn exact_backing_reuses_unchanged_tiles_and_preserves_snapshot() {
         let descriptor = RasterPlane::Color.descriptor(Default::default());
         let size = descriptor.byte_len([TILE_SIZE; 2]).unwrap();

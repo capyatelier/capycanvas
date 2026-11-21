@@ -14,6 +14,7 @@ impl AttachedRenderer {
 }
 impl CanvasRenderer for AttachedRenderer {
     fn is_preparation_pending(error: &Self::Error) -> bool { WgpuRasterizer::is_preparation_pending(error) }
+    fn is_memory_refusal(error: &Self::Error) -> bool { WgpuRasterizer::is_memory_refusal(error) }
     fn preflight_image_object_affine(&self, scene: layer_core::SceneView<'_>, object: layer_core::authored::ImageObjectHandle,
         affine: layer_core::authored::Affine64, view: layer_render::ViewState,
     ) -> Result<(), Self::Error> {

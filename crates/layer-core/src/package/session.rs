@@ -18,7 +18,7 @@ type HistoryDocuments=Vec<(Document,u64)>;
 impl EditorCapture {
     pub fn retained_tiles(&self)->crate::raster_storage::RetainedTiles {
         let editor=Editor {document:self.document.clone(),undo:self.undo.iter().map(|(edit,checkpoint)|HistoryEntry::new(edit.clone(),*checkpoint)).collect(),
-            redo:self.redo.iter().map(|(edit,checkpoint)|HistoryEntry::new(edit.clone(),*checkpoint)).collect(),checkpoint:self.artwork.checkpoint.edit_checkpoint,next_checkpoint:self.next_checkpoint,ledger:Default::default(),memory_dirty:false};
+            redo:self.redo.iter().map(|(edit,checkpoint)|HistoryEntry::new(edit.clone(),*checkpoint)).collect(),checkpoint:self.artwork.checkpoint.edit_checkpoint,next_checkpoint:self.next_checkpoint,ledger:Default::default(),memory_dirty:false,amends:Vec::new()};
         editor.retained_tiles()
     }
     pub fn artwork(&self)->&ArtworkCapture {&self.artwork}
@@ -506,7 +506,7 @@ fn open_parts_checked_with_budget(metadata:&[u8],resource_pack:ImmutableBacking,
     }
     undo.extend(entries(&record.undo,&documents,1,record.current.checkpoint)?);redo.extend(entries(&record.redo,&documents,1+record.undo.len(),record.current.checkpoint)?);
     let mut document=documents.remove(0);document.revision=record.checkpoint.artwork_generation;document.next_stroke_id=record.next_stroke_id;
-    let mut editor=Editor {document,undo,redo,checkpoint:record.checkpoint.edit_checkpoint,next_checkpoint:record.next_checkpoint,ledger:Default::default(),memory_dirty:false};
+    let mut editor=Editor {document,undo,redo,checkpoint:record.checkpoint.edit_checkpoint,next_checkpoint:record.next_checkpoint,ledger:Default::default(),memory_dirty:false,amends:Vec::new()};
     let mut accounting=crate::history_budget::Accounting::new(editor.document());let mut retained=0usize;
     for entry in editor.undo.iter().rev().chain(editor.redo.iter().rev()) {
         retained=retained.saturating_add(accounting.charge(entry));

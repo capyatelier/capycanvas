@@ -70,7 +70,7 @@ impl Demand {
 }
 
 #[derive(Default)]
-struct Lane {refused:Option<crate::residency::Blocked>,wanted:u64,asked:bool,lent:u64,base:u64,lendable:u64,exhausted:bool,told:bool,refusals:u64}
+struct Lane {refused:Option<crate::residency::Blocked>,wanted:u64,asked:bool,lent:u64,base:u64,lendable:u64,exhausted:bool,refusals:u64}
 
 pub(super) struct Memory {
     display: Owner,
@@ -191,7 +191,6 @@ impl Memory {
         let mut lane=self.lane.borrow_mut();(lane.lent,lane.wanted,lane.base)=(drawn,0,raster.saturating_sub(drawn));
     }
     pub(crate) fn stroke_memory_refusals(&self)->u64 {self.lane.borrow().refusals}
-    pub(crate) fn tell_exhausted(&self) {let mut lane=self.lane.borrow_mut();if lane.exhausted && !lane.told {lane.told=true;lane.refusals+=1;}}
     fn carry_overdraft(&self,used:u64) {
         if used>self.retention_grant() && self.lane.borrow().refused.is_none() {self.overdraft.borrow_mut().extend(self.display.handle.admit_working_through(used,None));}
     }
@@ -287,7 +286,7 @@ impl WgpuRasterizer {
         }
     }
     fn draining(&self)->Vec<Arc<crate::residency::Tier>> {
-        vec![self.retired_display_bytes.clone(),self.source_tiles.borrow().retired_tier(),self.device.transient_display.clone(),self.raster_buffers.transfer.clone()]
+        vec![self.retired_display_bytes.clone(),self.source_tiles.borrow().completing_tier(),self.device.transient_display.clone(),self.raster_buffers.transfer.clone()]
     }
     fn try_group(&mut self,raster:u64,display:u64)->Result<(crate::residency::Reservation,crate::residency::Reservation),crate::residency::Blocked> {
         #[cfg(test)] crate::test_support::PassCounts {raster_admissions:1,..Default::default()}.record();
@@ -325,8 +324,15 @@ impl WgpuRasterizer {
         let mut lane=self.memory.lane.borrow_mut();
         let short=raster.used().saturating_add(lane.wanted).saturating_sub(raster.limit());
         let lent_out=lane.lent>=lane.lendable || short==0;
-        lane.exhausted=self.live_stroke.is_some() && draining==0 && optional<short.max(blocked.deficit()) && lent_out && display.yielding()==0 && display.heap().pending()==0 && !blocked.fits();
+        lane.exhausted=self.live_stroke.is_some() && draining==0 && !self.raster_backing_in_flight() && optional<short.max(blocked.deficit()) && lent_out && display.yielding()==0 && display.heap().pending()==0 && !blocked.fits();
         blocked
+    }
+    pub(crate) fn lane_exhausted(&self)->bool {self.memory.lane.borrow().exhausted}
+    pub(crate) fn take_lane_failure(&mut self)->Option<GpuRasterError> {
+        if !self.lane_exhausted() {return None;}
+        self.memory.lane.borrow_mut().refusals+=1;
+        self.retire_restore();self.end_lane_wait();
+        Some(GpuRasterError::StrokeMemory)
     }
     pub(crate) fn lane_polls(&self)->bool {
         #[cfg(not(target_arch="wasm32"))] {self.preparation_wake.is_none() && self.lane_waits()}
@@ -336,7 +342,7 @@ impl WgpuRasterizer {
         self.scene_tiers.display.heap().pending()==0 && self.memory.stop().is_some_and(|lane|self.refuses(&lane))
     }
     fn end_lane_wait(&self) {
-        let ended={let mut lane=self.memory.lane.borrow_mut();(lane.wanted,lane.exhausted,lane.told)=(0,false,false);lane.refused.take().is_some()};
+        let ended={let mut lane=self.memory.lane.borrow_mut();(lane.wanted,lane.exhausted)=(0,false);lane.refused.take().is_some()};
         if !ended {return;}
         self.memory.invalidate_limits();self.publish_memory();
         if let Some(wake)=&self.preparation_wake {wake();}
@@ -422,6 +428,7 @@ impl WgpuRasterizer {
     }
     pub(crate) fn begin_frame_memory(&mut self, packet: FramePacket<'_>) {
         if let Some(lane)=self.memory.stop() {lane.rearm();}
+        self.memory.lane.borrow_mut().exhausted=false;
         self.memory.fruitless.borrow_mut().clear();
         if self.restore_preparation()==Some(crate::frame_demand::Outstanding::Blocked(crate::frame_demand::Input::Residency))
             && let Some(scene)=&self.scene {scene.advance_demand_epoch();}
