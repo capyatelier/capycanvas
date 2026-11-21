@@ -946,13 +946,6 @@ pub(crate) fn max_error(a: &[[f32; 4]], b: &[[f32; 4]]) -> f32 {
     a.iter().flatten().zip(b.iter().flatten()).map(|(a, b)| (a - b).abs()).fold(0., f32::max)
 }
 
-pub(crate) const DISPLAY_HALF_ULP: f32 = 1. / 2048.;
-const HALF_MIN_NORMAL: f32 = 1. / 16384.;
-
-pub(crate) fn max_relative_error(a: &[[f32; 4]], b: &[[f32; 4]]) -> f32 {
-    a.iter().flatten().zip(b.iter().flatten()).map(|(a, b)| (a - b).abs() / a.abs().max(b.abs()).max(HALF_MIN_NORMAL)).fold(0., f32::max)
-}
-
 pub(crate) fn max_error_bytes(a: &[u8], b: &[u8]) -> f32 {
     a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0.iter())
         .map(|(a, b)| (f32::from_le_bytes(*a) - f32::from_le_bytes(*b)).abs())
