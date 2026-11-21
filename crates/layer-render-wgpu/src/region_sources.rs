@@ -266,10 +266,6 @@ impl RawRegions {
         self.progress = Some(Classification {frame, extent:r.document_extent, batch:0, source:0});
         Ok(())
     }
-    #[cfg(test)]
-    pub fn tonal_cached(&self) -> bool {
-        self.tonal_cache.as_ref().is_some_and(|c| c.ready)
-    }
     fn encode_cached(
         &self,
         device: &wgpu::Device,
@@ -819,6 +815,9 @@ fn opaque_photo(r: &WgpuRasterizer, frame: &artwork::Frame, extent: [u32; 2]) ->
 mod tests {
     use super::*;
     use crate::artwork_sample_tests::{add_group, effect_draft, set_effect};
+    impl RawRegions {
+        pub(crate) fn tonal_cached(&self) -> bool { self.tonal_cache.as_ref().is_some_and(|c| c.ready) }
+    }
     use layer_core::authored::{CoverageSource, MaskUse, PortableId};
     use layer_core::{BlendSpace, Document, DocumentNames, EffectValue, LayerBlend, Rect, Selection};
     use layer_render::{RegionRequest, RegionSource};

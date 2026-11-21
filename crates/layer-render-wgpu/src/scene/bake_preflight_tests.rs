@@ -1,6 +1,10 @@
 use super::*;
 use layer_engine::{CanvasEngine, ViewTransform, input_queue};
 
+impl Scene {
+    pub(crate) fn image_work(&self) -> [u64; 2] { [self.images.input_updates, self.images.pass_updates] }
+}
+
 #[test]
 fn a_bake_within_its_image_budget_filters_each_step_once() {
     let extent = [1100, 700];

@@ -525,10 +525,6 @@ impl Scene {
         self.images.pass_pixels
     }
     #[cfg(test)]
-    pub fn image_work(&self) -> [u64; 2] {
-        [self.images.input_updates, self.images.pass_updates]
-    }
-    #[cfg(test)]
     pub fn image_cache_bytes(&self) -> u64 {
         self.images.storage_bytes()
     }

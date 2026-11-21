@@ -966,8 +966,6 @@ impl ViewportPresenter {
     }
 
     pub fn damage_area_pixels(&self) -> u64 { self.presented_area }
-    #[cfg(test)]
-    pub(crate) fn presented_camera(&self)->Option<ViewState> {self.presented_view.map(|(view,..)|view)}
     pub fn content_revision(&self, renderer: &WgpuRasterizer) -> Option<(u64,u64)> {
         if self.canvas_revision()!=Some(renderer.canvas_preview_revision()) {return None;}
         renderer.selected_display_cache()?.content_revision()
@@ -1833,6 +1831,9 @@ mod variant_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    impl ViewportPresenter {
+        pub(crate) fn presented_camera(&self)->Option<ViewState> {self.presented_view.map(|(view,..)|view)}
+    }
     #[test]
     fn waiting_drawing_shows_surround_until_full_composition_and_keeps_transparency_after_edits() {
         use crate::layer_tests::placement::{paint_document, set_source, occurrence_id};

@@ -210,6 +210,13 @@ impl NativeCapture {
 mod tests {
     use super::*;
 
+    impl WgpuRasterizer {
+        fn raster_publication_pending(&self)->bool {
+            self.raster.as_ref().and_then(|runtime|runtime.worker.as_ref())
+                .is_some_and(|worker|worker.pending.used()!=0)
+        }
+    }
+
     fn fixture_input_name(coordinate:[u32;2])->layer_core::raster::ContentVersion {
         use layer_core::raster::ContentVersion;
         let fill=[0.25f32,0.125,0.5,1.].into_iter().enumerate()

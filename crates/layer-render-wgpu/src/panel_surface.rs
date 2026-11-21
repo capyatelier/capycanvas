@@ -143,10 +143,6 @@ impl Recipes {
 }
 
 impl PanelSurfaces {
-    #[cfg(test)]
-    pub fn new(device: &crate::PipelineDevice, uniform: &wgpu::Buffer, shader: &wgpu::ShaderModule, format: wgpu::TextureFormat) -> Self {
-        Self::from_recipes(device, uniform, &Recipes::new(device, shader, format))
-    }
     pub fn from_recipes(device: &crate::PipelineDevice, uniform: &wgpu::Buffer, recipes: &Recipes) -> Self {
         let Recipes { pipeline, mask_pipeline, layout, profile, mask_layout, empty, sampler, spacer, .. } = recipes;
         let camera=crate::bindings::group(device,"panel viewport",&recipes.viewport,[wgpu::BindingResource::Buffer(wgpu::BufferBinding {

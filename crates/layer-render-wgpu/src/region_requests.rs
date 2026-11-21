@@ -816,19 +816,6 @@ impl WgpuRasterizer {
             .as_ref()
             .is_some_and(|r| r.pending.is_some() || r.waiting.is_some() || r.running.is_some() || r.areas.is_some())
     }
-    /// Limit refinement chunks and previews to `taps`, or with None restore
-    /// this GPU's budgets.
-    #[cfg(test)]
-    pub(super) fn set_refine_chunk(&mut self, taps: Option<f64>) {
-        let mut regions = self.regions.take().unwrap_or_else(|| RegionRequests::new(self));
-        regions.refiner(self).budget = taps;
-        self.keep_regions(regions);
-    }
-    /// The pixel taps a refinement chunk takes on this GPU, once timed.
-    #[cfg(test)]
-    pub(super) fn refine_chunk(&self) -> Option<(f64, bool)> {
-        self.regions.as_ref()?.refiner.as_ref().map(|r| (r.chunk(), r.times_chunks()))
-    }
     pub(super) fn cancel_region(&mut self) {
         if let Some(mut regions) = self.regions.take() {
             regions.cancel();
@@ -937,6 +924,19 @@ impl WgpuRasterizer {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    impl WgpuRasterizer {
+        /// Limit refinement chunks and previews to `taps`, or with None restore
+        /// this GPU's budgets.
+        pub(crate) fn set_refine_chunk(&mut self, taps: Option<f64>) {
+            let mut regions = self.regions.take().unwrap_or_else(|| RegionRequests::new(self));
+            regions.refiner(self).budget = taps;
+            self.keep_regions(regions);
+        }
+        /// The pixel taps a refinement chunk takes on this GPU, once timed.
+        pub(crate) fn refine_chunk(&self) -> Option<(f64, bool)> {
+            self.regions.as_ref()?.refiner.as_ref().map(|r| (r.chunk(), r.times_chunks()))
+        }
+    }
     pub(crate) fn cache_ready(r:&WgpuRasterizer)->bool {r.regions.as_ref().unwrap().cache.as_ref().unwrap().ready}
     pub(crate) fn request_encoded(r:&WgpuRasterizer)->bool {r.regions.as_ref().is_some_and(|r|r.waiting.is_none()&&r.pending.is_some()&&r.readback.is_some()&&r.rx.is_some())}
     pub(crate) fn cached_pages(r:&WgpuRasterizer)->(wgpu::Buffer,Option<wgpu::Buffer>,std::collections::BTreeSet<[u32;2]>) {
