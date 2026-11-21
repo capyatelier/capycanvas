@@ -1604,6 +1604,11 @@ fn animated_filters_move_on_the_reduced_grid_and_match_native_reduction() {
     }
 }
 
+fn walked_scratch(cache: &Cache) -> u64 {
+    cache.output.iter().chain(&cache.exact_tile).map(|image| texture_bytes(&image.texture)).sum::<u64>()
+        + cache.overview.iter().chain(&cache.previous).map(|cache| walked_scratch(cache)).sum::<u64>()
+}
+
 #[test]
 fn scene_counters_match_a_structure_walk_after_seeded_allocations_and_frees() {
     let extent = [517, 259];
@@ -1628,7 +1633,8 @@ fn scene_counters_match_a_structure_walk_after_seeded_allocations_and_frees() {
         let scene = r.scene.as_ref().unwrap();
         let [counted, walked] = [scene.usage(), scene.walked_usage()];
         let [objects, walked_objects] = scene.object_gpu();
-        assert_eq!([counted.working, counted.ram, counted.pinned, objects], [walked.working, walked.ram, walked.pinned, walked_objects], "step {step}");
+        let display_scratch = r.scale_display.as_ref().map_or(0, walked_scratch);
+        assert_eq!([counted.working, counted.ram, counted.pinned, objects], [walked.working + display_scratch, walked.ram, walked.pinned, walked_objects], "step {step}");
     }
 }
 
