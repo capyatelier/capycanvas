@@ -97,11 +97,11 @@ fn reduced_selection_standby_prepares_its_pipelines_without_encoding_on_the_fram
     assert_eq!(transforms.storage_bytes(), bytes, "Cold standby dependencies must finish before capture or reduction");
     assert_eq!(encoder.pass_count(),0,"cold standby declares dependencies without encoding");
     r.shader_idle(true, false);
-    while !r.scene_pipelines.source.pipeline.ready() || !transforms.display_pipelines()[0].ready() {
+    crate::test_support::wait_until("Standby compilation timed out", || {
+        if r.scene_pipelines.source.pipeline.ready() && transforms.display_pipelines()[0].ready() { return Ok(()); }
         r.poll_startup().unwrap();
-        assert!(std::time::Instant::now()<deadline,"Standby compilation timed out");
-        std::thread::sleep(Duration::from_millis(1));
-    }
+        Err(())
+    });
     assert!(r.scene_pipelines.source.pipeline.ready());
     assert!(transforms.display_pipelines()[0].ready());
     transforms.prepare_standby(&mut r, &mut encoder, document.scene(), target(&document), &selection, 1).unwrap();

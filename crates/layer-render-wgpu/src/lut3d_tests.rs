@@ -121,9 +121,8 @@ fn builtin_looks_preserve_alpha_hdr_and_match_known_srgb_knots_in_every_working_
 }
 fn capture(r:&mut WgpuRasterizer,scene:&mut scene::Scene,document:&Document,output:scene::Output,crop:PixelRect)->Vec<[f32;4]> {
     let (target,_)=crate::create_color_target(&r.device,[crop.width(),crop.height()],"LUT checkpoint oracle");
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    scene.capture_region(r,packet(document.scene().with_owner(0,0),[256;2]),&target,crop,output,&mut encoder).unwrap();
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);floats(&crate::layer_tests::page_bytes(r,&target))
+    crate::test_support::submit_encoded(r,|r,encoder|scene.capture_region(r,packet(document.scene().with_owner(0,0),[256;2]),&target,crop,output,encoder).unwrap());
+    floats(&crate::layer_tests::page_bytes(r,&target))
 }
 
 #[test]

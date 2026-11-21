@@ -10,25 +10,20 @@ fn engine(document:Document)->CanvasEngine<WgpuRasterizer> {
 }
 
 fn finish(engine:&mut CanvasEngine<WgpuRasterizer>)->Result<(),String> {
-    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(15);
-    loop {
-        engine.render_frame_at(0).map_err(|error|error.to_string())?;
-        if !engine.has_pending_document_edits()&&!engine.has_pending_input()&&engine.backend().next_frame()!=layer_render::FrameDemand::Work{return Ok(());}
-        assert!(std::time::Instant::now()<deadline,"cold local-analysis raster operation remained pending");
-        std::thread::yield_now();
-    }
+    crate::test_support::wait_until("cold local-analysis raster operation remained pending",||match engine.render_frame_at(0) {
+        Err(error)=>Ok(Err(error.to_string())),
+        Ok(_) if !engine.has_pending_document_edits()&&!engine.has_pending_input()&&engine.backend().next_frame()!=layer_render::FrameDemand::Work=>Ok(Ok(())),
+        Ok(_)=>Err(()),
+    })
 }
 
 fn start_bake_analysis(engine:&mut CanvasEngine<WgpuRasterizer>,target:SourceTarget) {
-    let deadline=std::time::Instant::now()+READBACK_TIMEOUT;
-    loop {
+    crate::test_support::wait_until("cold bake analysis must start",||{
         engine.render_frame_at(0).unwrap();
         assert!(engine.has_pending_document_edits());
         assert!(engine.document().target_raster(target).unwrap().try_data().is_none());
-        if !engine.backend().bake_analyses.is_empty() {return;}
-        assert!(std::time::Instant::now()<deadline,"cold bake analysis must start");
-        std::thread::yield_now();
-    }
+        if engine.backend().bake_analyses.is_empty() {Err(())} else {Ok(())}
+    });
 }
 
 fn baked_pixel(engine:&CanvasEngine<WgpuRasterizer>,target:SourceTarget,x:u32,y:u32)->[f32;4] {
@@ -275,8 +270,8 @@ fn cold_color_candidate_prepares_local_guides_before_its_first_submission_and_ca
     let make=|control|gpu().color_canvas(project.clone(),EvaluationContext::default(),&Default::default(),crate::test_support::view([33,17]),control).unwrap();
     let control=CaptureControl::default();let mut cancelled=make(control.clone());control.cancel();
     assert!(cancelled.poll().unwrap_err().to_string().contains("cancel"));
-    let mut candidate=make(Default::default());let deadline=std::time::Instant::now()+std::time::Duration::from_secs(15);
-    while !candidate.poll().unwrap(){assert!(std::time::Instant::now()<deadline,"cold color candidate remained pending");std::thread::yield_now();}
+    let mut candidate=make(Default::default());
+    crate::test_support::wait_until("cold color candidate remained pending",||if candidate.poll().unwrap() {Ok(())} else {Err(())});
     let renderer=candidate.take_ready().unwrap();assert_eq!(renderer.effect_analyses.len(),2);
     let pixels=crate::test_support::float_pixels(&renderer,crate::test_support::document_texture(&renderer));
     for pixel in pixels{close(pixel,output(f64::from(0.01125_f32),0.5,0.5),0.5,true);}
@@ -344,8 +339,7 @@ fn dropping_a_pending_cold_merge_releases_members_without_publishing_a_partial_r
     assert!(engine.has_pending_document_edits());
     let raster=engine.document().target_raster(result).unwrap().clone();assert!(raster.try_data().is_none());
     drop(engine);
-    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(15);
-    while source.upgrade().is_some(){assert!(std::time::Instant::now()<deadline,"cancelled merge retained its input");std::thread::yield_now();}
+    crate::test_support::wait_until("cancelled merge retained its input",||if source.upgrade().is_some() {Err(())} else {Ok(())});
     assert!(raster.try_data().is_none(),"cancelled guide work published a partial bake");
 }
 

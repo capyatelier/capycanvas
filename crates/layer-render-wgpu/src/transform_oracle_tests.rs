@@ -263,14 +263,6 @@ impl Oracle {
     }
 }
 
-fn frame(r: &mut WgpuRasterizer, layer: &Document, reset: bool) {
-    crate::test_support::submit_settled(r, FramePacket {
-        reset_layers: reset,
-        composite_all: reset,
-        ..packet(layer.scene(), EXTENT)
-    });
-}
-
 /// Every Float32 texel of the layer's pages, by layer pixel.
 fn pages(r: &WgpuRasterizer, scene: SceneView<'_>, desired: &layer_render::TransformPreview) -> Vec<([u32; 2], [f32; 4])> {
     let transforms = r.transforms.as_ref().unwrap();
@@ -301,7 +293,7 @@ fn native_transforms_match_an_independent_oracle_for_every_filter_and_map() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut layer = paint_document(EXTENT, "oracle");
     set_source(&mut layer, source_image(straight));
-    frame(&mut r, &layer, true);
+    crate::test_support::submit_settled(&mut r, FramePacket { reset_layers: true, ..packet(layer.scene(), EXTENT) });
     let pivot = Point { x: 150., y: 110. };
     let source = Rect {
         min: Point { x: 40., y: 30. },
@@ -353,13 +345,13 @@ fn native_transforms_match_an_independent_oracle_for_every_filter_and_map() {
                     },
                 };
                 r.set_transform_preview(Some(&preview)).unwrap();
-                frame(&mut r, &layer, false);
+                crate::test_support::submit_settled(&mut r, FramePacket { composite_all: false, ..packet(layer.scene(), EXTENT) });
                 let h = map.projective().unwrap().0.map(f64::from);
                 let texels = pages(&r, layer.scene(), r.transform_preview.as_ref().unwrap());
                 assert!(!texels.is_empty(), "the preview draws pages");
                 check_pages(&oracle, h, interpolation, false, texels, format_args!("mode {mode} {interpolation:?} {map:?}"));
                 r.set_transform_preview(None).unwrap();
-                frame(&mut r, &layer, false);
+                crate::test_support::submit_settled(&mut r, FramePacket { composite_all: false, ..packet(layer.scene(), EXTENT) });
             }
         }
     }
@@ -370,7 +362,7 @@ fn transforms_that_keep_their_source_place_the_moved_copy_over_the_original() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut layer = paint_document(EXTENT, "oracle");
     set_source(&mut layer, source_image(straight));
-    frame(&mut r, &layer, true);
+    crate::test_support::submit_settled(&mut r, FramePacket { reset_layers: true, ..packet(layer.scene(), EXTENT) });
     let maps = [
         Affine::translation(Point { x: 37., y: -12. }),
         Affine::translation(Point { x: -150., y: 90. }),
@@ -397,11 +389,11 @@ fn transforms_that_keep_their_source_place_the_moved_copy_over_the_original() {
                     transform,
                 }))
                 .unwrap();
-                frame(&mut r, &layer, false);
+                crate::test_support::submit_settled(&mut r, FramePacket { composite_all: false, ..packet(layer.scene(), EXTENT) });
                 let h = Projective::from_affine(affine).0.map(f64::from);
                 check_pages(&oracle, h, interpolation, true, pages(&r, layer.scene(), r.transform_preview.as_ref().unwrap()), format_args!("mode {mode} {interpolation:?} {affine:?}"));
                 r.set_transform_preview(None).unwrap();
-                frame(&mut r, &layer, false);
+                crate::test_support::submit_settled(&mut r, FramePacket { composite_all: false, ..packet(layer.scene(), EXTENT) });
             }
         }
     }
@@ -415,7 +407,7 @@ fn minified_native_transforms_average_the_pixel_footprint() {
         let on = f32::from((x + y) % 2 == 0);
         [on, on, on, 1.]
     }));
-    frame(&mut r, &layer, true);
+    crate::test_support::submit_settled(&mut r, FramePacket { reset_layers: true, ..packet(layer.scene(), EXTENT) });
     for (transaction, interpolation) in [Interpolation::Linear, Interpolation::Bicubic]
         .into_iter()
         .enumerate()
@@ -444,7 +436,7 @@ fn minified_native_transforms_average_the_pixel_footprint() {
                 },
             }))
             .unwrap();
-            frame(&mut r, &layer, false);
+            crate::test_support::submit_settled(&mut r, FramePacket { composite_all: false, ..packet(layer.scene(), EXTENT) });
             let values: Vec<f32> = pages(&r, layer.scene(), r.transform_preview.as_ref().unwrap())
                 .into_iter()
                 .filter(|([x, y], _)| (8..60).contains(x) && (12..44).contains(y))
@@ -467,7 +459,7 @@ fn bicubic_and_lanczos_mask_transforms_keep_scalar_coverage_within_the_unit_inte
     for interpolation in [Interpolation::Bicubic, Interpolation::Lanczos] {
         let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         let layer = masked(EXTENT, [[20., 20.], [60., 20.], [60., 60.], [20., 60.]]);
-        frame(&mut r, &layer, true);
+        crate::test_support::submit_settled(&mut r, FramePacket { reset_layers: true, ..packet(layer.scene(), EXTENT) });
         r.set_transform_preview(Some(&layer_render::TransformPreview {
             transaction: 1,
             moving: false,
@@ -478,7 +470,7 @@ fn bicubic_and_lanczos_mask_transforms_keep_scalar_coverage_within_the_unit_inte
             },
         }))
         .unwrap();
-        frame(&mut r, &layer, false);
+        crate::test_support::submit_settled(&mut r, FramePacket { composite_all: false, ..packet(layer.scene(), EXTENT) });
         let values: Vec<f32> = mask_values(&r, mask_target(&layer)).into_values().flatten().collect();
         assert!(!values.is_empty(), "the preview draws mask pages");
         assert!(
@@ -654,7 +646,7 @@ fn native_mesh_transforms_match_the_cpu_tessellation_including_folds() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut layer = paint_document(EXTENT, "mesh oracle");
     set_source(&mut layer, source_image(straight));
-    frame(&mut r, &layer, true);
+    crate::test_support::submit_settled(&mut r, FramePacket { reset_layers: true, ..packet(layer.scene(), EXTENT) });
     let source = Rect {
         min: Point { x: 40., y: 30. },
         max: Point { x: 230., y: 180. },
@@ -718,7 +710,7 @@ fn native_mesh_transforms_match_the_cpu_tessellation_including_folds() {
                     },
                 }))
                 .unwrap();
-                frame(&mut r, &layer, false);
+                crate::test_support::submit_settled(&mut r, FramePacket { composite_all: false, ..packet(layer.scene(), EXTENT) });
                 let texels = pages(&r, layer.scene(), r.transform_preview.as_ref().unwrap());
                 assert!(!texels.is_empty());
                 let mut mismatches = Vec::new();
@@ -746,7 +738,7 @@ fn native_mesh_transforms_match_the_cpu_tessellation_including_folds() {
                     mismatches.first()
                 );
                 r.set_transform_preview(None).unwrap();
-                frame(&mut r, &layer, false);
+                crate::test_support::submit_settled(&mut r, FramePacket { composite_all: false, ..packet(layer.scene(), EXTENT) });
             }
         }
     }
@@ -770,7 +762,7 @@ fn mask_warps_seeded_from_an_affine_match_the_affine() {
             .map(|map| {
                 let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
                 let layer = masked(EXTENT, [[20., 20.], [150., 30.], [120., 160.], [30., 110.]]);
-                frame(&mut r, &layer, true);
+                crate::test_support::submit_settled(&mut r, FramePacket { reset_layers: true, ..packet(layer.scene(), EXTENT) });
                 r.set_transform_preview(Some(&layer_render::TransformPreview {
                     transaction: 1,
                     moving: false,
@@ -781,7 +773,7 @@ fn mask_warps_seeded_from_an_affine_match_the_affine() {
                     },
                 }))
                 .unwrap();
-                frame(&mut r, &layer, false);
+                crate::test_support::submit_settled(&mut r, FramePacket { composite_all: false, ..packet(layer.scene(), EXTENT) });
                 mask_values(&r, mask_target(&layer))
             })
             .collect();

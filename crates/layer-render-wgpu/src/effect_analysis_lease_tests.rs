@@ -37,15 +37,8 @@ fn analysis_admits_new_and_replacement_guides_before_the_next_frame() {
             drop(pressure);
             let query = ArtworkQuery::new(&document, ArtworkSource::EffectInput(target));
             assert!(renderer.request_effect_analysis(query).unwrap());
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-            loop {
-                if let Some(result) = renderer.take_effect_analysis() {
-                    result.unwrap_or_else(|error| panic!("{id} at opacity {opacity}: {error}; retained {}", retained(&renderer)));
-                    break;
-                }
-                assert!(std::time::Instant::now() < deadline, "{id} analysis did not complete");
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
+            crate::test_support::wait_until(format_args!("{id} analysis did not complete"), || renderer.take_effect_analysis().ok_or(()))
+                .unwrap_or_else(|error| panic!("{id} at opacity {opacity}: {error}; retained {}", retained(&renderer)));
             renderer.accept_effect_analysis().unwrap();
             assert_eq!(renderer.effect_analyses.len(), 1);
             assert_eq!(renderer.effect_analyses[0].layer(), target);
@@ -148,14 +141,12 @@ fn analysis_in_flight_cancellation_releases_reserved_and_unpublished_storage() {
         let worker_control = control.clone();
         let gpu = renderer.snapshot_gpu();
         let worker = std::thread::spawn(move || pollster::block_on(gpu.effect_analysis(query, worker_control)));
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-        let peak = loop {
+        let peak = crate::test_support::wait_until("guide reservation did not start", || {
             let bytes = retained(&renderer);
-            if bytes > baseline { break bytes; }
+            if bytes > baseline { return Ok(bytes); }
             assert!(!worker.is_finished(), "guide completed without an observable reservation");
-            assert!(std::time::Instant::now() < deadline, "guide reservation did not start");
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        };
+            Err(bytes)
+        });
         let cancelled = std::time::Instant::now();
         control.cancel();
         assert!(worker.join().unwrap().is_err());
