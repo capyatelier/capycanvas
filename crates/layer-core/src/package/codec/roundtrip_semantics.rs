@@ -144,6 +144,26 @@ fn native_sdr_archives_reject_depth_mismatch() {
     assert!(PreparedPackage::prepare(&capture(&artwork), None, &AtomicBool::new(false)).is_err());
 }
 #[test]
+fn a_raster_without_a_watercolor_style_saves_only_without_its_wetness_plane() {
+    let wet = native(Default::default());
+    let settled = |keep: fn(&TileKey) -> bool| {
+        let mut artwork = wet.clone();
+        let paint = artwork.paint.resolve(identity(10)).unwrap();
+        let mut data = (*artwork.paint.get(paint).unwrap().raster.wait_data().unwrap()).clone();
+        data.watercolor = None;
+        data.tiles.retain(|key, _| keep(key));
+        artwork.paint.get_mut(paint).unwrap().raster = RasterRevision::backed(data);
+        artwork
+    };
+    let refused = PreparedPackage::prepare(&capture(&settled(|_| true)), None, &AtomicBool::new(false));
+    assert_eq!(refused.err().as_deref(), Some("Invalid raster tile coordinates or plane"));
+    let dry = settled(|key| key.plane != RasterPlane::WatercolorWetness);
+    let reopened = editable(serialize(&prepare(&dry, false)));
+    exact_rasters(&dry, &reopened);
+    let data = reopened.paint.get(reopened.paint.resolve(identity(10)).unwrap()).unwrap().raster.wait_data().unwrap();
+    assert!(data.watercolor.is_none() && !data.has_plane(RasterPlane::WatercolorWetness) && data.has_plane(RasterPlane::Color));
+}
+#[test]
 fn proof_metadata_roundtrips_deduplicates_profile_and_undo_keeps_raster_exact() {
     for (depth, name) in [(SampleDepth::U8, "Printer and paper"), (SampleDepth::U16, "Printer and paper"), (SampleDepth::U8, ""), (SampleDepth::U16, "")] {
         let artwork = native(DocumentColor { space: RgbSpace::ProPhoto, depth });
