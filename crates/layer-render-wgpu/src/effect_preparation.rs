@@ -108,8 +108,6 @@ impl Preparation {
             }
         }
     }
-    #[cfg(test)]
-    pub fn new(device: &wgpu::Device) -> Self { Self::from_recipes(Arc::new(Recipes::new(device))) }
     pub fn from_recipes(recipes: Arc<Recipes>) -> Self {
         Self { layout: recipes.layout.clone(), recipes, pipelines: Vec::new(), pending: Vec::new(), executions: 0 }
     }
@@ -243,6 +241,7 @@ impl Preparation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    impl Preparation { fn new(device: &wgpu::Device) -> Self { Self::from_recipes(Arc::new(Recipes::new(device))) } }
     #[test]
     fn selected_preparation_encodes_copy_dependencies_without_unrelated_parameters() {
         let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();

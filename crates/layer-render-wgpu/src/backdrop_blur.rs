@@ -243,8 +243,6 @@ impl Recipes {
 }
 
 impl BackdropBlur {
-    #[cfg(test)]
-    pub fn new(device: &crate::PipelineDevice, format: wgpu::TextureFormat) -> Self { Self::from_recipes(device, format, &Recipes::new(device, format)) }
     pub fn pipelines(&self) -> [&crate::Deferred<wgpu::RenderPipeline>; 4] { [&self.down, &self.up, &self.fill, &self.region] }
     pub fn from_recipes(device: &crate::PipelineDevice, format: wgpu::TextureFormat, recipes: &Recipes) -> Self {
         let Recipes { layout, sampler, down, up, fill, region } = recipes;

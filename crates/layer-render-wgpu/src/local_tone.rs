@@ -26,27 +26,6 @@ impl std::fmt::Debug for GpuToneGuide {
     }
 }
 impl GpuToneGuide {
-    #[cfg(test)]
-    pub(crate) fn from_cpu(renderer: &crate::WgpuRasterizer, guide: &layer_core::color::hdr::LocalToneGuide) -> Self {
-        use wgpu::util::DeviceExt;
-        let header = [guide.extent[0], guide.extent[1], guide.document_extent[0], guide.document_extent[1]];
-        let mut packed: Vec<u8> = header.iter().flat_map(|v| v.to_ne_bytes()).collect();
-        packed.extend(guide.samples.iter().flatten().flat_map(|v| v.to_ne_bytes()));
-        let buffer = renderer.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("local Laplacian Float32 guide"),
-            contents: &packed,
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-        Self {
-            extent: guide.extent,
-            document_extent: guide.document_extent,
-            space: renderer.document_color.space,
-            peak: guide.peak,
-            device: renderer.device.for_resource(),
-            buffer,
-            analysis_lease: None,
-        }
-    }
     pub fn byte_len(&self) -> u64 {
         self.buffer.size()
     }
@@ -497,17 +476,38 @@ pub(crate) async fn wait_async(device: &PipelineDevice, queue: &wgpu::Queue) -> 
     }
 }
 #[cfg(test)]
-fn range(
-    device: &PipelineDevice,
-    queue: &wgpu::Queue,
-    source: &wgpu::Buffer,
-) -> Result<(f32, f32, u32, f32), String> {
-    pollster::block_on(range_async(device, queue, source))
-}
-#[cfg(test)]
 mod tests {
     use super::*;
     use layer_core::color::{DocumentColor, SampleDepth, hdr::LocalToneBuilder};
+    impl GpuToneGuide {
+        pub(crate) fn from_cpu(renderer: &crate::WgpuRasterizer, guide: &layer_core::color::hdr::LocalToneGuide) -> Self {
+            use wgpu::util::DeviceExt;
+            let header = [guide.extent[0], guide.extent[1], guide.document_extent[0], guide.document_extent[1]];
+            let mut packed: Vec<u8> = header.iter().flat_map(|v| v.to_ne_bytes()).collect();
+            packed.extend(guide.samples.iter().flatten().flat_map(|v| v.to_ne_bytes()));
+            let buffer = renderer.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("local Laplacian Float32 guide"),
+                contents: &packed,
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+            Self {
+                extent: guide.extent,
+                document_extent: guide.document_extent,
+                space: renderer.document_color.space,
+                peak: guide.peak,
+                device: renderer.device.for_resource(),
+                buffer,
+                analysis_lease: None,
+            }
+        }
+    }
+    fn range(
+        device: &PipelineDevice,
+        queue: &wgpu::Queue,
+        source: &wgpu::Buffer,
+    ) -> Result<(f32, f32, u32, f32), String> {
+        pollster::block_on(range_async(device, queue, source))
+    }
     fn build(
         r: &crate::WgpuRasterizer,
         extent: [u32; 2],

@@ -183,10 +183,6 @@ impl PaintTransforms {
     pub(super) fn placement_pass(&self, scalar: bool) -> PixelTransform {
         if scalar { self.0[0].scalar.fork() } else { self.0[0].color.fork() }
     }
-    #[cfg(test)]
-    pub(super) fn bound_color_pipeline(&self) -> (String, Deferred<wgpu::RenderPipeline>) {
-        self.0[0].color.bound_pipeline()
-    }
     pub fn new(device: &PipelineDevice) -> Self {
         let primary = ImageTransformState::new(device);
         let companion = primary.fork();
@@ -263,12 +259,6 @@ impl PaintTransforms {
         for t in &mut self.0 {
             t.begin_frame();
         }
-    }
-    #[cfg(test)]
-    pub(crate) fn hold_spare(&mut self, page: LayerPage) { self.0[0].spares.paint.push(page); }
-    #[cfg(test)]
-    pub fn storage_bytes(&self) -> u64 {
-        self.0.iter().map(ImageTransformState::storage_bytes).sum::<u64>() - 3 * 48
     }
     pub(crate) fn charged(mut self, tier: &Arc<crate::residency::Tier>) -> Self {
         for state in &mut self.0 { state.charge = tier.charge(0); state.account(); }

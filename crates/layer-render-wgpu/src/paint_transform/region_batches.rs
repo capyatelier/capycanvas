@@ -50,18 +50,17 @@ impl Regions {
     pub fn advance(&mut self) {self.current=None;}
 }
 #[cfg(test)]
-fn region_batches(output:PixelRect,capacity:usize,mut demand:impl FnMut(PixelRect)->Result<BTreeSet<[u32;2]>,GpuRasterError>)
-    ->Result<Vec<RegionBatch>,GpuRasterError> {
-    let mut regions=Regions::new(output);let mut batches=Vec::new();let mut steps=usize::MAX;
-    while regions.prepare(capacity,&mut steps,&mut demand)?.is_some() {
-        batches.push(regions.current.take().unwrap());
-    }
-    Ok(batches)
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
+
+    pub(super) fn region_batches(output:PixelRect,capacity:usize,mut demand:impl FnMut(PixelRect)->Result<BTreeSet<[u32;2]>,GpuRasterError>)
+        ->Result<Vec<RegionBatch>,GpuRasterError> {
+        let mut regions=Regions::new(output);let mut batches=Vec::new();let mut steps=usize::MAX;
+        while regions.prepare(capacity,&mut steps,&mut demand)?.is_some() {
+            batches.push(regions.current.take().unwrap());
+        }
+        Ok(batches)
+    }
 
     #[test]
     fn batch_partition_preserves_every_odd_extent_output_pixel_and_requested_page() {
@@ -123,7 +122,7 @@ impl Allocation {
 }
 #[cfg(test)]
 mod lifecycle_tests {
-    use super::*;
+    use super::{*,tests::region_batches};
     #[test]
     fn overflowing_or_uncertain_region_subdivides_without_losing_any_output() {
         let bounds=PixelRect::new(0,0,9,3);

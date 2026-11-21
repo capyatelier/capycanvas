@@ -6,6 +6,9 @@ use std::sync::Arc;
 use layer_render::{FramePacket, ViewState};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+impl BackdropBlur {
+    pub(crate) fn new(device: &crate::PipelineDevice, format: wgpu::TextureFormat) -> Self { Self::from_recipes(device, format, &Recipes::new(device, format)) }
+}
 
 fn texture(r: &WgpuRasterizer, size: [u32; 2]) -> wgpu::Texture {
     crate::create_target(r.device(), [size[0], size[1]], FORMAT, "backdrop test surface").0
