@@ -138,7 +138,8 @@ impl Contact {
     fn phased(&self,tiles:&BTreeSet<[u32;2]>)->impl Iterator<Item=[u32;2]> {tiles.iter().flat_map(|tile|phased_tiles(*tile,self.source.phase))}
     fn reduced_tiles(&self,reach:impl Iterator<Item=[u32;2]>)->BTreeSet<[u32;2]> {
         let changed=self.next.iter().flat_map(|(_,changed,..)|self.phased(changed));
-        let tiles=reach.chain(changed).chain(self.stale.keys().copied());
+        let previewed=self.next.as_ref().map_or(&self.previewed,|(_,_,_,previewed)|previewed);
+        let tiles=reach.chain(changed).chain(self.stale.keys().copied().filter(|stale|!self.phased(previewed).any(|tile|tile==*stale)));
         if self.frame.watercolor(self.target) {tiles.flat_map(crate::scene::watercolor_stencil).flatten().collect()}else {tiles.collect()}
     }
 }
@@ -402,6 +403,7 @@ impl Cache {
         let contact=self.gesture.as_mut()?;
         let target=contact.target;let wet=contact.frame.watercolor(target);
         let current=r.current_raster_versions(target).ok()?;
+        let uncomposed=contact.next.take().map_or_default(|(_,changed,..)|changed);
         let mut changed=BTreeSet::new();
         if !contact.composed.changes(&current,|coordinate|{changed.insert(coordinate);}) {return None;}
         let predicted:BTreeSet<_>=match &r.preview_declaration {
@@ -409,16 +411,15 @@ impl Cache {
             Some(_)=>return None,
             None=>BTreeSet::new(),
         };
-        let persistent=changed.clone();
-        changed.extend(contact.predicted.iter().chain(&predicted).copied());
         let previewed=r.preview_input_tiles(target);
+        let refreshed:BTreeSet<_>=changed.iter().chain(&uncomposed).chain(&contact.predicted).chain(&predicted).chain(&contact.previewed).chain(&previewed).copied().collect();
+        let planes:&[layer_core::raster::RasterPlane]=if wet {&[layer_core::raster::RasterPlane::Color,layer_core::raster::RasterPlane::WatercolorWetness]}else {&[layer_core::raster::RasterPlane::Color]};
+        let accepted=contact.inputs.refresh_contact(r,packet.scene,target,planes,refreshed,&changed,encoder)?;
+        changed.extend(accepted.into_iter().chain(uncomposed));
         let stale=contact.footprints.iter().filter(|(local,_)|changed.iter().any(|tile|!page_rect(*tile).intersect(*local).is_empty()))
             .flat_map(|(_,cells)|cells.iter().copied()).collect::<Vec<_>>();
         let all=pages::coordinates(contact.plan.bounds,contact.plan.level).collect::<Vec<_>>();
         let reached=stale.iter().map(|index|pages::bounds(all[*index],contact.plan.level,contact.plan.extent)).collect();
-        let refreshed:BTreeSet<_>=changed.iter().chain(&contact.previewed).chain(&previewed).copied().collect();
-        let planes:&[layer_core::raster::RasterPlane]=if wet {&[layer_core::raster::RasterPlane::Color,layer_core::raster::RasterPlane::WatercolorWetness]}else {&[layer_core::raster::RasterPlane::Color]};
-        if !contact.inputs.refresh_contact(r,packet.scene,target,planes,refreshed,&persistent,encoder) {return None;}
         for region in scene.scale_sources.entries.get(&target).into_iter().flat_map(|source|&source.damage.regions) {for tile in page_coordinates(*region) {
             let rect=contact.stale.entry(tile).or_insert(PixelRect::EMPTY);*rect=rect.union(region.intersect(page_rect(tile)));
         }}

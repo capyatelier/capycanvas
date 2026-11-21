@@ -2797,9 +2797,9 @@ impl WgpuRasterizer {
         for batch in packet.dab_batches.iter().filter(|batch|batch.kind==DabBatchKind::Preview && batch.style.execution==BrushExecution::Liquify) {
             if let Some(input)=self.liquify.as_ref().and_then(|liquify|liquify.captured_input(batch.target,batch.stroke_id,consumer)) {inputs.insert(batch.target,input);}
         }
-        let declaration=scene::PreviewDeclaration::capture_with_plans(self,packet,quality,inputs,self.fill_preview.clone(),plans,stamps.clone())?;
-        if stamps.is_none() && let (Some(held),Some(candidate))=(&self.preview_declaration,&declaration)
-            && !held.in_contact() && held.matches_metadata(candidate)?
+        let declaration=scene::PreviewDeclaration::capture_with_plans(self,packet,quality,inputs,self.fill_preview.clone(),plans,stamps)?;
+        if let (Some(held),Some(candidate))=(&self.preview_declaration,&declaration)
+            && held.matches_metadata(candidate)? && (!held.in_contact() || self.holds_preview(held,packet,consumer))
             && held.matches_history(|plane,coordinate,pass|self.preview_seed_versions(held,plane,coordinate,pass,from_persistent)
                 .map(|(versions,_)|scene::PreviewDeclaration::captured_version(pass,&versions))) {
             return Ok(true);
@@ -2812,9 +2812,24 @@ impl WgpuRasterizer {
         Ok(false)
     }
 
+    fn holds_preview(&self,held:&Arc<scene::PreviewDeclaration>,packet:FramePacket<'_>,consumer:&submission::Submission)->bool {
+        let holds=|derived:Option<&scene::PreviewVersion>,surface:&resident::Resident<PageSurface>|
+            derived.is_some_and(|ticket|ticket.same_declaration(held) && surface.read(ticket.version(),Some(consumer)).is_some());
+        self.artwork_frame.as_ref().is_some_and(|frame|frame.same_preview_inputs(packet))
+            && held.contact_outputs().is_some_and(|mut outputs|outputs.all(|coordinate|
+                self.preview_pages.iter().find(|page|page.coordinate==coordinate).is_some_and(|page|holds(page.derived.as_ref(),page.active()))
+                    && self.preview_wetness_page(held.target(),coordinate).is_none_or(|page|holds(page.derived.as_ref(),page.active()))))
+    }
+
     pub(crate) fn preview_expected(&self,target:SourceTarget,plane:RasterPlane,coordinate:[u32;2],stage:scene::PreviewStage)
         ->Result<layer_core::raster::ContentVersion,GpuRasterError> {
         self.preview_declaration.as_ref().ok_or(GpuRasterError::NotReady)?.version(target,plane,coordinate,stage)
+    }
+    pub(crate) fn retains_preview(&mut self,coordinate:[u32;2],stage:scene::PreviewStage,retained:&layer_core::raster::ContentVersion,consumer:&submission::Submission)
+        ->Result<bool,GpuRasterError> {
+        let declaration=self.preview_declaration.as_ref().ok_or(GpuRasterError::NotReady)?;
+        let Some(page)=self.preview_pages.iter_mut().find(|page|page.coordinate==coordinate && page.primary.read(retained,Some(consumer)).is_some()) else {return Ok(false);};
+        match &mut page.derived {Some(ticket) if ticket.version().matches(retained)==Some(true)=>declaration.retain(ticket,stage),_=>Ok(false)}
     }
 
     fn encode_clear(
@@ -5046,7 +5061,7 @@ impl WgpuRasterizer {
         let preview_plans=self.preview_material_plans(preview_packet,&batch_tiles,new_preview_from_persistent)?;
         let declaration_matches=self.prepare_preview_declaration(preview_packet,scene::PreviewQuality {level:preview_level,contribution:preview_contribution,
             requires_base:new_preview_requires_base || original_batches.iter().any(|batch|batch.kind==DabBatchKind::Preview && batch.target.is_coverage())},&preview_plans,new_preview_from_persistent,stamps,&encoder.submission())?;
-        reuse_preview&=declaration_matches;
+        reuse_preview=declaration_matches && (reuse_preview || self.preview_declaration.as_ref().is_some_and(|held|held.in_contact()));
         self.encode_mask_dabs(&mut encoder,packet,original_batches,&committed_preview,true)?;
         if let Some(layer_id) =
             new_preview_layer.filter(|_| !reuse_preview && (fill_preview.is_none() || fill_changed))
@@ -5154,7 +5169,7 @@ impl WgpuRasterizer {
         }
         self.fill_preview_shown=fill_preview.as_ref().map(layer_render::FillPreview::key);
         if fill_changed {self.fill_preview_done=None;}
-        if preview_is_watercolor { self.canonicalize_preview_watercolor(&mut encoder)?; }
+        if preview_is_watercolor && !reuse_preview { self.canonicalize_preview_watercolor(&mut encoder)?; }
         if let Some(started) = started { cpu_phases[3] = started.elapsed().as_secs_f64() * 1000.; }
         trace_phase.next(c"capy.composition");
         self.telemetry.phase_end(1, encoder.diagnostics());

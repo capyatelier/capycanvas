@@ -1025,6 +1025,122 @@ fn fit_preview_defers_persistent_color_until_zero_dab_end_across_tiles() {
 }
 
 #[test]
+fn fit_preview_held_still_composes_nothing_and_each_change_matches_a_recomposing_twin() {
+    let extent=[512,256];
+    let mut doc=placement::paint_document(extent,"liquify held still");
+    placement::set_source(&mut doc,layer_core::color::source::rgba8_source(extent,|x,y|[((x*3+y)%160+45) as u8,((x+y*2)%150+45) as u8,80,255]));
+    let fit=|divisor:u32|layer_render::ViewState{width_px:extent[0]/divisor,height_px:extent[1]/divisor,document_to_surface:[1./divisor as f32,0.,0.,1./divisor as f32,0.,0.]};
+    let [mut r,mut twin]=[0;2].map(|_|WgpuRasterizer::new_native_headless(Default::default()).unwrap());
+    for r in [&mut r,&mut twin] {
+        crate::test_support::submit_settled(r,FramePacket{view:fit(8),reset_layers:true,..crate::test_support::packet(doc.scene(),extent)});
+    }
+    let target=placement::target(&doc);
+    let mut style=preset_style(DefaultBrushPreset::LiquifyPush);
+    style.liquify=Some(Arc::new(layer_core::liquify::Context::for_source(placement::paint(&doc),false)));
+    let bits=|r:&WgpuRasterizer|crate::scene::scale::tests::display_pixels(r).into_iter().map(|pixel|pixel.map(f32::to_bits)).collect::<Vec<_>>();
+    let frame=|r:&mut WgpuRasterizer,doc:&Document,recompose:bool,step:usize,divisor:u32,real:&[f32],tail:Option<&[f32]>| {
+        let dabs=real.iter().chain(tail.into_iter().flatten()).map(|x| {
+            let mut dab=dab([0.;4]);dab.center=Point{x:*x,y:128.};dab.radii=[72.;2];dab.material[3]=1.;dab.motion=[20.,0.];dab
+        }).collect::<Vec<_>>();
+        let batch=|kind:DabBatchKind,first:usize,count:usize| {
+            let damage=dabs[first..first+count].iter().fold(layer_core::Rect::EMPTY,|damage,dab|damage.union(dab.bounds()));
+            let mut batch=crate::test_support::dab_batch(target,style.clone(),damage);
+            batch.kind=kind;batch.stroke_id=StrokeId(270);batch.first_dab=first as u32;batch.dab_count=count as u32;
+            batch.stroke_start=step==0 && kind==DabBatchKind::Persistent;batch.stroke_end=tail.is_none();batch
+        };
+        let batches=(!real.is_empty() || tail.is_none()).then(||batch(DabBatchKind::Persistent,0,real.len())).into_iter()
+            .chain(tail.map(|tail|batch(DabBatchKind::Preview,real.len(),tail.len()))).collect::<Vec<_>>();
+        let (before,held,refreshed)=(r.metrics(),r.preview_declaration.clone(),r.navigator.revision);
+        crate::test_support::submit_ready(r,FramePacket{view:fit(divisor),composite_all:recompose,time_seconds:step as f32/120.,dabs:&dabs,dab_batches:&batches,
+            ..crate::test_support::packet(doc.scene(),extent)}).unwrap();
+        let after=r.metrics();
+        ([after.composited_pixels-before.composited_pixels,after.display_reduction_reads-before.display_reduction_reads,
+            after.command_passes-before.command_passes-(r.navigator.revision-refreshed)],
+            held.zip(r.preview_declaration.as_ref()).is_some_and(|(held,now)|Arc::ptr_eq(&held,now)))
+    };
+    let stroke:[(&str,u32,&[f32],&[f32],Option<bool>,usize);11]=[
+        ("the first dab",8,&[126.],&[134.],Some(true),0),
+        ("a dab on the next page",8,&[378.],&[386.],Some(true),0),
+        ("the pen stops with a pending tail",8,&[],&[386.],Some(true),3),
+        ("the tail is withdrawn",8,&[],&[],Some(true),3),
+        ("a predicted tip appears",8,&[],&[390.],Some(true),0),
+        ("the tip moves inside its page",8,&[],&[394.],Some(true),0),
+        ("momentum moves the page without a tip",8,&[392.],&[],Some(true),0),
+        ("the pen rests after momentum",8,&[],&[],Some(false),3),
+        ("the view zooms in",4,&[],&[],Some(true),3),
+        ("a frame whose submission is discarded",4,&[],&[400.],None,0),
+        ("the frame after the discarded one",4,&[],&[],Some(true),3),
+    ];
+    let mut step=0;
+    for (label,divisor,real,tail,composes,held) in stroke {
+        r.test.discard_frame=composes.is_none();
+        let (work,_)=frame(&mut r,&doc,false,step,divisor,real,Some(tail));
+        frame(&mut twin,&doc,true,step,divisor,real,Some(tail));
+        step+=1;
+        let Some(composes)=composes else {continue;};
+        assert!((work[0]>0)==composes,"{label}: only a changed picture is composed: {work:?}");
+        assert!(bits(&r)==bits(&twin),"{label}: the picture differs from a twin that recomposes every frame");
+        for repeat in 0..held {
+            let (work,kept)=frame(&mut r,&doc,false,step,divisor,real,Some(tail));
+            frame(&mut twin,&doc,true,step,divisor,real,Some(tail));
+            step+=1;
+            assert!(kept && work==[0;3],
+                "{label}, held frame {repeat}: an unchanged preview declares nothing and composes nothing: kept {kept}, texels, reduction reads and passes {work:?}");
+            assert!(bits(&r)==bits(&twin),"{label}, held frame {repeat}: the picture differs from a twin that recomposes every frame");
+        }
+    }
+    let colors=[&mut r,&mut twin].map(|r| {
+        let mut doc=doc.clone();
+        placement::paint_mut(&mut doc).raster=RasterRevision::pending();
+        frame(r,&doc,false,step,4,&[],None);
+        crate::test_support::submit_settled(r,FramePacket{view:fit(4),composite_all:false,..crate::test_support::packet(doc.scene(),extent)});
+        r.paint_layers.iter().find(|layer|layer.id==target).unwrap().pages.iter()
+            .map(|page|(page.coordinate,crate::layer_tests::page_bytes(r,&r.read_color_page(target,page,false,None).unwrap().value().texture))).collect::<BTreeMap<_,_>>()
+    });
+    assert!(colors[0]==colors[1] && bits(&r)==bits(&twin),"pen up: the committed color or the settled picture differs from a twin that recomposed every frame");
+}
+
+#[test]
+fn fit_amount_preview_replays_compose_each_new_amount_and_match_a_recomposing_twin() {
+    let extent=[512,256];
+    let mut doc=placement::paint_document(extent,"liquify Amount replay");
+    placement::set_source(&mut doc,layer_core::color::source::rgba8_source(extent,|x,_|if x%32<16 {[235,35,45,255]} else {[35,85,235,255]}));
+    let view=layer_render::ViewState{width_px:64,height_px:32,document_to_surface:[0.125,0.,0.,0.125,0.,0.]};
+    let target=placement::target(&doc);
+    let mut renderers=[false,true].map(|recomposes| {
+        let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        crate::test_support::submit_published(&mut r,FramePacket{view,reset_layers:true,..crate::test_support::packet(doc.scene(),extent)});
+        let anchor=seeded_context(&r,&doc,|_,_|([16.,0.],[1.,0.,0.,1.]));
+        (r,anchor,recomposes)
+    });
+    let bits=|r:&WgpuRasterizer|crate::scene::scale::tests::display_pixels(r).into_iter().map(|pixel|pixel.map(f32::to_bits)).collect::<Vec<_>>();
+    let amounts=[0.5,0.5,0.5,0.5,1.,1.,1.,0.25];
+    let mut shown=bits(&renderers[0].0);
+    for (index,amount) in amounts.into_iter().enumerate() {
+        let [(work,kept),_]=renderers.each_mut().map(|(r,anchor,recomposes)| {
+            let mut context=anchor.clone();context.amount=Some(amount);
+            let mut style=preset_style(DefaultBrushPreset::LiquifyPush);style.liquify=Some(Arc::new(context));
+            let mut preview=crate::test_support::dab_batch(target,style,layer_core::Rect::from_extent(extent));
+            preview.kind=DabBatchKind::Preview;preview.stroke_id=StrokeId(300+(amount*4.) as u64);preview.dab_count=0;preview.stroke_end=false;
+            let (before,held)=(r.metrics(),r.preview_declaration.clone());
+            crate::test_support::submit_ready(r,FramePacket{view,composite_all:*recomposes,time_seconds:index as f32/120.,dab_batches:&[preview],
+                ..crate::test_support::packet(doc.scene(),extent)}).unwrap();
+            let after=r.metrics();
+            ([after.composited_pixels-before.composited_pixels,after.display_reduction_reads-before.display_reduction_reads,after.command_passes-before.command_passes],
+                held.zip(r.preview_declaration.as_ref()).is_some_and(|(held,now)|Arc::ptr_eq(&held,now)))
+        });
+        let now=bits(&renderers[0].0);
+        assert!(now==bits(&renderers[1].0),"Amount {amount}, frame {index}: the picture differs from a twin that recomposes every frame");
+        if index==0 || amounts[index-1]!=amount {
+            assert!(work[0]>0 && now!=shown,"Amount {amount}, frame {index}: a new Amount is composed: {work:?}");
+        } else if index>1 && amounts[index-2]==amount {
+            assert!(kept && work==[0;3],"Amount {amount}, frame {index}: a replayed Amount declares nothing and composes nothing: kept {kept}, texels, reduction reads and passes {work:?}");
+        }
+        shown=now;
+    }
+}
+
+#[test]
 fn liquify_selection_stops_deformation_at_a_sparse_tile_boundary() {
     let extent=[512,256];
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();

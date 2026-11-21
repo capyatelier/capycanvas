@@ -716,18 +716,23 @@ fn settle_engine(engine:&mut layer_engine::CanvasEngine<WgpuRasterizer>,clock:&m
         assert!(std::time::Instant::now()<deadline,"the engine settles");
     }
 }
-fn brush_contact(preset:DefaultBrushPreset)->BrushContact {
-    use layer_engine::{CanvasEngine,PenEvent,PenPhase,SampleFlags,ViewTransform,input_queue};
-    let extent=[2048,1024];let frames=12;let doc=document_at(extent);
+fn brush_engine(preset:DefaultBrushPreset,doc:layer_core::Document,view:layer_render::ViewState,transform:layer_engine::ViewTransform)
+    ->(layer_engine::InputProducer<layer_engine::PenEvent>,layer_engine::CanvasEngine<WgpuRasterizer>) {
     let brush=layer_core::default_brush(preset);
-    let (mut input,consumer)=input_queue(64);
-    let mut engine=CanvasEngine::new(renderer(&doc),doc,consumer,crate::test_support::view(extent),ViewTransform::IDENTITY).unwrap();
+    let (input,consumer)=layer_engine::input_queue(64);
+    let mut engine=layer_engine::CanvasEngine::new(renderer(&doc),doc,consumer,view,transform).unwrap();
     engine.set_brush(brush.clone()).unwrap();
     if preset==DefaultBrushPreset::Eraser {engine.set_tool(layer_core::StrokeTool::Eraser);}
     if matches!(brush.execution,layer_core::BrushExecution::Clone|layer_core::BrushExecution::Heal|layer_core::BrushExecution::SpotHeal) {
         engine.set_retouch(Some(layer_core::RetouchSource::Editing));
         engine.set_clone_source(layer_core::CloneSource {point:Some(layer_core::Point {x:100.,y:700.}),offset:Some([-200.,400.]),aligned:true,flip:[false;2]});
     }
+    (input,engine)
+}
+fn brush_contact(preset:DefaultBrushPreset)->BrushContact {
+    use layer_engine::{PenEvent,PenPhase,SampleFlags,ViewTransform};
+    let extent=[2048,1024];let frames=12;
+    let (mut input,mut engine)=brush_engine(preset,document_at(extent),crate::test_support::view(extent),ViewTransform::IDENTITY);
     let mut clock=1_000_000_000;
     settle_engine(&mut engine,&mut clock);
     let before=display_pixels(engine.backend());
@@ -751,8 +756,8 @@ fn brush_contact(preset:DefaultBrushPreset)->BrushContact {
     settle_engine(&mut engine,&mut clock);
     BrushContact {engine,frames:recorded,clock,before}
 }
-fn fresh_view(doc:&layer_core::Document)->Vec<[f32;4]> {
-    let mut frame=packet(doc.scene(),doc.composition().size);frame.composite_all=false;
+fn fresh_view(doc:&layer_core::Document,divisor:u32)->Vec<[f32;4]> {
+    let mut frame=packet(doc.scene(),doc.composition().size);frame.composite_all=false;frame.view=view_at(doc.composition().size,divisor);
     let mut fresh=renderer(doc);crate::test_support::submit_settled(&mut fresh,frame);display_pixels(&fresh)
 }
 
@@ -865,12 +870,12 @@ fn presets_hold_their_contact_frame_until_pen_up(family:BrushFamily) {
         }
         let shown=display_pixels(engine.backend());
         if max_error(&shown,&before)==0. {failures.push(format!("{preset:?} paints nothing"));}
-        let error=max_error(&shown,&fresh_view(engine.document()));
+        let error=max_error(&shown,&fresh_view(engine.document(),1));
         if error>=1e-4 {failures.push(format!("{preset:?} after pen-up differs from a fresh renderer by {error}"));}
         for (step,redo) in [("undo",false),("redo",true)] {
             assert!(if redo {engine.redo().unwrap()}else {engine.undo().unwrap()},"{preset:?} {step}");
             settle_engine(&mut engine,&mut clock);
-            let error=max_error(&display_pixels(engine.backend()),&fresh_view(engine.document()));
+            let error=max_error(&display_pixels(engine.backend()),&fresh_view(engine.document(),1));
             if error>=1e-4 {failures.push(format!("{preset:?} after {step} differs from a fresh renderer by {error}"));}
         }
     }
@@ -888,6 +893,67 @@ fn wet_and_watercolor_presets_hold_their_contact_frame_until_pen_up() {presets_h
 
 #[test]
 fn liquify_presets_hold_their_contact_frame_until_pen_up() {presets_hold_their_contact_frame_until_pen_up(BrushFamily::Liquify);}
+
+const REST:usize=10;
+fn rested_stroke(preset:DefaultBrushPreset,divisor:u32)->Result<[usize;2],String> {
+    use layer_engine::{PenEvent,PenPhase,SampleFlags,ViewTransform};
+    let extent=[2048,1024];let doc=document_at(extent);let scale=divisor as f32;let moves=6;
+    let mut engines=[false,true].map(|recomposes| {
+        let (input,engine)=brush_engine(preset,doc.clone(),view_at(extent,divisor),ViewTransform {revision:1,surface_to_document:[scale,0.,0.,scale,0.,0.]});
+        (input,engine,recomposes)
+    });
+    let [mut clock,_]=engines.each_mut().map(|(_,engine,_)| {let mut clock=1_000_000_000;settle_engine(engine,&mut clock);clock});
+    let mut rested=[0;2];
+    for step in 0..moves+REST+2 {
+        clock+=8_333_333;
+        let event=match step {0=>Some((PenPhase::Down,0)),_ if step<moves=>Some((PenPhase::Move,step)),_ if step<moves+REST=>None,_ if step==moves+REST=>Some((PenPhase::Move,moves)),_=>Some((PenPhase::Up,moves))};
+        let frames=engines.each_mut().map(|(input,engine,recomposes)| {
+            if let Some((phase,at))=event {
+                input.push(PenEvent {timestamp_ns:clock,pressure:0.8,view_revision:1,..crate::test_support::pen(step as u64+1,phase,[(300.+40.*at as f32)/scale,300./scale],SampleFlags::PRIMARY)}).unwrap();
+            }
+            let r=engine.backend();
+            let (before,held,refreshed)=(r.metrics(),r.preview_declaration.clone(),r.navigator.revision);
+            let deadline=std::time::Instant::now()+crate::READBACK_TIMEOUT;
+            let mut now=clock;
+            loop {
+                engine.backend_mut().analysis_dirty=*recomposes;
+                engine.render_frame_at(now).unwrap();engine.backend_mut().wait_idle().unwrap();
+                if !engine.has_pending_input() && !engine.has_pending_document_edits() {break;}
+                assert!(std::time::Instant::now()<deadline,"{preset:?} frame {step} is consumed");
+                now+=8_333_333;
+            }
+            let r=engine.backend();let after=r.metrics();
+            (now,held.zip(r.preview_declaration.as_ref()).is_some_and(|(held,now)|Arc::ptr_eq(&held,now)),
+                [after.composited_pixels-before.composited_pixels,after.display_reduction_reads-before.display_reduction_reads,after.command_passes-before.command_passes-(r.navigator.revision-refreshed)])
+        });
+        let (_,kept,work)=frames[0];clock=frames[0].0.max(frames[1].0);
+        if bits(engines[0].1.backend())!=bits(engines[1].1.backend()) {return Err(format!("{preset:?} at 1/{divisor}, frame {step}: the picture differs from a twin that recomposes every frame"));}
+        if kept && work!=[0;3] {return Err(format!("{preset:?} at 1/{divisor}, frame {step}: a repeated preview composes texels, reduction reads and passes {work:?}"));}
+        if (moves..moves+REST).contains(&step) {rested[0]+=usize::from(kept);rested[1]+=usize::from(work[0]>0);}
+    }
+    let (_,engine,_)=&mut engines[0];
+    settle_engine(engine,&mut clock);
+    let error=max_error(&display_pixels(engine.backend()),&fresh_view(engine.document(),divisor));
+    if error>=1e-4 {return Err(format!("{preset:?} at 1/{divisor}: after pen-up the picture differs from a fresh renderer by {error}"));}
+    Ok(rested)
+}
+
+#[test]
+fn a_stroke_at_rest_composes_nothing_while_its_preview_repeats_and_always_equals_a_recomposing_twin() {
+    use DefaultBrushPreset as P;
+    let mut failures=Vec::new();
+    for (preset,divisor) in [(P::GPen,4),(P::Pencil,4),(P::Smudge,4),(P::WetRound,4),(P::WetWatercolor,4),(P::CloneStamp,1),(P::LiquifyPush,4),(P::Airbrush,4)] {
+        match rested_stroke(preset,divisor) {
+            Ok([quiet,composed])=> {
+                if layer_core::default_brush(preset).path.continuous_rate_hz>0. {
+                    if composed==0 {failures.push(format!("{preset:?} keeps painting at rest and composes none of it"));}
+                }else if quiet*2<REST {failures.push(format!("{preset:?} at rest repeats its preview in only {quiet} of {REST} frames"));}
+            },
+            Err(failure)=>failures.push(failure),
+        }
+    }
+    assert!(failures.is_empty(),"{}",failures.join("\n"));
+}
 
 #[test]
 fn a_predicted_watercolor_wash_leaving_a_settled_tile_matches_a_recomposing_twin_at_every_reduced_level() {

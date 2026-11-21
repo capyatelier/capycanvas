@@ -107,13 +107,16 @@ impl Selected {
 }
 #[derive(Clone,Default)]
 struct Decisions(std::collections::BTreeMap<Address,(bool,[Option<Selected>;2])>);
+fn same_choice((kind,held):&(bool,[Option<Selected>;2]),raw:bool,selected:&[Option<Selected>;2])->bool {
+    *kind==raw && held.iter().zip(selected).all(|(a,b)|match (a,b) {(None,None)=>true,(Some(a),Some(b))=>a.matches(b),_=>false})
+}
 fn resident_witnesses(choices:impl Iterator<Item=(bool,[Option<Selected>;2])>)->Vec<crate::resident::Input> {
     choices.flat_map(|(_,choices)|choices).filter_map(|choice|match choice {Some(Selected::Resident(_,witness))=>Some(witness),_=>None}).collect()
 }
 impl Decisions {
     fn insert(&mut self,address:Address,raw:bool,selected:[Option<Selected>;2])->Result<(),GpuRasterError> {
-        if let Some((kind,held))=self.0.get(&address) {
-            let compatible=*kind==raw && held.iter().zip(&selected).all(|(a,b)|match (a,b) {(None,None)=>true,(Some(a),Some(b))=>a.matches(b),_=>false});
+        if let Some(held)=self.0.get(&address) {
+            let compatible=same_choice(held,raw,&selected);
             debug_assert!(compatible,"incompatible accepted source decisions");
             if !compatible {return Err(GpuRasterError::Invariant("incompatible accepted source decisions"));}
         }else {self.0.insert(address,(raw,selected));}
@@ -832,7 +835,7 @@ impl AcceptedInputs {
     #[expect(clippy::too_many_arguments,reason="A contact refresh names its scene, target, planes, tiles and the brush's persistent writes")]
     pub(in crate::scene) fn refresh_contact(&mut self,r:&WgpuRasterizer,scene:SceneView<'_>,target:SourceTarget,planes:&[RasterPlane],tiles:std::collections::BTreeSet<[u32;2]>,
         persistent:&std::collections::BTreeSet<[u32;2]>,encoder:&mut crate::submission::CommandEncoder,
-    )->bool {
+    )->Option<std::collections::BTreeSet<[u32;2]>> {
         let consumer=encoder.submission();
         let mut written=Vec::new();
         let unwritten:Vec<_>=tiles.into_iter().filter(|coordinate| {
@@ -849,10 +852,14 @@ impl AcceptedInputs {
             }
             Ok(())
         });
-        let Some(fresh)=declared.ok().filter(Inputs::resident) else {return false;};
-        let replaced=resident_witnesses(fresh.decisions.0.into_iter().chain(written).filter_map(|(address,choice)|self.decisions.0.insert(address,choice)));
+        let fresh=declared.ok().filter(Inputs::resident)?;
+        let mut changed=std::collections::BTreeSet::new();
+        let replaced=resident_witnesses(fresh.decisions.0.into_iter().chain(written).filter_map(|(address,(raw,selected))| {
+            if self.decisions.0.get(&address).is_some_and(|held|same_choice(held,raw,&selected)) {return None;}
+            changed.insert(address.2);self.decisions.0.insert(address,(raw,selected))
+        }));
         encoder.hold(replaced);
-        true
+        Some(changed)
     }
     pub(in crate::scene) fn adopt(&mut self,other:Self)->Result<(),GpuRasterError> {
         for (address,choice) in other.decisions.0 {self.decisions.0.entry(address).or_insert(choice);}

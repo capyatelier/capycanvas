@@ -534,14 +534,12 @@ impl Liquify {
         let mut reductions = Vec::new();
         let mut original_writes=Vec::new();
         for tile in context.tiles {
-            let preview_expected=if preview {Some(r.preview_expected(batch.target,layer_core::raster::RasterPlane::Color,tile.coordinate,scene::PreviewStage::AfterBatch(batch_index))?)}else {None};
             if !preview && tile.dabs.is_empty() && batch.style.liquify.as_ref().is_none_or(|c| c.amount.is_none()) { continue; }
             if context.target == (BrushEncodingTarget::Preview { from_persistent: true })
                 && tail.intersect(page_rect(tile.coordinate)).is_empty()
-                && stroke.preview_tiles.get(&tile.coordinate).is_some_and(|(map, expected)|
-                    *map == stroke.tile(&tile.coordinate).map_or(0, |tile| tile.id)
-                        && preview_expected.as_ref().is_some_and(|wanted|wanted.matches(expected)==Some(true)
-                            && r.preview_pages.iter().any(|page|page.coordinate==tile.coordinate && page.primary.read(wanted,Some(&encoder.submission())).is_some())))
+                && let Some((map, retained)) = stroke.preview_tiles.get(&tile.coordinate)
+                && *map == stroke.tile(&tile.coordinate).map_or(0, |tile| tile.id)
+                && r.retains_preview(tile.coordinate, scene::PreviewStage::AfterBatch(batch_index), retained, &encoder.submission())?
             {
                 self.unchanged_previews.insert((batch.target, tile.coordinate));
                 continue;
