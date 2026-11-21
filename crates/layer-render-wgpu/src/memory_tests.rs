@@ -35,20 +35,23 @@ pub(crate) fn renderer_in_budget(color: layer_core::color::DocumentColor, facts:
     WgpuRasterizer::new_native_headless_in(color, facts, budget).map(|renderer| *renderer)
 }
 
-pub(crate) fn cold_color_pressure(r: &mut WgpuRasterizer) {
+pub(crate) fn lower_memory_to_floor(r: &mut WgpuRasterizer) {
     let budget = r.factory.memory_budget().clone();
-    budget.set_ram_override(Some(384 << 20));
-    let device = budget.snapshot().devices[0].device;
-    r.memory.raster.handle = budget.register_owner(Kind::RasterPool, MemoryClass::Warm, Some(device));
+    while budget.ram_limit_bytes() > 384 << 20 {
+        let limit = budget.ram_limit_bytes();
+        budget.update_ram(budget.facts(), MemoryBudget::now_ms());
+        budget.out_of_memory();
+        assert!(budget.ram_limit_bytes() < limit, "each out-of-memory incident lowers the limit");
+    }
     r.publish_memory();
     budget.flush_reports();
     r.refresh_memory_limits();
 }
 
-pub(crate) fn evict_to_grant(r: &mut WgpuRasterizer, batches: &[layer_render::DabBatch], tiles: &[Vec<BrushTile>]) {
+pub(crate) fn evict_to_grant(r: &mut WgpuRasterizer) {
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     let excess = r.raster_excess();
-    r.evict_raster(excess, batches, tiles, &mut encoder);
+    r.evict_raster(excess, &[], &[], &mut encoder);
     encoder.submit(&r.queue);
 }
 
@@ -209,7 +212,7 @@ fn a_color_cache_grant_keeps_unpinned_pages_beside_pinned_stroke_pages() {
     let optional = (evictable(&r) as u64 * page_bytes + r.raster_buffers.retained.used()).saturating_sub(r.raster_excess());
     let keep = (optional / page_bytes) as usize;
     assert!(keep > 0 && keep < evictable(&r), "the actual grant retains some backed color: {optional}");
-    evict_to_grant(&mut r, &[], &[]);
+    evict_to_grant(&mut r);
     assert_eq!(evictable(&r), keep, "pinned color must not consume the optional allowance twice");
     assert!(r.paint_layers[0].pages.iter().any(|page| page.primary.allocation_identity() == pinned && page.stroke_start.is_some()));
     complete(&r);
@@ -218,7 +221,7 @@ fn a_color_cache_grant_keeps_unpinned_pages_beside_pinned_stroke_pages() {
     budget.flush_reports();
     let _drain = budget.admit_import(budget.import_headroom_bytes()).unwrap();
     r.refresh_memory_limits();
-    evict_to_grant(&mut r, &[], &[]);
+    evict_to_grant(&mut r);
     assert_eq!(evictable(&r), 0);
     assert!(r.paint_layers[0].pages.iter().any(|page| page.primary.allocation_identity() == pinned && page.stroke_start.is_some()));
 }

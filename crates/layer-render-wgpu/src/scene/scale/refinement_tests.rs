@@ -497,7 +497,7 @@ fn cold_multilayer_idle_refinement_finishes_with_a_bounded_source_batch() {
     evict_view(&r);
     assert!(r.next_frame()==layer_render::FrameDemand::Work, "the evicted Fit view streams its exact cells again");
     crate::test_support::complete(&r);
-    crate::memory::memory_tests::cold_color_pressure(&mut r);
+    crate::memory::memory_tests::lower_memory_to_floor(&mut r);
     for _ in 0..(page_coordinates(PixelRect::full(extent)).count() * 4).div_ceil(SOURCE_SLOTS) + 1 {
         r.publish_memory();
         r.factory.memory_budget().flush_reports();
