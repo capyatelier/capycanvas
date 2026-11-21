@@ -1681,6 +1681,13 @@ pub unsafe extern "C" fn capy_device_lost(host: u64) -> bool {
 }
 
 /// # Safety
+/// Exclusive render-owner access to a live host.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_device_failure(host: u64) -> i32 {
+    guard(host, |host| if host.device_is_lost() { Ok(1) } else { host.gpu.check().map(|()| 0) })
+}
+
+/// # Safety
 /// Exclusive render-owner access. A non-null viewport must be readable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_navigator_surface_update(host: u64, id: u64, viewport: *const crate::navigator_surface::CapyNavigatorViewport) -> i32 {
@@ -2432,6 +2439,21 @@ mod handle_tests {
             retired.store(true,std::sync::atomic::Ordering::Release);
             assert_eq!(borrow::<CapyHost>(owner.0).unwrap().surface_ready.completed_launch(Some(7)),None);
         }
+    }
+
+    #[test]
+    fn a_latched_device_error_fails_the_owner_check_and_leaves_services_running() {
+        let owner=Owner::new(1600,1000);
+        assert_eq!(unsafe {capy_device_failure(owner.0)},0);
+        borrow::<CapyHost>(owner.0).unwrap().gpu.report_error("uncaptured device error");
+        assert_eq!(unsafe {capy_device_failure(owner.0)},-1);
+        assert_eq!(borrow::<CapyHost>(owner.0).unwrap().native.error.as_deref(),Some("uncaptured device error"));
+        assert!(!unsafe {capy_device_lost(owner.0)});
+        assert!(unsafe {capy_poll_services(owner.0)}>=0);
+        let removed=Owner::new(1600,1000);
+        borrow::<CapyHost>(removed.0).unwrap().gpu.report_lost("removed device");
+        assert_eq!(unsafe {capy_device_failure(removed.0)},1);
+        assert_eq!(borrow::<CapyHost>(removed.0).unwrap().native.error,None);
     }
 
     #[test]
