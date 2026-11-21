@@ -346,6 +346,68 @@ fn complete_compute_composition_replaces_the_clear_but_partial_writes_preserve_i
 }
 
 #[test]
+fn a_clear_fills_its_page_after_a_fold_used_its_record() {
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut scene = Scene::new(&r).unwrap();
+    let transfer = r.source_tiles.borrow_mut().prepare_transfer(&r.device, r.document_color().space).unwrap().table;
+    let page = scene.reserve(&r).unwrap();
+    for job in [Job::Fold(Box::new(fold::Fold::constant(scene.pool[page].view.clone(), transfer, Convert::None, wgpu::Color::GREEN))),
+        Job::Clear(scene.pool[page].view.clone(), wgpu::Color::RED)] {
+        scene.jobs.push(job);
+        submit_encoded(&mut r, |r, encoder| {
+            pollster::block_on(scene.prepare_capture_work_async(r)).unwrap();
+            scene.encode_jobs(r, encoder).unwrap();
+        });
+    }
+    let result = crate::layer_tests::page_bytes(&r, &scene.pool[page].texture);
+    for (pixel, bytes) in result.as_chunks::<16>().0.iter().enumerate() {
+        let color: [f32; 4] = std::array::from_fn(|channel| f32::from_le_bytes(bytes.as_chunks::<4>().0[channel]));
+        assert_eq!(color, [1., 0., 0., 1.], "pixel {pixel}");
+    }
+}
+
+#[test]
+fn every_job_stages_the_record_an_unused_slot_would_hold() {
+    use super::Image;
+    let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut reused = Scene::new(&r).unwrap();
+    let mut unused = Scene::new(&r).unwrap();
+    let image = Image::new(&r, display_mips::Plan::at([PAGE_SIZE; 2], 0), "record target");
+    let view = || image.view.clone();
+    let sources = || [view(), view(), r.empty_view.clone(), r.empty_paper_view.clone()];
+    let transfer = r.source_tiles.borrow_mut().prepare_transfer(&r.device, r.document_color().space).unwrap().table;
+    let mut document = layer_core::Document::new(layer_core::authored::PortableId::random(), 64, 64,
+        layer_core::DocumentNames { paint: "Paint".into(), paper: "Paper".into() });
+    let effect = crate::tests::native_effects::insert_effect(&mut document, layer_core::EffectInstance::new(crate::tests::fixture("exposure").program()));
+    let prepared = reused.effects.prepare(&r, document.scene(), &[effect], effects::Execution::Image(0), 0., 0, Default::default()).unwrap();
+    let data = std::array::from_fn(|index| 1. + index as f32);
+    let values = std::array::from_fn(|index| 1 + index as u32);
+    let resample = |byte| Job::Resample { values: [byte; resample::UNIFORM_BYTES as usize], views: [view(), view()], size: [8; 2] };
+    let jobs = [
+        ("clear", Job::Clear(view(), wgpu::Color::RED)),
+        ("draw", Job::Draw { target: view(), sources: sources(), data, over: false, clip: None, source_target: None, edges: None, pipeline: None }),
+        ("effect", Job::Effect { target: view(), sources: sources(), data, prepared, masks: Box::new(std::array::from_fn(|_| r.empty_view.clone())),
+            source_target: None, changed_cells: None }),
+        ("reduce", Job::Reduce { output: view(), sources: sources(), values, size: [8; 2], kernel: Reduction::Pages, format: wgpu::TextureFormat::Rgba32Float }),
+        ("compose", Job::Compose { format: wgpu::TextureFormat::Rgba32Float, values, output: view(), sources: sources(), _leases: Vec::new() }),
+        ("resample", resample(0x11)),
+        ("fold", Job::Fold(Box::new(fold::Fold::constant(view(), transfer, Convert::None, wgpu::Color::GREEN)))),
+        ("vector resample", Job::VectorResample { source: view(), origin: [0; 2], target: view(), target_origin: [0; 2], side: PAGE_SIZE, size: [8; 2], inverse: Default::default() }),
+        ("watercolor", Job::Watercolor { coordinates: (reused.material_coordinates.clone(), 0), target: view(), views: vec![view()], record: 0 }),
+        ("copy", Job::Copy { source: image.texture.clone(), source_origin: [0; 2], destination: image.texture.clone(), origin: [0; 2], width: 8, height: 8 }),
+    ];
+    let (kinds, jobs): (Vec<_>, Vec<_>) = jobs.into_iter().unzip();
+    let grid = |_| Some([3, 5, 700, 900]);
+    reused.stage_records(&r, &vec![resample(0xff); jobs.len()], grid);
+    reused.stage_records(&r, &jobs, grid);
+    unused.stage_records(&r, &jobs, grid);
+    for ((kind, reused), unused) in kinds.into_iter().zip(reused.upload.chunks(reused.stride)).zip(unused.upload.chunks(unused.stride)) {
+        let kept = reused.iter().zip(unused).position(|(reused, unused)| reused != unused);
+        assert_eq!(kept, None, "{kind}: the first byte kept from the record staged before");
+    }
+}
+
+#[test]
 fn effect_grids_preserve_document_coordinates_and_partial_edge_centers() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let extent = [1091, 613];
