@@ -574,7 +574,7 @@ impl WgpuRasterizer {
             .chain(planned.iter().filter(|(id,_)|*id==target).filter_map(|(_,output)|output.native_key()).filter(|key|key.plane==plane).map(|key|key.coordinate))
             .collect()
     }
-    fn retire_restore(&mut self) {
+    pub(crate) fn retire_restore(&mut self) {
         if let Some(scene)=&mut self.scene {scene.release_operation_scratch();}
         let bytes=self.staged_restore_bytes();
         if bytes==0 {self.restore_preflight=None;return;}
@@ -779,7 +779,7 @@ impl WgpuRasterizer {
         if ready {Ok(inputs)}else {Err(GpuRasterError::NotReady)}
     }
     pub(crate) fn note_restore_admission<T>(&mut self,admitted:&Result<T,crate::residency::Blocked>) {
-        if admitted.is_err() {self.scene_tiers.display.heap().begin_frame();self.memory.tell_exhausted();}
+        if admitted.is_err() {self.scene_tiers.display.heap().begin_frame();}
         if let Some(restore)=&mut self.restore_preflight {restore.refused=admitted.as_ref().err().cloned();}
     }
     pub(crate) fn restore_preparation(&self)->Option<crate::frame_demand::Outstanding> {

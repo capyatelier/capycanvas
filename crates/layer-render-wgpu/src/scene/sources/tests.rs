@@ -1632,6 +1632,21 @@ fn a_refusal_behind_retiring_source_slots_agrees_with_its_fit_while_the_retireme
 }
 
 #[test]
+fn a_refused_edit_waits_for_a_retired_source_only_while_its_gpu_work_completes() {
+    let mut r=crate::memory::memory_tests::renderer(Default::default(),layer_core::DeviceMemoryFacts {budget_bytes:Some(1<<30),..Default::default()}).unwrap();
+    r.publish_memory();r.factory.memory_budget().flush_reports();r.refresh_memory_limits();
+    r.live_stroke=Some(layer_core::StrokeId(1));
+    let completing=r.source_tiles.borrow().completing.charge(NORMALIZED_PAGE_BYTES);
+    let read=r.source_tiles.borrow().retired_bytes.charge(NORMALIZED_PAGE_BYTES);
+    assert!(r.admit_raster_working(u64::MAX/2).is_err());
+    assert_eq!(r.take_lane_failure(),None,"a retirement whose GPU work is still completing frees its room without the edit, so the edit waits");
+    drop(completing);
+    assert!(r.admit_raster_working(u64::MAX/2).is_err());
+    assert_eq!(r.take_lane_failure(),Some(GpuRasterError::StrokeMemory),"a retired slot that only a reader still holds is no release to wait for");
+    drop(read);
+}
+
+#[test]
 fn evicted_decoded_slots_return_their_memory_beside_long_lived_textures() {
     let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let reserved=||r.device.generate_allocator_report().map(|report|report.total_reserved_bytes);

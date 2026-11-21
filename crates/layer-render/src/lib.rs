@@ -898,6 +898,7 @@ pub trait CanvasRenderer {
     type Error: std::error::Error + 'static;
     /// Classifies internal preparation state for the shared submission invariant.
     fn is_preparation_pending(_error: &Self::Error) -> bool { false }
+    fn is_memory_refusal(_error: &Self::Error) -> bool { false }
     fn adopt_committed_pages(&mut self, _previous: &mut Self) where Self:Sized {}
     fn resume_retained(&mut self, _document: &layer_core::Document) -> bool { false }
     /// Input postpones optional shader work. Shared editor state separately

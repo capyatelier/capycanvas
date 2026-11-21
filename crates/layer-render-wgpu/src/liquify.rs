@@ -741,6 +741,10 @@ impl Liquify {
 mod field_tests;
 
 #[cfg(test)]
+#[path = "liquify_memory_tests.rs"]
+mod memory_tests;
+
+#[cfg(test)]
 mod publication_tests {
     use super::*;
     use crate::layer_tests::{placement,preset_style};
