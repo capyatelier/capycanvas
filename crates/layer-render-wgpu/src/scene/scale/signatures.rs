@@ -129,6 +129,7 @@ pub(crate) struct Snapshot {
     moving: Option<OccurrenceHandle>,
     watercolor: IdMap<SourceTarget, WatercolorLayerStyle>,
     context: ContentStamp,
+    bounded: bool,
 }
 impl Snapshot {
     fn preview_level(&self,id:SourceTarget)->u32 {self.preview.as_ref().filter(|preview|preview.target==id).map_or(0,|preview|preview.quality.level)}
@@ -324,7 +325,7 @@ impl Prepared {
             (motion.clone(),ContentVersion::derive(recipe(&motion.transform.0.map(f64::to_bits)),&inputs))
         });
         let mut prepared=Self::from_snapshot(Arc::new(Snapshot {scene:packet.scene.snapshot(),rasters:declared.rasters,captures:declared.captures,
-            preview,vector_preview,vector_motion,effects,moving:None,watercolor,context:context.0}));
+            preview,vector_preview,vector_motion,effects,moving:None,watercolor,context:context.0,bounded:bounded(packet.scene)}));
         prepared.name_wake=declared.name_wake;Ok(prepared)
     }
     #[cfg(test)]
@@ -447,6 +448,10 @@ impl Prepared {
     fn source_versions(&self,id:SourceTarget)->Result<&raster::contents::Versions,GpuRasterError> {
         self.snapshot.rasters.get(&id).ok_or(if self.snapshot.scene.view().source_owner(id).is_some() {GpuRasterError::NotReady}else {GpuRasterError::StaleExpression})
     }
+    fn clear(&self,level:u32,input_level:u32,global:bool)->ContentVersion {
+        let mut name=Recipe::new();name.add(&(self.snapshot.context,level,input_level,global));name.add(&None::<ContentStamp>);name.add(&(0,[0u32;4]));
+        ContentVersion::derive(name.0,&[])
+    }
     fn source_version(&self,id:SourceTarget,frame:SourceFrame,extent:[u32;2],region:DocRect,input_level:u32,global:bool)->Result<(ContentVersion,PixelRect),GpuRasterError> {
         let s=&self.snapshot;let scene=s.scene.view();let mut inputs=Vec::new();let mut name=Recipe::new();name.add(&(id,frame,extent,scene.color_mode(id)));
         let moving=s.moving==scene.source_owner(id);let level=s.source_level(id,frame,extent,(!global).then_some(region),input_level,moving);name.add(&level);
@@ -486,13 +491,16 @@ impl Prepared {
         let region=request.region();let mut read=None;
         let child=|node:&graph::Node,region:DocRect,global:bool|self.evaluate(Request::new(node,region,level,input_level,global,false),Some(request));
         let s=&self.snapshot;let scene=s.scene.view();let mut inputs=Vec::new();let mut name=Recipe::new();name.add(&(s.context,level,input_level,global));
-        if !source_chunk {name.add(&self.selected_placement(node)?);}
+        let clear=self.clear(level,input_level,global);let is_clear=|drawn:&ContentVersion|drawn.identity()==clear.identity();
+        if !source_chunk && !matches!(node.as_ref(),E::Objects {..}) {name.add(&self.selected_placement(node)?);}
         match node.as_ref() {
             E::Color(color)=>name.add(&(0,color)),
             E::Source {id,frame,extent,outside}=>{name.add(&(1,outside));let frame=if source_chunk {SourceFrame {phase:frame.phase,shift:[0;2]}}else {*frame};let (version,local)=self.source_version(*id,frame,*extent,region,input_level,global)?;inputs.push(version);read=Some((*id,local));},
             E::Objects {content,preview}=>{
                 let owner=content.owner();name.add(&(2,owner,preview,scene.visible(owner)));
-                let keys=if global {content.keys().to_vec()}else {content.query_at(region,input_level)};
+                let placed=super::super::objects::ObjectKey::new(scene,owner,scene.object_handle(owner).ok_or(GpuRasterError::StaleExpression)?);
+                let keys=if global || !s.bounded || content.keys()[0]!=placed {vec![placed]}else {content.query_at(region.aligned(1<<input_level),input_level)};
+                if keys.is_empty() {return Ok((clear,None));}
                 for key in keys {name.add(&(key.handle,key.affine,key.nearest));inputs.push(scene.object(key.handle).ok_or(GpuRasterError::StaleExpression)?.image.content_version());}
             },
             E::Vector {owner,offset,moving}=>{
@@ -507,13 +515,22 @@ impl Prepared {
             },
             E::VectorPreview {owner}=>{name.add(&(4,owner,scene.visible(*owner)));inputs.push(s.vector_preview.as_ref().filter(|(preview,_)|preview.owner==*owner).map_or_else(||ContentVersion::derive(0,&[]),|(_,version)|version.clone()));},
             E::VectorMotion {owner}=>{name.add(&(5,owner,scene.visible(*owner)));if let Some((_,version))=s.vector_motion.as_ref().filter(|(motion,_)|motion.owner==*owner) {inputs.push(version.clone());inputs.push(scene.vector_layer(*owner).ok_or(GpuRasterError::StaleExpression)?.content_version());}},
-            E::Opacity {input,opacity}=>{name.add(&(6,opacity));inputs.push(child(input,region,global)?);},
+            E::Opacity {input,opacity}=>{
+                let input=child(input,region,global)?;
+                if is_clear(&input) {return Ok((input,None));}
+                name.add(&(6,opacity));inputs.push(input);
+            },
             E::Combine {blend:0,flags:0,..}=>{
                 let mut operands=Vec::new();over_operands(node,&mut operands);
-                if let [operand]=operands[..] {return Ok((child(operand,region,global)?,None));}
-                name.add(&(7,0u32,0u32));for operand in operands {inputs.push(child(operand,region,global)?);}
+                for operand in operands {let drawn=child(operand,region,global)?;if !is_clear(&drawn) {inputs.push(drawn);}}
+                if inputs.len()<2 {return Ok((inputs.pop().unwrap_or(clear),None));}
+                name.add(&(7,0u32,0u32));
             },
-            E::Combine {front,back,blend,flags}=>{name.add(&(7,blend,flags));inputs.push(child(front,region,global)?);inputs.push(child(back,region,global)?);},
+            E::Combine {front,back,blend,flags}=>{
+                let (front,back)=(child(front,region,global)?,child(back,region,global)?);
+                if is_clear(&front) && flags&64==0 {return Ok((if flags&32==0 {back}else {front},None));}
+                name.add(&(7,blend,flags));inputs.push(front);inputs.push(back);
+            },
             E::Effect {input,chain,masks,..}=>{
                 name.add(&8);let mut footprint=region;let mut entire=global;
                 for (handle,_,flags) in chain {
@@ -1602,6 +1619,75 @@ pub(super) mod tests {
         assert_eq!(before.selected_placement(&node).unwrap(),after.selected_placement(&node).unwrap());
         assert_eq!(version(&before,&node).matches(&version(&after,&node)),Some(false));
         assert_ne!(before.authored_revision(&node).unwrap(),after.authored_revision(&node).unwrap());
+    }
+
+    #[test]
+    fn an_object_layer_names_only_the_cells_it_reaches_while_no_spatial_filter_is_visible() {
+        use layer_core::{Edit,authored::Image};
+        let image=Image::new(layer_core::color::source::rgba8_source([16;2],|_,_|[255,0,0,255]));
+        let scene=|filtered:bool| {
+            let mut artwork=Artwork::new([1024,256]).unwrap();let mut objects=Vec::new();let mut entries=Vec::new();
+            for x in [32.,40.,728.] {
+                let mut object=ImageObject::new(image.clone());object.affine.0[4]=x;
+                let handle=artwork.objects.insert(PortableId::random(),object).unwrap();objects.push(handle);
+                entries.push(artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(handle),"Image")).unwrap());
+            }
+            let owner=entries[0];
+            if filtered {
+                let instance=layer_core::EffectInstance::new(crate::tests::fixture("gaussian_blur").program());
+                let mut blur=Occurrence::new(OccurrenceContent::Effect(artwork.effects.insert(PortableId::random(),EffectApplication::new(instance.program,instance.values,[1024,256])).unwrap()),"Blur");
+                blur.attachment=Attachment::Effect;entries.insert(2,artwork.occurrences.insert(PortableId::random(),blur).unwrap());
+            }
+            let stack=artwork.compositions.get(artwork.root).unwrap().result;artwork.stacks.get_mut(stack).unwrap().entries=entries;
+            (Document::from_artwork(artwork).unwrap(),objects[0],owner)
+        };
+        let names=|document:&Document| {
+            let root=graph::compose(packet(document.scene(),[1024,256]),None,None,0,document.composition().color.space,Some(&mut object_spatial::SpatialIndex::default()),None).unwrap();
+            let names=prepared(document);
+            [0,1,2,3].map(|cell|names.expected(&root,PixelRect::new(cell*256,0,cell*256+256,256).into(),0,0).unwrap().identity())
+        };
+        let renamed=|document:&mut Document,edit:Edit| {
+            let before=names(document);document.apply(edit).unwrap();let after=names(document);
+            [0,1,2,3].map(|cell|before[cell]!=after[cell])
+        };
+        let place=|document:&Document,object,x|document.set_image_object_affine_edit(object,Affine64([1.,0.,0.,1.,x,0.])).unwrap();
+        let (mut document,moved,owner)=scene(false);
+        let layer=|document:&Document,change:&dyn Fn(&mut Occurrence)| {
+            let mut value=document.scene().occurrence(owner).unwrap().clone();change(&mut value);
+            Edit::Occurrence(RecordChange::replace(&document.artwork.occurrences,owner,Some(value)).unwrap())
+        };
+        let edits:[(&str,&dyn Fn(&Document)->Edit,[bool;4]);6]=[
+            ("a reorder renames the cell both layers draw in",&|document|document.move_occurrence_edit(owner,1).unwrap(),[true,false,false,false]),
+            ("an opacity renames the cell the layer draws in",&|document|layer(document,&|layer|layer.opacity=0.5),[true,false,false,false]),
+            ("a blend renames the cell the layer draws in",&|document|layer(document,&|layer|layer.blend=layer_core::LayerBlend::Multiply),[true,false,false,false]),
+            ("a move renames the cells it leaves and enters",&|document|place(document,moved,300.),[true,true,false,false]),
+            ("a reorder of layers that share no cell renames none",&|document|document.move_occurrence_edit(owner,0).unwrap(),[false;4]),
+            ("a hidden layer renames the cell it drew in",&|document|layer(document,&|layer|layer.visible=false),[false,true,false,false]),
+        ];
+        for (case,edit,cells) in edits {let edit=edit(&document);assert_eq!(renamed(&mut document,edit),cells,"{case}");}
+        let (mut document,moved,_)=scene(true);
+        let edit=place(&document,moved,300.);
+        assert_eq!(renamed(&mut document,edit),[true;4],"a spatial filter clamps to its input's bounds, so every cell names every object while one is visible");
+    }
+
+    #[test]
+    fn a_reduced_edge_cell_names_a_nearest_object_inside_its_last_texel() {
+        use layer_core::authored::Image;
+        let mut artwork=Artwork::new([1022,256]).unwrap();
+        let mut object=ImageObject::new(Image::new(layer_core::color::source::rgba8_source([16;2],|_,_|[255;4])));
+        object.interpolation=ImageInterpolation::Nearest;object.affine.0[4]=1022.;
+        let handle=artwork.objects.insert(PortableId::random(),object).unwrap();
+        let owner=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(handle),"Image")).unwrap();
+        let stack=artwork.compositions.get(artwork.root).unwrap().result;artwork.stacks.get_mut(stack).unwrap().entries=vec![owner];
+        let mut document=Document::from_artwork(artwork).unwrap();
+        let mut index=object_spatial::SpatialIndex::default();
+        let mut name=|document:&Document| {
+            let root=graph::compose(packet(document.scene(),[1022,256]),None,None,2,document.composition().color.space,Some(&mut index),None).unwrap();
+            prepared(document).expected(&root,PixelRect::new(0,0,1022,256).into(),2,2).unwrap().identity()
+        };
+        let before=name(&document);
+        document.apply(document.set_image_object_affine_edit(handle,Affine64([1.,0.,0.,1.,1023.,0.])).unwrap()).unwrap();
+        assert_ne!(before,name(&document),"the cell's last level-2 texel spans 1020 to 1024 and samples the object beside the document");
     }
 
     #[test]

@@ -1621,7 +1621,8 @@ impl Cache {
         let mut selection=Selection {copies:Vec::new(),composes:Vec::new(),transition:false,waiting:false};
         let Some((mut cells,mut store,template))=self.cells() else {return Ok(selection);};
         let frame=store.expected().cloned().ok_or(GpuRasterError::Invariant("signature frame is missing or inconsistent"))?;
-        selection.transition=self.pixels.committed_root().is_some_and(|root|root.authored()!=frame.authored_revision(&template.expression).ok());
+        let authored=frame.authored_revision(&template.expression).ok();
+        selection.transition=self.pixels.committed_root().is_some_and(|root|root.authored()!=authored);
         let (plan,input_level)=(self.plan,self.required_input_level());
         let exact_input_level=super::refinement::exact_input_level(frame.scene(),input_level);
         for (index,coordinate) in coordinates(plan.bounds,plan.level).enumerate() {
@@ -1636,8 +1637,11 @@ impl Cache {
                 Err(GpuRasterError::NotReady)=>{cell.blocked=Some(crate::frame_demand::Input::Name);cell.name=None;cell.arrivals=since;selection.waiting|=!region.intersect(visible).is_empty();continue;},
                 Err(error)=>return Err(error),
             }
-            let current=cell.shown.as_ref().filter(|shown|shown.recorded.as_ref().is_some_and(|recorded|Key {expression:key.expression.clone(),format:key.format,..recorded.key.clone()}==key
-                && recorded.matches_as(&frame,&key.expression,input_level)==Some(true))).map(|shown|shown.exact);
+            let current=cell.shown.as_mut().filter(|shown|shown.recorded.as_ref().is_some_and(|recorded|Key {expression:key.expression.clone(),format:key.format,..recorded.key.clone()}==key
+                && recorded.matches_as(&frame,&key.expression,input_level)==Some(true))).map(|shown| {
+                if let (Some(recorded),Some(authored))=(&mut shown.recorded,authored) {recorded.key.expression=key.expression.clone();recorded.authored=authored;}
+                shown.exact
+            });
             let exact_key=if store.pages.get(&key).is_some_and(|page|Coverage::covers(&page.coverage.exact,region)) {key.clone()}
                 else {Key {format:wgpu::TextureFormat::Rgba32Float,..key.clone()}};
             let exact=(current!=Some(true)).then(||store.get(&exact_key,region,Accuracy::Exact,exact_input_level,class(region)).map(|image|(exact_key.clone(),image,true))).flatten();
