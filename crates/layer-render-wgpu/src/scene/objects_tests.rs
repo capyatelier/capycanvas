@@ -2239,10 +2239,8 @@ fn object_counters_match_a_cache_walk_after_seeded_windows_edits_and_completions
         frame.view.document_to_surface = [scale as f32, 0., 0., scale as f32, 0., 0.];
         crate::test_support::submit_ready(&mut r, FramePacket { composite_all: step == 0, reset_layers: step == 0, ..frame }).unwrap();
         if seed & 4 != 0 { r.wait_idle().unwrap(); }
-        let scene = r.scene.as_ref().unwrap();
-        let [counted, walked] = [scene.usage(), scene.walked_usage()];
-        let [objects, walked_objects] = scene.object_gpu();
-        assert_eq!([counted.working, counted.ram, counted.pinned, objects], [walked.working, walked.ram, walked.pinned, walked_objects], "step {step}");
+        let [counted, walked] = r.scene.as_ref().unwrap().counted_and_walked();
+        assert_eq!(counted, walked, "step {step}");
     }
     crate::test_support::settle_decodes(&mut r);
     let held = r.source_results.iter().map(|(_, _, charge)| charge.bytes()).sum::<u64>();
