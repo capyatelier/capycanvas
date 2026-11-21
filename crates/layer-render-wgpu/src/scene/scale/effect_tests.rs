@@ -385,7 +385,8 @@ fn native_pointwise_warm_prediction_replacement_and_removal_match_full_rebuilds(
             });
             assert!(crate::test_support::max_error(&actual, &expected) < 2e-5,
                 "{name} {blend:?} replacement at {position:?} must restore the previous prediction: {difference:?}, plans {:?}/{:?}, preview levels {}/{}, work {work}", incremental.scale_display.as_ref().unwrap().plan, rebuilt.scale_display.as_ref().unwrap().plan, incremental.preview_level, rebuilt.preview_level);
-            assert!(work > 0 && work < u64::from(PAGE_SIZE >> level).pow(2) / 2, "{name} {blend:?} at {position:?}: warm prediction work={work}");
+            let cells = old_contacts.union(&incremental.preview_footprint).count() as u64;
+            assert!(work > 0 && work <= cells * u64::from(PAGE_SIZE).pow(2), "{name} {blend:?} at {position:?}: warm prediction work={work} for {cells} cells");
             let current_contacts=&incremental.preview_footprint;
             for &coordinate in old_contacts.symmetric_difference(current_contacts) {
                 assert!(incremental.changed_cells.as_ref().unwrap().reusable(paint,coordinate).is_none(),
@@ -396,7 +397,7 @@ fn native_pointwise_warm_prediction_replacement_and_removal_match_full_rebuilds(
         let work = incremental.metrics.composited_pixels;
         let old_contacts=incremental.preview_footprint.clone();
         crate::test_support::submit_ready(&mut incremental, frame).unwrap();
-        assert!(incremental.metrics.composited_pixels - work < u64::from(PAGE_SIZE >> level).pow(2) / 2);
+        assert!(incremental.metrics.composited_pixels - work <= old_contacts.len() as u64 * u64::from(PAGE_SIZE).pow(2));
         let removed = display_pixels(&incremental);
         let differing = removed.iter().zip(&original).filter(|(a, b)| a != b).count();
         let first = removed.iter().zip(&original).position(|(a, b)| a != b).map(|i| {

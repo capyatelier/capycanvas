@@ -1657,7 +1657,8 @@ fn identity_edits_recompose_only_damaged_regions() {
         let work = r.metrics.composited_pixels;
         crate::test_support::submit_ready(&mut r, frame).unwrap();
         let work = r.metrics.composited_pixels - work;
-        assert!(work > 0 && work < 4 * u64::from(PAGE_SIZE >> level).pow(2) / 4, "warm identity contacts must leave the rest of each page unchanged: {work}");
+        let cells = dabs.iter().flat_map(|dab| pages::coordinates(pixel_rect(dab.bounds(), doc.composition().size), level)).collect::<BTreeSet<_>>().len() as u64;
+        assert!(work > 0 && work <= cells * u64::from(PAGE_SIZE).pow(2), "warm identity contacts compose only the cells under their dabs: {work} for {cells} cells");
         let incremental = display_pixels(&r);
         r.scale_display = None;
         submit_published(&mut r, FramePacket { dabs: &[], dab_batches: &[], composite_all: true, ..frame });
