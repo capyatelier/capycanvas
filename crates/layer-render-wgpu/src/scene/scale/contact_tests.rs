@@ -1778,6 +1778,16 @@ fn at_half_size_a_stroke_leaves_its_level_pages_equal_to_a_full_reduction() {lev
 fn at_quarter_size_a_stroke_leaves_its_level_pages_equal_to_a_full_reduction() {level_pages_equal_a_full_reduction(0.25);}
 #[test]
 fn at_an_eighth_size_a_stroke_leaves_its_level_pages_equal_to_a_full_reduction() {level_pages_equal_a_full_reduction(0.125);}
+#[test]
+fn below_full_size_a_stroke_with_two_tips_on_an_offset_layer_leaves_its_level_pages_equal_to_a_full_reduction() {
+    for zoom in ZOOMS {for scene in OFFSETS {
+        let stroke=Zoomed::new(scene,"a Pencil",crate::layer_tests::preset_style(DefaultBrushPreset::Pencil),2,zoom);
+        for frames in [6,9,12] {
+            let (differing,largest,_)=stroke.level_pages_against_a_full_reduction(frames).unwrap_or_else(||panic!("{}, after {frames} frames: the stroke holds its sequence",stroke.case()));
+            assert_eq!(differing,[0;2],"{}, after {frames} frames: texels of the level pages, away from the tips and under them, differ from a full reduction by up to {largest:e}",stroke.case());
+        }
+    }}
+}
 
 fn pencil_and_smudge(scene:&str,zoom:f32)->[Zoomed<'_>;2] {
     let style=crate::layer_tests::preset_style;
