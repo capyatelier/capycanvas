@@ -361,34 +361,20 @@ impl RawRegions {
         if layer.is_none() && scene.order().iter().any(|&owner|scene.includes(owner) && scene.visible(owner)
             && (scene.effect(owner).is_some() || scene.object_layer(owner).is_some() || scene.mask(owner).is_some_and(|(mask,_)|mask.enabled))) {return Ok(());}
         let targets=layer.map_or_else(||source_access::placed_targets(scene).filter(|target|scene.source_owner(*target).is_some_and(|owner|scene.visible(owner))).collect(),|target|vec![target]);
-        let limit=SOURCE_SLOTS.min(r.source_tiles.borrow().free_slots());
-        let mut images:Vec<scene::sources::RequiredSource>=Vec::new();
-        let mut rasters:Vec<Arc<layer_core::raster::TileBlob>>=Vec::new();
-        let mut bases=Vec::new();
+        let (limit,space)=(SOURCE_SLOTS.min(r.source_tiles.borrow().free_slots()),r.document_color().space);
+        let mut stored=scene::sources::Inputs::default();
         for target in targets {
             if !matches!(target,SourceTarget::Paint(_)) || scene.target_offset(target)!=[0;2]
                 || r.watercolor_style(target,&frame.previews).is_some() {return Ok(());}
             for &coordinate in tiles {
                 if page_rect(coordinate).intersect(PixelRect::full(scene.target_extent(target))).is_empty()
                     || r.paint_layers.iter().any(|layer|layer.id==target && layer.pages.iter().any(|page|page.coordinate==coordinate)) {continue;}
-                if let Some(blob)=r.native_color_tile(target,coordinate)? {
-                    if !rasters.iter().any(|stored|scene::sources::same_raster_samples(stored,&blob)) {rasters.push(blob);}
-                }else if let Some(base)=scene.paint_base(target) {
-                    for position in page_coordinates(source_access::paint_base_source_bounds(base,coordinate)) {
-                        if !images.iter().any(|(source,c)|Arc::ptr_eq(source,base.image.storage()) && *c==position) {images.push((base.image.storage().clone(),position));}
-                        if images.len()+rasters.len()>limit {return Ok(());}
-                    }
-                    bases.push((base.clone(),coordinate));
-                }
-                if images.len()+rasters.len()>limit {return Ok(());}
+                if let Some(blob)=r.native_color_tile(target,coordinate)? {stored.raster(blob,space,space);}
+                else if let Some(base)=scene.paint_base(target) {stored.base(base,coordinate,space);}
+                if stored.stored()>limit {return Ok(());}
             }
         }
-        let mut ready=true;let space=r.document_color().space;
-        for blob in rasters {
-            if r.source_tiles.borrow().prepared_raster_any_view(&blob,space,space).is_none() {r.request_raster_decode_to(blob,space,space,crate::residency::Class::Visible)?;ready=false;}
-        }
-        for (base,coordinate) in bases {ready &= source_access::prepare_paint_base(r,&base,coordinate)?;}
-        if ready {Ok(())}else {Err(GpuRasterError::NotReady)}
+        if stored.request(r,crate::residency::Class::Visible)? {Ok(())}else {Err(GpuRasterError::NotReady)}
     }
     fn encode_source(&mut self, r: &mut WgpuRasterizer, request: &layer_render::RegionRequest,
         encoder: &mut crate::submission::CommandEncoder, combine: bool, sampling:Sampling,

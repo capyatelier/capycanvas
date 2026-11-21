@@ -1021,6 +1021,13 @@ impl MipDecodeQueue {
 pub(crate) mod tests {
     use super::*;
     use crate::test_support::{page_texture,upload_page};
+    impl MipDecodeQueue {
+        pub(crate) fn awaited(&self)->usize {self.outstanding.len()}
+        pub(crate) fn awaits_image(&self,source:&Arc<SourceImage>,coordinate:[u32;2])->Option<Class> {
+            let key=DecodeKey::Image(Arc::downgrade(source),coordinate);
+            self.outstanding.iter().find(|stored|stored.key.as_ref().is_some_and(|stored|stored.matches(&key))).map(|stored|stored.class)
+        }
+    }
     #[cfg(not(target_arch="wasm32"))]
     fn idle_pool(capacity:usize)->Arc<DecodePool> {
         Arc::new(DecodePool {dispatch:Default::default(),capacity,speculative:0,epoch:Default::default(),capacity_waiters:Default::default()})

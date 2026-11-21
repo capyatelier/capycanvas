@@ -39,6 +39,9 @@ impl DecodedTiles {
         ->Result<(RawTile,Option<Arc<PendingTile>>),GpuRasterError> {
         self.plan_image(r,source,coordinate,use_)
     }
+    pub(crate) fn leases_image(&self,source:&Arc<SourceImage>,coordinate:[u32;2])->Option<bool> {
+        self.keyed(&Key::Image(Arc::downgrade(source),coordinate)).map(Slot::leased)
+    }
 }
 
 fn standalone() -> (Arc<crate::residency::Tier>, DecodedTiles) {
