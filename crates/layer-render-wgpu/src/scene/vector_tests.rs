@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_support::{packet, float_pixels, max_error};
+use crate::test_support::{packet, float_pixels, max_error, submit_encoded};
 use layer_core::authored::vector::*;
 use layer_core::color::RgbColor;
 use crate::scene::Output;
@@ -45,10 +45,8 @@ fn native(r: &mut WgpuRasterizer, doc: &layer_core::Document) -> Vec<[f32; 4]> {
     let (texture, _) = create_color_target(&r.device, extent, "vector native reference");
     let mut scene = r.scene.take().unwrap_or_else(|| Scene::new(r).unwrap());
     pollster::block_on(crate::compile::Needs::capture_scene(r, doc.scene(), false).prepare(&r.compilation)).unwrap();
-    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    crate::test_support::query_ready(r, &mut encoder, |r, encoder|
-        scene.capture_region_prepared(r, packet(doc.scene(), extent), &texture, PixelRect::full(extent), Output::Artwork(None), encoder));
-    r.uploads.finish(&encoder); encoder.submit(&r.queue);
+    submit_encoded(r, |r, encoder| crate::test_support::query_ready(r, encoder, |r, encoder|
+        scene.capture_region_prepared(r, packet(doc.scene(), extent), &texture, PixelRect::full(extent), Output::Artwork(None), encoder)));
     r.scene = Some(scene);
     float_pixels(r, &texture)
 }
@@ -128,9 +126,7 @@ fn raw_object_captures_of_vector_layers_match_their_render() {
     let (texture, _) = create_color_target(&r.device, [300, 200], "vector raw capture");
     let mut scene = r.scene.take().unwrap_or_else(|| Scene::new(&r).unwrap());
     let scope = layer_core::SceneScope::RawObjects(layer);
-    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    scene.capture_region_prepared(&mut r, FramePacket { scene: doc.scene().with_scope(&scope), ..packet(doc.scene(), [300, 200]) }, &texture, PixelRect::full([300, 200]), Output::Objects(layer), &mut encoder).unwrap();
-    r.uploads.finish(&encoder); encoder.submit(&r.queue);
+    submit_encoded(&mut r, |r, encoder| scene.capture_region_prepared(r, FramePacket { scene: doc.scene().with_scope(&scope), ..packet(doc.scene(), [300, 200]) }, &texture, PixelRect::full([300, 200]), Output::Objects(layer), encoder)).unwrap();
     r.scene = Some(scene);
     let raw = float_pixels(&r, &texture);
     assert!(raw.iter().filter(|p| p[3] > 0.5).count() > 5000);

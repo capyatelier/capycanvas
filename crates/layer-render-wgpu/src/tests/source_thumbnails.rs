@@ -103,20 +103,15 @@ fn photo_thumbnail_batches_survive_interleaved_layers_edits_and_discarded_comman
     let mut gpu = SourceThumbnails::new(&r);
     let prepare = |gpu: &mut SourceThumbnails, r: &mut WgpuRasterizer, id, discard: bool| {
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
-        let ready = loop {
-            match gpu.prepare(r, id, &mut encoder, 1) {
-                Ok(ready) => break ready,
-                Err(GpuRasterError::NotReady|GpuRasterError::NotPublished) => {},
-                Err(error) => panic!("{error}"),
-            }
-            let mut worker = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-            r.drain_image_decodes(&mut worker).unwrap();
-            r.uploads.finish(&worker); worker.submit(&r.queue);
-            crate::test_support::complete(r);
-            assert!(std::time::Instant::now() < deadline, "thumbnail batch preparation must complete");
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        };
+        let ready = crate::test_support::wait_until("thumbnail batch preparation must complete", || match gpu.prepare(r, id, &mut encoder, 1) {
+            Ok(ready) => Ok(ready),
+            Err(pending @ (GpuRasterError::NotReady|GpuRasterError::NotPublished)) => {
+                crate::test_support::submit_encoded(r, |r, worker| { r.drain_image_decodes(worker).unwrap(); });
+                crate::test_support::complete(r);
+                Err(pending)
+            },
+            Err(error) => panic!("{error}"),
+        });
         if !discard { r.uploads.finish(&encoder); encoder.submit(&r.queue); }
         ready
     };

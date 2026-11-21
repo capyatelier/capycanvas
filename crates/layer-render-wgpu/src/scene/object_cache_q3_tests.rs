@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::submit_encoded;
 use layer_core::authored::*;
 
 impl ObjectCache {
@@ -35,15 +36,15 @@ fn initialized_object_bytes_are_charged_once_before_settle() {
     }).unwrap();
     let before=r.scene_tiers.display.used();
     let sampler=r.scene_pipelines.objects.clone();
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    cache.advance_task(&mut r,&mut scene,&mut encoder,&sampler,&mut task,PASS_TAPS).unwrap();
-    let accumulation=task.accumulation.as_ref().expect("initialization must allocate the accumulator");
-    let uniform=cache.uniform.as_ref().map_or(0,|(uniform,_)|uniform.size());
-    let physical=task.texture.as_ref().map_or(0,texture_bytes)+accumulation.gpu_bytes()
-        +task.collection.as_ref().map_or(0,|c|c.spare.as_ref().map_or(0,texture_bytes)+c.result.as_ref().map_or(0,texture_bytes));
-    assert!(physical-uniform<=closure.bytes,"the admitted closure bounds the allocation");
-    assert_eq!(r.scene_tiers.display.used()-before,uniform,"object allocation consumes its admitted reservation; only the single shared uniform adds");
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+    submit_encoded(&mut r,|r,encoder| {
+        cache.advance_task(r,&mut scene,encoder,&sampler,&mut task,PASS_TAPS).unwrap();
+        let accumulation=task.accumulation.as_ref().expect("initialization must allocate the accumulator");
+        let uniform=cache.uniform.as_ref().map_or(0,|(uniform,_)|uniform.size());
+        let physical=task.texture.as_ref().map_or(0,texture_bytes)+accumulation.gpu_bytes()
+            +task.collection.as_ref().map_or(0,|c|c.spare.as_ref().map_or(0,texture_bytes)+c.result.as_ref().map_or(0,texture_bytes));
+        assert!(physical-uniform<=closure.bytes,"the admitted closure bounds the allocation");
+        assert_eq!(r.scene_tiers.display.used()-before,uniform,"object allocation consumes its admitted reservation; only the single shared uniform adds");
+    });crate::test_support::complete(&r);
 }
 
 #[cfg(not(target_arch="wasm32"))]
