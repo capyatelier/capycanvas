@@ -326,7 +326,7 @@ impl WgpuRasterizer {
         let ours=[&self.memory.display,&self.memory.raster,&self.memory.staging].map(|owner|{let report=owner.published.get();report.gpu_bytes.saturating_sub(report.pinned_gpu_bytes)});
         let draining=crate::residency::Drain::new(self.draining()).bytes();
         let optional=self.factory.memory_budget().snapshot().devices.iter().find(|device|device.device==self.factory.memory_device())
-            .map_or(0,|device|device.physical_bytes.saturating_sub(device.pinned_bytes)).saturating_sub(ours.into_iter().sum());
+            .map_or(0,|device|device.releasable_bytes).saturating_sub(ours.into_iter().sum());
         let mut lane=self.memory.lane.borrow_mut();
         let short=raster.used().saturating_add(lane.wanted).saturating_sub(raster.limit());
         let lent_out=lane.lent>=lane.lendable || short==0;

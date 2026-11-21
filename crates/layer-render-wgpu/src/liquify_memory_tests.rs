@@ -18,18 +18,26 @@ struct Canvas {
     clock: u64,
     sequence: u64,
     refused: Vec<u64>,
+    _reserve: layer_core::MemoryOwner,
+    returning: Option<layer_core::MemoryOwner>,
 }
 
 struct Memory { lane: u64, admitted: u64, strokes: u64 }
 
 impl Canvas {
-    fn photo(budget_mib: u64) -> Self {
+    fn photo(budget_mib: u64, reserve_mib: u64, returning_mib: u64) -> Self {
         let photo = layer_core::color::source::rgba8_source(EXTENT, |x, y| [
             ((3 * x + y / 8) % 251) as u8, ((5 * y + x / 8) % 241) as u8, (((x + y) / 4 + x * y % 31) % 197) as u8, 255]);
         let document = layer_color::photo_project(Arc::unwrap_or_clone(photo), Default::default(), "Photo".into(), layer_core::color::SampleDepth::U8).unwrap();
         let target = document.active_target().unwrap();
         let r = crate::memory::memory_tests::renderer(document.composition().color,
             layer_core::DeviceMemoryFacts { budget_bytes: Some(budget_mib << 20), ..Default::default() }).unwrap();
+        let [reserve, returning] = [(layer_core::MemoryOwnerKind::Other, layer_core::MemoryClass::Pinned, reserve_mib),
+            (layer_core::MemoryOwnerKind::Scene, layer_core::MemoryClass::Visible, returning_mib)].map(|(kind, class, mib)| {
+            let owner = r.factory.memory_budget().register_owner(kind, class, Some(r.factory.memory_device()));
+            owner.report(layer_core::MemoryReport { gpu_bytes: mib << 20, ..Default::default() });
+            owner
+        });
         let view = layer_render::ViewState { width_px: (EXTENT[0] as f32 * FIT) as u32, height_px: (EXTENT[1] as f32 * FIT) as u32,
             document_to_surface: [FIT, 0., 0., FIT, 0., 0.] };
         let (input, consumer) = input_queue(1024);
@@ -41,7 +49,7 @@ impl Canvas {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC, view_formats: &[],
         });
         let presenter = ViewportPresenter::for_surface(engine.backend(), format, SdrSurfaceColor::Srgb).unwrap();
-        let mut canvas = Self { engine, input, target, presenter, shown, clock: 1_000_000_000, sequence: 0, refused: Vec::new() };
+        let mut canvas = Self { engine, input, target, presenter, shown, clock: 1_000_000_000, sequence: 0, refused: Vec::new(), _reserve: reserve, returning: Some(returning) };
         assert!(canvas.settle(), "the photo must open");
         canvas
     }
@@ -53,6 +61,7 @@ impl Canvas {
         self.engine.render_frame_at(self.clock).unwrap();
         self.presenter.present(self.engine.backend(), &self.shown.create_view(&Default::default()), self.engine.view(), [0.12, 0.12, 0.12, 1.]).unwrap();
         self.engine.backend_mut().wait_idle().unwrap();
+        if self.engine.backend().lane_waits() { self.returning = None; }
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     fn idle(&self) -> bool {
@@ -112,8 +121,8 @@ impl Canvas {
 
 #[test]
 fn a_stroke_refused_its_own_memory_ends_with_the_drawing_as_it_was_and_the_next_stroke_commits() {
-    for preset in [layer_core::DefaultBrushPreset::LiquifyPush, layer_core::DefaultBrushPreset::LoadedOil] {
-        let mut canvas = Canvas::photo(384);
+    for (preset, budget, reserve) in [(layer_core::DefaultBrushPreset::LiquifyPush, 1024, 512), (layer_core::DefaultBrushPreset::LoadedOil, 384, 0)] {
+        let mut canvas = Canvas::photo(budget, reserve, 0);
         canvas.brush(preset, 740.);
         let (document, before, shown, refusals) = (canvas.engine.document().clone(), canvas.memory(), canvas.pixels(), canvas.engine.backend().stroke_memory_refusals());
         assert!(canvas.ovals(1. / 3., 1), "{preset:?}: the stroke must end within {SETTLE_FRAMES} frames of its last input, not wait on {:?}", canvas.engine.backend().outstanding_terms());
@@ -137,9 +146,19 @@ fn a_stroke_refused_its_own_memory_ends_with_the_drawing_as_it_was_and_the_next_
 }
 
 #[test]
+fn a_stroke_short_of_memory_another_owner_still_returns_waits_for_it_and_commits() {
+    let mut canvas = Canvas::photo(1664, 512, 512);
+    canvas.brush(layer_core::DefaultBrushPreset::LiquifyPush, 740.);
+    let (revision, refusals) = (canvas.engine.document().revision, canvas.engine.backend().stroke_memory_refusals());
+    assert!(canvas.ovals(1. / 3., 1), "the stroke must end within {SETTLE_FRAMES} frames of its last input, not wait on {:?}", canvas.engine.backend().outstanding_terms());
+    assert!(canvas.returning.is_none(), "the stroke waits for the memory the other owner returns");
+    assert_eq!((canvas.engine.document().revision, canvas.engine.backend().stroke_memory_refusals()), (revision + 1, refusals), "the stroke commits once the memory returns and is never refused");
+}
+
+#[test]
 fn back_to_back_contacts_commit_the_revisions_a_roomy_run_commits() {
     let revisions = |budget: u64| {
-        let mut canvas = Canvas::photo(budget);
+        let mut canvas = Canvas::photo(budget, 0, 0);
         canvas.brush(layer_core::DefaultBrushPreset::LiquifyPush, 740.);
         let original = canvas.engine.document().artwork.clone();
         assert!(canvas.ovals(1. / 3., 2), "{budget} MiB: both contacts must end within {SETTLE_FRAMES} frames of the last input, not wait on {:?}", canvas.engine.backend().outstanding_terms());

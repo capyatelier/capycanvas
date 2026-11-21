@@ -68,6 +68,7 @@ pub struct MemoryDeviceSnapshot {
     pub limit_bytes: u64,
     pub physical_bytes: u64,
     pub pinned_bytes: u64,
+    pub releasable_bytes: u64,
     pub granted_bytes: u64,
     pub pinned_debt_bytes: u64,
 }
@@ -519,13 +520,15 @@ impl MemoryBudget {
         snapshot.pinned_debt_bytes = snapshot.ram_pinned_bytes.saturating_sub(state.ram_limit);
         let (mut unified_debt, mut discrete_debt) = (0u64, 0u64);
         for (&device, facts) in &state.devices {
-            let (physical, pinned, granted) = state.owners.values().filter(|owner| owner.device == Some(device)).fold((0u64,0u64,0u64), |(physical,pinned,granted),owner| (
-                physical.saturating_add(owner.report.gpu_bytes), pinned.saturating_add(owner.report.pinned_gpu_bytes), granted.saturating_add(owner.grants.gpu.load(Ordering::Acquire))));
+            let (physical, pinned, releasable, granted) = state.owners.values().filter(|owner| owner.device == Some(device)).fold((0u64,0u64,0u64,0u64), |(physical,pinned,releasable,granted),owner| (
+                physical.saturating_add(owner.report.gpu_bytes), pinned.saturating_add(owner.report.pinned_gpu_bytes),
+                releasable.saturating_add(if owner.class == MemoryClass::Pinned {0} else {owner.report.gpu_bytes.saturating_sub(owner.report.pinned_gpu_bytes)}),
+                granted.saturating_add(owner.grants.gpu.load(Ordering::Acquire))));
             let limit = device_limit(*facts, physical).min(if facts.unified { state.ram_limit } else { u64::MAX });
             let debt = pinned.saturating_sub(limit);
             if facts.unified { unified_debt = unified_debt.saturating_add(debt); } else { discrete_debt = discrete_debt.saturating_add(debt); }
             snapshot.devices.push(MemoryDeviceSnapshot { device, unified: facts.unified, heap_bytes: facts.heap_bytes, limit_bytes: limit,
-                physical_bytes: physical, pinned_bytes: pinned, granted_bytes: granted, pinned_debt_bytes: debt });
+                physical_bytes: physical, pinned_bytes: pinned, releasable_bytes: releasable, granted_bytes: granted, pinned_debt_bytes: debt });
         }
         snapshot.pinned_debt_bytes = snapshot.pinned_debt_bytes.max(unified_debt).saturating_add(discrete_debt);
         snapshot
