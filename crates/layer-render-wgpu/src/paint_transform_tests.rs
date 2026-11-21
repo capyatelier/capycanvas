@@ -441,7 +441,7 @@ fn moved_copies_that_keep_their_source_match_replay_and_commit_without_jump() {
 #[test]
 fn transform_selection_moves_to_new_tiles_preserves_unselected_and_layer_offset() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let extent = [768, 512];
+    let extent = [1024, 512];
     let mut layer = paint_document(extent, "selected transform");
     occurrence_mut(&mut layer).offset = [5, 7];
     let mut d = dab([1., 0., 0., 1.]);
@@ -494,6 +494,7 @@ fn transform_selection_moves_to_new_tiles_preserves_unselected_and_layer_offset(
         vec![255, 0, 0, 255],
         "placement crosses tiles"
     );
+    let reach = page_coordinates(crate::batch_pixel_rect(&op_batch, extent)).count();
     submit(&mut r, &layer, &[d], &[b, op_batch], true);
     assert_eq!(
         r.readback_srgb_rgba8().unwrap(),
@@ -501,8 +502,8 @@ fn transform_selection_moves_to_new_tiles_preserves_unselected_and_layer_offset(
         "replay across tile boundary"
     );
     assert!(
-        r.paint_layers[0].pages.len() < 6,
-        "only intersecting pages are allocated"
+        reach < page_coordinates(PixelRect::full(extent)).count() && r.paint_layers[0].pages.len() <= reach,
+        "only pages under the operation's bounds are allocated"
     );
 }
 
