@@ -674,6 +674,14 @@ impl Liquify {
             let preview_version=if preview {Some(r.preview_version(batch.target,layer_core::raster::RasterPlane::Color,*coordinate,scene::PreviewStage::AfterBatch(batch_index))?)}else {None};
             let intent=match &preview_version {Some(version)=>version.input().clone(),None=>r.raster_intent(batch.target,layer_core::raster::RasterPlane::Color,*coordinate)?};
             let layer=r.paint_layers.iter().position(|l|l.id==batch.target).ok_or(GpuRasterError::MissingPaintLayer(batch.target))?;
+            let copied_outside=(preview && block==1 && batch.style.liquify.as_ref().is_none_or(|context|context.amount.is_none())
+                && stroke.colored(coordinate).is_some()==prior_view.is_some()).then(|| {
+                let committed=r.raster_intent(batch.target,layer_core::raster::RasterPlane::Color,*coordinate).ok()?;
+                let read=r.paint_layers[layer].pages.iter().find(|page|page.coordinate==*coordinate)?.active().read(committed.version(),Some(&receipt))?;
+                let predicted=context.tiles.iter().find(|tile|tile.coordinate==*coordinate)?.local;
+                (current_tiles.get(coordinate)?.view==read.value().view)
+                    .then(||resident::Delta::seeded(&read.input(),predicted.union(stroke.dirty_at(coordinate).unwrap_or(PixelRect::EMPTY))))
+            }).flatten();
             let pages=if preview {&mut r.preview_pages}else {&mut r.paint_layers[layer].pages};
             let page=prepared_raster_output(pages.iter_mut().find(|p|p.coordinate==*coordinate))?;
             let write=if preview {page.active_mut().overwrite(&receipt)}else {page.active_mut().write(&intent,&receipt)}
@@ -682,7 +690,7 @@ impl Liquify {
             let version=preview_version.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|preview|preview.version().clone());
             if preview {preview_versions.insert(*coordinate,version.clone());}
             publications.push(MaterialPublication {kind:MaterialOutputKind::Color,coordinate:*coordinate,preview:preview_version,input:intent,
-                encoding:write.encoded(version).certified(if preview {resident::Delta::Unknown}else {resident::Delta::InPlace(local)})});
+                encoding:write.encoded(version).certified(if preview {copied_outside.unwrap_or_default()}else {resident::Delta::InPlace(local)})});
             for (index, &chunk) in chunks.iter().enumerate() {
                 let current = if preview {
                     current_tiles.get(coordinate).map_or(&r.empty_view, |tile| &tile.view)
