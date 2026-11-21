@@ -30,6 +30,14 @@ impl Delta {
     pub(crate) fn seeded(from: &Input, rect: PixelRect) -> Self {
         Self::Seeded { from: Origin { version: from.version.clone(), names: Arc::downgrade(&from.names) }, rect }
     }
+    pub(crate) fn reseeded(from: &Input, rect: PixelRect, submission: &Submission) -> Self {
+        let names = from.names.lock().unwrap();
+        match &names.delta {
+            Self::Seeded { from: earlier, rect: outside } if from.version.submission.same(submission) && names.published(&from.version) =>
+                Self::Seeded { from: earlier.clone(), rect: rect.union(*outside) },
+            _ => Self::seeded(from, rect),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -51,8 +59,9 @@ impl Names {
         let first = !self.version.as_ref().is_some_and(|previous| previous.submission.same(&version.submission));
         if first { self.before = self.held().cloned(); }
         self.delta = match (first, std::mem::take(&mut self.delta), delta) {
-            (true, _, delta) => delta,
+            (true, _, delta) | (false, _, delta @ Delta::Seeded { .. }) => delta,
             (false, Delta::InPlace(a), Delta::InPlace(b)) => Delta::InPlace(a.union(b)),
+            (false, Delta::Seeded { from, rect }, Delta::InPlace(b)) => Delta::Seeded { from, rect: rect.union(b) },
             _ => Delta::Unknown,
         };
         self.version = Some(version);
