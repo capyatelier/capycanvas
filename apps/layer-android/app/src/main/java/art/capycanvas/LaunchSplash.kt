@@ -39,8 +39,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.node.PointerInputModifierNode
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -347,6 +350,19 @@ internal fun CanvasHost.launchHolding(reveal: LaunchReveal?): Boolean {
     return reveal?.holding(visible, launchFinished()) ?: visible
 }
 
+private data class LaunchCoverInput(val covered: Boolean) : ModifierNodeElement<LaunchCoverInputNode>() {
+    override fun create() = LaunchCoverInputNode(covered)
+    override fun update(node: LaunchCoverInputNode) { node.covered = covered }
+}
+
+private class LaunchCoverInputNode(var covered: Boolean) : Modifier.Node(), PointerInputModifierNode {
+    override fun onPointerEvent(pointerEvent: PointerEvent, pass: PointerEventPass, bounds: IntSize) {
+        if (covered) pointerEvent.changes.forEach { it.consume() }
+    }
+    override fun onCancelPointerInput() {}
+    override fun sharePointerInputWithSiblings() = !covered
+}
+
 @Composable internal fun LaunchSplash(host: CanvasHost) {
     val activity = LocalActivity.current as? MainActivity ?: return
     val window = activity.launchSplash
@@ -380,9 +396,7 @@ internal fun CanvasHost.launchHolding(reveal: LaunchReveal?): Boolean {
     val alpha by animateFloatAsState(if (holding) 1f else 0f,
         tween(if (finished) reveal?.toInt() ?: 0 else 0), label = "launch-reveal")
     val native = window.nativeActive || (window.hadNativeVisual && finished)
-    if (alpha > 0f || window.nativeActive) BoxWithConstraints(Modifier.fillMaxSize().pointerInput(Unit) {
-        awaitPointerEventScope { while (true) awaitPointerEvent().changes.forEach { it.consume() } }
-    }) {
+    if (alpha > 0f || window.nativeActive) BoxWithConstraints(Modifier.fillMaxSize() then LaunchCoverInput(visible)) {
         if (!native && alpha > 0f) {
             val drawable = window.markDrawable(markIcon)
             val inkBottom = mark?.getDouble("ink_bottom")?.toFloat() ?: 0f

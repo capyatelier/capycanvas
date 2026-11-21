@@ -150,7 +150,9 @@ the ordered drawing-edit queue; file commands still wait for preceding edits.
 published drawing, its canvas/brush dependencies and chrome are ready. Its frame
 ticket identifies the current document, renderer and layout. Hosts acknowledge
 that ready frame through `launch_presented` using their surface-owned completion;
-an earlier or invalidated frame cannot reveal the workspace. Errors and required
+an earlier or invalidated frame cannot reveal the workspace. The cover takes
+input only while `LaunchView::visible`; a cover still painting or fading after
+that passes input to the workspace. Errors and required
 dialogs bypass the cover without completing launch. The workspace controller
 reports its errors, prompts and recovery action to the session; hosts report only
 their own modal surfaces through launch readiness. Notices raised under the cover

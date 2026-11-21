@@ -78,12 +78,12 @@ impl LaunchSplash {
     }
     pub fn update(&self, view: layer_ui::LaunchView, localization: &layer_ui::Localizer) {
         if !view.visible && !self.root.reveals_child() { return; }
+        self.root.set_can_target(view.visible);
         if view.visible {
             self.cancel_paint();
             self.label.set_text(&layer_ui::bootstrap_view(localization).launch_caption);
         }
         if view.visible {
-            self.root.set_can_target(true);
             self.root.set_transition_duration(0);
             self.root.set_reveal_child(true);
         } else if !view.finished {
@@ -97,7 +97,6 @@ impl LaunchSplash {
                 if let Some(frame) = frame.get() {
                     if clock.frame_counter() <= frame { return glib::ControlFlow::Continue; }
                     pending.borrow_mut().take();
-                    root.set_can_target(false);
                     root.set_reveal_child(false);
                     return glib::ControlFlow::Break;
                 }
@@ -207,7 +206,8 @@ mod tests {
         capture("launch-after-caption.png");
         let view = layer_ui::LaunchView {visible: false, finished: true, frame: None};
         splash.update(view, &localization);
-        assert!(splash.root.reveals_child() && splash.root.can_target(), "readiness does not reveal an unpainted editor");
+        assert!(splash.root.reveals_child(), "readiness does not reveal an unpainted editor");
+        assert!(!splash.root.can_target(), "a finished launch passes input before its cover fades");
         assert!(splash.paint.borrow().is_some());
         splash.update(layer_ui::LaunchView {visible: true, finished: false, ..view}, &localization);
         assert!(splash.paint.borrow().is_none());
