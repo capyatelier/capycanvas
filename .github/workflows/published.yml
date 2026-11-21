@@ -1,7 +1,5 @@
 name: Publish release updates
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       tag:
@@ -18,7 +16,7 @@ jobs:
     runs-on: ubuntu-24.04
     environment: cloudflare
     env:
-      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      RELEASE_TAG: ${{ inputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -40,9 +38,3 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CAPYCANVAS_WEB: ${{ github.workspace }}/target/capycanvas-web
         run: bash packaging/flatpak/publish.sh "$RELEASE_TAG"
-      - name: Deploy the website and online editor
-        env:
-          GH_TOKEN: ${{ secrets.DEPLOY_DISPATCH_TOKEN }}
-        run: |
-          gh workflow run site.yml --repo "$GITHUB_REPOSITORY_OWNER/capycanvas-web" --ref main
-          gh workflow run deploy.yml --repo "$GITHUB_REPOSITORY_OWNER/capycanvas-release" --ref main -f ref="$RELEASE_TAG"

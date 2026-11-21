@@ -226,11 +226,19 @@ this a stable GitHub Release: Flatpak updates deploy only from the latest
 published release that is neither a draft nor a prerelease, even while mobile
 distribution remains in beta.
 
-Publishing starts `published.yml`, which updates the Flatpak repository and
-then deploys the [website and online editor](#website-and-online-editor). Wait
-for it and the two deploys it starts, verify the public reference and repository
-signatures, and test installation and updates from the preceding Flatpak release
-in an isolated environment ([Linux Flatpak](#linux-flatpak)).
+Publishing deploys nothing by itself. Run each repository's release workflow:
+`published.yml` updates the [Flatpak repository](#linux-flatpak), and `site.yml`
+and `deploy.yml` deploy the [website and online editor](#website-and-online-editor).
+
+```bash
+gh workflow run published.yml --repo capyatelier/capycanvas -f tag="$CAPY_RELEASE_TAG"
+gh workflow run site.yml --repo capyatelier/capycanvas-web --ref main
+gh workflow run deploy.yml --repo capyatelier/capycanvas-release -f ref="$CAPY_RELEASE_TAG"
+```
+
+Wait for all three, verify the public reference and repository signatures, and
+test installation and updates from the preceding Flatpak release in an isolated
+environment ([Linux Flatpak](#linux-flatpak)).
 
 ### 7. Report completion by channel
 
@@ -276,16 +284,12 @@ published signed installer is a separate delivery channel.
 ## Website and online editor
 
 Cloudflare serves the site, release downloads, the editor and the Flatpak
-repository. When a release is published, `published.yml` starts the **Site**
-workflow in `capyatelier/capycanvas-web`, which copies the release to
+repository. [Step 6](#6-publish-and-deploy-all-public-surfaces) runs the **Site** workflow (`site.yml`) in
+`capyatelier/capycanvas-web`, which copies the release to
 `downloads.capycanvas.art` and redeploys the marketing site, and the editor's
 `deploy.yml` in `capyatelier/capycanvas-release` for the tag, which builds the
-editor from that tag and deploys it. To repeat either deployment:
-
-```bash
-gh workflow run site.yml --repo capyatelier/capycanvas-web --ref main
-gh workflow run deploy.yml --repo capyatelier/capycanvas-release -f ref="$CAPY_RELEASE_TAG"
-```
+editor from that tag and deploys it. Rerun either command to repeat that
+deployment.
 
 Wait for the site's checks and deployment and for the editor's `deploy.yml`.
 Verify the public
@@ -615,7 +619,7 @@ references their public HTTPS URLs.
 
 The repository archive contains the OSTree objects and metadata needed to serve
 updates. The bundle and reference alone cannot supply a Flatpak repository.
-When a GitHub Release is published, `.github/workflows/published.yml` runs
+Run for a published release's tag, `.github/workflows/published.yml` runs
 `packaging/flatpak/publish.sh`, which downloads its repository archive, checks it against `SHA256SUMS`, writes the hosted
 `capycanvas.flatpakref` and deploys the static Worker `capycanvas-flatpak` from
 `packaging/flatpak/cloudflare/`. Files over Cloudflare's 25 MiB static-asset
@@ -635,9 +639,8 @@ replace the update source. Installations from 1.0.15 or earlier recorded
 The `release` environment holds the signing material; restrict it to `v*` tags
 and require a maintainer's approval. The `cloudflare` environment, restricted to
 `v*` tags and `main`, holds `CLOUDFLARE_API_TOKEN` (an account API token with
-Workers Scripts, Workers R2 Storage and Zone WAF edit access), `CLOUDFLARE_ACCOUNT_ID` and
-`DEPLOY_DISPATCH_TOKEN` (a fine-grained token with Actions write access to
-`capycanvas-web` and `capycanvas-release`) for `published.yml`.
+Workers Scripts, Workers R2 Storage and Zone WAF edit access) and
+`CLOUDFLARE_ACCOUNT_ID` for `published.yml`.
 
 | Name | Kind | Use |
 | --- | --- | --- |
