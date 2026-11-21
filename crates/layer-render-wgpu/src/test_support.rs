@@ -9,7 +9,8 @@ pub(crate) struct PassCounts {
     pub transport_bind_groups:u64,
     pub total:u64,
     pub normalizations:u64,
-    pub material_batches:u64,
+    pub placement_batches:u64,
+    pub placed_inputs:u64,
     pub source_input_misses:u64,
     pub raster_output_misses:u64,
     pub raster_write_defers:u64,
@@ -51,7 +52,7 @@ pub(crate) struct PassCounts {
     pub window_reduced_texels:u64,
 }
 std::thread_local! {
-    static PASS_COUNTS:std::cell::Cell<PassCounts>=const {std::cell::Cell::new(PassCounts {material_encode_accepts:0,material_neighborhoods:0,material_bind_groups:0,transport_bind_groups:0,total:0,normalizations:0,material_batches:0,source_input_misses:0,raster_output_misses:0,raster_write_defers:0,store_page_visits:0,paint_page_visits:0,display_walks:0,preview_revision_replays:0,unit_acceptances:0,projected_cells:0,projected_copies:0,composite_commits:0,declarations:0,store_gets:0,expected_keys:0,brush_acceptances:0,preview_computations:0,completion_callbacks:0,preview_definitions:0,warm_restore_extra_tiles:0,navigator_checks:0,graph_prepares:0,signature_reads:0,contact_declarations:0,destination_units:0,raster_admissions:0,vector_names:0,grant_encoders:0,report_syncs:0,command_encoders:0,scene_dispatches:0,fold_inputs:0,display_rooms:0,memory_updates:0,object_lookups:0,object_lookup_visits:0,room_scans:0,composed_texels:0,written_back:0,window_reduced_texels:0})};
+    static PASS_COUNTS:std::cell::Cell<PassCounts>=const {std::cell::Cell::new(PassCounts {material_encode_accepts:0,material_neighborhoods:0,material_bind_groups:0,transport_bind_groups:0,total:0,normalizations:0,placement_batches:0,placed_inputs:0,source_input_misses:0,raster_output_misses:0,raster_write_defers:0,store_page_visits:0,paint_page_visits:0,display_walks:0,preview_revision_replays:0,unit_acceptances:0,projected_cells:0,projected_copies:0,composite_commits:0,declarations:0,store_gets:0,expected_keys:0,brush_acceptances:0,preview_computations:0,completion_callbacks:0,preview_definitions:0,warm_restore_extra_tiles:0,navigator_checks:0,graph_prepares:0,signature_reads:0,contact_declarations:0,destination_units:0,raster_admissions:0,vector_names:0,grant_encoders:0,report_syncs:0,command_encoders:0,scene_dispatches:0,fold_inputs:0,display_rooms:0,memory_updates:0,object_lookups:0,object_lookup_visits:0,room_scans:0,composed_texels:0,written_back:0,window_reduced_texels:0})};
 }
 type PreviewName=(layer_core::SourceTarget,usize,[u32;2],crate::scene::PreviewStage);
 std::thread_local! {static PREVIEW_NAMES:std::cell::RefCell<Option<crate::IdMap<PreviewName,u32>>>=const {std::cell::RefCell::new(None)};}
@@ -96,7 +97,7 @@ impl PassCounts {
     pub fn snapshot()->Self {PASS_COUNTS.with(std::cell::Cell::get)}
     pub fn delta(self,before:Self)->Self {
         Self {material_encode_accepts:self.material_encode_accepts-before.material_encode_accepts,material_neighborhoods:self.material_neighborhoods-before.material_neighborhoods,material_bind_groups:self.material_bind_groups-before.material_bind_groups,transport_bind_groups:self.transport_bind_groups-before.transport_bind_groups,total:self.total-before.total,normalizations:self.normalizations-before.normalizations,
-            material_batches:self.material_batches-before.material_batches,source_input_misses:self.source_input_misses-before.source_input_misses,
+            placement_batches:self.placement_batches-before.placement_batches,placed_inputs:self.placed_inputs-before.placed_inputs,source_input_misses:self.source_input_misses-before.source_input_misses,
             raster_output_misses:self.raster_output_misses-before.raster_output_misses,raster_write_defers:self.raster_write_defers-before.raster_write_defers,
             store_page_visits:self.store_page_visits-before.store_page_visits,paint_page_visits:self.paint_page_visits-before.paint_page_visits,display_walks:self.display_walks-before.display_walks,
             preview_revision_replays:self.preview_revision_replays-before.preview_revision_replays,unit_acceptances:self.unit_acceptances-before.unit_acceptances,
@@ -108,7 +109,7 @@ impl PassCounts {
         PASS_COUNTS.with(|counts| {
             let before=counts.get();
             counts.set(Self {material_encode_accepts:before.material_encode_accepts+self.material_encode_accepts,material_neighborhoods:before.material_neighborhoods+self.material_neighborhoods,material_bind_groups:before.material_bind_groups+self.material_bind_groups,transport_bind_groups:before.transport_bind_groups+self.transport_bind_groups,total:before.total+self.total,normalizations:before.normalizations+self.normalizations,
-                material_batches:before.material_batches+self.material_batches,source_input_misses:before.source_input_misses+self.source_input_misses,
+                placement_batches:before.placement_batches+self.placement_batches,placed_inputs:before.placed_inputs+self.placed_inputs,source_input_misses:before.source_input_misses+self.source_input_misses,
                 raster_output_misses:before.raster_output_misses+self.raster_output_misses,raster_write_defers:before.raster_write_defers+self.raster_write_defers,
                 store_page_visits:before.store_page_visits+self.store_page_visits,paint_page_visits:before.paint_page_visits+self.paint_page_visits,display_walks:before.display_walks+self.display_walks,
                 preview_revision_replays:before.preview_revision_replays+self.preview_revision_replays,unit_acceptances:before.unit_acceptances+self.unit_acceptances,
