@@ -1178,6 +1178,9 @@ fn clone_stamp()->layer_render::DabStyle {
     layer_render::DabStyle {retouch:Some(layer_core::Retouch {source:layer_core::RetouchSource::Editing,offset:[40.,-120.],..Default::default()}),
         ..crate::layer_tests::preset_style(DefaultBrushPreset::CloneStamp)}
 }
+fn wet_edged_brush()->layer_render::DabStyle {
+    let mut style=crate::tests::test_style(layer_core::BrushExecution::Dry);style.rendering.wet_edge=0.6;style
+}
 fn select_retouch(r:&mut WgpuRasterizer,target:SourceTarget,style:&layer_render::DabStyle) {
     let Some(retouch)=style.retouch.clone() else {return;};
     layer_render::CanvasRenderer::prepare_retouch(r,Some(&layer_render::RetouchPreparation {execution:style.execution,target,retouch,points:vec![layer_core::Point {x:300.,y:300.}]}));
@@ -1250,7 +1253,8 @@ fn each_page_record_bounds_what_its_stroke_frame_wrote() {
     let fine=layer_render::DabStyle {blender:layer_core::BrushBlender {cell_size:1.,..dither.blender},..dither.clone()};
     let colored=[("a Pencil",style(Pencil),true,1),("an alpha-locked Pencil",locked,true,1),("an ink pen",style(GPen),true,1),
         ("an eraser",style(Eraser),true,1),("a paintbrush",style(Paintbrush),true,1),("a multiply glaze",style(MultiplyGlaze),true,1),
-        ("a Pencil stored write-only",style(Pencil),false,1),("an ink pen stored write-only",style(GPen),false,1),("a smudge",style(Smudge),true,0),("wet paint",style(WetRound),true,0)];
+        ("a Pencil stored write-only",style(Pencil),false,1),("an ink pen stored write-only",style(GPen),false,1),("a smudge",style(Smudge),true,0),("wet paint",style(WetRound),true,0),
+        ("a wet-edged brush",wet_edged_brush(),true,0)];
     let grayed=[("a Dither blender",dither,true,0),("a Dither blender without cells",fine,true,0),("a Scatter blender",style(ScatterBlender),true,0),
         ("a clone stamp",clone_stamp(),true,1),("a clone stamp stored write-only",clone_stamp(),false,1),("a Liquify push",style(LiquifyPush),true,0)];
     for (doc,(label,style,in_place,tips)) in colored.into_iter().map(|row|(&doc,row)).chain(grayed.into_iter().map(|row|(&graying,row))) {
@@ -1304,6 +1308,7 @@ fn every_patched_frame_equals_a_whole_frame_bit_for_bit_for_each_kind_of_page_re
         Stroked::new("a page a Scatter blender rewrote in cells",&painted,ScatterBlender,0),
         Stroked {style:clone_stamp(),..Stroked::new("a page a clone stamp copied onto under its tip",&painted,CloneStamp,1)},
         Stroked::new("a page Liquify pushed in place without a tip",&painted,LiquifyPush,0),
+        Stroked {style:wet_edged_brush(),..Stroked::new("a page a wet-edged brush drew on in place without a tip",&painted,Pencil,0)},
     ]);
 }
 

@@ -2967,7 +2967,8 @@ impl WgpuRasterizer {
             let write=if let Some(expected)=&expected {page.active_mut().revise(expected,&receipt)}else {page.active_mut().write(&intent,&receipt)}
                 .ok_or(GpuRasterError::Invariant("prepared encode brush batch state is inconsistent"))?;
             let target=write.value().view.clone();
-            let output=write.encoded(ticket.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|ticket|ticket.version().clone()));
+            let output=write.encoded(ticket.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|ticket|ticket.version().clone()))
+                .certified(resident::Delta::InPlace(tile.local));
             self.encode_batch_to_target(encoder,batch_index,batch,&target,tile.local,self.paint_target_binding(&batch.style),
                 self.layer_target_offset(batch.target,tile.coordinate))?;
             let actual=encoder.submission();let written=output.publish(&actual);
