@@ -37,10 +37,6 @@ impl MovingProjection {
             && self.viewport == viewport && self.format == format
             && self.space == space && self.available == available && self.failures == failures && self.moving==moving
     }
-    pub(crate) fn storage_bytes(&self) -> u64 {
-        (std::mem::size_of::<Self>() + self.identities.capacity()*std::mem::size_of::<(layer_core::authored::PortableId,std::sync::Weak<layer_core::color::source::SourceImage>)>()
-            + self.requests.capacity()*std::mem::size_of::<object_image_mips::MovingRequest>()) as u64
-    }
     pub(crate) fn update(cache:&mut Option<Self>, scene:SceneView<'_>, view:layer_render::ViewState, space:layer_core::color::RgbSpace, available:bool, failed:&mut Vec<FailedImageTile>, moving:Option<layer_core::authored::OccurrenceHandle>) -> Result<bool,GpuRasterError> {
         use layer_core::authored::{Affine64, ImageInterpolation};
         let mapping=view.document_to_surface;
@@ -118,11 +114,11 @@ mod tests {
         let mapping=[0.25,0.,0.,0.25,0.,0.];
         MovingProjection::update(&mut cache,doc.scene(),layer_render::ViewState {width_px:256,height_px:256,document_to_surface:mapping},RgbSpace::Srgb,true,&mut failures,None).unwrap();
         let before=cache.as_ref().unwrap();assert_eq!(before.requests.len(),1);assert_eq!(before.identities.len(),1);assert_eq!(before.requests[0].level,2);
-        let requests=before.requests.as_ptr();let identities=before.identities.as_ptr();let bytes=before.storage_bytes();
+        let requests=before.requests.as_ptr();let identities=before.identities.as_ptr();let capacity=[before.requests.capacity(),before.identities.capacity()];
         let mut source=doc.artwork.paint.get(paint).unwrap().clone();source.domain=[257,256];
         doc.apply(Edit::Paint(RecordChange::replace(&doc.artwork.paint,paint,Some(source)).unwrap())).unwrap();
         MovingProjection::update(&mut cache,doc.scene(),layer_render::ViewState {width_px:256,height_px:256,document_to_surface:[0.25,0.,0.,0.25,120.,-40.]},RgbSpace::Srgb,true,&mut failures,None).unwrap();
-        let painted=cache.as_ref().unwrap();assert_eq!(painted.requests.as_ptr(),requests);assert_eq!(painted.identities.as_ptr(),identities);assert_eq!(painted.storage_bytes(),bytes);
+        let painted=cache.as_ref().unwrap();assert_eq!(painted.requests.as_ptr(),requests);assert_eq!(painted.identities.as_ptr(),identities);assert_eq!([painted.requests.capacity(),painted.identities.capacity()],capacity);
         failures.push((image.id(),Arc::downgrade(image.storage()),[0;2],RgbSpace::Srgb,"Unavailable image tile".into()));
         MovingProjection::update(&mut cache,doc.scene(),layer_render::ViewState {width_px:256,height_px:256,document_to_surface:mapping},RgbSpace::Srgb,true,&mut failures,None).unwrap();
         let failed=cache.as_ref().unwrap();assert!(failed.requests.is_empty());assert_eq!(failed.identities.as_ptr(),identities);assert_eq!(failures.len(),1);

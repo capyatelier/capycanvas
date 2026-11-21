@@ -803,7 +803,6 @@ fn painting_at_fit_updates_the_half_float_level_it_presents() {
         submit(&mut fresh, &doc, native, true, bounded);
         let mut presenter = crate::test_support::float_presenter(&painted);
         let before = present(&painted, &mut presenter, fit);
-        let conversions = painted.metrics.half_level_passes;
         for step in 0..3 {
             let mut dab = crate::tests::test_dab([200. + step as f32 * 250., 300.], [0.9, 0.02, 0.1, 0.8], 1.);
             dab.radii = [60.; 2];
@@ -818,7 +817,6 @@ fn painting_at_fit_updates_the_half_float_level_it_presents() {
                 present(&painted, &mut presenter, fit);
             }
         }
-        assert_eq!(painted.metrics.half_level_passes, conversions, "bounded {bounded}: strokes convert their half-float pixels while reducing them");
         submit(&mut painted, &doc, fit, false, bounded);
         submit(&mut fresh, &doc, fit, false, bounded);
         assert!(half_float_presentation(&painted) && half_float_presentation(&fresh), "bounded {bounded}");

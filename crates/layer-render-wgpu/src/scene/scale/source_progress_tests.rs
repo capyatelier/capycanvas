@@ -89,12 +89,12 @@ fn deferred_fine_objects_keep_committed_coarse_pages_without_backup() {
     let frame=FramePacket {view:fine,composite_all:false,..packet(doc.scene(),extent)};
     crate::memory::memory_tests::legacy_scene_frame(&mut r,frame);
     let request=request(&r,frame).unwrap();assert_eq!(request.plan.level,0);
-    let (cache,_)=Cache::select(r.scale_display.take(),&r,frame,request,true);
+    let (cache,_)=Cache::select(r.scale_display.take(),&r,frame,request);
     assert!(Arc::ptr_eq(&cache.pages,&retained));
     r.scale_display=Some(cache);r.moving_images=Default::default();
     let mut scene=r.scene.take().unwrap();scene.object_results.clear();
     let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let result={let mut work=crate::test_support::work(false);scene.compose(&mut r,frame,PixelRect::EMPTY,&mut encoder,None,&mut work)};
+    let result={let mut work=crate::test_support::work(false);scene.compose(&mut r,frame,&mut encoder,&mut work)};
     assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady)),"{result:?}");
     r.scene=Some(scene);r.uploads.finish(&encoder);encoder.submit(&r.queue);r.wait_idle().unwrap();
     assert!(r.has_presentable_frame(),"a pending fine window must retain its committed coarse fallback");
@@ -258,7 +258,7 @@ fn fill_preview_becomes_ready_after_deferred_object_composition() {
     let authored=doc.artwork.clone();
     let frame=FramePacket {view:fine,composite_all:false,..packet(doc.scene(),extent)};
     let request=request(&r,frame).unwrap();
-    let (cache,_)=Cache::select(r.scale_display.take(),&r,frame,request,true);
+    let (cache,_)=Cache::select(r.scale_display.take(),&r,frame,request);
     r.scale_display=Some(cache);r.moving_images=Default::default();
     r.scene.as_mut().unwrap().object_results.clear();
     let operation=layer_core::RasterOperation {placement:layer_core::Affine::IDENTITY,
@@ -298,8 +298,8 @@ fn an_empty_store_rebuilds_without_a_cache_readiness_flag() {
     let mut scene=r.scene.take().unwrap();let mut commands=scene.scale_commands.take().unwrap();
     scene.begin_frame();commands.begin();
     let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    {let mut work=crate::test_support::work(false);cache.render_coarse_preview(&mut scene,&mut r,frame,PixelRect::full(extent),
-        &mut Encoding {encoder:&mut encoder,commands:&mut commands, retained:0, budget:&mut work},None).unwrap();}
+    {let mut work=crate::test_support::work(false);cache.render_coarse_preview(&mut scene,&mut r,frame,
+        &mut Encoding {encoder:&mut encoder,commands:&mut commands, retained:0, budget:&mut work}).unwrap();}
     scene.encode_jobs(&mut r,&mut encoder).unwrap();r.uploads.finish(&encoder);encoder.submit(&r.queue);r.wait_idle().unwrap();
     assert!(cache.coverage_complete(),"ready without valid coverage must rebuild the coarse preview");
 }

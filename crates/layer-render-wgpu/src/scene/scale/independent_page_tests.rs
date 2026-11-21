@@ -52,7 +52,7 @@ impl Pages {
         Self {stores,source,r,doc,ink,scene,cache,commands,wakes}
     }
 
-    fn attempt(&mut self,dirty:PixelRect)->Result<PixelRect,GpuRasterError> {
+    fn attempt(&mut self)->Result<PixelRect,GpuRasterError> {
         for _ in self.wakes.try_iter() {}
         let frame=FramePacket {composite_all:false,..frame(&self.doc,0)};
         let mut encoder=crate::submission::CommandEncoder::new(&self.r.device,&Default::default());
@@ -61,9 +61,8 @@ impl Pages {
         crate::scene::scale::tests::prepare_fixture_frame(&self.r,frame,&self.scene);
         let prepared=self.cache.prepare_graph(&self.r,frame,&self.scene);
         let result={let mut work=crate::test_support::work(false);prepared.and_then(|()|
-            self.cache.render_graph(&mut self.scene,&mut self.r,frame,dirty,
-                &mut Encoding {encoder:&mut encoder,commands:&mut self.commands, retained:0, budget:&mut work},Destination::View,None))};
-        self.cache.unchanged=true;
+            self.cache.render_graph(&mut self.scene,&mut self.r,frame,
+                &mut Encoding {encoder:&mut encoder,commands:&mut self.commands, retained:0, budget:&mut work},Destination::View))};
         if result.is_ok() {self.scene.encode_jobs(&mut self.r,&mut encoder).unwrap();}
         else {self.scene.discard_unencoded_jobs();}
         self.r.uploads.finish(&encoder);
@@ -130,7 +129,7 @@ impl Pages {
         crate::test_support::settle_decodes(&mut self.r);
         let deadline=std::time::Instant::now()+std::time::Duration::from_secs(30);
         while !self.cache.coverage_complete() {
-            let result=self.attempt(PixelRect::EMPTY);
+            let result=self.attempt();
             assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady)),"released page units: {result:?}");
             assert!(std::time::Instant::now()<deadline,"released page units must complete coverage");
             crate::test_support::settle_decodes(&mut self.r);
@@ -156,7 +155,7 @@ fn a_pending_stored_page_does_not_block_other_ready_page_units() {
     let mut pages=Pages::new(&[1,2,3]);
     let ready=(1..4).map(|page|[page,0]).collect();
     for attempt in 0..3 {
-        let result=pages.attempt(PixelRect::full(pages.doc.composition().size));
+        let result=pages.attempt();
         assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady)),"attempt {attempt}: {result:?}");
         pages.stores[0].gate.entered();
         pages.assert_ready(&ready);
@@ -167,7 +166,7 @@ fn a_pending_stored_page_does_not_block_other_ready_page_units() {
 #[test]
 fn cold_stroke_frames_commit_new_ready_pages_outside_the_dab_damage() {
     let mut pages=Pages::new(&[]);
-    let result=pages.attempt(PixelRect::full(pages.doc.composition().size));
+    let result=pages.attempt();
     assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady)),"{result:?}");
     pages.stores[0].gate.entered();
     assert!(pages.cache.coverage_snapshot().written.is_empty());
@@ -181,8 +180,7 @@ fn cold_stroke_frames_commit_new_ready_pages_outside_the_dab_damage() {
         let before=page_coordinates(pages.cache.plan.bounds).filter(|coordinate|
             (coverage.ready(page_rect(*coordinate),pages::Accuracy::Display) || pages.cache.displays(page_rect(*coordinate)))
                 && dirty.intersect(page_rect(*coordinate)).is_empty()).count();
-        pages.cache.unchanged=false;
-        let result=pages.attempt(dirty);
+        let result=pages.attempt();
         assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady)),"frame {page}: {result:?}");
         ready.insert([page,0]);
         pages.assert_ready(&ready);

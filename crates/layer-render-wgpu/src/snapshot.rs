@@ -443,39 +443,6 @@ impl SnapshotRenderer {
         self.check_cancelled()?;
         Ok(result)
     }
-    #[cfg(target_arch = "wasm32")]
-    pub async fn preview_document_async(
-        &mut self,
-        bounds: [u32; 2],
-        space: layer_core::color::RgbSpace,
-    ) -> Result<SnapshotPreview, GpuRasterError> {
-        let mut preview =
-            layer_color::AreaPreview::new(self.extent, bounds).map_err(GpuRasterError::Color)?;
-        let mut y = 0;
-        while y < self.extent[1] {
-            self.check_cancelled()?;
-            let (height, pixels) = self.read_band_async(y).await?;
-            for row in pixels.chunks_exact(self.extent[0] as usize) {
-                preview.push(row).map_err(GpuRasterError::Color)?;
-            }
-            y += height;
-        }
-        let (extent, mut pixels) = preview.finish().map_err(GpuRasterError::Color)?;
-        let matrix = self.color().space.linear_transform(space);
-        for pixel in &mut pixels {
-            let rgb = layer_core::color::rgb::apply(
-                matrix,
-                [pixel[0], pixel[1], pixel[2]].map(f64::from),
-            );
-            pixel[..3].copy_from_slice(&rgb.map(|v| v as f32));
-        }
-        self.check_cancelled()?;
-        Ok(SnapshotPreview {
-            extent,
-            space,
-            pixels,
-        })
-    }
     fn check_cancelled(&self) -> Result<(), GpuRasterError> {
         self.control.check()
     }

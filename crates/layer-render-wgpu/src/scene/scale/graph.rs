@@ -260,7 +260,6 @@ pub(super) struct Graph {
     pub parts: Option<Parts>,
     pub motion: Option<[Node; 2]>,
     pub prepared: Option<[Node; 2]>,
-    pub split_changed: bool,
     cached: HashSet<Node>,
     interned: HashSet<Node>,
     effects: HashMap<OccurrenceHandle, (metadata::Metadata, u64)>,
@@ -274,7 +273,7 @@ impl Graph {
     pub fn objects(&self)->&object_spatial::SpatialIndex {&self.objects}
     pub fn blend_space(&self)->layer_core::BlendSpace {self.blend_space}
     pub fn without_pixels(&self) -> Self {
-        Self { root: self.root.clone(), content:self.content.clone(), parts: self.parts.as_ref().map(|parts|Parts {nodes:parts.nodes.clone(),scopes:parts.scopes.clone()}), motion: None, prepared: None, split_changed: false, cached: HashSet::new(), interned: self.interned.clone(), effects: self.effects.clone(),
+        Self { root: self.root.clone(), content:self.content.clone(), parts: self.parts.as_ref().map(|parts|Parts {nodes:parts.nodes.clone(),scopes:parts.scopes.clone()}), motion: None, prepared: None, cached: HashSet::new(), interned: self.interned.clone(), effects: self.effects.clone(),
             revision: self.revision, blend_space: self.blend_space, objects:self.objects.clone(), active: self.active, inputs: None }
     }
     pub fn prepare(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, sources: &Sources, plan: display_mips::Plan, _held: bool) -> Result<(), GpuRasterError> {
@@ -294,7 +293,7 @@ impl Graph {
                 self.effects.insert(handle, (metadata, self.revision));
             }
         }
-        let before = self.motion.take();
+        self.motion.take();
         let mut halves = |split: &super::super::MotionSplit, moving: &(OccurrenceHandle, Moving)| -> Result<[Node; 2], GpuRasterError> {
             let mut half = |scope| compose(FramePacket { scene: packet.scene.with_scope(scope), ..packet }, Some(sources), Some(&self.effects), plan.level, r.device.working_space(), None, Some(moving))
                 .map(|node| if Expression::is_clear(&node) { node } else { Arc::new(Expression::Combine { front: node, back: Expression::color([0.; 4]), blend: 0, flags: 0 }) })
@@ -303,7 +302,6 @@ impl Graph {
         };
         self.motion = sources.motion_split.as_ref().zip(sources.moving.as_ref()).map(|(split, moving)| halves(split, moving)).transpose()?;
         self.prepared = sources.prepared.as_ref().filter(|_| self.motion.is_none()).map(|(split, moving, _)| halves(split, moving)).transpose()?;
-        self.split_changed = before != self.motion;
         self.active = active;
         let (root, parts) = match &self.motion {
             Some([above, below]) => (Expression::combine(above.clone(), below.clone(), layer_core::LayerBlend::Normal, 0), None),
@@ -676,8 +674,8 @@ fn native_level_retained_branches_batch_live_graph_pages_and_keep_islands_separa
             }
             let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default()); let mut commands = RegionRecords::new(&r);
             let work = r.metrics.composited_pixels;
-            {let mut work=crate::test_support::work(false);cache.render_graph(&mut scene, &mut r, frame, PixelRect::EMPTY,
-                &mut Encoding { encoder: &mut encoder, commands: &mut commands, retained:0, budget:&mut work }, Destination::View, Some(&BTreeSet::new())).unwrap();}
+            {let mut work=crate::test_support::work(false);cache.render_graph(&mut scene, &mut r, frame,
+                &mut Encoding { encoder: &mut encoder, commands: &mut commands, retained:0, budget:&mut work }, Destination::View).unwrap();}
             scene.encode_jobs(&mut r, &mut encoder).unwrap();
             let passes = encoder.pass_count(); let pages = if sparse { 2 } else { count };
             let batches = if sparse { 2 } else { count.div_ceil(SOURCE_SLOTS as u32) };

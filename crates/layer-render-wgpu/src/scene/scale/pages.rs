@@ -2622,8 +2622,8 @@ pub(super) mod query_tests {
         scene.begin_frame();commands.begin();scene.scale_sources.prepare(&renderer,frame,&[]);
         crate::scene::scale::tests::prepare_fixture_frame(&renderer,frame,&scene);
         cache.prepare_graph(&renderer,frame,&scene).unwrap();
-        {let mut work=crate::test_support::work(false);cache.render_graph(&mut scene,&mut renderer,frame,PixelRect::full(extent),
-            &mut Encoding {encoder:&mut encoder,commands:&mut commands, retained:0, budget:&mut work},Destination::View,None).unwrap();}
+        {let mut work=crate::test_support::work(false);cache.render_graph(&mut scene,&mut renderer,frame,
+            &mut Encoding {encoder:&mut encoder,commands:&mut commands, retained:0, budget:&mut work},Destination::View).unwrap();}
         scene.encode_jobs(&mut renderer,&mut encoder).unwrap();
         renderer.uploads.finish(&encoder);encoder.submit(&renderer.queue);renderer.wait_idle().unwrap();
         renderer.scene=Some(scene);renderer.scale_display=Some(cache);renderer
@@ -2690,7 +2690,6 @@ pub(super) mod query_tests {
         hold_fixture_inputs(&mut cache.pages.lock().unwrap(),&pending,pending.plan().bounds,Evaluation::Display,vec![input.clone().into()].into(),pending.level);
         renderer.uploads.finish(&encoder);encoder.submit(&renderer.queue);crate::test_support::complete(&renderer);
         assert!(cache.pages.lock().unwrap().get(&key,key.plan().bounds,Accuracy::Display,key.level,crate::residency::Class::Visible).is_some());
-        scene.scale_sources.object_refinements.insert((0,Some(owner)),PixelRect::new(0,0,256,256).into());
         let mut fine=Cache::new(&renderer,Request {plan:display_mips::Plan::at(extent,0),evaluation:Evaluation::Display},1);
         fine.pages=cache.pages.clone();
         fine.prepare_root(&renderer,frame,&scene.scale_sources,false).unwrap();
@@ -2747,7 +2746,7 @@ pub(super) mod query_tests {
         for (level,evaluation) in [(1,Evaluation::Native),(3,Evaluation::Tiled(2)),(0,Evaluation::Display),(2,Evaluation::Native)] {
             let frame=FramePacket {composite_all:false,..display_frame(&document,level)};
             scene.scale_sources.prepare(&renderer,frame,&[]);
-            (cache,_)=Cache::select(Some(cache),&renderer,frame,Request {plan:display_mips::Plan::window(extent,level,half),evaluation},true);
+            (cache,_)=Cache::select(Some(cache),&renderer,frame,Request {plan:display_mips::Plan::window(extent,level,half),evaluation});
             crate::scene::scale::tests::prepare_fixture_frame(&renderer,frame,&scene);
             cache.prepare_graph(&renderer,frame,&scene).unwrap();
             let global=if cache.plan==overview_plan(cache.plan) {&cache}else {cache.overview.as_deref().unwrap()};
@@ -2783,7 +2782,7 @@ pub(super) mod query_tests {
         pollster::block_on(renderer.compilation.prepare_all([&pipelines.constant.2,&pipelines.fold.pipeline,&pipelines.objects.preview,&kernels.compose,&kernels.reduce_pair,&kernels.reduce])).unwrap();
         assert_eq!(leaf.child(0,leaf.window,renderer.empty_view.clone()).unwrap().key.image,id);
         let mut encoder=submission::CommandEncoder::new(&renderer.device,&Default::default());
-        {let mut work=crate::test_support::work(false);cache.render_graph(&mut scene,renderer,frame,plan.bounds,&mut Encoding {encoder:&mut encoder,commands:&mut commands, retained:0, budget:&mut work},Destination::Preview,None).unwrap();}
+        {let mut work=crate::test_support::work(false);cache.render_graph(&mut scene,renderer,frame,&mut Encoding {encoder:&mut encoder,commands:&mut commands, retained:0, budget:&mut work},Destination::Preview).unwrap();}
         renderer.uploads.finish(&encoder);encoder.submit(&renderer.queue);renderer.wait_idle().unwrap();
         assert!(cache.displays(bounds([0;2],plan.level,extent)),"the overview unit must commit on the frame its regional mip inputs and halo are ready");
         assert!(!cache.displays(plan.bounds));
@@ -2818,7 +2817,7 @@ pub(super) mod query_tests {
         crate::scene::scale::tests::prepare_fixture_frame(&renderer,frame,&scene);
         scene.begin_frame();cache.prepare_graph(&renderer,frame,&scene).unwrap();
         let mut encoder=submission::CommandEncoder::new(&renderer.device,&Default::default());
-        {let mut work=crate::test_support::work(false);cache.render_graph(&mut scene,&mut renderer,frame,plan.bounds,&mut Encoding {encoder:&mut encoder,commands:&mut commands, retained:0, budget:&mut work},Destination::View,None).unwrap();}
+        {let mut work=crate::test_support::work(false);cache.render_graph(&mut scene,&mut renderer,frame,&mut Encoding {encoder:&mut encoder,commands:&mut commands, retained:0, budget:&mut work},Destination::View).unwrap();}
         renderer.uploads.finish(&encoder);encoder.submit(&renderer.queue);renderer.wait_idle().unwrap();
         let coverage=cache.coverage_snapshot();
         assert!(coverage.ready(bounds([0;2],plan.level,extent),Accuracy::Display),"one complete page must publish without the rest of its level");
@@ -2875,7 +2874,7 @@ pub(super) mod query_tests {
         overview.copy_level(&scene,&mut renderer,&mut encoder,&mut commands).unwrap();
         assert!(cache.presentable().is_some());
         let plan=display_mips::Plan::window(extent,0,PixelRect::new(768,256,1024,512));
-        let (mut next,_)=Cache::select(Some(cache),&renderer,frame,Request {plan,evaluation:Evaluation::Display},true);
+        let (mut next,_)=Cache::select(Some(cache),&renderer,frame,Request {plan,evaluation:Evaluation::Display});
         crate::scene::scale::tests::prepare_fixture_frame(&renderer,frame,&scene);
         next.prepare_graph(&renderer,frame,&scene).unwrap();
         next.copy_level(&scene,&mut renderer,&mut encoder,&mut commands).unwrap();
@@ -2904,7 +2903,7 @@ pub(super) mod query_tests {
         let frame=FramePacket {composite_all:false,..display_frame(&document,2)};
         scene.scale_sources.prepare(&renderer,frame,&[]);
         let (mut cache,_)=Cache::select(renderer.scale_display.take(),&renderer,frame,
-            Request {plan:display_mips::Plan::at(extent,2),evaluation:Evaluation::Display},true);
+            Request {plan:display_mips::Plan::at(extent,2),evaluation:Evaluation::Display});
         crate::scene::scale::tests::prepare_fixture_frame(&renderer,frame,&scene);
         cache.prepare_graph(&renderer,frame,&scene).unwrap();
         let mut key=cache.page_key(cache.graph.root.clone().unwrap(),cache.plan.bounds);
@@ -2936,7 +2935,7 @@ pub(super) mod query_tests {
         let frame=display_frame(&document,0);
         let scene=renderer.scene.take().unwrap();
         let (mut cache,_)=Cache::select(renderer.scale_display.take(),&renderer,frame,
-            Request {plan:display_mips::Plan::at(extent,0),evaluation:Evaluation::Display},true);
+            Request {plan:display_mips::Plan::at(extent,0),evaluation:Evaluation::Display});
         let mut commands=RegionRecords::new(&renderer);
         crate::scene::scale::tests::prepare_fixture_frame(&renderer,frame,&scene);
         cache.prepare_graph(&renderer,frame,&scene).unwrap();
@@ -2978,7 +2977,7 @@ pub(super) mod query_tests {
         let mut scene=renderer.scene.take().unwrap();
         scene.begin_frame();scene.scale_sources.prepare(&renderer,frame,&[]);
         let request=Request {plan:display_mips::Plan::at(extent,1),evaluation:Evaluation::Display};
-        let (mut cache,_)=Cache::select(renderer.scale_display.take(),&renderer,frame,request,true);
+        let (mut cache,_)=Cache::select(renderer.scale_display.take(),&renderer,frame,request);
         let mut commands=RegionRecords::new(&renderer);
         crate::scene::scale::tests::prepare_fixture_frame(&renderer,frame,&scene);
         cache.prepare_graph(&renderer,frame,&scene).unwrap();

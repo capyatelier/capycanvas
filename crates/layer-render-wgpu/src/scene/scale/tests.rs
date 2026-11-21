@@ -867,8 +867,8 @@ fn streamed_sources_reuse_valid_finer_pages_without_native_decoding() {
         crate::scene::scale::tests::prepare_fixture_frame(&r, frame, &scene);
         cache.prepare_graph(&r, frame, &scene).unwrap();
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        {let mut work=crate::test_support::work(false);cache.render(&mut scene, &mut r, frame, PixelRect::full(frame.document_extent),
-            &mut Encoding { encoder: &mut encoder, commands: &mut commands, retained:0, budget:&mut work }, None).unwrap();}
+        {let mut work=crate::test_support::work(false);cache.render(&mut scene, &mut r, frame,
+            &mut Encoding { encoder: &mut encoder, commands: &mut commands, retained:0, budget:&mut work }).unwrap();}
         scene.encode_jobs(&mut r, &mut encoder).unwrap();
         r.uploads.finish(&encoder);
         encoder.submit(&r.queue);
@@ -1098,7 +1098,7 @@ fn source_windows_keep_overlap_and_sample_global_coordinates() {
         let cache = r.scale_display.as_ref().unwrap();
 
         let sources = &r.scene.as_ref().unwrap().scale_sources;
-        let bytes=sources.storage_bytes()+sources.entries.keys().flat_map(|id|source_textures(&r,*id,None)).map(|texture|texture_bytes(&texture)).sum::<u64>();
+        let bytes=sources.entries.keys().flat_map(|id|source_textures(&r,*id,None)).map(|texture|texture_bytes(&texture)).sum::<u64>();
         assert!(bytes < 8 << 20, "small output retains bounded source windows: {bytes}");
         let source = &sources.entries[&source_at(&doc,0)];
         let images = source_textures(&r,source_at(&doc,0),None);
@@ -2335,7 +2335,7 @@ fn reduced_photo_stack() -> Document {
 }
 
 fn resident_bytes(cache: &crate::scene::scale::Cache, scene: &crate::scene::Scene) -> u64 {
-    cache.storage_bytes() + scene.scale_sources.storage_bytes() + scene.scale_commands.as_ref().unwrap().storage_bytes()
+    cache.storage_bytes() + scene.scale_commands.as_ref().unwrap().storage_bytes()
 }
 
 fn resident_bytes_with_pool(cache: &crate::scene::scale::Cache, scene: &crate::scene::Scene) -> u64 {

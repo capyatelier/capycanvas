@@ -47,7 +47,7 @@ fn display_level_updates_and_dirty_regions_batch_compute_passes() {
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     let mut work = crate::test_support::work(false);
     let mut encoding = Encoding { encoder: &mut encoder, commands: &mut commands, retained:0, budget:&mut work };
-    cache.render_graph(&mut scene, &mut r, frame, PixelRect::EMPTY, &mut encoding, Destination::View, None).unwrap();
+    cache.render_graph(&mut scene, &mut r, frame, &mut encoding, Destination::View).unwrap();
     assert_eq!(r.metrics.frame_composited_pages, vec![(2, [0, 0]), (2, [7, 7])]);
     assert_eq!(encoder.pass_count(), 2, "distant dirty pages share composition and display reduction passes");
     r.uploads.finish(&encoder);
@@ -1204,7 +1204,7 @@ fn fit_exact_producer_survives_shared_preparation_while_its_store_read_waits() {
     crate::test_support::submit_ready(&mut r,frame).unwrap();crate::test_support::complete(&r);gate.gate.entered();
     let frame=FramePacket {composite_all:false,..frame};
     let mut cache=r.scale_display.take().unwrap();let mut scene=r.scene.take().unwrap();
-    let plan=cache.plan;(cache,_)=Cache::select(Some(cache),&r,frame,Request {plan,evaluation},false);
+    let plan=cache.plan;(cache,_)=Cache::select(Some(cache),&r,frame,Request {plan,evaluation});
     prepare_fixture_frame(&r,frame,&scene);cache.prepare_graph(&r,frame,&scene).unwrap();
     let mut commands=scene.scale_commands.take().unwrap_or_else(||RegionRecords::new(&r));
     let key=cache.refinement_interest(0,PixelRect::full(extent)).key;

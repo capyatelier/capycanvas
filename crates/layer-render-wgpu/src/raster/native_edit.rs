@@ -284,16 +284,6 @@ impl WgpuRasterizer {
         Self::native_staged_on_factory(self.factory.clone(), device, color).map(|renderer| *renderer)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn from_wgpu_native_staged_boxed(
-        adapter: wgpu::Adapter,
-        device: wgpu::Device,
-        queue: wgpu::Queue,
-        color: DocumentColor,
-    ) -> Result<Box<Self>, GpuRasterError> {
-        Self::native_staged_on_device(adapter, device.into(), queue, color)
-    }
-
     /// Portable native integer SDR backing with Float32 working pixels.
     pub fn from_wgpu_native_staged(
         adapter: wgpu::Adapter,

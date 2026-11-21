@@ -348,16 +348,8 @@ impl Scene {
         self.vectors.deferred = false;
         self.vectors.retain(packet.scene);
         let palette = Self::vector_palette(r, packet);
-        let complete = self.vectors.advance(packet.scene, palette);
-        for &owner in packet.scene.order() {
-            let mut rects = self.vectors.damage(packet.scene, owner, palette);
-            rects.extend(complete.iter().filter(|(window, _)| *window == owner).map(|(_, rect)| *rect));
-            if rects.is_empty() { continue; }
-            let extent = packet.document_extent;
-            let rects = coalesce(rects.into_iter().map(|rect| rect.in_frame(extent)).filter(|rect| !rect.is_empty()).collect());
-            let damage = self.scale_sources.object_damage.entry(Some(owner)).or_insert(scale::Damage::EMPTY);
-            damage.regions.extend(rects.into_iter().map(|rect| rect.intersect(PixelRect::full(extent))));
-        }
+        self.vectors.advance(packet.scene, palette);
+        for &owner in packet.scene.order() { self.vectors.damage(packet.scene, owner, palette); }
         self.vectors.trim();
         crate::performance_trace::counter(c"Capy vector paths derived", self.vectors.derived_paths());
     }
@@ -526,8 +518,7 @@ impl Vectors {
             keep
         });
     }
-    fn advance(&mut self, scene: SceneView<'_>, palette: (layer_core::color::RgbSpace, layer_core::BlendSpace)) -> Vec<(OccurrenceHandle, DocRect)> {
-        let mut complete = Vec::new();
+    fn advance(&mut self, scene: SceneView<'_>, palette: (layer_core::color::RgbSpace, layer_core::BlendSpace)) {
         for waiting in std::mem::take(&mut self.waiting) {
             if self.deadline.is_some_and(|deadline| web_time::Instant::now() > deadline) {
                 self.deferred = true;
@@ -538,12 +529,8 @@ impl Vectors {
             if self.entries(handle, slots, offset, waiting.level, waiting.extent, true).1 {
                 self.deferred = true;
                 self.waiting.push(waiting);
-            } else {
-                let span = waiting.size.map(|v| i64::from(v) << waiting.level);
-                complete.push((waiting.owner, DocRect { min: waiting.origin, max: [waiting.origin[0] + span[0], waiting.origin[1] + span[1]] }));
             }
         }
-        complete
     }
     fn window_slots(&mut self, scene: SceneView<'_>, at: Waiting, palette: (layer_core::color::RgbSpace, layer_core::BlendSpace), excluded: Option<&BTreeSet<ItemId>>) -> Option<(VectorHandle, Vec<u32>, [f64; 2])> {
         let handle = scene.vector_handle(at.owner)?;
@@ -579,20 +566,15 @@ impl Vectors {
         let Some((handle, slots, offset)) = self.window_slots(scene, Waiting { owner, origin, level, size, extent }, palette, None) else { return true };
         self.derive_within_deadline(handle, slots, offset, level, extent)
     }
-    pub fn damage(&mut self, scene: SceneView<'_>, owner: OccurrenceHandle, palette: (layer_core::color::RgbSpace, layer_core::BlendSpace)) -> Vec<DocRect> {
-        let Some(handle) = scene.vector_handle(owner) else { return Vec::new() };
-        let Some(object) = scene.vector(handle) else { return Vec::new() };
-        let offset = scene.occurrence_offset64(owner);
+    pub fn damage(&mut self, scene: SceneView<'_>, owner: OccurrenceHandle, palette: (layer_core::color::RgbSpace, layer_core::BlendSpace)) {
+        let Some(handle) = scene.vector_handle(owner) else { return };
+        let Some(object) = scene.vector(handle) else { return };
         let pool = self.pool.get_or_insert_with(|| Pool::charged(POOL_BYTES, &self.tier));
         let layer = self.layers.entry(handle).or_default();
         layer.update(object, palette, pool);
-        if layer.change.to.same_root(&layer.root) && layer.pending.damage.is_empty() && !layer.pending.full { return Vec::new(); }
+        if layer.change.to.same_root(&layer.root) && layer.pending.damage.is_empty() && !layer.pending.full { return; }
         let from = std::mem::take(&mut layer.change.to);
         layer.change = Change { from, to: layer.root.clone(), ..std::mem::take(&mut layer.pending) };
-        layer.change.damage.iter().map(|[x0, y0, x1, y1]| DocRect {
-            min: [(x0 + offset[0]).floor() as i64 - 16, (y0 + offset[1]).floor() as i64 - 16],
-            max: [(x1 + offset[0]).ceil() as i64 + 16, (y1 + offset[1]).ceil() as i64 + 16],
-        }).collect()
     }
     pub fn changes_from(&self, scene: SceneView<'_>, owner: OccurrenceHandle, previous: &VectorObject) -> bool {
         let (Some(handle), Some(object)) = (scene.vector_handle(owner), scene.vector_layer(owner)) else { return false };

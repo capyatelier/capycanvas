@@ -234,7 +234,6 @@ impl Scene {
         }
         Ok((tiles.len() as u64).saturating_mul(sources::NORMALIZED_PAGE_BYTES))
     }
-    pub(crate) fn invalidate_object_previews(&mut self, extent: [u32; 2]) { self.object_source_damage = PixelRect::full(extent).into(); }
     #[cfg(test)]
     pub(crate) fn decode_prepared(r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
         source: &Arc<SourceImage>, coordinate: [u32; 2], pixels: sources::PreparedSourcePixels,

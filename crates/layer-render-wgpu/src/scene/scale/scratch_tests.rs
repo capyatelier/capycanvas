@@ -76,7 +76,7 @@ fn display_scratch_rejects_an_unadmitted_image_before_allocation() {
     let frame = packet(doc.scene(), [512;2]);
     let plan = display_mips::Plan::at([512;2], 0);
     let request = Request {plan, evaluation:Evaluation::Native};
-    let (mut cache,_) = Cache::select(None, &r, frame, request, false);
+    let (mut cache,_) = Cache::select(None, &r, frame, request);
     let mut oversized = plan;
     oversized.size = [8192;2];
     assert!(matches!(cache.allocate(&r, oversized), Err(GpuRasterError::NotReady)));
@@ -103,7 +103,7 @@ fn held_composition_scratch_is_pinned_in_the_display_report() {
     let doc = Document::new(PortableId::random(), 512, 512, layer_core::DocumentNames {paint:"Paint".into(),paper:"Paper".into()});
     let frame = packet(doc.scene(), [512;2]);
     let plan = display_mips::Plan::at([512;2], 0);
-    let (mut cache,_) = Cache::select(None, &r, frame, Request {plan, evaluation:Evaluation::Native}, false);
+    let (mut cache,_) = Cache::select(None, &r, frame, Request {plan, evaluation:Evaluation::Native});
     let before = r.current_display_memory_report().pinned_gpu_bytes;
     let lease = cache.allocate(&r, plan).unwrap();
     let bytes = cache.output[lease.index].bytes();
@@ -160,7 +160,7 @@ fn exhausted_overview_scratch_retires_incompatible_capacity_before_resuming() {
     let frame = packet(doc.scene(), [512;2]);
     crate::memory::memory_tests::legacy_scene_frame(&mut r, frame);
     let plan = display_mips::Plan::at([512;2], 0);
-    let (mut cache,_) = Cache::select(None, &r, frame, Request {plan,evaluation:Evaluation::Native}, false);
+    let (mut cache,_) = Cache::select(None, &r, frame, Request {plan,evaluation:Evaluation::Native});
     let page_bytes = u64::from(PAGE_SIZE).pow(2) * 16;
     let held = r.retired_display_bytes.charge(crate::memory::CACHE_BYTES - 2 * page_bytes);
     let mut small = plan;
@@ -169,7 +169,7 @@ fn exhausted_overview_scratch_retires_incompatible_capacity_before_resuming() {
     let mut next = small;
     next.size[0] *= 2;
     assert!(matches!(cache.allocate(&r, next), Err(GpuRasterError::NotReady)));
-    let (mut outer,_) = Cache::select(None, &r, frame, Request {plan,evaluation:Evaluation::Native}, false);
+    let (mut outer,_) = Cache::select(None, &r, frame, Request {plan,evaluation:Evaluation::Native});
     outer.overview = Some(Box::new(cache));
     r.scale_display = Some(outer);
     let mut encoder = crate::submission::CommandEncoder::new(&r.device,&Default::default());

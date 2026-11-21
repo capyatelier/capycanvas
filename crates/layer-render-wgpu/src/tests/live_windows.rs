@@ -104,7 +104,7 @@ fn native_live_windows_match_full_filters_masks_clips_and_reconfiguration() {
                     // A second partial window frame cannot reuse a previous
                     // window as if it held the entire document.
                     let composed = r.metrics().composited_pixels;
-                    compose_region(&mut r, &document, extent, PixelRect::new(253, 251, 279, 283));
+                    compose_frame(&mut r, &document, extent);
                     assert!(r.metrics().composited_pixels - composed < u64::from(extent[0]) * u64::from(extent[1]),
                         "releasing temporary pixels must preserve damage metadata");
                     close(&pixels(&r), &expected);
@@ -224,10 +224,9 @@ fn native_live_window_halos_follow_paint_undo_redo_and_recreated_renderer() {
         &document.artwork.paint.get(paint).unwrap().raster.wait_data().unwrap(),
         &backing
     ));
-    // Metadata changes still invalidate the complete adjustment, even when a
-    // caller supplies only a small paint rectangle in the same frame.
+    // Metadata changes still invalidate the complete adjustment.
     document.artwork.occurrences.get_mut(first).unwrap().opacity = 0.13;
-    compose_region(&mut r, &document, extent, PixelRect::new(259, 261, 263, 265));
+    compose_frame(&mut r, &document, extent);
     let changed = pixels(&r);
     r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(u64::MAX);
     crate::test_support::submit_published(&mut r, packet(&document, extent));
@@ -432,11 +431,10 @@ fn frequency_separation_at_sigma_85_bakes_discrete_gaussian_and_survives_history
     finish(&mut fresh);assert_eq!(fresh.backend_mut().readback_srgb_rgba8().unwrap(),separated);
 }
 
-fn compose_region(r: &mut WgpuRasterizer, document: &Document, extent: [u32; 2], damage: PixelRect) {
+fn compose_frame(r: &mut WgpuRasterizer, document: &Document, extent: [u32; 2]) {
     let mut scene = r.scene.take().unwrap();
     let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
-    {let mut work=crate::test_support::work(false);scene.compose(r, FramePacket { composite_all: false, ..packet(document, extent) },
-        damage, &mut encoder, None, &mut work).unwrap();}
+    {let mut work=crate::test_support::work(false);scene.compose(r, FramePacket { composite_all: false, ..packet(document, extent) }, &mut encoder, &mut work).unwrap();}
     r.uploads.finish(&encoder);
     encoder.submit(&r.queue);
     r.scene = Some(scene);

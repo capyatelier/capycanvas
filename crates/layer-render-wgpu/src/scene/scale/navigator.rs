@@ -98,8 +98,7 @@ impl Navigator {
             }else {
                 #[cfg(test)]
                 RENDER_GRAPHS.with(|count|count.set(count.get()+1));
-                cache.render_graph(&mut scene,r,packet,cache.plan.bounds,
-                    &mut Encoding {encoder,commands:&mut commands, retained:0, budget},Destination::Navigator,None)?;
+                cache.render_graph(&mut scene,r,packet,&mut Encoding {encoder,commands:&mut commands, retained:0, budget},Destination::Navigator)?;
             }
             Ok(())
         })();

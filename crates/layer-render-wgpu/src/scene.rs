@@ -355,7 +355,6 @@ impl Tiers {
 pub(super) struct Scene {
     tiers: Tiers,
     records_charge: crate::residency::Charge,
-    damage_charge: crate::residency::Charge,
     valid: Arc<std::sync::atomic::AtomicBool>,
     submission: Option<submission::Submission>,
     placement: [pixel_transform::PixelTransform; 2],
@@ -367,7 +366,6 @@ pub(super) struct Scene {
     material_bounds: std::collections::HashMap<SourceTarget, DocRect>,
     placement_display: bool,
     object_display: bool,
-    object_source_damage: scale::Damage,
     object_live: bool,
     presented_backdrop: Option<OccurrenceHandle>,
     object_query: bool,
@@ -509,7 +507,6 @@ impl Scene {
             let exact = std::mem::replace(&mut self.exact_object_results,object_cache::ObjectCache::new(&self.tiers,Default::default(),false));
             let display = std::mem::replace(&mut self.object_results,object_cache::ObjectCache::new(&self.tiers,Default::default(),false));
             let objects = std::mem::take(&mut self.object_spatial);
-            let damage = std::mem::take(&mut self.object_source_damage);
             let pages=std::mem::take(&mut self.scale_pages);
             let sources=std::mem::take(&mut self.scale_sources);
             let query = self.object_query;
@@ -517,7 +514,6 @@ impl Scene {
             self.exact_object_results = exact;
             self.object_results = display;
             self.object_spatial = objects;
-            self.object_source_damage = damage;
             self.scale_pages=pages;
             self.scale_sources=sources;
             self.object_query = query;
@@ -544,7 +540,7 @@ impl Scene {
             +self.placement.iter().map(pixel_transform::PixelTransform::storage_bytes).sum::<u64>()+self.images.storage_bytes()
             +self.scale_commands.as_ref().map_or(0,scale::RegionRecords::storage_bytes)+self.vectors.storage_bytes()+self.pool.iter().map(|page|scratch_page_bytes(page.texture.format())).sum::<u64>();
         Usage {working,pinned:results_pinned+exact_pinned,
-            ram:self.images.metadata_bytes()+self.scale_sources.storage_bytes()+results_ram+exact_ram+self.object_spatial.storage_bytes()-self.object_spatial.key_bytes()+self.object_spatial.walked_key_bytes()}
+            ram:self.images.metadata_bytes()+results_ram+exact_ram+self.object_spatial.storage_bytes()-self.object_spatial.key_bytes()+self.object_spatial.walked_key_bytes()}
     }
     #[cfg(test)]
     pub(crate) fn object_gpu(&self)->[u64;2] {[self.tiers.objects.used(),self.object_results.walked_bytes()[1]+self.exact_object_results.walked_bytes()[1]+self.tiers.schedule.reserved()]}
@@ -735,7 +731,6 @@ impl Scene {
             submission: None,
             placement_display: false,
             object_display: false,
-            object_source_damage: scale::Damage::EMPTY,
             object_live: false,
             presented_backdrop: None,
             object_query: false,
@@ -779,7 +774,6 @@ impl Scene {
             stride,
             capacity: 128,
             records_charge: tiers.gpu.charge(stride as u64*128+32),
-            damage_charge: tiers.ram.charge(0),
             record_count: 0,
             upload: Vec::new(),
             pipeline,
@@ -2351,11 +2345,8 @@ impl Scene {
 
     pub(crate) fn prepare_scale_sources(&mut self,r:&WgpuRasterizer,packet:FramePacket<'_>,batch_tiles:&[Vec<crate::brush_tiles::BrushTile>]) {
         self.scale_sources.vector_preview = r.vector_preview.as_ref().zip(r.vector_preview_shown).map(|(p, (_, _, bounds))| (p.owner, p.path.clone(), bounds));
-        self.scale_sources.preview_damage = r.vector_preview_damage.clone();
         self.scale_sources.vector_motion = r.composed_vector_motion().cloned();
         self.scale_sources.motion_split = r.vector_motion_split.clone();
-        self.scale_sources.motion_damage = r.vector_motion_damage.clone();
-        self.scale_sources.exclusion_damage = r.vector_exclusion_damage.clone();
         self.scale_sources.moving = r.vector_motion_drawn.as_ref().map(|(motion, _)| (motion.owner, vectors::Moving(motion.items.clone())));
         self.scale_sources.prepared = r.vector_prepared.as_ref().map(|(prepared, ..)| prepared.clone());
         self.scale_pages.lock().unwrap().release_moved(self.scale_sources.moving.iter().chain(self.scale_sources.prepared.iter().map(|(_, moving, _)| moving)).map(|(_, moving)| moving));
@@ -2391,23 +2382,16 @@ impl Scene {
         &mut self,
         r: &mut WgpuRasterizer,
         packet: FramePacket<'_>,
-        dirty: PixelRect,
         encoder: &mut crate::submission::CommandEncoder,
-        tiles: Option<&std::collections::BTreeSet<[u32; 2]>>, budget: &mut WorkBudget,
+        budget: &mut WorkBudget,
     ) -> Result<PixelRect, GpuRasterError> {
         if let Some(startup) = &r.startup { startup.compiler.check()?; }
         if !r.scene_scale_ready(packet.scene) { return Err(GpuRasterError::NotReady); }
         let write = self.begin_write(r,encoder)?;
         self.object_results.retain(packet.scene,packet.blend_space,r.device.working_space());
-        self.scale_sources.object_refinements=self.object_results.take_damage();
-        let mut damage=std::collections::BTreeMap::new();
-        let source = std::mem::take(&mut self.object_source_damage);
-        if !source.is_empty() { damage.entry(None).or_insert(scale::Damage::EMPTY).extend(&source); }
-        self.scale_sources.object_damage = damage;
+        self.object_results.take_damage();
         self.vector_damage(r, packet);
-        self.damage_charge.resize(self.scale_sources.storage_bytes());
         self.prepare_presented_motion(r, packet, encoder)?;
-        let dirty = self.scale_sources.object_damage.values().fold(dirty, |dirty, damage| dirty.union(damage.bounds()));
         let mut commands = self.scale_commands.take().unwrap_or_else(|| scale::RegionRecords::charged(r, &self.tiers.gpu));
         commands.begin();
         let mut cache = r.scale_display.take().expect("prepared display cache");
@@ -2418,7 +2402,7 @@ impl Scene {
         let result = (|| {
             cache.prepare_graph(r, packet, self)?;
             if r.moving_layer.is_none()
-                && cache.render_preview(self, r, packet, dirty, &mut scale::Encoding { encoder, commands: &mut commands, retained:0, budget }, tiles)? {
+                && cache.render_preview(self, r, packet, &mut scale::Encoding { encoder, commands: &mut commands, retained:0, budget })? {
                 return Ok(PixelRect::full(packet.document_extent));
             }
                 self.retire_images(|scene| scene.images.release_window_pixels());
@@ -2431,7 +2415,7 @@ impl Scene {
                 self.effects.retain(packet.scene);
                 r.telemetry.phase_begin(8, &r.device, &r.queue, encoder);
                 r.telemetry.phase_end(8, encoder);
-                cache.render(self, r, packet, dirty, &mut scale::Encoding { encoder, commands: &mut commands, retained:0, budget }, tiles)
+                cache.render(self, r, packet, &mut scale::Encoding { encoder, commands: &mut commands, retained:0, budget })
         })();
         self.object_live = false;
         self.object_display = false;

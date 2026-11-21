@@ -62,21 +62,13 @@ pub(super) struct Prepared {pub(super) unpublished:bool,pub(super) refusal:Optio
 pub(crate) struct Sources {
     pub(super) entries: HashMap<SourceTarget, Source>,
     pub(super) object_moving: Option<OccurrenceHandle>,
-    pub(in crate::scene) object_damage: BTreeMap<Option<OccurrenceHandle>, Damage>,
-    pub(in crate::scene) object_refinements: BTreeMap<super::super::object_cache::DamageKey, Damage>,
     pub(in crate::scene) vector_preview: Option<(OccurrenceHandle, Arc<layer_core::authored::vector::PathItem>, DocRect)>,
-    pub(in crate::scene) preview_damage: Vec<DocRect>,
     pub(in crate::scene) vector_motion: Option<(layer_render::VectorMotion, DocRect)>,
-    pub(in crate::scene) motion_damage: Vec<DocRect>,
-    pub(in crate::scene) exclusion_damage: Vec<DocRect>,
     pub(in crate::scene) motion_split: Option<super::super::MotionSplit>,
     pub(in crate::scene) moving: Option<(OccurrenceHandle, super::super::vectors::Moving)>,
     pub(in crate::scene) prepared: Option<(super::super::MotionSplit, (OccurrenceHandle, super::super::vectors::Moving), DocRect)>,
 }
 impl Sources {
-    pub fn storage_bytes(&self) -> u64 {
-        self.object_refinements.values().chain(self.object_damage.values()).map(|damage| std::mem::size_of::<(super::super::object_cache::DamageKey, Damage)>() as u64 + damage.regions.capacity() as u64 * std::mem::size_of::<PixelRect>() as u64).sum::<u64>()
-    }
     pub fn prepare(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, batch_tiles: &[Vec<brush_tiles::BrushTile>]) {
         let mut wanted = BTreeSet::new();
         self.object_moving = r.moving_layer;
@@ -913,7 +905,7 @@ mod replacement_tests {
         assert_eq!(renderer.source_tiles.borrow().leased_bytes(),leased_bytes);
         let after=display_mips::Plan::window(extent,1,PixelRect::new(256,0,768,256));
         scene.scale_sources.prepare(&renderer,FramePacket {composite_all:false,..frame},&[]);
-        (cache,_)=Cache::select(Some(cache),&renderer,frame,Request {plan:after,evaluation:Evaluation::Display},true);
+        (cache,_)=Cache::select(Some(cache),&renderer,frame,Request {plan:after,evaluation:Evaluation::Display});
         crate::scene::scale::tests::prepare_fixture_frame(&renderer,frame,&scene);
         cache.prepare_graph(&renderer,frame,&scene).unwrap();
         assert!(held.upgrade().is_some(),"overlapping accepted input must remain pinned while its page is incomplete");

@@ -292,7 +292,6 @@ pub(crate) struct Cache {
     preparing: bool,
     declaring: bool,
     exact_tile: Option<Image>,
-    unchanged: bool,
     graph: graph::Graph,
     transform: Option<layer_render::TransformPreview>,
     retired: Option<Box<Cache>>,
@@ -632,40 +631,34 @@ impl Cache {
         r: &WgpuRasterizer,
         packet: FramePacket<'_>,
         request: Request,
-        unchanged: bool,
     ) -> (Self, bool) {
         let Request {plan,evaluation}=request;
-        let unchanged=unchanged && !packet.composite_all && !packet.reset_layers && packet.restore_rasters.is_empty();
         let required=display_mips::view_bounds(packet.view,plan.extent,2<<plan.level).expect("admitted display view");
         let Some(mut old)=previous else {
             let cache=Self::new(r,request,packet.scene.order().len());
             return (cache,true);
         };
         if old.plan!=plan && old.overview.as_ref().is_some_and(|overview|overview.plan==plan) {
-            let (mut next,replaced)=Self::select(old.overview.take().map(|overview|*overview),r,packet,request,unchanged);
+            let (mut next,replaced)=Self::select(old.overview.take().map(|overview|*overview),r,packet,request);
             old.exit_contact();
             next.retired=Some(Box::new(old)).filter(|old|old.has_direct_cells());
             return (next,replaced);
         }
-        let unchanged=unchanged && old.transform==r.transform_preview;
         if old.plan.extent==plan.extent && old.plan.level==plan.level && old.plan.bounds.intersect(required)==required
             && old.layer_count==packet.scene.order().len() {
-            old.evaluation=evaluation;old.transform=r.transform_preview.clone();old.unchanged=unchanged;old.release_previous(r);
-            if let Some(overview)=&mut old.overview {
-                overview.unchanged=unchanged;
-            }
+            old.evaluation=evaluation;old.transform=r.transform_preview.clone();old.release_previous(r);
             return (old,false);
         }
         let mut next=Self::new(r,request,packet.scene.order().len());
-        next.pages=old.pages.clone();next.window=old.window;next.graph=old.graph.without_pixels();next.unchanged=unchanged;next.pivot_edit=old.pivot_edit;next.pointer=old.pointer;
+        next.pages=old.pages.clone();next.window=old.window;next.graph=old.graph.without_pixels();next.pivot_edit=old.pivot_edit;next.pointer=old.pointer;
         let mut old=Some(Box::new(old));
         if let Some(overview)=&mut next.overview {
-            overview.pages=next.pages.clone();overview.window=next.window;overview.unchanged=unchanged;
+            overview.pages=next.pages.clone();overview.window=next.window;
             let previous=if old.as_ref().is_some_and(|old|old.plan==overview.plan) {old.take()}
                 else {old.as_mut().and_then(|old|old.overview.take()).filter(|cache|cache.plan==overview.plan)};
             if let Some(mut previous)=previous {
                 previous.exit_contact();
-                previous.pages=next.pages.clone();previous.window=next.window;previous.evaluation=Evaluation::Display;previous.unchanged=unchanged;
+                previous.pages=next.pages.clone();previous.window=next.window;previous.evaluation=Evaluation::Display;
                 next.overview=Some(previous);
             }
         }
@@ -702,7 +695,7 @@ impl Cache {
             geometry,
             layer_count: layers,
             overview, preparing: false, declaring: false, exact_tile: None,
-            unchanged: false, graph: Default::default(), transform: r.transform_preview.clone(), retired: None, previous: None, standing: None, complete: false, contact: false, gesture: None, stroked: None, presented: pages::Accuracy::Display, refused_at: None,
+            graph: Default::default(), transform: r.transform_preview.clone(), retired: None, previous: None, standing: None, complete: false, contact: false, gesture: None, stroked: None, presented: pages::Accuracy::Display, refused_at: None,
             streaming: Default::default(), pivot_waiting: None, pivot_refusal: None, reduction_refusal: None, pivot_pending: false, pivot_edit: None, pointer: None,
         }
     }
@@ -974,17 +967,13 @@ impl Cache {
         self.used[slot].reserve();
         Ok(self.used[slot].lease(slot))
     }
-    pub(super) fn render_preview(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
-        dirty: PixelRect, encoding: &mut Encoding<'_>, tiles: Option<&BTreeSet<[u32; 2]>>,
-    ) -> Result<bool, GpuRasterError> {
+    pub(super) fn render_preview(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>, encoding: &mut Encoding<'_>) -> Result<bool, GpuRasterError> {
         if self.overview.is_some() {return Ok(false);}
-        self.render_coarse_preview(scene,r,packet,dirty,encoding,tiles)
+        self.render_coarse_preview(scene,r,packet,encoding)
     }
-    fn render_coarse_preview(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
-        dirty: PixelRect, encoding: &mut Encoding<'_>, tiles: Option<&BTreeSet<[u32; 2]>>,
-    ) -> Result<bool, GpuRasterError> {
+    fn render_coarse_preview(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>, encoding: &mut Encoding<'_>) -> Result<bool, GpuRasterError> {
         if self.coverage_complete() || refinement::streams_exact(self,r,packet,refinement::presented_accuracy(r,packet.scene,false)) { return Ok(false); }
-        let result = self.render_graph(scene, r, packet, dirty, encoding, Destination::Preview, tiles);
+        let result = self.render_graph(scene, r, packet, encoding, Destination::Preview);
         self.release_previous(r);
         match result {
             Err(GpuRasterError::NotReady|GpuRasterError::NotPublished) if !scene.pending_pipelines.ready()=>Err(GpuRasterError::NotReady),
@@ -992,26 +981,21 @@ impl Cache {
             Err(error)=>Err(error),
         }
     }
-    pub(super) fn render(
-        &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
-        dirty: PixelRect, encoding: &mut Encoding<'_>, tiles: Option<&BTreeSet<[u32; 2]>>,
-    ) -> Result<PixelRect, GpuRasterError> {
+    pub(super) fn render(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>, encoding: &mut Encoding<'_>) -> Result<PixelRect, GpuRasterError> {
         let mut overview=self.overview.take();
         let visible=display_mips::view_bounds(packet.view,self.plan.extent,0).unwrap_or(PixelRect::EMPTY);
         let first=overview.is_some() && self.holes(visible);
         let retained=encoding.retained;
         r.telemetry.phase_begin(9,&r.device,&r.queue,encoding.encoder);
-        let result=self.render_caches(overview.as_deref_mut(),first,scene,r,packet,dirty,encoding,tiles);
+        let result=self.render_caches(overview.as_deref_mut(),first,scene,r,packet,encoding);
         encoding.retained=retained;
         r.telemetry.phase_end(9,encoding.encoder);
         self.overview=overview;
         self.release_previous(r);
         result
     }
-    #[expect(clippy::too_many_arguments, reason = "The view and its overview share one frame's input, damage and encoding")]
     fn render_caches(
-        &mut self, mut overview: Option<&mut Cache>, first: bool, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
-        dirty: PixelRect, encoding: &mut Encoding<'_>, tiles: Option<&BTreeSet<[u32; 2]>>,
+        &mut self, mut overview: Option<&mut Cache>, first: bool, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>, encoding: &mut Encoding<'_>,
     ) -> Result<PixelRect, GpuRasterError> {
         let retained=encoding.retained;
         let with=|memory:u64|retained+memory;
@@ -1019,26 +1003,22 @@ impl Cache {
         let mut changed=PixelRect::EMPTY;
         if first && let Some(overview)=overview.as_deref_mut() {
             encoding.retained=with(self.window_memory());
-            let result=overview.render_graph(scene,r,packet,dirty,encoding,Destination::Overview(self,PixelRect::EMPTY),tiles);
+            let result=overview.render_graph(scene,r,packet,encoding,Destination::Overview(self,PixelRect::EMPTY));
             changed=rendered(scene,result)?;
         }
         encoding.retained=with(overview.as_deref().map_or(0,Cache::window_memory));
-        let result=self.render_graph(scene,r,packet,dirty,encoding,Destination::View,tiles);
+        let result=self.render_graph(scene,r,packet,encoding,Destination::View);
         let view=rendered(scene,result)?;
         changed=changed.union(view);
         if !first && let Some(overview)=overview.filter(|overview|!overview.held(r)) {
             encoding.retained=with(self.window_memory());
-            let result=overview.render_graph(scene,r,packet,dirty,encoding,Destination::Overview(self,view),tiles);
+            let result=overview.render_graph(scene,r,packet,encoding,Destination::Overview(self,view));
             changed=changed.union(rendered(scene,result)?);
         }
         Ok(changed)
     }
 
-    #[expect(clippy::too_many_arguments, reason = "Graph rendering keeps frame input, damage, encoding, and destination domains explicit")]
-    fn render_graph(
-        &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
-        _dirty: PixelRect, encoding: &mut Encoding<'_>, destination: Destination<'_>, _tiles: Option<&BTreeSet<[u32; 2]>>,
-    ) -> Result<PixelRect, GpuRasterError> {
+    fn render_graph(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>, encoding: &mut Encoding<'_>, destination: Destination<'_>) -> Result<PixelRect, GpuRasterError> {
         let arrivals=r.arrival_token();
         let Encoding { encoder, commands, retained, budget } = encoding;
         scene.placement_display=true;

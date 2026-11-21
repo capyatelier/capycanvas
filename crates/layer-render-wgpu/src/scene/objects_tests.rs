@@ -667,10 +667,10 @@ fn coarse_linear_object_node_includes_source_outside_its_output_cell() {
     }, 1));
     let mut scene = r.scene.take().unwrap();
     let mut settled = false;
-    for iteration in 0..2000 {
+    for _ in 0..2000 {
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        if r.prepare_moving_images(frame, &mut encoder, &mut crate::test_support::work(false)).unwrap() { scene.invalidate_object_previews([8192; 2]); }
-        let composed = {let mut work=crate::test_support::work(false);scene.compose(&mut r, frame, if iteration == 0 { window } else { PixelRect::EMPTY }, &mut encoder, None, &mut work)};
+        r.prepare_moving_images(frame, &mut encoder, &mut crate::test_support::work(false)).unwrap();
+        let composed = {let mut work=crate::test_support::work(false);scene.compose(&mut r, frame, &mut encoder, &mut work)};
         if let Err(error) = &composed { assert!(matches!(error, GpuRasterError::NotReady), "{error:?}"); }
         r.uploads.finish(&encoder); r.last_submission = encoder.submit(&r.queue); r.wait_idle().unwrap();
         if composed.is_ok() && scene.objects_outstanding(&r).is_none() && !r.moving_images.pending() && !r.image_decode_waiting() { settled = true; break; }
@@ -1769,7 +1769,6 @@ fn ready_mip_pixels_present_while_canonical_results_are_rebuilt() {
     assert!(r.has_presentable_frame());
     let mut scene = r.scene.take().unwrap();
     scene.object_results.clear();
-    scene.invalidate_object_previews(frame.document_extent);
     let request = canonical_request(&r, &mut scene, &doc, owner,
         ObjectWindow { origin: [1280., 768.], side: 1., size: [PAGE_SIZE; 2] });
     assert!(!request.keys.is_empty());
