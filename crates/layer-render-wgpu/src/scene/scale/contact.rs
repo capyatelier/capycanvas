@@ -31,6 +31,7 @@ pub(super) struct Contact {
     reduced:BTreeSet<[u32;2]>,
     baselines:BTreeMap<[u32;2],Baseline>,
     drawn_directly:bool,
+    reduced_from:BTreeMap<[u32;2],Vec<Description>>,
 }
 
 type Description=(crate::resident::Input,PixelRect);
@@ -274,7 +275,7 @@ impl Cache {
         self.gesture=Some(Contact {id:NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed),stroke,target,plan:self.plan,window,root,tiled,frame,composed,predicted,
             previewed,next:None,
             footprints,tainted,guard,generation:std::sync::Mutex::new(generation),exit:std::sync::OnceLock::new(),preview_level,cells,inputs,pages,level,
-            stale,written:IdMap::default(),submissions:Vec::new(),stamps:Arc::default(),reduced,baselines:BTreeMap::new(),drawn_directly});
+            stale,written:IdMap::default(),submissions:Vec::new(),stamps:Arc::default(),reduced,baselines:BTreeMap::new(),drawn_directly,reduced_from:BTreeMap::new()});
         Ok(())
     }
     #[expect(clippy::too_many_arguments,reason="A contact grows with the frame's scene, encoding and budget into the cells its stroke reaches")]
@@ -466,12 +467,22 @@ impl Cache {
                 if let Some(page)=contact.pages.get(&key).filter(|_|!region.is_empty()) {reductions.push((key,region,*tile,page.clone()));}
             }
         }
+        let recorded=contact.guard.watercolor.is_none() && frame.phase==[0;2] && !(r.preview_contribution && r.preview_layer_id==Some(target));
+        let mut parts=stale.clone();
+        let witnessed=reductions.iter().map(|(_,_,tile,_)| {
+            let now=inputs.sole_color(target,*tile).filter(|witness|recorded && witness.live() && inputs.level(target,layer_core::raster::RasterPlane::Color,*tile)==0).map(descriptions);
+            if let Some(changed)=now.as_ref().zip(contact.reduced_from.get(tile)).and_then(|(now,before)|changed_since(now,before)) {
+                let named=changed.translated(tile.map(|side|side*PAGE_SIZE));
+                parts.insert(*tile,stale.get(tile).map_or(page_rect(*tile),|entry|*entry).intersect(named));
+            }
+            (*tile,now)
+        }).collect::<Vec<_>>();
         let start=scene.jobs.len();
         let result=(|| {
             let handle=packet.scene.source_owner(target).ok_or(GpuRasterError::NotReady)?;
             let mut reads=Unit::default();
             for (_,_,tile,page) in &reductions {
-                let rewritten=frame.document(scene.reduce_color_pages(r,packet,handle,page.plan,&page.view,&[*tile],None,[0;2],&stale,&mut inputs)?).in_frame(plan.extent);
+                let rewritten=frame.document(scene.reduce_color_pages(r,packet,handle,page.plan,&page.view,&[*tile],None,[0;2],&parts,&mut inputs)?).in_frame(plan.extent);
                 reads.reads.push(page.clone());
                 for cell in pages::coordinates(rewritten,plan.level) {
                     if let Some(Baseline {stroked:Stroked::Level(area),..})=baselines.get_mut(&cell) {*area=area.union(rewritten);}
@@ -523,6 +534,7 @@ impl Cache {
         let (composed,blocked,fresh)=match result {Ok(done)=>done,Err(error)=>{scene.discard_jobs_from(start);return Err(error);}};
         let submission=encoder.submission();
         contact.baselines.extend(fresh.into_iter().map(|(cell,stroked,reads)|(cell,Baseline {submission:submission.clone(),stroked,reads})));
+        for (tile,now) in witnessed {match now {Some(now)=>{contact.reduced_from.insert(tile,now);},None=>{contact.reduced_from.remove(&tile);}}}
         if let Some((versions,_,predicted,previewed))=contact.next.take() {contact.composed=versions;contact.predicted=predicted;contact.previewed=previewed;}
         {
             let mut store=self.pages.lock().unwrap();
