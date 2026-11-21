@@ -5,6 +5,8 @@ std::thread_local! {
     static RENDER_GRAPHS:std::cell::Cell<u64>=const {std::cell::Cell::new(0)};
 }
 
+struct Inherited {contact:u64,taken:u64}
+
 #[derive(Default)]
 pub(crate) struct Navigator {
     cache: Option<Cache>,
@@ -12,6 +14,7 @@ pub(crate) struct Navigator {
     pub revision: u64,
     contact: Option<u64>,
     stale: bool,
+    inherited: Option<Inherited>,
 }
 
 impl Navigator {
@@ -35,11 +38,11 @@ impl Navigator {
     }
     pub fn scale(&self) -> f32 { self.cache.as_ref().map_or(1., |c| (1 << c.plan.level) as f32) }
     pub fn storage_bytes(&self) -> u64 { self.cache.as_ref().map_or(0, Cache::window_bytes) }
-    pub(crate) fn release(&mut self) { self.cache = None; }
+    pub(crate) fn release(&mut self) { self.cache = None; self.inherited = None; }
 
     pub(in crate::scene) fn prepare(&mut self,r:&WgpuRasterizer,packet:FramePacket<'_>,scene:&Scene,pages:Pages,reset:bool)->Result<(),GpuRasterError> {
         #[cfg(test)] crate::test_support::PassCounts {navigator_checks:1,..Default::default()}.record();
-        self.contact=None;self.stale=false;
+        self.contact=None;self.stale=false;self.inherited=None;
         let plan=display_mips::Plan::new(packet.document_extent)?;
         if reset || self.cache.as_ref().is_none_or(|cache|cache.plan!=plan) {
             let window=self.cache.as_ref().map(|cache|cache.window);
@@ -66,11 +69,18 @@ impl Navigator {
         let followed=self.cache.as_ref().zip(display.contact_id()).and_then(|(cache,contact)|display.contact_window(contact,cache).map(|source|(source,contact)));
         let follows=followed.is_some();
         let deferred=self.held(r) || changed && self.view().is_some() && packet.time_seconds>=self.refreshed && packet.time_seconds-self.refreshed<0.05;
+        let mut inherited=None;
         let source=if let Some((source,contact))=followed {
             if deferred {
                 self.stale=true;self.contact=Some(contact);return Ok(());
             }
-            Some((source,Some(contact)))
+            let since=self.inherited.take().filter(|earlier|earlier.contact==contact && self.view().is_some()).map(|earlier|earlier.taken);
+            let (taken,region)=r.scale_display.as_mut().unwrap().pixels.take_changes(&source,since);
+            if region.is_empty() {
+                self.inherited=Some(Inherited {contact,taken});self.contact=Some(contact);self.stale=false;return Ok(());
+            }
+            inherited=Some(Inherited {contact,taken});
+            Some((source,Some(contact),region))
         } else {
             let pages=display.pages.clone();
             self.prepare(r,packet,r.scene.as_ref().unwrap(),pages,false)?;
@@ -81,8 +91,9 @@ impl Navigator {
             let cache=self.cache.as_ref().unwrap();
             r.scale_display.as_ref().into_iter().flat_map(|display|std::iter::once(display).chain(display.overview.as_deref()))
                 .filter_map(|window|window.current_window(cache).map(|source|(source,window.contact_id()))).max_by_key(|(source,_)|source.level())
+                .map(|(source,contact)|(source,contact,cache.plan.bounds))
         };
-        let contact=source.as_ref().and_then(|(source,contact)|contact.filter(|_|source.current()));
+        let contact=source.as_ref().and_then(|(source,contact,_)|contact.filter(|_|source.current()));
         let cache = self.cache.as_mut().unwrap();
         let write = crate::submission::CacheWrite::new();
         let mut scene = r.scene.take().unwrap();
@@ -92,38 +103,39 @@ impl Navigator {
         let _trace = crate::performance_trace::Span::new(c"capy.navigator_refresh");
         r.telemetry.phase_begin(13, &r.device, &r.queue, encoder);
         let result=(|| {
-            if let Some((source,_))=source {
+            if let Some((source,_,region))=source {
                 cache.release_streaming(encoder);
-                cache.inherit(&scene,r,encoder,&mut commands,source)?;
+                Ok(cache.inherit(&scene,r,encoder,&mut commands,source,region)?.area())
             }else {
                 #[cfg(test)]
                 RENDER_GRAPHS.with(|count|count.set(count.get()+1));
-                cache.render_graph(&mut scene,r,packet,&mut Encoding {encoder,commands:&mut commands, retained:0, budget},Destination::Navigator)?;
+                let written=cache.render_graph(&mut scene,r,packet,&mut Encoding {encoder,commands:&mut commands, retained:0, budget},Destination::Navigator)?;
+                let [_,_,width,height]=paint_transform::texel_rect(written.window_local(cache.plan.bounds),1<<cache.plan.level);
+                Ok(u64::from(width)*u64::from(height))
             }
-            Ok(())
         })();
         r.telemetry.phase_end(13, encoder);
         scene.scale_commands = Some(commands);
         r.scene = Some(scene);
-        match result {
+        let texels=match result {
             Err(GpuRasterError::NotReady|GpuRasterError::NotPublished|GpuRasterError::SourceWorkingSetExceeded)=> {
                 scene_write.track(encoder);
                 return Ok(());
             },
             result=>result?,
-        }
+        };
         if !follows && cache.presented_matches_expected()!=Some(true) {
             scene_write.track(encoder);
             return Ok(());
         }
         cache.submission_valid = Some(write.validity());
-        self.contact=contact;
+        self.contact=contact;self.inherited=inherited;
         write.track(encoder);
         scene_write.track(encoder);
         self.refreshed = packet.time_seconds;self.stale=false;
         self.revision = self.revision.wrapping_add(1);
         crate::performance_trace::counter(c"Capy Navigator refreshes", self.revision);
-        crate::performance_trace::counter(c"Capy Navigator pixels", cache.plan.size.map(u64::from).into_iter().product());
+        crate::performance_trace::counter(c"Capy Navigator pixels", texels);
         Ok(())
     }
 }
@@ -503,6 +515,142 @@ mod tests {
         let cached=super::super::signatures::tests::cached_len(&expected(&r));
         begin_frame(&mut r,FramePacket {time_seconds:3.,..frame});
         assert_eq!(super::super::signatures::tests::cached_len(&expected(&r)),cached,"an unchanged Navigator frame reuses every cached key");
+    }
+
+    const CONTACT_FRAMES:usize=18;
+    const MISHAP_FRAME:usize=7;
+    fn under_the_stroke()->PixelRect {PixelRect::new(990,234,991,235)}
+    #[derive(Clone,Copy,PartialEq)]
+    enum Mishap {None,DroppedRecord,Released,Restroked,DroppedPublication,BlockedCell(usize)}
+    #[derive(Clone,Copy,Debug)]
+    struct Contact {id:Option<u64>,shown:bool,sourced:bool,remembered:bool}
+    struct Followed {display:display_mips::Plan,navigator:display_mips::Plan,reduced:Vec<[u64;2]>,published:Vec<[bool;2]>,contacts:Vec<Contact>,pending:[bool;2]}
+    impl Followed {
+        fn whole(&self)->u64 {self.navigator.size.map(u64::from).into_iter().product()}
+        fn cell(&self)->u64 {
+            let (level,extent)=(self.display.level,self.display.extent);
+            pages::bounds(pages::coordinates(under_the_stroke(),level).next().unwrap(),level,extent).intersect(self.display.bounds).area()>>(2*self.navigator.level)
+        }
+        fn patched(&self)->usize {self.reduced.iter().filter(|[partial,all]|*partial>0 && partial<all).count()}
+        fn refreshes_from(&self,step:usize)->Vec<u64> {self.reduced[step..].iter().map(|[partial,_]|*partial).filter(|texels|*texels>0).collect()}
+    }
+    fn follows_like_a_navigator_that_reduces_the_whole_window(label:&str,zoom:f32,preset:layer_core::DefaultBrushPreset,tip:bool,mishap:Mishap)->Followed {
+        let mut doc=freshness_document();let extent=doc.composition().size;let target=doc.working.target.unwrap();
+        if matches!(mishap,Mishap::BlockedCell(_)) {
+            let below=crate::scene::scale::tests::paint_occurrence(&mut doc,"Below",Some(layer_core::color::source::rgba8_source(extent,|x,y|[(x/9) as u8,(y/5) as u8,140,255])));
+            let working=doc.scene().position(doc.working.occurrence.unwrap()).unwrap();
+            crate::scene::scale::tests::insert_occurrence(&mut doc,below,working+1);
+        }
+        let style=crate::layer_tests::preset_style(preset);
+        let mut frame=FramePacket {blend_space:doc.composition().blend,composite_all:false,..packet(doc.scene(),extent)};
+        frame.view.document_to_surface=[zoom,0.,0.,zoom,0.,0.];
+        let mut twins=[(),()].map(|()| {
+            let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+            layer_render::CanvasRenderer::set_working_layer(&mut r,doc.working.occurrence);
+            submit_settled(&mut r,frame);r
+        });
+        let (mut reduced,mut published,mut contacts)=(Vec::new(),Vec::new(),Vec::new());
+        for step in 0..=CONTACT_FRAMES {
+            let paused=step==CONTACT_FRAMES;
+            let at=[900.+13.*step as f32,200.+5.*step as f32];
+            let dabs=[at,[at[0]+9.,at[1]+3.]].map(|[x,y]|super::super::tests::contact::material_dab(x,y,&style));
+            let dabs=if paused {&[][..]}else {&dabs[..=usize::from(tip)]};
+            let restroked=mishap==Mishap::Restroked && step>=MISHAP_FRAME;
+            let batches=dabs.iter().enumerate().map(|(index,dab)|DabBatch {kind:if index==0 {DabBatchKind::Persistent}else {DabBatchKind::Preview},
+                stroke_id:layer_core::StrokeId(1+u64::from(restroked)),first_dab:index as u32,stroke_start:index==0 && (step==0 || restroked && step==MISHAP_FRAME),stroke_end:false,
+                ..crate::test_support::dab_batch(target,style.clone(),dab.bounds())}).collect::<Vec<_>>();
+            let time=0.02*(step+1) as f32+if paused {0.04}else {0.};
+            let mut frames=[(0,false);2];
+            for (twin,r) in twins.iter_mut().enumerate() {
+                match mishap {
+                    Mishap::DroppedRecord if step==MISHAP_FRAME=>r.scale_display.as_ref().unwrap().evict_window(under_the_stroke()),
+                    Mishap::Released if step==MISHAP_FRAME=>r.navigator.release(),
+                    Mishap::DroppedPublication if step==MISHAP_FRAME=>{
+                        let mut navigator=std::mem::take(&mut r.navigator);
+                        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+                        navigator.refresh(r,FramePacket {time_seconds:time-0.02,..frame},false,&mut encoder,&mut crate::test_support::work(false)).unwrap();
+                        drop(encoder);
+                        assert!(navigator.view().is_none(),"{label}: a publication whose commands were dropped is not shown");
+                        r.navigator=navigator;
+                    },
+                    Mishap::BlockedCell(blocked) if step==blocked=>{
+                        crate::test_support::settle_decodes(r);
+                        crate::scene::scale::tests::evict_composite_pages(r.scale_display.as_ref().unwrap(),&[under_the_stroke()]);
+                        r.moving_decode=None;r.source_tiles.borrow_mut().invalidate();
+                        let samples=r.device.source_samples.clone();let limit=samples.stats().limit_bytes;
+                        samples.set_limit(0);samples.trim_unused(usize::MAX);samples.set_limit(limit);
+                    },
+                    Mishap::BlockedCell(blocked) if step==blocked+1=>crate::test_support::settle_decodes(r),
+                    _=>{},
+                }
+                if twin==1 {r.navigator.inherited=None;}
+                let (counts,revision)=(crate::test_support::PassCounts::snapshot(),r.navigator.revision);
+                crate::test_support::submit_ready(r,FramePacket {dabs,dab_batches:&batches,time_seconds:time,..frame}).unwrap();
+                frames[twin]=(crate::test_support::PassCounts::snapshot().delta(counts).window_reduced_texels,r.navigator.revision!=revision);
+            }
+            let [partial,all]=twins.each_ref().map(|r|pixels(r).into_iter().map(|texel|texel.map(f32::to_bits)).collect::<Vec<_>>());
+            let differing=partial.iter().zip(&all).filter(|(partial,all)|partial!=all).count();
+            assert_eq!(differing,0,"{label} at {zoom}, frame {step}: Navigator texels differ from a Navigator that reduces the whole window at every refresh; (texels reduced, published) {frames:?}");
+            reduced.push(frames.map(|(texels,_)|texels));published.push(frames.map(|(_,published)|published));
+            let [contact,_]=twins.each_ref().map(|r| {
+                let display=r.scale_display.as_ref().unwrap();
+                Contact {id:display.contact_id(),shown:display.coverage_complete(),remembered:r.navigator.inherited.is_some(),
+                    sourced:display.contact_id().zip(r.navigator.cache.as_ref()).is_some_and(|(id,cache)|display.contact_window(id,cache).is_some())}
+            });
+            contacts.push(contact);
+        }
+        Followed {display:twins[0].scale_display.as_ref().unwrap().plan,navigator:twins[0].navigator.cache.as_ref().unwrap().plan,
+            reduced,published,contacts,pending:twins.each_ref().map(|r|r.navigator.pending())}
+    }
+
+    #[test]
+    fn a_navigator_following_a_contact_reduces_the_whole_window_once_and_then_only_what_the_stroke_changed() {
+        let followed=follows_like_a_navigator_that_reduces_the_whole_window("a G-pen",1.,layer_core::DefaultBrushPreset::GPen,false,Mishap::None);
+        let (whole,Followed {reduced,published,pending,..})=(followed.whole(),followed);
+        let refreshes=reduced[..CONTACT_FRAMES].iter().filter(|[partial,_]|*partial>0).collect::<Vec<_>>();
+        assert!(refreshes.len()>=5 && refreshes.iter().all(|[_,all]|*all==whole),"the stroke refreshes the Navigator, and its twin reduces all {whole} texels each time: {reduced:?}");
+        assert_eq!(refreshes[0][0],whole,"the first refresh of a contact reduces the whole window");
+        assert!(refreshes[1..].iter().all(|[partial,_]|partial*4<whole) && refreshes[1..].iter().any(|[partial,_]|partial*64<whole),
+            "every later refresh reduces under a quarter of the Navigator's {whole} texels, and one inside a cell under a sixty-fourth: {reduced:?}");
+        assert_eq!((reduced[CONTACT_FRAMES],published[CONTACT_FRAMES],pending),([0,whole],[false,true],[false;2]),"a paused pen that changed nothing reduces and publishes nothing, and owes nothing");
+    }
+
+    #[test]
+    fn a_navigator_following_a_contact_matches_one_that_reduces_the_whole_window_at_every_refresh() {
+        use layer_core::DefaultBrushPreset::{Eraser,GPen,Paintbrush};
+        for zoom in [1.,0.25] {
+            for (label,preset,tip) in [("a stroke across a cell edge",GPen,false),("a predicted tip",Paintbrush,true),("an eraser",Eraser,false)] {
+                let followed=follows_like_a_navigator_that_reduces_the_whole_window(label,zoom,preset,tip,Mishap::None);
+                assert!(followed.patched()>=3,"{label} at {zoom}: the Navigator reduces part of the window: {:?}",followed.reduced);
+            }
+            let dropped=follows_like_a_navigator_that_reduces_the_whole_window("a cell whose record was dropped",zoom,GPen,true,Mishap::DroppedRecord);
+            assert!(dropped.refreshes_from(MISHAP_FRAME)[0]>=dropped.cell() && dropped.patched()>=3,"at {zoom} the refresh after a dropped record reduces the cell's {} texels: {:?}",dropped.cell(),dropped.reduced);
+            let released=follows_like_a_navigator_that_reduces_the_whole_window("a Navigator released in mid-stroke",zoom,GPen,false,Mishap::Released);
+            let refreshes=released.refreshes_from(MISHAP_FRAME);
+            assert!(refreshes[..2]==[released.whole();2] && refreshes[2]*4<released.whole(),
+                "at {zoom} a released Navigator reduces the whole window twice, entering and following the contact, and then part of it: {:?}",released.reduced);
+        }
+        for (label,mishap) in [("a second stroke on the next frame",Mishap::Restroked),("a publication whose commands were dropped",Mishap::DroppedPublication)] {
+            let followed=follows_like_a_navigator_that_reduces_the_whole_window(label,1.,GPen,false,mishap);
+            let refreshes=followed.refreshes_from(MISHAP_FRAME);
+            assert!(refreshes[0]==followed.whole() && refreshes[1..].iter().any(|texels|texels*4<followed.whole()),
+                "the first refresh after {label} reduces the whole window, and a later one part of it: {:?}",followed.reduced);
+        }
+        for (zoom,at,sourced) in [(1.,MISHAP_FRAME+1,true),(0.25,MISHAP_FRAME+4,false)] {
+            let blocked=follows_like_a_navigator_that_reduces_the_whole_window("a cell blocked on a tile that is not decoded",zoom,GPen,false,Mishap::BlockedCell(at));
+            let [before,during,after]=[at-1,at,at+1].map(|step|blocked.contacts[step]);
+            assert!(during.id.is_some() && [before.id,after.id]==[during.id;2] && before.shown && !during.shown && after.shown,
+                "at {zoom} a cell is blocked in frame {at} of a contact and composes in the next: {:?}",&blocked.contacts[at-1..=at+1]);
+            let (whole,next)=(blocked.whole(),blocked.refreshes_from(at+1)[0]);
+            assert_eq!(during.sourced,sourced,"at {zoom} the blocked frame leaves the Navigator a window to follow: {during:?}");
+            if sourced {
+                assert!(blocked.published[at][0] && blocked.reduced[at][0]*4<whole && (blocked.cell()..whole).contains(&next),
+                    "at {zoom} the Navigator follows the half-size level, which the blocked frame leaves unreduced, and reduces the cell's {} texels once it composes: {:?}",blocked.cell(),blocked.reduced);
+            }else {
+                assert!(!during.remembered && !blocked.published[at][0] && next==whole,
+                    "at {zoom} the Navigator does not follow a window whose record is not current, and its next follow refresh reduces the whole window: {during:?} {:?}",blocked.reduced);
+            }
+        }
     }
 
     fn freshness_document()->Document {

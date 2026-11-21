@@ -1348,6 +1348,7 @@ impl Cache {
         }
         let output=self.pixels.root().unwrap();
         let [x,y,width,height]=paint_transform::texel_rect(region.window_local(output.plan.bounds),1<<self.plan.level);
+        #[cfg(test)] crate::test_support::PassCounts {window_reduced_texels:u64::from(width)*u64::from(height),..Default::default()}.record();
         let level=input.plan.level;
         let mut values=[0;20];
         values[..8].copy_from_slice(&[x,y,width,height,input.plan.bounds.width(),input.plan.bounds.height(),1<<(self.plan.level-level),(level<<8)|8]);
@@ -1398,7 +1399,7 @@ impl Cache {
             pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
         }
         drop(pass);
-        self.pixels.commit_next(encoder.submission());
+        self.pixels.commit_next(encoder.submission(),changed);
         self.write_projection_scales(r,encoder)?;
         Ok(())
     }
