@@ -59,6 +59,7 @@ impl Canvas {
         let (engine, r) = (&self.engine, self.engine.backend());
         !engine.has_pending_input() && !engine.has_pending_document_edits() && !engine.raster_backing_pending() && !engine.has_active_stroke()
             && r.settled() && engine.document().scene().raster(self.target).unwrap().host_backed() && r.has_presentable_frame() && !crate::scene::scale::tests::publication_pending(r)
+            && self.presenter.pipelines_ready(r) && self.presenter.canvas_revision().is_some()
     }
     fn settle(&mut self) -> bool {
         for _ in 0..SETTLE_FRAMES {
