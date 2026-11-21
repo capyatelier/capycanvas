@@ -199,9 +199,12 @@ separately without a GPU. The pre-push hook runs the released-input guard over
 every pushed range, and CI runs it over the commits since `origin/main`, both
 with full history so intermediate input edits cannot hide behind a later restore.
 
-`generated_compat_fixtures_load_without_expectations` runs the workspace fixture
-generator in private temporary storage and reads every generated input through
-the release loaders without expectation files; output excludes markers and locks.
+`generated_compat_fixtures_load_without_expectations` runs the workspace and core
+fixture generators in private temporary storage and reads every generated input
+through the release loaders without expectation files; output excludes markers
+and locks. A generator writes inputs in a form an earlier release may not know
+under `newer/`: a `.capy` there may open view-only when it copies byte for byte,
+and the workspace loader skips the folder.
 
 `generated_saved_documents_set_every_field` (UI) checks non-default saved fields,
 including serde omissions; `generated_fixtures_cover_every_saved_value` (core)

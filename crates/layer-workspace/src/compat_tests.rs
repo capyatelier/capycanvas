@@ -234,6 +234,8 @@ fn check_release(release: &str) {
 fn generated_compat_fixtures_load_without_expectations() {
     let directory = crate::test_support::temp_dir("generated-compat");
     generate(&directory);
+    std::fs::create_dir(directory.join("newer")).unwrap();
+    std::fs::write(directory.join("newer/later-kind.json"), b"{}").unwrap();
     check_inputs(&directory, |_,_| {});
     std::fs::remove_dir_all(directory).unwrap();
 }
@@ -250,6 +252,7 @@ fn check_inputs(directory: &Path, check: impl Fn(&str, Value)) {
     paths.sort();
     for path in paths {
         let name = path.file_name().unwrap().to_str().unwrap();
+        if name == "newer" { continue; }
         let bytes = std::fs::read(&path).unwrap();
         let value = match name {
             name if name.starts_with("editing") => serde_json::to_value(EditingState::restore(std::str::from_utf8(&bytes).unwrap(), &english)).unwrap(),

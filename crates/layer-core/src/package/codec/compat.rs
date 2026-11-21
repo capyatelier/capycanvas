@@ -6,6 +6,7 @@ use sha2::{Digest,Sha256};
 #[path="sweep.rs"]
 mod sweep;
 
+const VIEW_ONLY:&str="unsupported-pass-through.capy";
 fn root() -> PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/compat") }
 fn digest(bytes:&[u8])->String {Sha256::digest(bytes).iter().map(|b|format!("{b:02x}")).collect()}
 fn resource_digest(payload:&resources::Payload)->String {
@@ -29,15 +30,15 @@ fn write_compat_fixtures() {
 }
 
 pub(crate) fn generate(directory:&Path) {
-    std::fs::create_dir_all(directory).unwrap();
+    std::fs::create_dir_all(directory.join("newer")).unwrap();
     for depth in [SampleDepth::U8,SampleDepth::U16,SampleDepth::F16,SampleDepth::F32] {
         std::fs::write(directory.join(format!("samples-{depth:?}.capy")),serialize(&prepare(&fixture(depth),true))).unwrap();
     }
-    for name in ["authored-filters.capy","shared-image-objects.capy","vector-objects.capy","vector-future.capy","illustration-conversions.capy","layer-color-modes.capy","papers.capy","unsupported-pass-through.capy"] {
-        let bytes = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/package/codec/fixtures").join(name)).unwrap();
-        let bytes = if name.starts_with("unsupported") {bytes} else {serialize(&prepare(&editable(bytes),true))};
-        std::fs::write(directory.join(name),bytes).unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/package/codec/fixtures");
+    for name in ["authored-filters.capy","shared-image-objects.capy","vector-objects.capy","vector-future.capy","illustration-conversions.capy","layer-color-modes.capy","papers.capy"] {
+        std::fs::write(directory.join(name),serialize(&prepare(&editable(std::fs::read(fixtures.join(name)).unwrap()),true))).unwrap();
     }
+    std::fs::copy(fixtures.join(VIEW_ONLY),directory.join("newer").join(VIEW_ONLY)).unwrap();
     sweep::generate(directory);
 }
 
@@ -94,12 +95,16 @@ fn external_compat_inputs_load() {
 }
 
 fn check_inputs(directory:&Path,check:impl Fn(&str,Value)) {
-    for path in std::fs::read_dir(directory).unwrap().map(|entry|entry.unwrap().path()) {
+    let marked=directory.join("newer");
+    for path in std::fs::read_dir(directory).unwrap().chain(std::fs::read_dir(&marked).into_iter().flatten()).map(|entry|entry.unwrap().path()) {
         if path.extension().and_then(|value|value.to_str()) != Some("capy") {continue;}
+        let newer=path.parent()==Some(marked.as_path());
+        let file=path.file_name().unwrap().to_str().unwrap();
+        let name=if newer {format!("newer/{file}")} else {file.to_owned()};
         let bytes = std::fs::read(&path).unwrap();
         let actual = match open(backing(bytes.clone()),ProjectLimits::default(),&AtomicBool::new(false)).unwrap() {
             OpenOutcome::Candidate {artwork,preview,..} => {
-                if path.file_name().unwrap()=="app-preview.capy" {assert!(preview.is_some());}
+                if name=="app-preview.capy" {assert!(preview.is_some());}
                 let prepared = prepare(&artwork,false);
                 let manifest = serde_json::from_slice::<Value>(prepared.manifest()).unwrap();
                 let reopened=editable(serialize(&prepared));
@@ -109,14 +114,27 @@ fn check_inputs(directory:&Path,check:impl Fn(&str,Value)) {
                     .map(|entry|(entry.record["id"].as_str().unwrap().to_owned(),resource_digest(&entry.payload))).collect();
                 json!({"manifest":manifest,"resources":resources,"preview":preview.map(|p|json!({"size":p.size(),"pixels":digest(p.pixels())}))})
             }
-            OpenOutcome::Preserved {source,..} if path.file_name().unwrap() == "unsupported-pass-through.capy" => {
+            OpenOutcome::Preserved {source,..} if newer || name == VIEW_ONLY => {
                 let mut copied = Vec::new();copy_original(&source,&mut copied,&AtomicBool::new(false)).unwrap();
                 assert_eq!(copied,bytes);json!({"preserved":digest(&bytes)})
             }
             outcome => panic!("{}: {outcome:?}",path.display()),
         };
-        check(path.file_name().unwrap().to_str().unwrap(),actual);
+        check(&name,actual);
     }
+}
+
+#[test]
+fn generated_compat_fixtures_load_without_expectations() {
+    let directory=std::env::temp_dir().join(format!("capy-generated-compat-{}",PortableId::random()));
+    generate(&directory);crate::package::session::persistence_tests::compat::generate(&directory);
+    let view_only=std::cell::RefCell::new(Vec::new());
+    check_inputs(&directory,|name,actual|if actual.get("preserved").is_some() {view_only.borrow_mut().push(name.to_owned());});
+    assert_eq!(*view_only.borrow(),[format!("newer/{VIEW_ONLY}")]);
+    crate::package::session::persistence_tests::compat::check_inputs(&directory,|_,_|{});
+    std::fs::copy(directory.join("newer").join(VIEW_ONLY),directory.join("unmarked.capy")).unwrap();
+    assert!(std::panic::catch_unwind(||check_inputs(&directory,|_,_|{})).is_err());
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]

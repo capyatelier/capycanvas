@@ -76,13 +76,17 @@ fn check_release(release:&str) {
     });
 }
 
+fn recorded_locations(session:&Path,generation:PortableId)->std::collections::BTreeMap<String,serde_json::Value> {
+    let recorded:serde_json::Value=serde_json::from_slice(&std::fs::read(session.join(format!("generations/{generation}.json"))).unwrap()).unwrap();
+    recorded.get("session").unwrap_or(&recorded)["resources"].as_array().unwrap().iter().map(|record|(record["id"].as_str().unwrap().to_owned(),record["location"].clone())).collect()
+}
+
 pub(crate) fn check_inputs(directory:&Path,check:impl Fn(&str,serde_json::Value)) {
-    let expected:serde_json::Value=serde_json::from_slice(&std::fs::read(directory.parent().unwrap().join("expected").join(directory.file_name().unwrap()).join("session.json")).unwrap()).unwrap();
-    let locations=expected["metadata"]["metadata"]["resources"].as_array().unwrap().iter().map(|record|(record["id"].as_str().unwrap().to_owned(),record["location"].clone())).collect::<std::collections::BTreeMap<_,_>>();
     let temporary=std::env::temp_dir().join(format!("capy-release-session-{}",PortableId::random()));
     copy_tree(&directory.join("session"),&temporary);
     let cancel=AtomicBool::new(false);let mut store=pollster::block_on(SessionStore::open(&temporary)).unwrap();
     let loaded=pollster::block_on(store.load(ProjectLimits::default(),&cancel)).unwrap().unwrap();
+    let locations=recorded_locations(&directory.join("session"),store.loaded_generation().unwrap());
     let mut editor=loaded.editor;let metadata=loaded.metadata.value;
     let actual=history_snapshot(&mut editor,&metadata,&locations);
     check("session.json",actual.clone());
