@@ -392,18 +392,10 @@ fn offset_photo_samples_full_source_across_tiles_without_creating_raster() {
 }
 
 #[test]
-fn watercolor_prediction_and_commit_cover_an_offset_source_larger_than_canvas() {
-    watercolor_prediction_and_commit_with_canvas(256, false);
-}
-
-#[test]
-fn watercolor_prediction_and_commit_in_canvas_control() {
-    watercolor_prediction_and_commit_with_canvas(512, false);
-}
-
-#[test]
-fn watercolor_prediction_and_commit_at_reduced_zoom() {
-    watercolor_prediction_and_commit_with_canvas(256, true);
+fn watercolor_prediction_and_commit_cover_an_offset_source_beyond_and_within_the_canvas_and_at_reduced_zoom() {
+    for (canvas, reduced) in [(256, false), (512, false), (256, true)] {
+        watercolor_prediction_and_commit_with_renderer(WgpuRasterizer::new_native_headless(Default::default()).unwrap(), canvas, reduced);
+    }
 }
 
 #[test]
@@ -447,10 +439,6 @@ fn wet_edge_full_coverage_stays_finite_at_clamped_edge_width() {
         assert_eq!(r.readback_srgb_rgba8().unwrap(), committed);
     }
 }
-fn watercolor_prediction_and_commit_with_canvas(canvas: u32, reduced: bool) {
-    watercolor_prediction_and_commit_with_renderer(WgpuRasterizer::new_native_headless(Default::default()).unwrap(), canvas, reduced);
-}
-
 pub(crate) fn watercolor_prediction_and_commit_with_renderer(mut r: WgpuRasterizer, canvas: u32, reduced: bool) {
     let mut layer = paint_document([128; 2], "larger offset watercolor source");
     let source = rgba8_source([512; 2], |_, _| [160, 170, 180, 255]);
@@ -472,7 +460,7 @@ pub(crate) fn watercolor_prediction_and_commit_with_renderer(mut r: WgpuRasteriz
     };
     let read = |r: &mut WgpuRasterizer| {
         if reduced {
-            assert!(r.scale_display.as_ref().unwrap().plan.level > 0);
+            assert!(r.scale_display.as_ref().unwrap().plan.level > 0, "canvas={canvas} reduced={reduced}");
             crate::scene::scale::tests::display_pixels(r).into_iter().flatten().map(|v| (v.clamp(0., 1.) * 255.).round() as u8).collect::<Vec<_>>()
         } else { r.readback_srgb_rgba8().unwrap() }
     };
@@ -489,19 +477,19 @@ pub(crate) fn watercolor_prediction_and_commit_with_renderer(mut r: WgpuRasteriz
     send(&mut r, &layer, &[ink], &[preview.clone()], false);
     let prediction = read(&mut r);
     let preview_storage = r.native_edit.as_ref().unwrap().storage_bytes();
-    assert_ne!(prediction, original);
-    assert!(paint(&layer).raster.is_empty());
-    assert!(r.paint_layers.iter().find(|p| p.id == target(&layer)).unwrap().watercolor.is_none());
-    assert!(r.preview_watercolor_wetness_pages.iter().any(|page| page.coordinate == [1, 0]));
+    assert_ne!(prediction, original, "canvas={canvas} reduced={reduced}");
+    assert!(paint(&layer).raster.is_empty(), "canvas={canvas} reduced={reduced}");
+    assert!(r.paint_layers.iter().find(|p| p.id == target(&layer)).unwrap().watercolor.is_none(), "canvas={canvas} reduced={reduced}");
+    assert!(r.preview_watercolor_wetness_pages.iter().any(|page| page.coordinate == [1, 0]), "canvas={canvas} reduced={reduced}");
     let mut next = preview.clone(); next.first_dab = 1; next.stroke_start = false;
     send(&mut r, &layer, &[ink, ink], &[preview, next], false);
-    assert_eq!(r.native_edit.as_ref().unwrap().storage_bytes(), preview_storage, "same-footprint prediction reuses native storage");
-    assert!(paint(&layer).raster.is_empty());
+    assert_eq!(r.native_edit.as_ref().unwrap().storage_bytes(), preview_storage, "canvas={canvas} reduced={reduced}: same-footprint prediction reuses native storage");
+    assert!(paint(&layer).raster.is_empty(), "canvas={canvas} reduced={reduced}");
     send(&mut r, &layer, &[], &[], false);
-    assert_eq!(read(&mut r), original, "cancel restores source pixels");
-    assert!(r.preview_watercolor_wetness_pages.is_empty());
-    assert_eq!(r.native_edit.as_ref().unwrap().storage_bytes(), preview_storage, "cancel retains bounded reusable prediction storage");
-    assert!(r.paint_layers.iter().find(|p| p.id == target(&layer)).unwrap().watercolor.is_none());
+    assert_eq!(read(&mut r), original, "canvas={canvas} reduced={reduced}: cancel restores source pixels");
+    assert!(r.preview_watercolor_wetness_pages.is_empty(), "canvas={canvas} reduced={reduced}");
+    assert_eq!(r.native_edit.as_ref().unwrap().storage_bytes(), preview_storage, "canvas={canvas} reduced={reduced}: cancel retains bounded reusable prediction storage");
+    assert!(r.paint_layers.iter().find(|p| p.id == target(&layer)).unwrap().watercolor.is_none(), "canvas={canvas} reduced={reduced}");
     paint_mut(&mut layer).raster = layer_core::raster::RasterRevision::pending();
     send(&mut r, &layer, &[ink], &[stroke.clone()], false);
     let accepted = read(&mut r);
@@ -511,17 +499,17 @@ pub(crate) fn watercolor_prediction_and_commit_with_renderer(mut r: WgpuRasteriz
     send(&mut fresh, &fresh_layer, &[], &[], true);
     paint_mut(&mut fresh_layer).raster = layer_core::raster::RasterRevision::pending();
     send(&mut fresh, &fresh_layer, &[ink], &[stroke.clone()], false);
-    assert_eq!(read(&mut fresh), accepted, "fresh persistent oracle excludes preview/cancel reuse");
+    assert_eq!(read(&mut fresh), accepted, "canvas={canvas} reduced={reduced}: fresh persistent oracle excludes preview/cancel reuse");
     let maximum = accepted.iter().zip(&prediction).map(|(a,b)|a.abs_diff(*b)).max().unwrap();
-    assert!(maximum <= 1, "prediction matches committed material: maximum={maximum}, edge_after_stroke={}", stroke.style.rendering.edge_after_stroke);
+    assert!(maximum <= 1, "canvas={canvas} reduced={reduced}: prediction matches committed material: maximum={maximum}, edge_after_stroke={}", stroke.style.rendering.edge_after_stroke);
     let data = paint(&layer).raster.wait_data().unwrap();
-    assert!(data.watercolor.is_some());
+    assert!(data.watercolor.is_some(), "canvas={canvas} reduced={reduced}");
     for plane in [layer_core::raster::RasterPlane::Color, layer_core::raster::RasterPlane::WatercolorWetness] {
-        assert!(data.tiles.contains_key(&layer_core::raster::TileKey { plane, coordinate: [1, 0] }));
+        assert!(data.tiles.contains_key(&layer_core::raster::TileKey { plane, coordinate: [1, 0] }), "canvas={canvas} reduced={reduced}");
     }
-    assert!(std::sync::Arc::ptr_eq(paint(&layer).base.as_ref().unwrap().image.storage(), &source));
+    assert!(std::sync::Arc::ptr_eq(paint(&layer).base.as_ref().unwrap().image.storage(), &source), "canvas={canvas} reduced={reduced}");
     send(&mut r, &layer, &[], &[], true);
-    assert_eq!(read(&mut r), accepted, "backing restore preserves pigment and wetness");
+    assert_eq!(read(&mut r), accepted, "canvas={canvas} reduced={reduced}: backing restore preserves pigment and wetness");
 }
 
 #[test]
@@ -546,13 +534,10 @@ fn layer_tiles_beside_the_largest_offset_keep_their_exact_pixels() {
 }
 
 #[test]
-fn watercolor_transport_preserves_multitile_prediction_commit_and_restore() {
-    watercolor_multitile_prediction_commit_and_restore(false);
-}
-
-#[test]
-fn watercolor_transport_batches_restored_empty_backing() {
-    watercolor_multitile_prediction_commit_and_restore(true);
+fn watercolor_transport_preserves_multitile_prediction_commit_and_restore_with_and_without_restored_empty_backing() {
+    for restored_empty in [false, true] {
+        watercolor_multitile_prediction_commit_and_restore(restored_empty);
+    }
 }
 
 fn watercolor_multitile_prediction_commit_and_restore(restored_empty: bool) {
@@ -567,12 +552,12 @@ fn watercolor_multitile_prediction_commit_and_restore(restored_empty: bool) {
         (r.readback_srgb_rgba8().unwrap(), passes)
     };
     let original = send(&mut r, &layer, &[], &[], true).0;
-    assert_eq!(send(&mut without_transport, &layer, &[], &[], true).0, original);
+    assert_eq!(send(&mut without_transport, &layer, &[], &[], true).0, original, "restored_empty={restored_empty}");
     if restored_empty {
         let empty = layer_core::raster::RasterData::default();
         r.restore_raster(target(&layer), &empty, &empty).unwrap();
         without_transport.restore_raster(target(&layer), &empty, &empty).unwrap();
-        assert!(r.native_backing(target(&layer)).is_some_and(|data| data.tiles.is_empty()));
+        assert!(r.native_backing(target(&layer)).is_some_and(|data| data.tiles.is_empty()), "restored_empty={restored_empty}");
     }
     let mut ink = dab([0.1, 0.3, 0.8, 1.]);
     ink.center = Point { x: 256., y: 256. };
@@ -587,25 +572,25 @@ fn watercolor_multitile_prediction_commit_and_restore(restored_empty: bool) {
     stationary.style.transport.as_mut().unwrap().distance = 0.;
     let (stationary, stationary_passes) = send(&mut without_transport, &layer, &[ink], &[stationary], false);
     let extra_passes = passes.checked_sub(stationary_passes).unwrap();
-    assert!(extra_passes <= 1, "every transport step of every page shares one compute pass: {passes} versus {stationary_passes}");
-    assert_ne!(prediction, stationary, "transport moves the deposited material");
+    assert!(extra_passes <= 1, "restored_empty={restored_empty}: every transport step of every page shares one compute pass: {passes} versus {stationary_passes}");
+    assert_ne!(prediction, stationary, "restored_empty={restored_empty}: transport moves the deposited material");
     let coordinates = |r: &WgpuRasterizer| (
         r.preview_pages.iter().map(|page| page.coordinate).collect::<std::collections::BTreeSet<_>>(),
         r.preview_watercolor_wetness_pages.iter().map(|page| page.coordinate).collect::<std::collections::BTreeSet<_>>());
-    assert_eq!(coordinates(&r), coordinates(&without_transport));
-    assert_ne!(prediction, original);
-    assert_eq!(r.preview_pages.len(), 4);
-    assert_eq!(r.preview_watercolor_wetness_pages.len(), 4);
-    assert!(paint(&layer).raster.is_empty());
+    assert_eq!(coordinates(&r), coordinates(&without_transport), "restored_empty={restored_empty}");
+    assert_ne!(prediction, original, "restored_empty={restored_empty}");
+    assert_eq!(r.preview_pages.len(), 4, "restored_empty={restored_empty}");
+    assert_eq!(r.preview_watercolor_wetness_pages.len(), 4, "restored_empty={restored_empty}");
+    assert!(paint(&layer).raster.is_empty(), "restored_empty={restored_empty}");
     let mut moved = ink; moved.center = Point { x: 320., y: 320. };
     preview.damage = moved.bounds();
     send(&mut r, &layer, &[moved], &[preview.clone()], false);
-    assert!(paint(&layer).raster.is_empty());
-    assert_eq!(send(&mut r, &layer, &[], &[], false).0, original);
+    assert!(paint(&layer).raster.is_empty(), "restored_empty={restored_empty}");
+    assert_eq!(send(&mut r, &layer, &[], &[], false).0, original, "restored_empty={restored_empty}");
     paint_mut(&mut layer).raster = layer_core::raster::RasterRevision::pending();
     let accepted = send(&mut r, &layer, &[ink], &[stroke], false).0;
-    assert_ne!(accepted, original);
-    assert_eq!(send(&mut r, &layer, &[], &[], true).0, accepted);
+    assert_ne!(accepted, original, "restored_empty={restored_empty}");
+    assert_eq!(send(&mut r, &layer, &[], &[], true).0, accepted, "restored_empty={restored_empty}");
     println!("watercolor transport: restored_empty={restored_empty}, extra_passes={extra_passes}");
 }
 
