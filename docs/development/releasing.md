@@ -631,8 +631,11 @@ WAF allowlist, so the script runs `capycanvas-web`'s
 deploying. Only the latest published release
 that is neither a draft nor a prerelease can deploy, so an older release cannot
 replace the update source. Installations from 1.0.15 or earlier recorded
-`https://capyatelier.github.io/capycanvas/flatpak`; they update again after
-`flatpak remote-modify --url=https://flatpak.capycanvas.art capycanvas`.
+`https://capyatelier.github.io/capycanvas/flatpak`. GitHub Pages serves the
+`gh-pages` branch there: a summary signed with the release key that moves those
+installations to `https://flatpak.capycanvas.art` at their next `flatpak update`
+or Software refresh. Keep that branch and Pages enabled; releases don't change
+them.
 
 ### Signing credentials
 
