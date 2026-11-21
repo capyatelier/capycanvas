@@ -1,4 +1,13 @@
 use super::*;
+impl PaintTransforms {
+    pub(crate) fn bound_color_pipeline(&self) -> (String, Deferred<wgpu::RenderPipeline>) {
+        self.0[0].color.bound_pipeline()
+    }
+    pub(crate) fn hold_spare(&mut self, page: LayerPage) { self.0[0].spares.paint.push(page); }
+    pub(crate) fn storage_bytes(&self) -> u64 {
+        self.0.iter().map(ImageTransformState::storage_bytes).sum::<u64>() - 3 * 48
+    }
+}
 
 #[test]
 fn cold_reduced_preview_retains_its_cursor_across_more_than_sixty_four_sources() {

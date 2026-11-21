@@ -330,18 +330,6 @@ impl Effects {
     pub(super) fn preparation_ready<'a>(&self, parameters: impl IntoIterator<Item = &'a Arc<wgpu::Buffer>>)->bool {
         self.preparation.ready(parameters)
     }
-    #[cfg(test)]
-    pub fn preparation_count(&self) -> u64 {
-        self.preparation.executions
-    }
-    #[cfg(test)]
-    pub(crate) fn parameter_buffers(&self)->Vec<&wgpu::Buffer> {
-        self.instances.values().map(|instance| -> &wgpu::Buffer { &instance.buffer }).collect()
-    }
-    #[cfg(test)]
-    pub fn storage_bytes(&self) -> u64 {
-        self.instances.values().map(|i| i.buffer.size()).sum()
-    }
     pub fn new(r: &WgpuRasterizer, uniforms: &wgpu::BindGroupLayout) -> Self {
         if let Some(cache) = &r.validated_effects { return cache.fork(); }
         let recipes = r.recipes.effects.get_or_init(|| Arc::new(Recipes::new(&r.device, uniforms))).clone();
@@ -1116,6 +1104,17 @@ fn fx_original(p:vec2<f32>)->vec4<f32> {
 mod tests {
     use super::*;
     use crate::tests::fixtures;
+    impl Effects {
+        pub(crate) fn preparation_count(&self) -> u64 {
+            self.preparation.executions
+        }
+        pub(crate) fn parameter_buffers(&self)->Vec<&wgpu::Buffer> {
+            self.instances.values().map(|instance| -> &wgpu::Buffer { &instance.buffer }).collect()
+        }
+        pub(crate) fn storage_bytes(&self) -> u64 {
+            self.instances.values().map(|i| i.buffer.size()).sum()
+        }
+    }
     #[test]
     fn builtin_shaders_and_saved_fixture_compile_with_the_current_catalog() {
         use layer_core::package::{codec::{open,OpenOutcome},ImmutableBacking,transport::ChunkedBytes};

@@ -153,20 +153,6 @@ impl Resample {
             wgpu::BindingResource::Sampler(&self.sampler),
         ])
     }
-    #[cfg(test)]
-    pub fn encode(&self, encoder: &mut crate::submission::CommandEncoder, binding: &wgpu::BindGroup, texels: [u32; 4]) {
-        let mut compute = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("display resample"), timestamp_writes: None,
-        });
-        compute.set_pipeline(&self.area);
-        compute.set_bind_group(0, binding, &[]);
-        compute.dispatch_workgroups(texels[2].div_ceil(8), texels[3].div_ceil(8), 1);
-    }
-
-    #[cfg(test)]
-    pub fn mesh_binding(&self, device: &wgpu::Device, uniforms: &wgpu::Buffer, views: &[wgpu::TextureView; 2]) -> wgpu::BindGroup {
-        self.mesh_binding_at(device, uniforms, 0, views)
-    }
     pub fn mesh_binding_at(&self, device: &wgpu::Device, uniforms: &wgpu::Buffer, offset: u64, views: &[wgpu::TextureView; 2]) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("mesh resample"), layout: &self.mesh_layout,
             entries: &[
@@ -220,6 +206,19 @@ fn shader_source(space:layer_core::color::RgbSpace,filterable:bool,fine:bool)->s
 #[cfg(test)]
 mod program_tests {
     use super::*;
+    impl Resample {
+        pub(crate) fn encode(&self, encoder: &mut crate::submission::CommandEncoder, binding: &wgpu::BindGroup, texels: [u32; 4]) {
+            let mut compute = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("display resample"), timestamp_writes: None,
+            });
+            compute.set_pipeline(&self.area);
+            compute.set_bind_group(0, binding, &[]);
+            compute.dispatch_workgroups(texels[2].div_ceil(8), texels[3].div_ceil(8), 1);
+        }
+        pub(crate) fn mesh_binding(&self, device: &wgpu::Device, uniforms: &wgpu::Buffer, views: &[wgpu::TextureView; 2]) -> wgpu::BindGroup {
+            self.mesh_binding_at(device, uniforms, 0, views)
+        }
+    }
     #[test]
     fn fine_page_programs_validate_in_every_working_space_and_sampling_mode() {
         for space in layer_core::color::RgbSpace::ALL {

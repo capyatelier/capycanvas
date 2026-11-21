@@ -241,10 +241,6 @@ impl PixelTransform {
     pub(super) fn linear_affine_placement_pipeline(&self, area: bool) -> Deferred<wgpu::ComputePipeline> {
         self.kernels.compute(Key::linear_affine(area), false)
     }
-    #[cfg(test)]
-    pub(super) fn bound_pipeline(&self) -> (String, Deferred<wgpu::RenderPipeline>) {
-        (format!("{:?}", self.key), self.kernels.render(self.key))
-    }
     pub(super) fn placement_pipeline(&self, transform: &ImageTransform, taps: u32) -> Deferred<wgpu::ComputePipeline> {
         self.kernels.compute(Key::new(transform, taps), false)
     }
@@ -661,6 +657,11 @@ fn valid_extent(origin: [i32; 2], extent: [u32; 2]) -> bool {
 #[cfg(test)]
 mod program_tests {
     use super::*;
+    impl PixelTransform {
+        pub(crate) fn bound_pipeline(&self) -> (String, Deferred<wgpu::RenderPipeline>) {
+            (format!("{:?}", self.key), self.kernels.render(self.key))
+        }
+    }
     #[test]
     fn all_transform_programs_validate_and_exclude_unused_algorithms() {
         for mapping in [Mapping::Copy, Mapping::Affine, Mapping::Projective, Mapping::Mesh] {

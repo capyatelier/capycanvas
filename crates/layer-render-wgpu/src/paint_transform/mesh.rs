@@ -196,10 +196,6 @@ impl MeshGeometry {
     /// Source bounds of the triangles' parts within a destination pixel of
     /// the region, or None when no triangle reaches it. Positions interpolate
     /// linearly across each triangle, so its clipped corners bound them.
-    #[cfg(test)]
-    pub fn footprint(&self, region: PixelRect) -> Option<[f64; 4]> {
-        self.footprint_rect(region.to_rect())
-    }
     pub fn footprint_rect(&self, region: layer_core::Rect) -> Option<[f64; 4]> {
         if let Some((query,result))=self.footprint.get() && *query==region {return *result;}
         let _span=crate::performance_trace::Span::new(c"Capy mesh footprint");
@@ -662,6 +658,11 @@ impl Positions {
 mod tests {
     use super::*;
     use layer_core::{Affine, MeshMap, Point, Rect};
+    impl MeshGeometry {
+        fn footprint(&self, region: PixelRect) -> Option<[f64; 4]> {
+            self.footprint_rect(region.to_rect())
+        }
+    }
 
     fn warped(offset: f32) -> MeshGeometry {
         let bounds = Rect {
