@@ -1800,18 +1800,17 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     /// submitted raster boundaries belong to history; CPU-only sample draining
     /// cannot create a saveable raster edit. The producer must be quiescent.
     pub fn discard_unsubmitted_input(&mut self) {
-        if self.pending_frame.take().is_some() {
-            for root in self.document().artwork.paint.iter().map(|(_, _, source)| &source.raster)
-                .chain(self.document().artwork.coverage.iter().map(|(_, _, source)| &source.raster))
-            {
-                if root.try_data().is_none() {
-                    let _ = root.publish(Err("Renderer stopped before raster submission".into()));
-                }
+        self.pending_frame = None;
+        for root in self.document().artwork.paint.iter().map(|(_, _, source)| &source.raster)
+            .chain(self.document().artwork.coverage.iter().map(|(_, _, source)| &source.raster))
+        {
+            if root.try_data().is_none() {
+                let _ = root.publish(Err("Renderer stopped before raster submission".into()));
             }
-            self.dabs.clear();
-            self.batches.clear();
-            self.restore_rasters.clear();
         }
+        self.dabs.clear();
+        self.batches.clear();
+        self.restore_rasters.clear();
         while self.input.pop().is_some() {}
         self.queued_contacts.clear();
         self.contact_settings = None;
@@ -4086,6 +4085,31 @@ mod tests {
         assert_eq!(active_paint(canvas.document()).raster, root);
         canvas.discard_unsubmitted_input();
         assert_eq!(canvas.checkpoint(), checkpoint, "retirement is idempotent");
+    }
+
+    #[test]
+    fn a_stroke_whose_commit_frame_failed_is_dropped_when_the_renderer_stops() {
+        let (mut input, mut canvas) = engine("failed commit", 128, 128);
+        input.push(event(1, PenPhase::Down, 20.)).unwrap();
+        input.push(event(2, PenPhase::Up, 80.)).unwrap();
+        canvas.render_frame().unwrap();
+        let root = active_paint(canvas.document()).raster.clone();
+        let checkpoint = canvas.checkpoint();
+        input.push(event(3, PenPhase::Down, 30.)).unwrap();
+        input.push(event(4, PenPhase::Up, 90.)).unwrap();
+        canvas.backend_mut().fail_submit = true;
+        assert!(canvas.render_frame().is_err());
+        assert_eq!(canvas.metrics().committed_strokes, 2);
+        assert!(canvas.pending_frame.is_none() && active_paint(canvas.document()).raster.try_data().is_none());
+        canvas.discard_unsubmitted_input();
+        assert_eq!(canvas.recover_failed_rasters().unwrap(), 1, "the stroke whose pixels were never submitted leaves history");
+        assert_eq!(active_paint(canvas.document()).raster, root);
+        assert_eq!(canvas.checkpoint(), checkpoint);
+        canvas.replace_backend(RecordingRenderer::default()).unwrap();
+        canvas.render_frame().unwrap();
+        assert_eq!(active_paint(canvas.document()).raster, root, "a new renderer restores the pixels from before the failed stroke");
+        assert!(canvas.undo().unwrap());
+        assert!(active_paint(canvas.document()).raster.is_empty());
     }
 
     #[test]

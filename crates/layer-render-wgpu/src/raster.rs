@@ -820,6 +820,8 @@ mod native_tests;
 
 #[cfg(test)]
 mod restore_tests;
+#[cfg(test)]
+mod failed_commit_tests;
 
 pub(super) mod native_edit;
 mod residency;
