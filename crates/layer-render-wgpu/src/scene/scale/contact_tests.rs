@@ -455,7 +455,7 @@ fn pen_up_keeps_the_cells_shown_earlier_in_the_contact_without_composing_or_copy
     assert!(counts.expected_keys<=6*view_cells,"pen-up keys stay bounded by the view, not the contact: {} keys for {view_cells} cells",counts.expected_keys);
 }
 
-fn material_dab(x:f32,y:f32,style:&layer_render::DabStyle)->layer_render::Dab {
+pub(in crate::scene::scale) fn material_dab(x:f32,y:f32,style:&layer_render::DabStyle)->layer_render::Dab {
     let mut dab=stroke_dab(x,y);
     if let Some(dry)=style.contact.and_then(|contact|contact.dry) {
         let relief=dry.pose(0.5).relief;

@@ -7,7 +7,8 @@ pub(super) struct Pixels {
     next: Option<Window>,
     unreduced: PixelRect,
 }
-struct Window {image:Image,_charge:crate::residency::Charge,newest:Option<CommittedImage>,good:Option<CommittedImage>}
+struct Window {image:Image,_charge:crate::residency::Charge,newest:Option<CommittedImage>,good:Option<CommittedImage>,changed:PixelRect,taken:u64}
+fn new_take()->u64 {static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed)}
 pub(super) struct CommittedImage {
     image: Image,
     submission: submission::Submission,
@@ -34,12 +35,19 @@ impl CommittedImage {
     }
 }
 impl Window {
-    fn new(image:Image,charge:crate::residency::Charge)->Self {Self {image,_charge:charge,newest:None,good:None}}
+    fn new(image:Image,charge:crate::residency::Charge)->Self {Self {image,_charge:charge,newest:None,good:None,changed:PixelRect::EMPTY,taken:new_take()}}
     fn committed(&self)->Option<&CommittedImage> {self.newest.iter().chain(&self.good).find(|image|!image.submission.discarded())}
     fn committed_mut(&mut self)->Option<&mut CommittedImage> {self.newest.iter_mut().chain(&mut self.good).find(|image|!image.submission.discarded())}
     fn commit(&mut self,submission:submission::Submission,pages:Vec<Held>,versions:Vec<Recorded>,current:Option<Current>,authored:Option<layer_core::raster::ContentStamp>) {
         if let Some(replaced)=self.newest.take().filter(|newest|!newest.submission.discarded() && !newest.submission.same(&submission)) {self.good=Some(replaced);}
         self.newest=Some(CommittedImage {image:self.image.clone(),submission,pages,versions,current,authored});
+    }
+    fn take_changes(&mut self,since:Option<u64>)->(u64,PixelRect) {
+        let (plan,changed)=(self.image.plan,std::mem::replace(&mut self.changed,PixelRect::EMPTY));
+        let known=since==Some(std::mem::replace(&mut self.taken,new_take()));
+        let region=if known {PixelRect::new(changed.min_x()<<plan.level,changed.min_y()<<plan.level,changed.max_x()<<plan.level,changed.max_y()<<plan.level)
+            .translated([plan.bounds.min_x(),plan.bounds.min_y()]).intersect(plan.bounds)}else {plan.bounds};
+        (self.taken,region)
     }
 }
 pub(crate) struct PresentedPage<'a> {
@@ -58,11 +66,19 @@ impl Pixels {
     pub fn committed_root(&self)->Option<&CommittedImage> {self.root.as_ref()?.committed()}
     pub fn committed_next(&self)->Option<&CommittedImage> {self.next.as_ref()?.committed()}
     fn commit_root(&mut self,submission:submission::Submission,pages:Vec<Held>,versions:Vec<Recorded>,current:Option<Current>,authored:Option<layer_core::raster::ContentStamp>) {self.root.as_mut().unwrap().commit(submission,pages,versions,current,authored);}
-    pub fn commit_next(&mut self,submission:submission::Submission) {
+    pub fn commit_next(&mut self,submission:submission::Submission,reduced:PixelRect) {
         let root=self.committed_root().unwrap();let pages=root.pages.clone();let versions=root.versions.clone();let current=root.current.clone();let authored=root.authored;
-        self.next.as_mut().unwrap().commit(submission,pages,versions,current,authored);self.unreduced=PixelRect::EMPTY;
+        let next=self.next.as_mut().unwrap();
+        next.commit(submission,pages,versions,current,authored);next.changed=next.changed.union(reduced);self.unreduced=PixelRect::EMPTY;
     }
-    pub(super) fn wrote(&mut self,region:PixelRect) {self.unreduced=self.unreduced.union(region);}
+    pub(super) fn wrote(&mut self,region:PixelRect) {
+        self.unreduced=self.unreduced.union(region);
+        if let Some(root)=&mut self.root {root.changed=root.changed.union(region);}
+    }
+    pub(super) fn take_changes(&mut self,source:&WindowSource,since:Option<u64>)->(u64,PixelRect) {
+        self.root.iter_mut().chain(&mut self.next).find(|window|window.image.texture==source.image.texture)
+            .map_or_else(||(new_take(),source.image.plan.bounds),|window|window.take_changes(since))
+    }
     pub(super) fn hold_current(&mut self,frame:&Arc<SignatureFrame>) {
         if let Some(image)=self.root.as_mut().and_then(Window::committed_mut) {image.current=Some(Current {frame:frame.clone(),derived:false});}
     }
@@ -1960,11 +1976,11 @@ impl Cache {
             .map(|window|WindowSource {image:window.image.clone(),versions:window.versions.clone(),
                 current:window.current.clone().map(|current|Current {derived:true,..current}),authored:window.authored})
     }
-    pub(super) fn inherit(&mut self,scene:&Scene,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,commands:&mut RegionRecords,source:WindowSource)->Result<(),GpuRasterError> {
-        if self.reduce_from(scene,r,encoder,commands,&source.image,self.plan.bounds)?.is_none() {return Err(GpuRasterError::NotReady);}
+    pub(super) fn inherit(&mut self,scene:&Scene,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,commands:&mut RegionRecords,source:WindowSource,region:PixelRect)->Result<PixelRect,GpuRasterError> {
+        let reduced=self.reduce_from(scene,r,encoder,commands,&source.image,region)?.ok_or(GpuRasterError::NotReady)?;
         for cell in &mut self.cells.lock().unwrap().cells {cell.shown=None;cell.invalidate();}
         self.pixels.commit_root(encoder.submission(),Vec::new(),source.versions,source.current,source.authored);
-        Ok(())
+        Ok(reduced)
     }
     #[cfg(test)]
     pub(in crate::scene) fn retained_ready(&self)->bool {self.ready_at(Accuracy::Display)}
@@ -3445,7 +3461,7 @@ pub(super) mod query_tests {
             for image in [cache.pixels.root().unwrap(),cache.pixels.next().unwrap()] {
                 drop(encoder.color_pass("initialized retained projection",&image.view,wgpu::LoadOp::Clear(wgpu::Color::WHITE)));
             }
-            cache.pixels.commit_root(encoder.submission(),Vec::new(),Vec::new(),None,None);cache.pixels.commit_next(encoder.submission());
+            cache.pixels.commit_root(encoder.submission(),Vec::new(),Vec::new(),None,None);cache.pixels.commit_next(encoder.submission(),PixelRect::full(cache.pixels.next().unwrap().plan.size));
             encoder.submit(&r.queue);crate::test_support::complete(&r);
             let mut held=Vec::new();
             let mut group=0usize;
