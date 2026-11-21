@@ -191,10 +191,6 @@ impl NativeTileEncoder {
         let start = depth.bytes().ilog2() as usize * 2 * self.tiles_per_dispatch;
         self.pipelines[start..start + 2 * self.tiles_per_dispatch].iter().chain(self.pipelines[6 * self.tiles_per_dispatch..].iter().filter(move |_|gray))
     }
-    #[cfg(test)]
-    pub(crate) fn with_device(device: &PipelineDevice) -> Self {
-        Self::new(device, false)
-    }
     pub(crate) fn new(device: &PipelineDevice, in_place: bool) -> Self {
         assert!(!in_place || device.features().contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES));
         let tiles_per_dispatch = 2usize

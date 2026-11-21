@@ -209,8 +209,6 @@ impl<'a, T> Read<'a, T> {
     pub fn value(&self) -> &'a T { self.value }
     pub fn input(&self)->Input {Input {version:self.version.clone(),names:self.names.clone()}}
     pub(crate) fn witnessed_by(&self,input:&Input)->bool {Arc::ptr_eq(&self.names,&input.names) && self.version.same(&input.version)}
-    #[cfg(test)]
-    pub fn name(&self) -> layer_core::raster::ContentStamp { self.version.name.identity() }
     pub fn version(&self) -> &ContentVersion { &self.version.name }
     #[cfg(test)]
     pub fn submission(&self) -> &Submission { &self.version.submission }

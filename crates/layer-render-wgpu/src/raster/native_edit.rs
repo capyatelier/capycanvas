@@ -67,8 +67,6 @@ impl NativeEdit {
                 .contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
         Self::with_admission(r,transfer,in_place)
     }
-    #[cfg(test)]
-    fn with_mode(r: &WgpuRasterizer, transfer: NativeTransfer, in_place: bool) -> Self {Self::with_admission(r,transfer,in_place)}
     fn with_admission(r:&WgpuRasterizer,transfer:NativeTransfer,in_place:bool)->Self {
         let scratch_count = if in_place || r.snapshot_worker { 0 } else { MAX_BATCH_TILES };
         let colors = (0..scratch_count)
@@ -108,14 +106,6 @@ impl NativeEdit {
             let count = inputs.chunks(MAX_BATCH_TILES).map(|batch| batch.iter().filter(|(t, _, _)| t.format() == format).count()).max().unwrap_or(0);
             textures.extend((textures.len()..count).map(|_| Self::scratch_texture(device, format)));
         }
-    }
-    #[cfg(test)]
-    pub(crate) fn pipelines(&self) -> impl Iterator<Item = &Deferred<wgpu::ComputePipeline>> {
-        self.color
-            .pipelines
-            .iter()
-            .chain(&self.scalar.pipelines)
-            .chain(self.promoter.iter().flat_map(|p| p.pipelines.iter()))
     }
     pub(crate) fn required_pipelines(&self, depth: layer_core::color::SampleDepth, gray:bool) -> impl Iterator<Item = &Deferred<wgpu::ComputePipeline>> {
         self.color.pipelines_for_depth(depth,gray)
@@ -333,15 +323,6 @@ impl WgpuRasterizer {
         Ok(renderer)
     }
 
-    #[cfg(test)]
-    pub(crate) fn native_capture_on_gpu(
-        adapter: wgpu::Adapter,
-        device: PipelineDevice,
-        queue: wgpu::Queue,
-        color: DocumentColor,
-    ) -> Result<Self, GpuRasterError> {
-        Self::native_capture_on_factory(RendererFactory::with_device(adapter, &device, queue), device, color)
-    }
     pub(crate) fn native_capture_on_factory(factory: RendererFactory, device: PipelineDevice, color: DocumentColor) -> Result<Self, GpuRasterError> {
         let device = device.with_working_space(color.space).with_depth(color.depth);
         let mut r = Self::from_factory_inner(factory, device, Initialization::Snapshot)?;

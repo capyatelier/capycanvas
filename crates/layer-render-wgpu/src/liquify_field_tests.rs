@@ -2,6 +2,8 @@ use super::*;
 use crate::layer_tests::{dab, preset_style, placement};
 use layer_core::{DefaultBrushPreset, Document, Point, Selection, raster::RasterRevision};
 
+impl Tile {pub(super) fn new(r:&WgpuRasterizer,bounds:PixelRect)->Self {Self::at_block(r,bounds.to_rect(),1)}}
+
 fn map_texture(tile:&Tile)->wgpu::Texture {
     tile.pixels.read(&tile.capture,None).unwrap().value().texture.clone()
 }

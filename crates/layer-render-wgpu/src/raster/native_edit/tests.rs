@@ -34,6 +34,18 @@ use layer_engine::{
 };
 use layer_render::ViewState;
 use crate::test_support::{flush_engine as flush, submit_encoded, view, wait_until};
+
+impl NativeEdit {
+    fn with_mode(r: &WgpuRasterizer, transfer: NativeTransfer, in_place: bool) -> Self {Self::with_admission(r,transfer,in_place)}
+    pub(crate) fn pipelines(&self) -> impl Iterator<Item = &Deferred<wgpu::ComputePipeline>> {
+        self.color.pipelines.iter().chain(&self.scalar.pipelines).chain(self.promoter.iter().flat_map(|p| p.pipelines.iter()))
+    }
+}
+impl WgpuRasterizer {
+    pub(crate) fn native_capture_on_gpu(adapter: wgpu::Adapter, device: PipelineDevice, queue: wgpu::Queue, color: DocumentColor) -> Result<Self, GpuRasterError> {
+        Self::native_capture_on_factory(RendererFactory::with_device(adapter, &device, queue), device, color)
+    }
+}
 fn stroke(
     engine: &mut CanvasEngine<WgpuRasterizer>,
     input: &mut InputProducer<PenEvent>,

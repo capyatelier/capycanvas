@@ -34,8 +34,6 @@ impl std::fmt::Debug for Tile {
     fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result {f.debug_struct("Tile").field("id",&self.id).field("bounds",&self.bounds).finish()}
 }
 impl Tile {
-    #[cfg(test)]
-    fn new(r:&WgpuRasterizer,bounds:PixelRect)->Self {Self::at_block(r,bounds.to_rect(),1)}
     fn at_block(r:&WgpuRasterizer,bounds:Rect,block:u32)->Self {
         Self {id:NEXT_RESOURCE.fetch_add(1,Ordering::Relaxed),capture:layer_core::raster::ContentName::fresh().into(),
             pixels:resident::Resident::unwritten(TileStorage::new(r,block)),bounds}
