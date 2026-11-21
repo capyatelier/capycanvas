@@ -842,42 +842,35 @@ fn streamed_sources_reuse_valid_finer_pages_without_native_decoding() {
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
     submit_published(&mut r, frame);
     let expected = display_pixels(&r);
-    let mut cache = r.scale_display.take().unwrap();
-    let mut scene = r.scene.take().unwrap();
-    let mut commands = scene.scale_commands.take().unwrap();
     let id=source_at(&doc,0);
-    let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
-    scene.begin_frame();
-    {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan:display_mips::Plan::at(frame.document_extent,2),required:PixelRect::full(frame.document_extent).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut work).unwrap();}
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
-    assert!(!source_chunks(&cache,id,2).is_empty());
-    cache.pages.lock().unwrap().remove_source_level(id,3);
-    for missing in [None, Some([4, 3])] {
-        if let Some(tile) = missing {
-            assert!(source_chunks(&cache,id,2).contains(&tile));
-            cache.pages.lock().unwrap().discard_source_chunks(id,2,page_rect(tile));
-        }
-        let updates = scene.scale_sources.entries[&id].updates;
-        cache.graph = Default::default();
-        evict_composite_pages(&cache,&[cache.plan.bounds]);
+    let updates=|r:&WgpuRasterizer|r.scene.as_ref().unwrap().scale_sources.entries[&id].updates;
+    {
+        let (mut scene,mut cache)=(r.scene.take().unwrap(),r.scale_display.take().unwrap());
+        let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
         scene.begin_frame();
-        commands.begin();
-        crate::scene::scale::tests::prepare_fixture_frame(&r, frame, &scene);
-        cache.prepare_graph(&r, frame, &scene).unwrap();
-        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        {let mut work=crate::test_support::work(false);cache.render(&mut scene, &mut r, frame,
-            &mut Encoding { encoder: &mut encoder, commands: &mut commands, retained:0, budget:&mut work }).unwrap();}
-        scene.encode_jobs(&mut r, &mut encoder).unwrap();
-        r.uploads.finish(&encoder);
-        encoder.submit(&r.queue);
-        assert_eq!(scene.scale_sources.entries[&source_at(&doc,0)].updates, updates + u64::from(missing.is_some()),
-            "only gaps in retained finer pages may require native reduction");
-        let actual = pixels(&r, cache.texture());
-        assert!(actual.iter().zip(&expected).all(|(a, b)| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 2e-5)));
+        {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan:display_mips::Plan::at(frame.document_extent,2),required:PixelRect::full(frame.document_extent).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut work).unwrap();}
+        r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+        r.scene=Some(scene);r.scale_display=Some(cache);
     }
-    scene.scale_commands = Some(commands);
-    r.scene = Some(scene);
-    r.scale_display = Some(cache);
+    let pages=page_coordinates(PixelRect::full(frame.document_extent)).count();
+    for missing in [None, Some([4, 3])] {
+        {
+            let cache=r.scale_display.as_ref().unwrap();
+            assert_eq!(source_chunks(cache,id,2).len(),pages,"every finer page is retained");
+            if let Some(tile) = missing {cache.pages.lock().unwrap().discard_source_chunks(id,2,page_rect(tile));}
+            cache.pages.lock().unwrap().remove_source_level(id,3);
+            assert!(source_chunks(cache,id,3).is_empty());
+        }
+        let reduced=updates(&r);
+        prepare_layer_pages(&mut r,frame);
+        assert_eq!(updates(&r)-reduced, u64::from(missing.is_some()), "only gaps in retained finer pages may require native reduction");
+        assert_eq!(source_chunks(r.scale_display.as_ref().unwrap(),id,3).len(),pages);
+        let reduced=updates(&r);
+        evict_view(&r);
+        submit_published(&mut r,frame);
+        assert_eq!(updates(&r),reduced,"publishing from prepared layer pages reduces no native page");
+        assert_eq!(display_pixels(&r),expected,"the rebuilt window shows the picture it showed before eviction");
+    }
     assert_presentation_mip(&r);
 }
 
