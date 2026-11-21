@@ -45,6 +45,9 @@ decoded-but-unconsumed bytes stay within the workers plus one idle frame's tiles
 of native 8-bit samples, charged to the renderer's RAM, plus one request's room
 for an ordered receipt. Fallback, Navigator and prefetch decodes stop at six
 tiles per worker, since their units let go of their inputs between frames.
+A stroke asks at prefetch priority for the stored tiles its display reads one
+stroke step ahead; the frame that reads one asks at visible priority and takes
+over the request in flight.
 Frames take every ready result before the display walk, so the walk refills the
 room it frees. Dropping a queue invalidates its queued jobs and discards any
 result already in progress; workers finish at most the pool's active jobs.

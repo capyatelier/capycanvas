@@ -1885,3 +1885,219 @@ fn a_blender_prediction_over_a_rectangle_prepares_the_neighbors_of_every_page_it
         assert!(engine.can_undo(), "{label} Dither contact should commit");
     }
 }
+
+struct Wash {
+    engine:layer_engine::CanvasEngine<WgpuRasterizer>,
+    input:layer_engine::InputProducer<layer_engine::PenEvent>,
+    view:layer_render::ViewState,
+    photo:Arc<SourceImage>,
+    gated:Vec<(Arc<SourceImage>,[u32;2])>,
+    clock:u64,
+    events:u64,
+}
+#[derive(Clone,Copy,Debug)]
+struct Sample {clock:u64,dabs:u64,composed:u64,contact:Option<u64>}
+struct Washed {samples:Vec<[u64;3]>,lifted:Vec<[u32;4]>,settled:Vec<[u32;4]>,exported:Vec<u8>}
+impl Wash {
+    const TICK:u64=16_666_667;
+    const ROW:f32=1400.;
+    const NEIGHBOURS:[[u32;2];2]=[[8,3],[8,7]];
+    fn path()->Vec<f32> {(0..=16).map(|step|1100.+100.*step as f32).collect()}
+    fn new(preset:DefaultBrushPreset,gated:&[[u32;2]],offset:[i64;2])->(Self,Vec<crate::test_support::GatedStore>) {
+        use layer_engine::{CanvasEngine,InstantFeedbackConfig,PenPhase,ViewTransform,input_queue};
+        let (extent,zoom)=([4000,3000],0.25);
+        let mut doc=document_at(extent);
+        occurrence_mut(&mut doc,0).offset=offset;reindex(&mut doc);
+        let photo=doc.scene().paint_base(doc.active_target().unwrap()).unwrap().image.storage().clone();
+        let mut view=crate::test_support::view([512,384]);
+        view.document_to_surface=[zoom,0.,0.,zoom,256.-zoom*extent[0] as f32/2.,192.-zoom*extent[1] as f32/2.];
+        let [_,_,_,_,x,y]=view.document_to_surface;
+        let (input,consumer)=input_queue(64);
+        let mut engine=CanvasEngine::new(renderer(&doc),doc,consumer,view,ViewTransform {revision:1,surface_to_document:[1./zoom,0.,0.,1./zoom,-x/zoom,-y/zoom]}).unwrap();
+        let brush=layer_core::BrushSnapshot {diameter:30.,..layer_core::default_brush(preset)};
+        let watercolor=brush.execution_class()==layer_core::BrushExecution::Watercolor;
+        engine.set_brush(brush).unwrap();
+        engine.set_instant_feedback(InstantFeedbackConfig {use_platform_prediction:false,..Default::default()}).unwrap();
+        let mut wash=Self {engine,input,view,photo,gated:Vec::new(),clock:1_000_000_000,events:0};
+        settle_engine(&mut wash.engine,&mut wash.clock);
+        if watercolor {
+            for step in 0..=3 {wash.pen(if step==0 {PenPhase::Down}else {PenPhase::Move},[1100.+60.*step as f32,2180.]);}
+            wash.pen(PenPhase::Up,[1280.,2180.]);
+            settle_engine(&mut wash.engine,&mut wash.clock);
+        }
+        let stores=gated.iter().map(|tile| {
+            let mut stored=(*wash.photo).clone();stored.tiles.retain(|coordinate,_|coordinate==tile);
+            crate::test_support::GatedStore::new(&layer_core::raster_storage::RetainedTiles::from_sources([&stored]),false)
+        }).collect();
+        wash.gated=gated.iter().map(|tile|(wash.photo.clone(),*tile)).collect();
+        let r=wash.engine.backend_mut();
+        let samples=r.device.source_samples.clone();let limit=samples.stats().limit_bytes;
+        samples.set_limit(0);samples.trim_unused(usize::MAX);samples.set_limit(limit);
+        r.source_tiles.borrow().release_ready();r.source_tiles.borrow_mut().retire_evicted();
+        assert!(wash.clock<600_000_000_000,"the fixture settles within its clock");
+        wash.clock=600_000_000_000;
+        (wash,stores)
+    }
+    fn fill_speculative_decodes(&mut self)->crate::test_support::GatedStore {
+        let filler=rgba8_source([8*PAGE_SIZE,4*PAGE_SIZE],|x,y|[x as u8,y as u8,7,255]);
+        let store=crate::test_support::GatedStore::new(&layer_core::raster_storage::RetainedTiles::from_sources([filler.as_ref()]),false);
+        let r=self.engine.backend_mut();
+        let admitted=page_coordinates(PixelRect::full(filler.extent)).take_while(|tile|
+            r.request_exact_image_decode(filler.tiles[tile].resource_id(),filler.clone(),*tile,Class::Prefetch).unwrap()).count();
+        assert!((1..32).contains(&admitted),"the speculative decode bound admits some requests and refuses the next: {admitted}");
+        self.gated.extend(page_coordinates(PixelRect::full(filler.extent)).take(admitted).map(|tile|(filler.clone(),tile)));
+        store
+    }
+    fn release(&mut self,stores:&[crate::test_support::GatedStore]) {
+        for store in stores {store.gate.release();}
+        self.gated.clear();
+    }
+    fn awaits(&self,tile:[u32;2])->Option<Class> {self.engine.backend().moving_decode.as_ref().and_then(|(_,queue)|queue.awaits_image(&self.photo,tile))}
+    fn tiles(&self,held:impl Fn(&crate::scene::sources::DecodedTiles,[u32;2])->bool)->Vec<[u32;2]> {
+        let cache=self.engine.backend().source_tiles.borrow();
+        page_coordinates(PixelRect::full(self.photo.extent)).filter(|tile|held(&cache,*tile)).collect()
+    }
+    fn leased(&self)->Vec<[u32;2]> {self.tiles(|cache,tile|cache.leases_image(&self.photo,tile)==Some(true))}
+    fn resident(&self)->Vec<[u32;2]> {self.tiles(|cache,tile|cache.resident_format(&self.photo,tile).is_some())}
+    fn arrive(&mut self) {
+        let (r,gated)=(self.engine.backend_mut(),&self.gated);
+        crate::test_support::wait_until("the requested decodes arrive",|| {
+            let awaited=r.moving_decode.as_ref().map_or(0,|(_,queue)|queue.awaited()-gated.iter().filter(|(source,tile)|queue.awaits_image(source,*tile).is_some()).count());
+            if awaited==0 && r.source_results.is_empty() {return Ok(());}
+            crate::test_support::submit_encoded(r,|r,encoder|r.drain_image_decodes(encoder).unwrap());
+            Err(awaited)
+        });
+    }
+    fn pen(&mut self,phase:layer_engine::PenPhase,[x,y]:[f32;2])->Sample {
+        use layer_engine::{PenEvent,PenPhase,SampleFlags};
+        self.events+=1;self.clock+=Self::TICK;
+        let [zoom,_,_,_,tx,ty]=self.view.document_to_surface;
+        self.input.push(PenEvent {timestamp_ns:self.clock,view_revision:1,pressure:if phase==PenPhase::Up {0.}else {1.},
+            ..crate::test_support::pen(self.events,phase,[x*zoom+tx,y*zoom+ty],SampleFlags::PRIMARY)}).unwrap();
+        let (counts,dabs)=(crate::test_support::PassCounts::snapshot(),self.engine.backend().metrics.dabs);
+        let deadline=std::time::Instant::now()+crate::READBACK_TIMEOUT;
+        loop {
+            self.engine.render_frame_at(self.clock).unwrap();self.engine.backend_mut().wait_idle().unwrap();
+            if !self.engine.has_pending_input() && !self.engine.has_pending_document_edits() {break;}
+            assert!(std::time::Instant::now()<deadline,"sample {} is consumed",self.events);
+            if phase==PenPhase::Up {self.clock+=Self::TICK;}
+        }
+        let r=self.engine.backend();
+        Sample {clock:self.clock,dabs:r.metrics.dabs-dabs,composed:crate::test_support::PassCounts::snapshot().delta(counts).composed_texels,contact:r.scale_display.as_ref().unwrap().contact_id()}
+    }
+    fn stroke(&mut self,path:&[f32],mut after:impl FnMut(&mut Self,usize,Sample))->Vec<Sample> {
+        path.iter().enumerate().map(|(step,x)| {
+            let sample=self.pen(if step==0 {layer_engine::PenPhase::Down}else {layer_engine::PenPhase::Move},[*x,Self::ROW]);
+            after(self,step,sample);
+            self.arrive();
+            sample
+        }).collect()
+    }
+    fn lift(mut self,path:&[f32],samples:&[Sample])->Washed {
+        self.pen(layer_engine::PenPhase::Up,[*path.last().unwrap(),Self::ROW]);
+        let lifted=bits(self.engine.backend());
+        settle_engine(&mut self.engine,&mut self.clock);
+        let settled=bits(self.engine.backend());
+        let exported=self.engine.backend_mut().readback_srgb_rgba8().unwrap();
+        Washed {samples:samples.iter().map(|sample|[sample.clock-samples[0].clock,sample.dabs,sample.composed]).collect(),lifted,settled,exported}
+    }
+}
+fn in_one_contact(samples:&[Sample])->bool {samples[1].contact.is_some() && samples[1..].iter().all(|sample|sample.contact==samples[1].contact)}
+
+fn a_watercolor_stroke_asks_for_the_stored_neighbours_of_its_next_tiles_one_move_before_it_reads_them(preset:DefaultBrushPreset) {
+    let path=Wash::path();
+    let (mut wash,_)=Wash::new(preset,&[],[0;2]);
+    let samples=wash.stroke(&path,|_,_,_|{});
+    assert!(in_one_contact(&samples) && samples[1..].iter().all(|sample|sample.dabs>0 && sample.composed>0),"{preset:?}: every Move of a stroke over cold photo tiles composes in its contact: {samples:?}");
+    let control=wash.lift(&path,&samples);
+
+    let (mut wash,stores)=Wash::new(preset,&Wash::NEIGHBOURS,[0;2]);
+    let fill=wash.fill_speculative_decodes();
+    let (mut read,mut held)=(None,Vec::new());
+    let samples=wash.stroke(&path,|wash,step,sample| {
+        let awaited=Wash::NEIGHBOURS.map(|tile|wash.awaits(tile));
+        if read.is_none() && awaited.iter().any(Option::is_some) {
+            read=Some((step,awaited,sample));held=wash.leased();
+            wash.release(&stores);fill.gate.release();
+        } else if read.is_some_and(|(read,..)|step==read+1) {
+            let leased=wash.leased();
+            assert!(held.iter().all(|tile|leased.contains(tile)),"{preset:?}: the contact keeps the tiles it leased across the held Move: {held:?} then {leased:?}");
+        }
+    });
+    let (read,awaited,waited)=read.unwrap_or_else(||panic!("{preset:?}: the stroke reads its far neighbours"));
+    assert_eq!(awaited,[Some(Class::Visible);2],"{preset:?}: with the speculative decode bound full, Move {read} asks for the tiles as it reads them");
+    assert!(waited.dabs>0 && waited.composed==0,"{preset:?}: Move {read} paints and holds its picture for the tiles: {waited:?}");
+    assert!(in_one_contact(&samples) && samples[read+1].composed>0,"{preset:?}: the contact composes again on the Move after the tiles arrive: {samples:?}");
+    let starved=wash.lift(&path,&samples);
+    assert!(starved.samples.iter().zip(&control.samples).all(|(starved,control)|starved[..2]==control[..2]),"{preset:?}: a held Move accepts the same dabs on the same clock");
+    assert!(starved.settled==control.settled && starved.exported==control.exported,"{preset:?}: a stroke that held a Move settles and exports the same picture");
+
+    let (mut wash,stores)=Wash::new(preset,&Wash::NEIGHBOURS,[0;2]);
+    let mut asked=None;
+    let samples=wash.stroke(&path,|wash,step,_| {
+        let awaited=Wash::NEIGHBOURS.map(|tile|wash.awaits(tile));
+        if asked.is_none() && awaited.iter().any(Option::is_some) {asked=Some((step,awaited));wash.release(&stores);}
+    });
+    assert_eq!(asked,Some((read-1,[Some(Class::Prefetch);2])),"{preset:?}: the Move before Move {read} asks for the tiles Move {read} reads");
+    let ahead=wash.lift(&path,&samples);
+    assert_eq!(ahead.samples,control.samples,"{preset:?}: every Move accepts the same dabs on the same clock and composes the same texels");
+    assert!(ahead.lifted==control.lifted,"{preset:?}: the picture at pen-up is the control's");
+    assert!(ahead.settled==control.settled && ahead.exported==control.exported,"{preset:?}: the settled and exported pictures are the control's");
+}
+
+#[test]
+fn a_wet_watercolor_stroke_asks_for_the_stored_neighbours_of_its_next_tiles_one_move_before_it_reads_them() {
+    a_watercolor_stroke_asks_for_the_stored_neighbours_of_its_next_tiles_one_move_before_it_reads_them(DefaultBrushPreset::WetWatercolor);
+}
+
+#[test]
+fn a_watercolor_wash_stroke_asks_for_the_stored_neighbours_of_its_next_tiles_one_move_before_it_reads_them() {
+    a_watercolor_stroke_asks_for_the_stored_neighbours_of_its_next_tiles_one_move_before_it_reads_them(DefaultBrushPreset::WatercolorWash);
+}
+
+#[test]
+fn a_watercolor_stroke_on_a_layer_off_the_page_grid_composes_on_every_move_over_cold_photo_tiles() {
+    let path=Wash::path();
+    let (mut wash,_)=Wash::new(DefaultBrushPreset::WetWatercolor,&[],[5,7]);
+    let samples=wash.stroke(&path,|_,_,_|{});
+    assert!(samples[1..].iter().all(|sample|sample.dabs>0 && sample.composed>0),"every Move paints and composes: {samples:?}");
+    wash.lift(&path,&samples);
+}
+
+#[test]
+fn a_pencil_stroke_asks_ahead_only_for_the_stored_tiles_under_its_next_dabs() {
+    let path=Wash::path();
+    let (mut wash,stores)=Wash::new(DefaultBrushPreset::Pencil,&Wash::NEIGHBOURS,[0;2]);
+    let mut asked=BTreeSet::new();
+    let samples=wash.stroke(&path,|wash,_,_|asked.extend(page_coordinates(PixelRect::full(wash.photo.extent)).filter(|tile|wash.awaits(*tile)==Some(Class::Prefetch))));
+    assert!(in_one_contact(&samples) && samples[1..].iter().all(|sample|sample.dabs>0 && sample.composed>0),"every Move composes in its contact: {samples:?}");
+    assert!(!asked.is_empty() && asked.iter().all(|tile|tile[1]==(Wash::ROW as u32)/PAGE_SIZE),"a Pencil asks ahead for tiles in the row it draws on: {asked:?}");
+    assert!(stores.iter().all(|store|store.gate.reads.load(std::sync::atomic::Ordering::Acquire)==0),"no read reaches the tiles two rows from the stroke");
+    wash.release(&stores);
+    wash.lift(&path,&samples);
+}
+
+#[test]
+fn a_watercolor_stroke_that_turns_back_leaves_the_tiles_it_asked_for_and_never_read_unleased() {
+    let preset=DefaultBrushPreset::WetWatercolor;
+    let path:Vec<f32>=Wash::path()[..=8].iter().copied().chain([1800.,1700.,1600.,1500.]).collect();
+    let (mut wash,_)=Wash::new(preset,&[],[0;2]);
+    let samples=wash.stroke(&path,|_,_,_|{});
+    let control=wash.lift(&path,&samples);
+
+    let (mut wash,_)=Wash::new(preset,&[],[0;2]);
+    let mut asked=Vec::new();
+    let samples=wash.stroke(&path,|wash,step,_|if step==8 {asked=page_coordinates(PixelRect::full(wash.photo.extent)).filter(|tile|wash.awaits(*tile)==Some(Class::Prefetch)).collect();});
+    assert!(in_one_contact(&samples) && samples[1..].iter().all(|sample|sample.composed>0),"every Move composes in its contact: {samples:?}");
+    let (leased,resident)=(wash.leased(),wash.resident());
+    let spare:Vec<_>=asked.iter().copied().filter(|tile|!leased.contains(tile)).collect();
+    assert!(!spare.is_empty() && spare.iter().all(|tile|resident.contains(tile)),"the Move before the turn asked for tiles ahead that the stroke never read: asked {asked:?}, leased {leased:?}, resident {resident:?}");
+    let r=wash.engine.backend_mut();
+    r.source_tiles.borrow().release_ready();r.source_tiles.borrow_mut().retire_evicted();
+    let kept=wash.resident();
+    assert!(spare.iter().all(|tile|!kept.contains(tile)),"releasing unleased decoded tiles takes the tiles never read: {spare:?} of {kept:?}");
+    assert!(wash.leased()==leased && resident.iter().filter(|tile|leased.contains(*tile)).all(|tile|kept.contains(tile)),"and none the contact leases: {leased:?} of {kept:?}");
+    let turned=wash.lift(&path,&samples);
+    assert_eq!(turned.samples,control.samples,"every Move accepts the same dabs on the same clock and composes the same texels");
+    assert!(turned.settled==control.settled && turned.exported==control.exported,"the settled and exported pictures are the control's");
+}

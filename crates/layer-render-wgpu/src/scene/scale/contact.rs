@@ -13,6 +13,7 @@ pub(super) struct Contact {
     composed:crate::raster::contents::Versions,
     predicted:BTreeSet<[u32;2]>,
     previewed:BTreeSet<[u32;2]>,
+    ahead:BTreeSet<[u32;2]>,
     next:Option<(crate::raster::contents::Versions,BTreeSet<[u32;2]>,BTreeSet<[u32;2]>,BTreeSet<[u32;2]>)>,
     footprints:Vec<(PixelRect,Vec<usize>)>,
     tainted:crate::IdSet<usize>,
@@ -120,6 +121,33 @@ fn reads(node:&graph::Node,target:SourceTarget,tainted:&mut crate::IdSet<usize>)
 
 fn source_phase(scene:&Scene,target:SourceTarget)->[u32;2] {scene.scale_sources.entries.get(&target).map_or([0;2],|source|source.phase)}
 fn phased_tiles(tile:[u32;2],phase:[u32;2])->impl Iterator<Item=[u32;2]> {page_coordinates(page_rect(tile).translated(phase))}
+fn native_tiles(area:PixelRect,phase:[u32;2],extent:[u32;2])->impl Iterator<Item=[u32;2]> {
+    page_coordinates(DocRect::from(area).translated(phase.map(|by|-i64::from(by))).in_frame(extent))
+}
+fn members(wet:bool,tiles:impl Iterator<Item=[u32;2]>)->BTreeSet<[u32;2]> {
+    if wet {tiles.flat_map(crate::scene::watercolor_stencil).flatten().collect()}else {tiles.collect()}
+}
+fn swept(reach:PixelRect,[dx,dy]:[f32;2],stride:u32)->impl Iterator<Item=PixelRect> {
+    let steps=(dx.abs().max(dy.abs())/stride as f32).ceil() as u32;
+    (0..=steps).map(move|step|{let t=step as f32/steps.max(1) as f32;let [x,y]=[(dx*t).round() as i64,(dy*t).round() as i64];
+        let shift=|value:u32,by:i64|(i64::from(value)+by).clamp(0,i64::from(u32::MAX)) as u32;
+        PixelRect::new(shift(reach.min_x(),x),shift(reach.min_y(),y),shift(reach.max_x(),x),shift(reach.max_y(),y))})
+}
+fn request_ahead(r:&mut WgpuRasterizer,scene:SceneView<'_>,frame:&Arc<SignatureFrame>,encoder:&mut submission::CommandEncoder,target:SourceTarget,phase:[u32;2],
+    tiles:impl Iterator<Item=[u32;2]>,
+) {
+    let (wet,extent)=(frame.watercolor(target),scene.target_extent(target));
+    let read=members(wet,tiles);
+    if read.is_empty() {return;}
+    let declared=crate::scene::sources::declare(Default::default(),crate::scene::sources::Declaration::scene(frame.clone(),Some(encoder.submission())),|accepted| {
+        for tile in read.into_iter().flat_map(|tile|native_tiles(page_rect(tile),phase,extent)) {
+            accepted.color(r,scene,target,tile)?;
+            if wet {accepted.scalar(r,scene,target,layer_core::raster::RasterPlane::WatercolorWetness,tile)?;}
+        }
+        Ok(())
+    });
+    if let Ok(stored)=declared {drop(stored.request(r,Class::Prefetch));}
+}
 fn local_reach(packet:FramePacket<'_>,target:SourceTarget,phase:[u32;2])->Vec<PixelRect> {
     let extent=packet.scene.target_extent(target);
     packet.dab_batches.iter().map(|batch|crate::pixel_rect::pixel_rect(batch.damage,extent)).filter(|reach|!reach.is_empty()).map(|reach|reach.translated(phase)).collect()
@@ -133,8 +161,7 @@ fn stroke(packet:FramePacket<'_>)->Option<(layer_core::StrokeId,SourceTarget)> {
 impl Contact {
     fn reduced_tiles(&self,phase:[u32;2],reach:impl Iterator<Item=[u32;2]>)->BTreeSet<[u32;2]> {
         let changed=self.next.iter().flat_map(|(_,changed,..)|changed.iter().flat_map(|tile|phased_tiles(*tile,phase)));
-        let tiles=reach.chain(changed).chain(self.stale.keys().copied());
-        if self.frame.watercolor(self.target) {tiles.flat_map(crate::scene::watercolor_stencil).flatten().collect()}else {tiles.collect()}
+        members(self.frame.watercolor(self.target),reach.chain(changed).chain(self.stale.keys().copied()))
     }
 }
 
@@ -147,17 +174,26 @@ impl Cache {
         let (level,extent,bounds)=(self.plan.level,self.plan.extent,self.plan.bounds);let span=PAGE_SIZE<<level;
         let near=|reach:PixelRect|PixelRect::new(reach.min_x().saturating_sub(span),reach.min_y().saturating_sub(span),
             reach.max_x().saturating_add(span),reach.max_y().saturating_add(span)).intersect(bounds);
-        let swept=|reach:PixelRect|{
+        let back=|reach:PixelRect|{
             let centre=[(reach.min_x()+reach.max_x()) as f32*0.5,(reach.min_y()+reach.max_y()) as f32*0.5];
-            let [dx,dy]=from.map_or([0.;2],|[x,y]|[x-centre[0],y-centre[1]]);
-            let steps=(dx.abs().max(dy.abs())/span as f32).ceil() as u32;
-            (0..=steps).map(move|step|{let t=step as f32/steps.max(1) as f32;let [x,y]=[(dx*t).round() as i64,(dy*t).round() as i64];
-                let shift=|value:u32,by:i64|(i64::from(value)+by).clamp(0,i64::from(u32::MAX)) as u32;
-                PixelRect::new(shift(reach.min_x(),x),shift(reach.min_y(),y),shift(reach.max_x(),x),shift(reach.max_y(),y))})
+            swept(reach,from.map_or([0.;2],|[x,y]|[x-centre[0],y-centre[1]]),span)
         };
-        let coordinates:BTreeSet<[u32;2]>=dab_reach(packet,extent).flat_map(swept).map(near).chain(touched.iter().map(|cell|cell.intersect(bounds)))
+        let coordinates:BTreeSet<[u32;2]>=dab_reach(packet,extent).flat_map(back).map(near).chain(touched.iter().map(|cell|cell.intersect(bounds)))
             .flat_map(|reach|pages::coordinates(reach,level)).collect();
         coordinates.into_iter().map(|coordinate|pages::bounds(coordinate,level,extent)).collect()
+    }
+    fn stroke_lead(&self,scene:&Scene,view:SceneView<'_>,target:SourceTarget,wet:bool,scope:&[PixelRect],from:Option<[f32;2]>)->BTreeSet<[u32;2]> {
+        let Some(source)=scene.scale_sources.entries.get(&target) else {return BTreeSet::new();};
+        let heading=self.pointer.zip(from).map_or([0.;2],|(now,from)|[now[0]-from[0],now[1]-from[1]]);
+        let placed=source_frame(Some(&scene.scale_sources),view,target);
+        let tiles=source.damage.regions.iter().flat_map(|damage|swept(*damage,heading,PAGE_SIZE))
+            .flat_map(|damage|native_tiles(damage,source.phase,source.extent)).flat_map(|tile|phased_tiles(tile,source.phase));
+        let mut lead=members(wet,tiles);
+        lead.retain(|tile| {
+            let area=placed.document(page_rect(*tile)).in_frame(self.plan.extent);
+            scope.iter().any(|cell|!cell.intersect(area).is_empty())
+        });
+        lead
     }
     pub(super) fn dab_cells(&self,packet:FramePacket<'_>)->Vec<PixelRect> {
         if stroke(packet).is_none() {return Vec::new();}
@@ -259,12 +295,14 @@ impl Cache {
         let tiled=self.tiled(r,packet,scene,&root);
         let plan=self.plan;
         let required=self.dab_cells(packet).into_iter().chain(touched.iter().filter(|cell|!cell.intersect(plan.bounds).is_empty()).copied()).collect::<Vec<_>>();
+        let ahead=self.stroke_lead(scene,packet.scene,target,frame.watercolor(target),&scope,None);
         let ready=scope.into_iter().filter(|cell|!self.pivot_missing(*cell)).collect::<Vec<_>>();
         if required.iter().any(|cell|!ready.contains(cell)) {return Ok(());}
         let reach=local_reach(packet,target,source_phase(scene,target));
         let reduced=reach.iter().copied().flat_map(page_coordinates).collect();
         let Some(Declared {cells,inputs,pages,level})=self.declare_contact(scene,r,packet,encoder,retained,budget,&frame,&root,target,tiled,None,ready,&required,reach)? else {return Ok(());};
         if required.iter().any(|region|!cells.iter().any(|(cell,_)|cell==region)) {return Ok(());}
+        request_ahead(r,packet.scene,&frame,encoder,target,source_phase(scene,target),ahead.iter().copied());
         let footprints=frame.reader_regions(target,self.plan.level).into_iter().map(|(local,regions)|(local,regions.into_iter().flat_map(|region|self.reached_cells(region)).collect())).collect();
         let mut tainted=crate::IdSet::default();reads(&root,target,&mut tainted);
         let drawn_directly=drawn_directly(&root,&tainted);
@@ -274,6 +312,7 @@ impl Cache {
         let previewed=r.preview_input_tiles(target);let stale=previewed.iter().map(|tile|(*tile,page_rect(*tile))).collect();
         self.gesture=Some(Contact {id:NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed),stroke,target,plan:self.plan,window,root,tiled,frame,composed,predicted,
             previewed,next:None,
+            ahead,
             footprints,tainted,guard,generation:std::sync::Mutex::new(generation),exit:std::sync::OnceLock::new(),preview_level,cells,inputs,pages,level,
             stale,written:IdMap::default(),submissions:Vec::new(),stamps:Arc::default(),reduced,baselines:BTreeMap::new(),drawn_directly,reduced_from:BTreeMap::new()});
         Ok(())
@@ -292,6 +331,11 @@ impl Cache {
             .into_iter().filter(|tile|!contact.reduced.contains(tile)).collect::<Vec<_>>();
         let reach=tiles.iter().copied().map(page_rect).collect::<Vec<_>>();
         let scope=self.stroke_scope(packet,reached,from);
+        let mut ahead=self.stroke_lead(scene,packet.scene,target,frame.watercolor(target),&scope,from);
+        ahead.extend(&tiles);
+        ahead.retain(|tile|!contact.ahead.contains(tile));
+        request_ahead(r,packet.scene,&frame,encoder,target,phase,ahead.iter().copied());
+        self.gesture.as_mut().expect("live contact").ahead.extend(ahead);
         let view=work_view(packet,0);
         let mut waiting=self.contact_cells().into_iter().filter(|cell|!known.contains(cell) && !scope.contains(cell) && self.keyless(*cell)).collect::<Vec<_>>();
         waiting.sort_by_key(|cell|centre_distance(view,*cell));
