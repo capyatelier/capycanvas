@@ -299,7 +299,7 @@ impl WgpuRasterizer {
         self.validate_and_prepare_brush_resources(packet.dab_batches)?;
         let mut tiles = packet.dab_batches.iter().map(|batch| {
             let dabs = &packet.dabs[batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize];
-            brush_tiles::plan(batch, dabs, self.target_extent(batch.target))
+            brush_tiles::plan(batch, dabs, self.target_extent(batch.target), packet.scene.color_mode(batch.target))
         }).collect::<Vec<_>>();
         let quality=scene::PreviewQuality {level:self.preview_level,contribution:self.preview_contribution,requires_base:self.preview_requires_base};
         let declaration=self.preview_declaration.clone();

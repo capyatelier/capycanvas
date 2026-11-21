@@ -1514,7 +1514,7 @@ pub(super) mod tests {
         let (document,target)=document();let mut style=layer_render::DabStyle::for_brush(&layer_core::BrushSnapshot::default(),layer_core::StrokeTool::Brush);style.execution=BrushExecution::Watercolor;
         let mut batch=dab_batch(target,style,PixelRect::new(240,16,255,48).to_rect());batch.kind=DabBatchKind::Preview;
         let program=declaration(&document,&[batch.clone()],&[preview_dab(250.)],None);
-        let planned=brush_tiles::plan(&batch,&[preview_dab(250.)],document.scene().target_extent(target));
+        let planned=brush_tiles::plan(&batch,&[preview_dab(250.)],document.scene().target_extent(target),Default::default());
         assert_eq!(program.commands[0].outputs,planned.into_iter().map(|tile|tile.coordinate).collect());
         assert!(program.affects(page_rect([0;2])));assert!(!program.affects(page_rect([1,0])));
         assert!(matches!(program.page_stage(RasterPlane::Color,[1,0],PreviewStage::Final),PreviewStage::Seed));

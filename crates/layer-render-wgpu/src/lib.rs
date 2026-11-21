@@ -6702,6 +6702,10 @@ use layer_render::{DabBatchKind, DabStyle, FramePacket, ViewState};
         }
     }
 
+    pub(crate) fn unfed_erase_style() -> DabStyle {
+        DabStyle { mode: DabMode::Erase, ..test_style(BrushExecution::Dry) }
+    }
+
     #[test]
     fn thumbnails_frame_nontransparent_pixels_and_show_paper_and_checkerboard() {
         let mut r = WgpuRasterizer::new_native_headless(Default::default()).expect("physical GPU required");
