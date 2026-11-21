@@ -1864,7 +1864,7 @@ fn keeps_its_ink_outside_the_canvas(label:&str,doc:&Document,mut r:WgpuRasterize
     assert!(inked>0,"{label}: the layer's pages keep the ink drawn outside the canvas");
 }
 const PAST_THE_CANVAS:[(&str,DefaultBrushPreset,usize,bool);3]=[("a Pencil",DefaultBrushPreset::Pencil,1,true),("an eraser",DefaultBrushPreset::Eraser,1,true),
-    ("a Dither blender",DefaultBrushPreset::DitherBlender,0,false)];
+    ("a Dither blender whose dabs move no paint",DefaultBrushPreset::DitherBlender,0,false)];
 
 #[test]
 fn a_stroke_on_the_part_of_an_offset_layer_outside_the_canvas_composes_whole_cells_and_keeps_its_ink() {
