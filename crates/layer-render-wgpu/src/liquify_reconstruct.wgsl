@@ -70,6 +70,7 @@ fn prior_value(pixel: vec2<i32>, block: u32) -> vec4<u32> {
 }
 
 fn current_average(pixel: vec2<i32>, block: u32) -> vec4<f32> {
+    if block == 1u { return textureLoad(current_color, pixel, 0); }
     var color = vec4(0.);
     for (var y = 0u; y < block; y++) {
         for (var x = 0u; x < block; x++) {
