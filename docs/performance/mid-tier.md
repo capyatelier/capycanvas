@@ -64,6 +64,23 @@ G-Pen and Soft Blender miss it on both builds: their stroke frames compose
 whole cells. Liquify's texel medians come from one trace per build; its means
 are 1,370,795 → 1,387,240.
 
+### Blender predictions
+
+Measured 2026-11-21 against `965dded42`: benchmark APKs in ABBA order, candidate
+`b71f225d6`, which prepares the neighbours of every page a blender's prediction
+writes. Each row has six five-second strokes per build with a 512 px brush on
+the 12 MP photo under an empty paint layer, default workspace, factory density
+and thermal status 0. The canvas is the low tier's, not this tier's 24 MP
+canvas; the panel ran at 90 Hz.
+
+| Row | Completed updates/s, control → candidate | Completed p99 gap ms | Fresh input updates/s | Fresh input p99 gap ms |
+| --- | ---: | ---: | ---: | ---: |
+| Dither Blender, 100% | 60.98 → 61.37 | 30.70 → 30.17 | 60.98 → 61.37 | 30.70 → 30.17 |
+| Scatter Blender, 100% | 65.33 → 65.65 | 28.93 → 28.66 | 65.33 → 65.65 | 28.93 → 28.66 |
+
+Both blenders miss the target on both builds: their stroke frames compose whole
+cells.
+
 ## Stored image-source format comparison
 
 Measured 2026-11-06–07: frozen `01fe577d9` → format commit 1 candidate APK

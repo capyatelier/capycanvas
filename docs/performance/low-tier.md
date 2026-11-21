@@ -44,6 +44,26 @@ Clone Stamp holds the target on the candidate. Liquify Push, the wet-edged
 G-Pen and Soft Blender miss it on both builds: their stroke frames compose
 whole cells.
 
+### Blender predictions
+
+Measured 2026-11-21 against `965dded42`: benchmark APKs in ABBA order, candidate
+`b71f225d6`, which prepares the neighbours of every page a blender's prediction
+writes. Each row has six five-second strokes per build with a 512 px brush on
+the 12 MP photo under an empty paint layer, default workspace, factory density
+and thermal status 0.
+
+| Row | Completed updates/s, control → candidate | Completed p99 gap ms | Fresh input updates/s | Fresh input p99 gap ms |
+| --- | ---: | ---: | ---: | ---: |
+| Dither Blender, 100% | 33.49 → 33.43 | 52.22 → 51.43 | 33.49 → 33.43 | 52.22 → 51.43 |
+| Scatter Blender, 100% | 40.21 → 40.28 | 48.33 → 47.06 | 40.21 → 40.28 | 48.33 → 47.06 |
+| Dither Blender, Fit, painting the photo | stops → 34.15 | stops → 49.00 | stops → 34.15 | stops → 49.00 |
+| Scatter Blender, Fit, painting the photo | 36.04 → 35.85 | 54.41 → 53.38 | 36.04 → 35.85 | 54.41 → 53.38 |
+
+On the control a Dither Blender stroke on the photo at Fit stops the canvas with
+"brush input is not prepared"; Scatter completed five of its six strokes there.
+Both blenders miss the target on both builds: their stroke frames compose whole
+cells, 1,179,648 texels per frame at 100% on both.
+
 ## Settled Fit half-float presentation
 
 Measured 2026-11-11: `3a98291d7` → `440f2dbff`, release Rust/unminified

@@ -41,6 +41,23 @@ difference changed sign between rounds. The wet-edged G-Pen misses the target
 on both builds. Liquify Push, the wet-edged G-Pen and Soft Blender compose
 whole cells in their stroke frames.
 
+### Blender predictions
+
+Measured 2026-11-21 against `965dded42`: benchmark APKs in ABBA order, candidate
+`b71f225d6`, which prepares the neighbours of every page a blender's prediction
+writes. Each row has six five-second strokes per build with a 512 px brush on
+the 12 MP photo under an empty paint layer, default workspace, factory density
+and thermal status 0. The canvas is the low tier's, not this tier's 61 MP
+canvas. The control has four strokes per row.
+
+| Row | Completed updates/s, control → candidate | Completed p99 gap ms | Fresh input updates/s | Fresh input p99 gap ms |
+| --- | ---: | ---: | ---: | ---: |
+| Dither Blender, 100% | 114.01 → 115.28 | 20.96 → 20.48 | 113.51 → 115.18 | 21.13 → 20.48 |
+| Scatter Blender, 100% | 155.90 → 155.13 | 15.93 → 16.55 | 145.60 → 145.60 | 17.57 → 17.96 |
+
+Dither Blender misses the target on both builds. Both blenders compose whole
+cells in their stroke frames, 1,179,648 texels per frame on both builds.
+
 ## Settled Fit half-float presentation
 
 Measured 2026-11-11: `3a98291d7` → `440f2dbff`, release Rust/unminified
