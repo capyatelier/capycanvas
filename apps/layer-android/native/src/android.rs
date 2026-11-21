@@ -486,6 +486,7 @@ impl App {
                 .checked_add(1)
                 .ok_or("GPU generation exhausted")?;
             self.gpu_watch = gpu.watch;
+            self.host.watch_device(&self.gpu_watch);
             let renderer = layer_host::GpuContext::from_factory(gpu.factory).rasterizer(
                 self.host.session.engine().document().composition().color,
                 &self.host.renderer_options(),
@@ -1095,8 +1096,7 @@ pub extern "system" fn Java_art_capycanvas_Native_destroyGpuForTest(
             .0
             .as_ref()
             .ok_or("Missing test GPU")?
-            .device()
-            .destroy();
+            .destroy_device();
         Ok(())
     })();
     fail(&mut env, result);

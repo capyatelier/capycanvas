@@ -840,14 +840,14 @@ pub unsafe extern "C" fn capy_apple_test_gpu_fault(app: u64, validation: u32) ->
     let Some(mut lease_app)=handles::app(app) else { return -1; };
     let app=&mut *lease_app;
     app.perform(|a| {
-        let device = a.host.session.engine().backend().0.as_ref().ok_or("No test GPU")?.device();
+        let gpu = a.host.session.engine().backend().0.as_ref().ok_or("No test GPU")?;
         if validation == 1 {
-            let _invalid = device.create_buffer(&wgpu::BufferDescriptor {
+            let _invalid = gpu.device().create_buffer(&wgpu::BufferDescriptor {
                 label: Some("isolated invalid buffer"), size: 16,
                 usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::UNIFORM,
                 mapped_at_creation: false,
             });
-        } else if validation == 0 { device.destroy(); }
+        } else if validation == 0 { gpu.destroy_device(); }
         else { return Err("Unknown GPU fault".into()); }
         Ok(())
     }).map_or(-1, |_| 0)

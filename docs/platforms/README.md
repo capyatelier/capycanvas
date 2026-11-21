@@ -71,10 +71,14 @@ pacing on the target hardware.
 Native canvas devices come from `layer_host::request_device`, which installs a
 `DeviceWatch` before any renderer object exists, so a wgpu validation, memory or
 device-loss error is recorded for the host's existing GPU failure path instead
-of panicking on whichever thread raised it. Android, Apple and Windows enter
-shared Rust through `layer_host::contain`: a panic becomes an error, and the
-host refuses further calls with that cause rather than continuing on torn state
-or aborting the process. Android wraps every JNI function with `jni_entry!`.
+of panicking on whichever thread raised it. A render owner registers its wake
+with the watch of the device it installs, through `NativeHost::watch_device` or
+`DeviceWatch::wake_on_failure`. The first failure wakes each owner once, so an
+idle canvas reports a stopped GPU without waiting for a frame. Android, Apple
+and Windows enter shared Rust through `layer_host::contain`: a panic becomes an
+error, and the host refuses further calls with that cause rather than
+continuing on torn state or aborting the process. Android wraps every JNI
+function with `jni_entry!`.
 
 ## Storage and feature coverage
 
