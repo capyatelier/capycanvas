@@ -81,6 +81,18 @@ canvas; the panel ran at 90 Hz.
 Both blenders miss the target on both builds: their stroke frames compose whole
 cells.
 
+## Stroke patches below 100%
+
+Measured 2026-11-21 against `bd6ad1e02`: benchmark APKs in ABBA order, candidate
+`0b1138906`, which redraws only a stroke's damage in cells below full size. Each
+row has six five-second strokes per build at 25% on the 24 MP photo under an
+empty paint layer, with the default prediction. The panel ran at 90 Hz.
+
+| Row | Completed updates/s, control → candidate | Completed p99 gap ms | Fresh input updates/s | Fresh input p99 gap ms | Composed texels per moving frame |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Pencil 9 px | 285.96 → 310.63 | 6.00 → 5.07 | 197.69 → 197.78 | 9.41 → 8.25 | 131,072 → 3,808 |
+| G-Pen 18 px | 280.30 → 301.98 | 5.97 → 5.22 | 197.36 → 197.89 | 9.32 → 8.69 | 131,072 → 4,544 |
+
 ## Stored image-source format comparison
 
 Measured 2026-11-06–07: frozen `01fe577d9` → format commit 1 candidate APK

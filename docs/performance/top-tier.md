@@ -58,6 +58,17 @@ canvas. The control has four strokes per row.
 Dither Blender misses the target on both builds. Both blenders compose whole
 cells in their stroke frames, 1,179,648 texels per frame on both builds.
 
+## Stroke patches below 100%
+
+Measured 2026-11-21 against `bd6ad1e02`: benchmark APKs in ABBA order, candidate
+`0b1138906`, which redraws only a stroke's damage in cells below full size. The
+row has six five-second strokes per build at 25% on the 60.2 MP photo under an
+empty paint layer, with the default prediction.
+
+| Row | Completed updates/s, control → candidate | Completed p99 gap ms | Fresh input updates/s | Fresh input p99 gap ms | Composed texels per moving frame |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Pencil 9 px | 357.94 → 380.94 | 6.84 → 6.53 | 194.50 → 195.41 | 11.16 → 10.45 | 131,072 → 3,068 |
+
 ## Settled Fit half-float presentation
 
 Measured 2026-11-11: `3a98291d7` → `440f2dbff`, release Rust/unminified
