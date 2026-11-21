@@ -45,6 +45,25 @@ on the candidate. Three of the six candidate G-Pen strokes are among them. Both
 builds miss the 90 updates/s target at 1536 px; a stroke below 50% zoom is not
 patched.
 
+### Brush records
+
+Measured 2026-11-21 against `8d93dd1e9`: benchmark APKs in ABBA order, candidate
+`0f5b4fc72`. Each row has six five-second strokes per build at 100% on the 12 MP
+photo, not this tier's 24 MP canvas, under an empty paint layer, default
+workspace, factory density and thermal status 0. The panel ran at 90 Hz.
+
+| Row | Completed updates/s, control → candidate | Completed p99 gap ms | Fresh input updates/s | Fresh input p99 gap ms | Composed texels per frame |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Clone Stamp 512 px | 70.52 → 102.62 | 18.18 → 14.25 | 70.52 → 102.62 | 18.18 → 14.25 | 1,179,648 → 608,881 |
+| Liquify Push 512 px | 36.75 → 36.63 | 68.62 → 58.95 | 36.75 → 36.63 | 68.62 → 58.95 | 1,179,648 → 1,572,864 |
+| Wet-edged G-Pen 1024 px | 28.95 → 28.83 | 41.42 → 41.24 | 28.95 → 28.83 | 41.42 → 41.24 | 2,284,976 → 2,281,062 |
+| Soft Blender 512 px | 47.59 → 47.45 | 28.35 → 28.86 | 47.59 → 47.45 | 28.35 → 28.86 | 1,179,648 → 1,179,648 |
+
+Clone Stamp holds the target on the candidate. Liquify Push, the wet-edged
+G-Pen and Soft Blender miss it on both builds: their stroke frames compose
+whole cells. Liquify's texel medians come from one trace per build; its means
+are 1,370,795 → 1,387,240.
+
 ## Stored image-source format comparison
 
 Measured 2026-11-06–07: frozen `01fe577d9` → format commit 1 candidate APK

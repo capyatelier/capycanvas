@@ -26,6 +26,24 @@ status 0.
 Both builds miss the 60 updates/s target at 1024 px; a stroke below 50% zoom is
 not patched.
 
+### Brush records
+
+Measured 2026-11-21 against `8d93dd1e9`: benchmark APKs in ABBA order, candidate
+`0f5b4fc72`. Each row has six five-second strokes per build at 100% on the 12 MP
+photo under an empty paint layer, default workspace, factory density and thermal
+status 0.
+
+| Row | Completed updates/s, control → candidate | Completed p99 gap ms | Fresh input updates/s | Fresh input p99 gap ms | Composed texels per frame |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Clone Stamp 512 px | 44.12 → 64.80 | 30.97 → 25.55 | 44.12 → 64.70 | 30.97 → 25.89 | 1,179,648 → 614,329 |
+| Liquify Push 512 px | 21.59 → 21.45 | 119.30 → 124.31 | 21.59 → 21.45 | 119.30 → 124.31 | 1,572,864 → 1,572,864 |
+| Wet-edged G-Pen 1024 px | 15.55 → 15.55 | 77.32 → 78.87 | 15.55 → 15.55 | 77.32 → 78.87 | 2,339,976 → 2,363,904 |
+| Soft Blender 512 px | 26.68 → 26.62 | 51.53 → 50.47 | 26.68 → 26.62 | 51.53 → 50.47 | 1,179,648 → 1,179,648 |
+
+Clone Stamp holds the target on the candidate. Liquify Push, the wet-edged
+G-Pen and Soft Blender miss it on both builds: their stroke frames compose
+whole cells.
+
 ## Settled Fit half-float presentation
 
 Measured 2026-11-11: `3a98291d7` → `440f2dbff`, release Rust/unminified

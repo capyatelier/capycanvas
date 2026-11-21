@@ -21,6 +21,26 @@ thermal status 0.
 
 A stroke below 50% zoom is not patched.
 
+### Brush records
+
+Measured 2026-11-21 against `8d93dd1e9`: benchmark APKs in ABBA order, candidate
+`0f5b4fc72`. Each row has six five-second strokes per build at 100% on the 12 MP
+photo, not this tier's 61 MP canvas, under an empty paint layer, default
+workspace, factory density and thermal status 0. Clone Stamp has eighteen
+strokes per build.
+
+| Row | Completed updates/s, control → candidate | Completed p99 gap ms | Fresh input updates/s | Fresh input p99 gap ms | Composed texels per frame |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Clone Stamp 512 px | 228.97 → 226.18 | 13.43 → 14.00 | 168.11 → 166.18 | 16.27 → 16.77 | 1,179,648 → 598,410 |
+| Liquify Push 512 px | 140.57 → 140.91 | 18.44 → 17.45 | 135.88 → 133.93 | 18.92 → 18.62 | 1,179,648 → 1,179,648 |
+| Wet-edged G-Pen 1024 px | 86.97 → 88.13 | 31.26 → 28.95 | 86.97 → 88.06 | 31.26 → 28.95 | 3,014,656 → 3,014,656 |
+| Soft Blender 512 px | 215.31 → 215.22 | 13.15 → 13.17 | 167.13 → 167.59 | 16.35 → 16.68 | 1,179,648 → 1,179,648 |
+
+Clone Stamp composes half the texels at the same rate: its completed-rate
+difference changed sign between rounds. The wet-edged G-Pen misses the target
+on both builds. Liquify Push, the wet-edged G-Pen and Soft Blender compose
+whole cells in their stroke frames.
+
 ## Settled Fit half-float presentation
 
 Measured 2026-11-11: `3a98291d7` → `440f2dbff`, release Rust/unminified
