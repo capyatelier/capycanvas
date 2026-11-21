@@ -71,6 +71,7 @@ __declspec(dllimport) int32_t capy_test_display(CapyHost, bool hdr);
 __declspec(dllimport) int32_t capy_set_window(CapyHost, void* hwnd);
 /* Device loss is observed by the render owner. A poisoned host cannot recover. */
 __declspec(dllimport) bool capy_device_lost(CapyHost);
+__declspec(dllimport) int32_t capy_device_failure(CapyHost);
 /* CPU retirement after input admission stops; keep document services alive. */
 __declspec(dllimport) int32_t capy_suspend_renderer(CapyHost);
 /* Render-owner replacement with no acquired image; attach the new handle on XAML. */
