@@ -4356,6 +4356,7 @@ impl WgpuRasterizer {
         self.fit_grants();
         self.brush_inputs=None;
         self.watercolor_written.clear();
+        if let Some(scene)=&mut self.scene {scene.release_operation_scratch();}
         if let Err(error)=result {
             self.clear_preview_stamps();
             return Err(error);

@@ -50,7 +50,11 @@ fn painted(r: &mut WgpuRasterizer) -> Document {
 }
 
 fn erase_operation(selection: Selection, alpha_locked: bool) -> RasterOperation {
-    let mut coverage = reveal_all(EXTENT, [0, 0]);
+    erase_within(EXTENT, selection, alpha_locked)
+}
+
+fn erase_within(extent: [u32; 2], selection: Selection, alpha_locked: bool) -> RasterOperation {
+    let mut coverage = reveal_all(extent, [0, 0]);
     coverage.source.default_coverage = f32::from(selection.inverted);
     coverage.selection = Some(selection);
     RasterOperation {
@@ -377,4 +381,148 @@ fn bakes_freeze_mask_versions_and_keep_live_mask_pages_unchanged() {
     assert_eq!(document.artwork.coverage.get(mask).unwrap(), &live_source);
     assert_eq!(crate::test_support::mask_page_bytes(&r,mask_target,[0;2]), live_pixels);
     assert!(r.layer_masks.snapshots.is_empty(), "completed bakes release their private mask pages");
+}
+
+fn backing(layer: &Document) -> BTreeMap<TileKey, Vec<u8>> {
+    paint(layer).raster.wait_data().unwrap().tiles.iter()
+        .map(|(key, tile)| (*key, tile.wait_backing().unwrap().decode_on_worker().unwrap())).collect()
+}
+
+fn wash(extent: [u32; 2], center: [f32; 2], radius: f32) -> (WgpuRasterizer, Document) {
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut layer = paint_document(extent, "watercolor wash");
+    let mut ink = dab([0.2, 0.3, 0.8, 0.8]);
+    ink.center = Point { x: center[0], y: center[1] };
+    ink.radii = [radius; 2];
+    ink.material = [0.5, 0.8, 1., 0.8];
+    let mut stroke = batch(target(&layer));
+    stroke.style = preset_style(layer_core::DefaultBrushPreset::WatercolorWash);
+    stroke.damage = Rect { min: Point { x: center[0] - radius, y: center[1] - radius }, max: Point { x: center[0] + radius, y: center[1] + radius } };
+    paint_mut(&mut layer).raster = RasterRevision::pending();
+    crate::test_support::submit_ready(&mut r, FramePacket { dabs: &[ink], dab_batches: &[stroke], ..packet(layer.scene(), extent) }).unwrap();
+    paint(&layer).raster.wait_data().unwrap();
+    assert!(r.paint_layers[0].watercolor.is_some());
+    (r, layer)
+}
+
+fn queue(layer: &mut Document, extent: [u32; 2], op: RasterOperation) -> DabBatch {
+    paint_mut(layer).operations = Arc::new(vec![op]);
+    paint_mut(layer).raster = RasterRevision::pending();
+    DabBatch { kind: DabBatchKind::RasterOperation(0), dab_count: 0, damage: Rect::from_extent(extent), ..batch(target(layer)) }
+}
+
+fn settle(r: &mut WgpuRasterizer, layer: &mut Document, extent: [u32; 2], op: RasterOperation) -> BTreeMap<TileKey, Vec<u8>> {
+    let command = queue(layer, extent, op);
+    crate::test_support::submit_ready(r, FramePacket { dab_batches: &[command], ..packet(layer.scene(), extent) }).unwrap();
+    let tiles = backing(layer);
+    assert!(r.paint_layers[0].watercolor.is_none());
+    assert!(paint(layer).raster.wait_data().unwrap().watercolor.is_none());
+    tiles
+}
+
+fn settles_in_any_order(extent: [u32; 2], center: [f32; 2], radius: f32, pages: usize, orders: &[fn(&mut Vec<LayerPage>)],
+    operation: impl Fn(&mut WgpuRasterizer, &mut Document) -> RasterOperation,
+) {
+    let settled: Vec<_> = orders.iter().map(|order| {
+        let (mut r, mut layer) = wash(extent, center, radius);
+        assert_eq!(r.paint_layers[0].pages.len(), pages);
+        let before = backing(&layer);
+        order(&mut r.paint_layers[0].pages);
+        let op = operation(&mut r, &mut layer);
+        (before, settle(&mut r, &mut layer, extent, op))
+    }).collect();
+    let (wet, first) = &settled[0];
+    for (before, tiles) in &settled[1..] {
+        assert!(before == wet, "the washes differ before they settle");
+        let seams: Vec<_> = first.iter().filter(|(key, tile)| tiles.get(key) != Some(tile)).map(|(key, _)| key.coordinate).collect();
+        assert!(seams.is_empty() && tiles.len() == first.len(), "pages {seams:?} depend on the order their neighbours settled in");
+    }
+}
+
+#[test]
+fn a_watercolor_erase_bakes_both_pages_from_one_pigment_revision() {
+    let extent = [384, 256];
+    settles_in_any_order(extent, [256., 120.], 64., 2, &[|_| {}, |pages| pages.reverse()],
+        |_, _| erase_within(extent, rectangle([368., 240., 384., 256.]), false));
+}
+
+#[test]
+fn applying_a_mask_bakes_both_watercolor_pages_from_one_pigment_revision() {
+    let extent = [384, 256];
+    settles_in_any_order(extent, [256., 120.], 64., 2, &[|_| {}, |pages| pages.reverse()], |r, layer| {
+        let mut mask = reveal_all(extent, [0, 0]);
+        mask.source.default_coverage = 0.;
+        crate::test_support::materialize_mask(&mut mask.source, rectangle([0., 0., 384., 240.]), layer.composition().color);
+        set_mask(layer, mask);
+        crate::test_support::submit_ready(r, packet(layer.scene(), extent)).unwrap();
+        let coverage = mask_snapshot(layer);
+        occurrence_mut(layer).mask = None;
+        RasterOperation { placement: layer_core::Affine::IDENTITY, coverage, kind: RasterOperationKind::ApplyMask }
+    });
+}
+
+#[test]
+fn a_watercolor_erase_settles_three_rows_of_pages_in_any_order() {
+    let extent = [768; 2];
+    settles_in_any_order(extent, [384.; 2], 200., 9,
+        &[|_| {}, |pages| pages.reverse(), |pages| pages.sort_by_key(|page| (page.coordinate[0] + 3 * page.coordinate[1]) * 4 % 9)],
+        |_, _| erase_within(extent, rectangle([752., 752., 768., 768.]), false));
+}
+
+#[test]
+fn a_watercolor_erase_settles_a_page_the_same_whatever_it_erases_on_its_neighbour() {
+    let extent = [384, 256];
+    for (page, beside, apart) in [([1, 0], [0., 0., 255., 256.], [0., 240., 16., 256.]), ([0, 0], [257., 0., 384., 256.], [368., 240., 384., 256.])] {
+        let [beside, apart] = [beside, apart].map(|selection| {
+            let (mut r, mut layer) = wash(extent, [256., 120.], 64.);
+            settle(&mut r, &mut layer, extent, erase_within(extent, rectangle(selection), false))
+                .remove(&TileKey { plane: RasterPlane::Color, coordinate: page }).unwrap()
+        });
+        assert!(beside == apart, "page {page:?} settled from pigment the erase had already taken from its neighbour");
+    }
+}
+
+#[test]
+fn a_watercolor_erase_holds_its_shorter_side_of_outputs_and_frees_its_scratch() {
+    let extent = [1024, 512];
+    let (mut r, mut layer) = wash(extent, [512., 256.], 300.);
+    assert_eq!(r.paint_layers[0].pages.len(), 8, "four columns of two pages");
+    drop(r.scene.as_mut().unwrap().trim_scratch(0));
+    assert_eq!(r.scene.as_ref().unwrap().pool_bytes(), 0);
+    settle(&mut r, &mut layer, extent, erase_within(extent, rectangle([1008., 496., 1024., 512.]), false));
+    let page = u64::from(PAGE_SIZE).pow(2) * u64::from(r.device.working_format().block_copy_size(None).unwrap());
+    let scene = r.scene.as_mut().unwrap();
+    assert!(scene.pool_bytes() <= 3 * page, "more than two outputs and one resolve at once: {} bytes", scene.pool_bytes());
+    drop(scene.trim_scratch(0));
+    assert_eq!(scene.pool_bytes(), 0, "the erase kept scratch after it finished");
+}
+
+#[test]
+fn a_watercolor_erase_waits_for_its_scratch_and_then_settles_the_same() {
+    let extent = [768; 2];
+    let erase = || erase_within(extent, rectangle([752., 752., 768., 768.]), false);
+    let (mut roomy, mut control) = wash(extent, [384.; 2], 200.);
+    let expected = settle(&mut roomy, &mut control, extent, erase());
+    let (mut r, mut layer) = wash(extent, [384.; 2], 200.);
+    drop(r.scene.as_mut().unwrap().trim_scratch(0));
+    let page = u64::from(PAGE_SIZE).pow(2) * u64::from(r.device.working_format().block_copy_size(None).unwrap());
+    r.scene_tiers.gpu.update_limit(r.scene_tiers.gpu.used() + 3 * page);
+    let written = |r: &WgpuRasterizer| (r.paint_layers[0].pages.iter().map(|page| page.active().name()).collect::<Vec<_>>(), r.metrics.submissions);
+    let before = written(&r);
+    let command = queue(&mut layer, extent, erase());
+    let frame = FramePacket { dab_batches: &[command], ..packet(layer.scene(), extent) };
+    crate::test_support::wait_until("the erase did not reserve the scratch there was", || {
+        assert!(!r.raster_dependencies_ready(frame, None), "an erase without its scratch is not ready");
+        r.wait_idle().unwrap();
+        if r.scene.as_ref().unwrap().pool_bytes() == 3 * page { Ok(()) } else { Err(()) }
+    });
+    assert!(!r.raster_dependencies_ready(frame, None), "an erase holding part of its scratch is not ready");
+    assert!(written(&r) == before, "a waiting erase wrote a page or submitted its frame");
+    assert!(r.paint_layers[0].watercolor.is_some() && paint(&layer).raster.try_data().is_none(), "a waiting erase settled or published");
+    r.scene_tiers.gpu.update_limit(u64::MAX);
+    crate::test_support::submit_ready(&mut r, frame).unwrap();
+    assert!(backing(&layer) == expected, "the erase settled differently after waiting for its scratch");
+    assert_eq!(r.scene.as_ref().unwrap().pool_bytes(), 4 * page, "the erase used other scratch than its preflight reserved");
+    drop(r.scene.as_mut().unwrap().trim_scratch(0));
+    assert_eq!(r.scene.as_ref().unwrap().pool_bytes(), 0, "the erase kept scratch after it finished");
 }
