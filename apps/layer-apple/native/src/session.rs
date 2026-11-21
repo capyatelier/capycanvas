@@ -186,7 +186,7 @@ impl SessionJob {
                     handles::take::<CapySessionDestination>(fingerprint).map(|fingerprint|fingerprint.0)
                 });
                 environment.use_store(&disk.stores,id)?;
-                let mut candidate = environment.prepare(restore.document().clone(), || false)?;
+                let mut candidate = environment.prepare_recovered(restore.document().clone(), || false)?;
                 candidate.restore_session(restore, recovered, observed)?;
                 candidate.set_document_replacement(false);
                 let deadline = std::time::Instant::now() + layer_host::open::PREPARE_DEADLINE;

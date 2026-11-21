@@ -223,7 +223,7 @@ impl Storage {
 #[derive(Default)]
 struct Decoded{drawings:Vec<(u64,SessionRestoreAttempt,SessionRestore,bool)>,failed:Vec<String>,errors:Vec<String>}
 fn prepare(environment:&layer_host::open::OpenEnvironment,restored:SessionRestore,recovered:bool,active:bool,stopping:&AtomicBool)->Result<Box<UiSession<Renderer>>,String>{
-    let mut candidate=environment.prepare(restored.document().clone(),||stopping.load(Ordering::Acquire))?;
+    let mut candidate=environment.prepare_recovered(restored.document().clone(),||stopping.load(Ordering::Acquire))?;
     let observed=restored.state.location.as_ref().and_then(|location|DestinationFingerprint::observe_path(std::path::Path::new(&location.uri),restored.state.destination.as_ref()));
     candidate.restore_session(restored,recovered,observed)?;
     let deadline=Instant::now()+layer_host::open::PREPARE_DEADLINE;

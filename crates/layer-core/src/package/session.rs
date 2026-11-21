@@ -372,7 +372,7 @@ pub(crate) fn open_stored_parts(metadata:&[u8],store:&super::session_store::Stor
 }
 fn open_parts_checked_with_budget(metadata:&[u8],resource_pack:ImmutableBacking,limits:ProjectLimits,cancel:&AtomicBool,programs:&super::TrustedPrograms,budget:crate::MemoryBudget,
     store:Option<&super::session_store::StoreResources>)->Result<OpenSession,OpenFailure> {
-    active(cancel)?;
+    active(cancel)?;let limits=limits.for_recovery();
     let value=super::parse_json(metadata,limits.metadata_bytes.min(usize::MAX as u64) as usize)?;
     validate_format(&value)?;
     let record:SessionRecord=serde_json::from_value(value).map_err(|e|e.to_string())?;

@@ -100,6 +100,23 @@ impl OpenEnvironment {
     /// Returns a candidate whose canvas and configured brush are ready to draw.
     pub fn prepare(
         &self,
+        project: Document,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<Box<UiSession<Renderer>>, String> {
+        self.prepare_within(ProjectLimits::default(), project, cancelled)
+    }
+
+    pub fn prepare_recovered(
+        &self,
+        project: Document,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<Box<UiSession<Renderer>>, String> {
+        self.prepare_within(ProjectLimits::default().for_recovery(), project, cancelled)
+    }
+
+    fn prepare_within(
+        &self,
+        limits: ProjectLimits,
         mut project: Document,
         cancelled: impl Fn() -> bool,
     ) -> Result<Box<UiSession<Renderer>>, String> {
@@ -107,7 +124,7 @@ impl OpenEnvironment {
             if cancelled() {Err("Document operation cancelled".to_string())}else {Ok(())}
         };
         check()?;
-        project.validate(ProjectLimits { dimension: self.limits().dimension, ..Default::default() })?;
+        project.validate(ProjectLimits { dimension: self.limits().dimension, ..limits })?;
         let writer=self.asset_writer.as_ref().map(|writer|writer.for_document(&project)).transpose()?;
         if let Some(writer)=&writer {pollster::block_on(writer.prepare_document(&mut project))?;}
         else {project.reserve_import()?;}
@@ -259,6 +276,36 @@ mod tests {
         );
         drop((candidate, environment, session,stores));
         let _=std::fs::remove_dir_all(directory);
+        layer_render_wgpu::finish_shader_compiler_shutdown();
+    }
+
+    #[test]
+    fn a_recovered_drawing_above_the_tile_count_limit_passes_validation() {
+        use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey,TILE_SIZE};
+        let english=layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
+        let gpu=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let session=UiSession::from_project_localized(Renderer(Some(gpu.into())),layer_ui::new_drawing(64,48,&english).unwrap(),None,[640,480],layer_ui::Platform::Mac,english.clone()).unwrap();
+        let admission=layer_ui::DocumentSessions::<()>::default().admission(&session.retained_document_tiles());
+        let mut environment=OpenEnvironment::capture(&session,admission,RendererOptions::default()).unwrap();
+        environment.asset_writer=None;
+        let dimension=environment.limits().dimension;let side=dimension.div_ceil(TILE_SIZE);
+        let mut project=Document::new(layer_core::PortableId::random(),dimension,dimension,layer_core::DocumentNames {paint:"ink".into(),paper:"paper".into()});
+        let descriptor=project.composition().color.paint_descriptor();
+        let tile=RasterTile::backed(TileBlob::encode(descriptor,&vec![7;descriptor.byte_len([TILE_SIZE;2]).unwrap()]).unwrap());
+        *project.target_raster_mut(project.working.target.unwrap()).unwrap()=RasterRevision::backed(RasterData {
+            tiles:(0..side*side).map(|index|(TileKey {plane:RasterPlane::Color,coordinate:[index%side,index/side]},tile.clone())).collect(),
+            ..Default::default()
+        });
+        let layer=project.working.occurrence.unwrap();
+        for _ in 0..ProjectLimits::default().tiles/(side*side) as usize {
+            let (edit,_)=project.duplicate_layers_edit(&[layer]).unwrap();project.apply(edit).unwrap();
+        }
+        let checks=std::cell::Cell::new(0);
+        let stop_after_validation=||{checks.set(checks.get()+1);checks.get()>1};
+        assert_eq!(environment.prepare(project.clone(),stop_after_validation).err().as_deref(),Some("Artwork exceeds the tile count limit"));
+        checks.set(0);
+        assert_eq!(environment.prepare_recovered(project,stop_after_validation).err().as_deref(),Some("Document operation cancelled"));
+        drop((environment,session));
         layer_render_wgpu::finish_shader_compiler_shutdown();
     }
 }

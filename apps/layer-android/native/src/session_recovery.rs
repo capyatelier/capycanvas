@@ -266,7 +266,7 @@ pub extern "system" fn Java_art_capycanvas_Native_sessionPrepare(mut env: JNIEnv
         crate::inspection::on_worker("capy-session-open", "Session worker failed", move || {
             let Work::Restore { environment, candidates, pending, .. } = &mut task.work else { return Err("Not a session restore".into()); };
             let (restored,recovered) = *pending.take().ok_or("Session restore is not read")?;
-            let mut prepared = environment.prepare(restored.document().clone(), || false)?;
+            let mut prepared = environment.prepare_recovered(restored.document().clone(), || false)?;
             prepared.restore_session(restored, recovered, observed)?;
             let deadline = Instant::now() + layer_host::open::PREPARE_DEADLINE;
             loop {

@@ -85,6 +85,9 @@ impl ProjectLimits {
     pub fn for_import() -> Self {
         Self::default()
     }
+    pub fn for_recovery(self) -> Self {
+        Self { tiles: usize::MAX, ..self }
+    }
 }
 
 impl Document {

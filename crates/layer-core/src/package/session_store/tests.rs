@@ -241,6 +241,30 @@
         captured(&capture, json!({"marker": marker}))
     }
     #[test]
+    fn a_checkpoint_above_the_tile_count_limit_loads() {
+        use crate::raster::{RasterWatercolor,TILE_SIZE};
+        let limits=ProjectLimits::default();let side=limits.dimension.div_ceil(TILE_SIZE);
+        let mut document=Document::new(PortableId::random(),limits.dimension,limits.dimension,DocumentNames {paint:"ink".into(),paper:"paper".into()});
+        let target=document.working.target.unwrap();
+        let tile=|plane:RasterPlane,value:u8| {
+            let descriptor=plane.descriptor(Default::default());
+            RasterTile::backed(TileBlob::encode(descriptor,&vec![value;descriptor.byte_len([TILE_SIZE;2]).unwrap()]).unwrap())
+        };
+        let color=tile(RasterPlane::Color,7);
+        let mut tiles:BTreeMap<_,_>=(0..side*side).map(|index|(TileKey {plane:RasterPlane::Color,coordinate:[index%side,index/side]},color.clone())).collect();
+        tiles.insert(TileKey {plane:RasterPlane::WatercolorWetness,coordinate:[0,0]},tile(RasterPlane::WatercolorWetness,3));
+        assert_eq!(tiles.len(),limits.tiles+1);
+        *document.target_raster_mut(target).unwrap()=RasterRevision::backed(RasterData {tiles:tiles.into(),watercolor:Some(RasterWatercolor {wet_edge:0.5,burnt_edge:0.5,edge_width:2.})});
+        let editor=Editor::new(document);
+        let capture=editor.capture_session(editor.capture(1,Default::default()).unwrap()).unwrap();
+        let directory=Directory::new();let cancel=AtomicBool::new(false);
+        SessionStore::open(&directory.0).wait().unwrap().checkpoint(&capture,json!({}).into(),&cancel).wait().unwrap();
+        let loaded=SessionStore::open(&directory.0).wait().unwrap().load(limits,&cancel).wait().unwrap().unwrap();
+        let restored=loaded.editor.document();
+        assert_eq!(restored.scene().raster(target).unwrap().try_data().unwrap().unwrap().tiles.len(),limits.tiles+1);
+        assert_eq!(restored.admit(limits).unwrap_err(),"Artwork exceeds the tile count limit");
+    }
+    #[test]
     fn full_disk_keeps_pressure_and_checkpoint_bytes_in_ram_without_publishing() {
         use crate::package::storage_budget::STORAGE_UNAVAILABLE;
         for authoritative in [false,true] {for operation in ["pressure","checkpoint"] {
