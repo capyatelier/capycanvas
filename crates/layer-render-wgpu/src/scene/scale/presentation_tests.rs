@@ -711,12 +711,12 @@ fn first_preview_stroke_pattern_fit() {
     first_preview_stroke(patterned([1100,700]),ViewState {width_px:330,height_px:210,document_to_surface:[0.2976,0.,0.,0.2976,1.,1.]});
 }
 
-fn half_float_presentation(r: &WgpuRasterizer) -> bool {
-    r.presentation_views().is_some_and(|[moved, _, kept]| [moved, kept].iter().all(|view| view.texture().format() == wgpu::TextureFormat::Rgba16Float))
+fn presents(r: &WgpuRasterizer, format: wgpu::TextureFormat) -> bool {
+    r.presentation_views().is_some_and(|[moved, _, kept]| [moved, kept].iter().all(|view| view.texture().format() == format))
 }
 
 #[test]
-fn fit_views_read_one_half_float_level_closer_to_an_area_average() {
+fn fit_views_read_one_level_closer_to_an_area_average() {
     let extent = [1100, 700];
     let doc = patterned(extent);
     let color = doc.composition().color;
@@ -727,7 +727,7 @@ fn fit_views_read_one_half_float_level_closer_to_an_area_average() {
             let view = ViewState { width_px: size[0], height_px: size[1], document_to_surface: [zoom, 0., 0., zoom, 1., 1.] };
             submit(&mut r, &doc, view, true, bounded);
             assert_eq!(r.scale_display.as_ref().unwrap().plan.level, level);
-            assert!(half_float_presentation(&r), "zoom {zoom} presents half-float levels");
+            assert!(presents(&r, wgpu::TextureFormat::Rgba32Float), "zoom {zoom} presents the paper scene's float levels");
             let actual = present(&r, &mut crate::test_support::float_presenter(&r), view);
             let mut exact = WgpuRasterizer::new_native_headless(color).unwrap();
             exact.test.reference = true;
@@ -753,14 +753,16 @@ fn fit_views_read_one_half_float_level_closer_to_an_area_average() {
 #[test]
 fn half_float_levels_present_alike_with_or_without_float32_filtering() {
     let extent = [1100, 700];
-    let doc = patterned(extent);
+    let mut doc = patterned(extent);
+    let pattern = doc.scene().order()[0];
+    set_root_entries(&mut doc, vec![pattern]);
     let color = doc.composition().color;
     for zoom in [0.2137f32, 0.2976] {
         let size = extent.map(|n| (n as f32 * zoom).ceil() as u32 + 2);
         let view = ViewState { width_px: size[0], height_px: size[1], document_to_surface: [zoom, 0., 0., zoom, 1., 1.] };
         let shown = |mut r: WgpuRasterizer| {
             submit(&mut r, &doc, view, true, false);
-            assert!(half_float_presentation(&r), "zoom {zoom} presents half-float levels");
+            assert!(presents(&r, wgpu::TextureFormat::Rgba16Float), "zoom {zoom} presents the effect-free scene's half-float levels");
             present(&r, &mut crate::test_support::float_presenter(&r), view)
         };
         let filtered = shown(WgpuRasterizer::new_native_headless(color).unwrap());
@@ -790,7 +792,7 @@ fn the_surround_skips_the_artwork_shader() {
 }
 
 #[test]
-fn painting_at_fit_updates_the_half_float_level_it_presents() {
+fn painting_at_fit_updates_the_level_it_presents() {
     let extent = [1100, 700];
     let doc = patterned(extent);
     let color = doc.composition().color;
@@ -819,7 +821,7 @@ fn painting_at_fit_updates_the_half_float_level_it_presents() {
         }
         submit(&mut painted, &doc, fit, false, bounded);
         submit(&mut fresh, &doc, fit, false, bounded);
-        assert!(half_float_presentation(&painted) && half_float_presentation(&fresh), "bounded {bounded}");
+        assert!(presents(&painted, wgpu::TextureFormat::Rgba32Float) && presents(&fresh, wgpu::TextureFormat::Rgba32Float), "bounded {bounded}");
         let painted_pixels = present(&painted, &mut presenter, fit);
         let fresh_pixels = present(&fresh, &mut crate::test_support::float_presenter(&fresh), fit);
         assert!(crate::test_support::max_error(&painted_pixels, &before) > 0.3, "bounded {bounded}: the strokes show");
