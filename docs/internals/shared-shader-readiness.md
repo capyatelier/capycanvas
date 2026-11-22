@@ -139,8 +139,10 @@ behind required work. A later source change promotes only its bound variant.
 Shared native composition declares configured chrome before presentation. A visible
 Navigator joins that gate; hidden overview and picker recipes remain optional.
 Optional drawing skips cold recipes and repaints when they become ready.
-Unresolved raster backings retain conservative watercolor preparation until their
-material state is available.
+A raster backing that is still being produced, such as a finished stroke or a
+cleared selection, adds no watercolor preparation of its own: resident wet pages,
+watercolor batches and published wet backings require it, and the drawing keeps
+any watercolor preparation it already has.
 
 After launch, application controls such as Settings remain usable while required shaders and
 raster work prepare. Shared command classification keeps these controls outside
