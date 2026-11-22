@@ -204,6 +204,13 @@ fn pointwise_material_result(fragment_position:vec4<f32>)->MaterialOutput {
     if style.color.a>0.5 && !pointwise_aggregate() {
         result=material_alpha_locked(result,dry_original(vec2<i32>(floor(fragment_position.xy))));
     }
-    result.color=layer_color(result.color,WORKING_LUMA,style.color_mode.x,style.color_mode.y);
+    result.color=stored_layer_color(result.color);
     return result;
+}
+
+fn stored_layer_color(paint:vec4<f32>)->vec4<f32> {
+    if paint_stored_encoded() && style.color_mode.x!=0. {
+        return working_encode(layer_color(working_decode(paint),WORKING_LUMA,style.color_mode.x,style.color_mode.y));
+    }
+    return layer_color(paint,WORKING_LUMA,style.color_mode.x,style.color_mode.y);
 }

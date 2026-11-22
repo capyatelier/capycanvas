@@ -43,13 +43,24 @@ fn preview_average(source: texture_2d<f32>, p: vec2<i32>) -> vec4<f32> {
     }
     return sum / f32(max(size.x * size.y, 1));
 }
+fn display_average(source: texture_2d<f32>, p: vec2<i32>) -> vec4<f32> {
+    if !paint_stored_encoded() { return preview_average(source, p); }
+    if all(textureDimensions(source) == vec2<u32>(1u)) { return vec4<f32>(0.); }
+    let start = preview_origin(p);
+    let size = preview_size(start);
+    var sum = vec4<f32>(0.);
+    for (var y = 0; y < size.y; y++) {
+        for (var x = 0; x < size.x; x++) { sum += working_encode(textureLoad(source, start + vec2<i32>(x, y), 0)); }
+    }
+    return sum / f32(max(size.x * size.y, 1));
+}
 
 @compute @workgroup_size(32, 2)
 fn gather_display(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id.xy >= vec2<u32>(256u / style.operation.z)) { return; }
     let p = vec2<i32>(id.xy * style.operation.z);
     let texel = vec2<i32>(id.xy);
-    if style.flags.w < 1.5 { textureStore(display_original, texel, preview_average(source_11, p)); }
+    if style.flags.w < 1.5 { textureStore(display_original, texel, display_average(source_11, p)); }
     textureStore(display_coverage, texel, vec4<f32>(preview_average(stroke_coverage_texture, p).r, 0., 0., 1.));
-    textureStore(display_start, texel, preview_average(reservoir_texture, p));
+    if grouped_opacity() { textureStore(display_start, texel, display_average(reservoir_texture, p)); }
 }

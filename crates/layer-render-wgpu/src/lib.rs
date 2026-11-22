@@ -1190,6 +1190,7 @@ pub struct WgpuRasterizer {
     preview_layer_id: Option<SourceTarget>,
     preview_requires_base: bool,
     preview_contribution: bool,
+    preview_encoded: bool,
     preview_level: u32,
     masks: Vec<MaskAsset>,
     papers: paper::Papers,
@@ -1625,6 +1626,7 @@ impl WgpuRasterizer {
             preview_layer_id: None,
             preview_requires_base: false,
             preview_contribution: false,
+            preview_encoded: false,
             preview_level: 0,
             masks: Vec::with_capacity(8),
             papers,
@@ -2208,6 +2210,7 @@ impl WgpuRasterizer {
             self.preview_layer_id = None;
             self.preview_requires_base = false;
             self.preview_contribution = false;
+            self.preview_encoded = false;
         }
         self.update_target_geometry(&retained.iter().map(|(target, scene)| (*target, scene.target_extent(*target))).collect(), resized)?;
         self.register_tiled_sources(scene);
@@ -2645,15 +2648,20 @@ impl WgpuRasterizer {
         for index in 0..packet.dab_batches.len() {
             let batch = &packet.dab_batches[index];
             let block = self.dry_material_block(batch);
-            let mut record = StyleGpu::brush(self.target_extent(batch.target), batch, block, &self.device, self.paper_style(&batch.style));
+            let encoded = self.encoded_preview(batch);
+            let averaged = if encoded {self.scene.as_ref().and_then(|scene|scene.reduced_extent(batch.target,self.preview_level))} else {None};
+            let mut record = StyleGpu::brush(averaged.unwrap_or_else(||self.target_extent(batch.target)), batch, block, &self.device, self.paper_style(&batch.style));
             if self.compact_preview_contribution(batch) {
                 record.flags[3] = 2.;
+            } else if encoded {
+                record.flags[3] = 1.;
             }
             if dry_material::single_pigment_marked(&batch.style) && batch.dab_count>0 {
                 let source=&packet.dabs[batch.first_dab as usize..(batch.first_dab+batch.dab_count) as usize];
                 record.material_a[3]=f32::from(batch.style.mode==DabMode::Erase
                     || source.iter().all(|d|d.color_rgba_linear[..3]==source[0].color_rgba_linear[..3]));
-                record.material_b[..3].copy_from_slice(&source[0].color_rgba_linear[..3]);
+                let pigment=if encoded {&self.dab_upload[batch.first_dab as usize].dab} else {&source[0]};
+                record.material_b[..3].copy_from_slice(&pigment.color_rgba_linear[..3]);
             }
             record.color_mode = layer_color_parameters(packet.scene.color_mode(batch.target), self.document_color());
             record.color_mode[3] = if ordered_dither(&batch.style) { 1. } else if stable_blender(&batch.style) { 2. } else { 0. };
@@ -4627,6 +4635,7 @@ impl WgpuRasterizer {
             self.preview_layer_id = None;
             self.preview_requires_base = false;
             self.preview_contribution = false;
+            self.preview_encoded = false;
         }
         liquify::Liquify::extend_plans(self, packet, &mut batch_tiles);
         let mut encoder = crate::submission::CommandEncoder::new(
@@ -4746,6 +4755,9 @@ impl WgpuRasterizer {
             .map_or(0, |cache| new_preview_layer.map_or(0, |id| cache.preview_level(self, packet, id, preview_contribution)));
         preview_contribution &= preview_level>0 || native_dry_preview;
         if !preview_contribution && new_preview_from_persistent {new_preview_requires_base=true;}
+        let preview_encoded=preview_level>0 && !preview_contribution && packet.blend_space==layer_core::BlendSpace::Perceptual
+            && packet.dab_batches.iter().filter(|b|b.kind==DabBatchKind::Preview && has_brush_work(b))
+                .all(|b|b.style.execution==BrushExecution::Dry && b.style.blend_space==layer_core::BlendSpace::Perceptual);
         let mut reuse_preview = same_preview
             && !reset
             && !display_rebuilt
@@ -4797,6 +4809,7 @@ impl WgpuRasterizer {
         self.preview_valid = false;
         if packet.commit_rasters {
             self.preview_contribution=preview_contribution;
+            self.preview_encoded=preview_encoded;
             let mut preview_cells=self.changed_cells.take().unwrap();
             if !reuse_preview && (fill_preview.is_none() || fill_changed) {
                 preview_cells.prepare_preview(

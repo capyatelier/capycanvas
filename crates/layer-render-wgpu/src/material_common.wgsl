@@ -76,15 +76,19 @@ fn deposit_color(color: vec3<f32>) -> vec3<f32> {
     return color;
 }
 
+fn paint_stored_encoded() -> bool {
+    return style.flags.w == 1.0;
+}
+
 fn deposit_paint(paint: vec4<f32>) -> vec4<f32> {
-    if deposit_encoded() {
+    if deposit_encoded() && !paint_stored_encoded() {
         return working_encode(paint);
     }
     return paint;
 }
 
 fn stored_paint(paint: vec4<f32>) -> vec4<f32> {
-    if deposit_encoded() {
+    if deposit_encoded() && !paint_stored_encoded() {
         return working_decode(paint);
     }
     return paint;

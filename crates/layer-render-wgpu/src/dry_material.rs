@@ -526,6 +526,14 @@ impl WgpuRasterizer {
         } else { 1 }
     }
 
+    pub(crate) fn encoded_preview_pages(&self) -> bool {
+        self.preview_encoded && self.preview_level > 0
+    }
+
+    pub(super) fn encoded_preview(&self, batch: &DabBatch) -> bool {
+        batch.kind == DabBatchKind::Preview && !batch.target.is_coverage() && self.encoded_preview_pages()
+    }
+
     pub(super) fn compact_preview_contribution(&self, batch: &DabBatch) -> bool {
         batch.kind == DabBatchKind::Preview && self.preview_contribution
             && batch.style.mode == DabMode::Paint && batch.style.opacity == 1.

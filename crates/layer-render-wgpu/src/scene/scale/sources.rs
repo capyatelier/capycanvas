@@ -382,6 +382,9 @@ impl Cache {
 }
 
 impl Scene {
+    pub(crate) fn reduced_extent(&self,id:SourceTarget,level:u32)->Option<[u32;2]> {
+        self.scale_sources.entries.get(&id).map(|source|{let valid=source.valid_extent(level);std::array::from_fn(|i|valid[i].saturating_sub(source.phase[i]))})
+    }
     pub(in crate::scene) fn source_placements(&mut self,packet:FramePacket<'_>,output:scene::Output)->Result<crate::scene::sources::Inputs,GpuRasterError> {
         let placed=|sources:&Sources,id|(source_frame(Some(sources),packet.scene,id),packet.scene.target_extent(id));
         if self.placement_frame.len()!=packet.scene.targets().count() || packet.scene.targets().any(|id|self.placement_frame.get(&id)
@@ -484,6 +487,7 @@ impl Scene {
                 (valid.min_x()+high[0]*side).min(valid.max_x()),(valid.min_y()+high[1]*side).min(valid.max_y())));
             let size=[high[0]-low[0],high[1]-low[1]];
             let origin = output_origin(tile, shift, plan);
+            let encoded = input_level > 0 && r.encoded_preview_pages();
             let mut values = [0; 20];
             values[..8].copy_from_slice(&[
                 origin[0]+low[0],
@@ -495,7 +499,8 @@ impl Scene {
                 1 << (level - input_level),
                 u32::from(over) | if empty { 4 } else { 0 } | (input_level << 8)
                     | if placement.is_some() { 128 } else { 0 }
-                    | if blend_space == layer_core::BlendSpace::Perceptual { 2 } else { 0 },
+                    | if blend_space == layer_core::BlendSpace::Perceptual && !encoded { 2 } else { 0 }
+                    | if encoded && input_level == level { 4096 } else { 0 },
             ]);
             if low!=[0;2] {
                 values[7]|=8;
@@ -569,7 +574,10 @@ impl Scene {
         let mut values = [0; 20];
         values[..8].copy_from_slice(&[origin[0], origin[1], count[0], count[1], size[0], size[1], side,
             if blend_space == layer_core::BlendSpace::Perceptual { 2 } else { 0 }]);
-        for ((word,input),level) in values[8..12].iter_mut().zip(&inputs).zip(levels) { *word=level | if input.as_ref().is_some_and(|input|!input.empty) {16}else {0}; }
+        let encoded=r.encoded_preview_pages();
+        for ((word,input),level) in values[8..12].iter_mut().zip(&inputs).zip(levels) {
+            *word=level | if input.as_ref().is_some_and(|input|!input.empty) {16 | if encoded && level>0 {32} else {0}} else {0};
+        }
         values[12..16].copy_from_slice(&[phase[0], phase[1], low[0] | low[1] << 16, high[0] | high[1] << 16]);
         let views: [&wgpu::TextureView; 4] = std::array::from_fn(|i| inputs[i].as_ref().map_or(&r.empty_view, |input| &input.source));
         self.jobs.push(Job::Reduce { output: output.clone(), sources: views.map(Clone::clone), values,

@@ -321,7 +321,9 @@ Depending on the view, compact pages are 64 × 64 or 128 × 128 rather than
 256 × 256 pages. Contribution tails start from zero and bind only their committed
 stroke coverage; destination color is not prepared or bound. No private
 full-size coverage fork is needed. Reduction weights partial edge texels by their
-actual document area. Changing or cancelling a tail invalidates its old footprint;
+actual document area. In a Perceptual document an in-place tail averages encoded
+color over the pixels its source level averages and keeps it encoded, so paint the
+tail leaves untouched reduces to the same values as without a tail. Changing or cancelling a tail invalidates its old footprint;
 committing it still executes the authoritative full-resolution brush.
 
 Exact queries replay a compact tail through the existing exact tile executor

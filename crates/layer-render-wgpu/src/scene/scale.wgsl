@@ -27,6 +27,10 @@ fn reduce(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let start = vec2<u32>(vec2<i32>((id.xy + select(vec2<u32>(0u), region.origin, (region.flags & 8u) != 0u)) * region.side) - vec2<i32>(region.opacity.zw));
+    if (region.flags & 4096u) != 0u {
+        textureStore(output, vec2<i32>(region.origin + id.xy), textureLoad(source, vec2<i32>(start), 0));
+        return;
+    }
     let step = 1u << (region.flags >> 8u);
     let remaining = region.extent - start * step;
     let size = min(vec2<u32>(region.side), (remaining + step - 1u) / step);
@@ -135,7 +139,7 @@ fn reduce_phased(@builtin(global_invocation_id) id: vec3<u32>) {
                 let word = bitcast<u32>(region.paper[index]);
                 if (word & 16u) == 0u { continue; }
                 var value = phased_load(index, (local - at * 256 + i32(cell / 2u)) >> vec2(word & 15u));
-                if (region.flags & 2u) != 0u { value = working_encode(value); }
+                if (region.flags & 2u) != 0u && (word & 32u) == 0u { value = working_encode(value); }
                 sum += value;
             }
         }
