@@ -5322,7 +5322,7 @@ impl WgpuRasterizer {
             || self.transform_preview.is_some()
             || self.artwork_frame.as_ref().is_none_or(|old| !old.same_artwork(packet));
         self.prefetch_retouch(&frame, moving, &mut encoder)?;
-        self.prefetch_regions(&frame,&mut encoder)?;
+        self.prefetch_regions(&frame,&mut encoder,&mut work)?;
         self.apply_frame_grants(&mut encoder);
         self.uploads.finish(&encoder);
         if let Some(started) = started { cpu_phases[4] = started.elapsed().as_secs_f64() * 1000.; }

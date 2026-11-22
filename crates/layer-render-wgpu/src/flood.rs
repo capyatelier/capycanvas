@@ -6,7 +6,7 @@ use wgpu::util::DeviceExt;
 
 #[path = "flood_lines.rs"]
 mod lines;
-pub(super) use lines::{Input,UNDERFILL_HALF_PIXELS};
+pub(super) use lines::{Input,ScopeProbe,UNDERFILL_HALF_PIXELS};
 const WINDOW: u32 = 2048;
 const PARAMETER_BYTES: u64 = 96;
 
@@ -143,12 +143,31 @@ impl Flood {
         self.lines.pipelines(refinement,prepare_ends).chain(stages(enclosed,contiguous).map(|entry|&self.pipelines[entry]))
     }
     pub fn prepare_cache(&self,compiler:&compile::Scope,priority:startup::Class)->bool {self.lines.prepare_cache(compiler,priority)}
-    pub fn build_lines(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,extent:[u32;2],paper:([f32;4],u32,bool),(budget,demand):(f64,bool),dirty:&std::collections::BTreeSet<[u32;2]>)->Result<(bool,f64),GpuRasterError> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_lines(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,extent:[u32;2],paper:([f32;4],u32,bool),(budget,demand):(f64,bool),dirty:&std::collections::BTreeSet<[u32;2]>,lines:bool)->Result<(bool,f64),GpuRasterError> {
         let device=input.device;
         let labels=Labels::new(extent,&device.limits()).ok_or(GpuRasterError::SizeOverflow)?;
         let windows:Vec<_>=labels.windows(extent).collect();
         if !self.lines.building() {self.lines.allocate(device,extent,labels.side,&windows)?;}
-        self.lines.build(input,encoder,paper,budget,demand,dirty)
+        self.lines.build(input,encoder,paper,budget,demand,dirty,lines)
+    }
+    pub fn build_scope(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,paper:([f32;4],u32),budget:f64,blocks:Option<std::collections::BTreeSet<[u32;2]>>)->Result<bool,GpuRasterError> {
+        self.lines.build_scope(input,encoder,paper,budget,blocks)
+    }
+    pub fn lines_full(&self)->bool {self.lines.full()}
+    #[cfg(test)]
+    pub fn built_blocks(&self)->Option<usize> {self.lines.built_blocks()}
+    pub fn lines_open(&self)->bool {self.lines.open()}
+    pub fn scope_blocks(&self,seed:[u32;2],flagged:impl Iterator<Item=[u32;2]>)->std::collections::BTreeSet<[u32;2]> {self.lines.scope_blocks(seed,flagged)}
+    pub fn check_snap(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,tap:[u32;2],probe:&ScopeProbe,stop:Option<&wgpu::Buffer>,fill:Option<&layer_render::RegionFillQuery>) {
+        self.lines.exclude(input,encoder,fill.map_or(&[],|fill|fill.excluded_seals.as_ref()));
+        self.lines.check_snap(input,encoder,tap,probe,stop);
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn probe_scope(&mut self,device:&PipelineDevice,encoder:&mut crate::submission::CommandEncoder,extent:[u32;2],seed:[u32;2],tolerance:f32,classified:&wgpu::Buffer,paper:&wgpu::TextureView,stop:Option<(&wgpu::Buffer,bool)>)->Result<mpsc::Receiver<Result<ScopeProbe,GpuRasterError>>,GpuRasterError> {
+        let open=RegionRefinement {close_gaps:false,edges:layer_render::RegionEdges::Exact,smooth_edges:false};
+        self.encode_input(device,encoder,extent,seed,tolerance,None,open,classified,true,false,paper,stop,None)?;
+        Ok(self.lines.probe_scope(&Input {device,mask:classified,paper},encoder,seed))
     }
     pub fn prepare_areas(&self,compiler:&compile::Scope,priority:startup::Class)->bool {
         self.lines.prepare_areas(compiler,priority) & compiler.require(["initialize","merge","mark_exterior","export_border","seam_merge","propagate_flags","area_tokens"].map(|entry|&self.pipelines[entry]),priority)

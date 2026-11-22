@@ -364,7 +364,7 @@ fn warmed_context_needs_no_compile_at_first_use(use_: FirstUse) {
             let frame = renderer.artwork_frame.clone().unwrap();
                 while renderer.regions.as_ref().is_none_or(|regions| regions.background_pending()) {
                 let mut encoder = crate::submission::CommandEncoder::new(&renderer.device, &Default::default());
-                renderer.prefetch_regions(&frame, &mut encoder).unwrap();
+                renderer.prefetch_regions(&frame, &mut encoder, &mut crate::test_support::work(false)).unwrap();
                 renderer.uploads.finish(&encoder); encoder.submit(&renderer.queue);
                 renderer.region_chunks_submitted();
                 crate::test_support::complete(renderer);
@@ -382,7 +382,11 @@ fn warmed_context_needs_no_compile_at_first_use(use_: FirstUse) {
                     target: document.drawing_content().unwrap(), position: layer_core::Point {x:0.,y:0.} }
                 } else { RegionTask::Mask(request) };
                 assert!(renderer.request_region(task).unwrap());
-                assert!(crate::region_requests::tests::request_encoded(renderer), "{use_:?} deferred an already warmed request");
+                while !crate::region_requests::tests::request_encoded(renderer) {
+                    if let Some(result) = renderer.take_region() { result.unwrap(); break; }
+                    crate::test_support::complete(renderer);
+                    assert!(std::time::Instant::now() < deadline, "{use_:?} deferred an already warmed request");
+                }
             }
             FirstUse::Gradient | FirstUse::Figure => {
                 let operation = if matches!(use_, FirstUse::Figure) {OperationUse::Figure} else {OperationUse::Gradient};

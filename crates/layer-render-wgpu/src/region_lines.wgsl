@@ -87,7 +87,75 @@ fn grain_bits(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgro
     if p.y>=line.core.w {return;}
     let q=line.core.xy+p;
     let word=q.y*line.extent.z+q.x/32u;let bit=1u<<(q.x%32u);
-    if grain(vec2<i32>(q)) {atomicOr(&cached[word],bit);}else{atomicAnd(&cached[word],~bit);}
+    if grain(vec2<i32>(q)) {atomicOr(&cached[word],bit);}else{
+        atomicAnd(&cached[word],~bit);
+        if atomicLoad(&cached[line.offsets.y+2u])==0u {atomicStore(&cached[line.offsets.y+2u],1u);}
+    }
+}
+const SNAP_REACH=16;
+const SNAP_SIDE=u32(2*SNAP_REACH+1);
+const SNAP_AREA=SNAP_SIDE*SNAP_SIDE;
+fn scope_columns()->u32{return (line.extent.x+127u)/128u;}
+fn snap_index(q:vec2<i32>,tap:vec2<i32>)->u32{let d=vec2<u32>(q-tap+vec2(SNAP_REACH));return d.y*SNAP_SIDE+d.x;}
+@compute @workgroup_size(64)
+fn scope_region(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>){
+    let index=id.x+id.y*groups.x*64u+line.job.x;
+    if index<line.offsets.x && atomicLoad(&eligible[index])!=0u {
+        let y=index/line.extent.z;let x=index%line.extent.z*32u;first[2u+y/128u*scope_columns()+x/128u]=1u;
+    }
+    if index==0u {
+        let tap=vec2<i32>(line.options.xy);
+        first[0]=u32(ink(tap));first[1]=atomicLoad(&cached[line.offsets.y+2u]);
+        for(var y=-SNAP_REACH;y<=SNAP_REACH;y++){for(var x=-SNAP_REACH;x<=SNAP_REACH;x++){
+            let q=tap+vec2(x,y);
+            first[2u+scope_columns()*((line.extent.y+127u)/128u)+snap_index(q,tap)]=u32(valid(q) && (atomicLoad(&eligible[u32(q.y)*line.extent.z+u32(q.x)/32u])&(1u<<(u32(q.x)%32u)))!=0u);
+        }}
+    }
+}
+fn cover_seal(a:vec2<i32>,b:vec2<i32>,tap:vec2<i32>,z:u32) {
+    if any(min(a,b)>tap+vec2(SNAP_REACH)) || any(max(a,b)<tap-vec2(SNAP_REACH)) {return;}
+    var p=a;let delta=abs(b-p);let step=select(vec2(-1),vec2(1),p<b);var error=delta.x-delta.y;
+    loop{
+        if all(abs(p-tap)<=vec2(SNAP_REACH)) {second[z*SNAP_AREA+snap_index(p,tap)]=1u;}
+        if all(p==b){break;}let twice=2*error;
+        if twice> -delta.y{error-=delta.y;p.x+=step.x;}
+        if twice<delta.x{error+=delta.x;p.y+=step.y;}
+    }
+}
+fn snapped(tap:vec2<i32>,z:u32)->u32 {
+    var best=INVALID;var cost=0xffffffffu;
+    for(var y=-SNAP_REACH;y<=SNAP_REACH;y++){for(var x=-SNAP_REACH;x<=SNAP_REACH;x++){
+        let q=tap+vec2(x,y);if !valid(q) || ink(q) {continue;}
+        if line.options.z!=0u && (first[u32(q.y)*line.extent.z+u32(q.x)/32u]&(1u<<(u32(q.x)%32u)))==0u {continue;}
+        if z<4u && second[z*SNAP_AREA+snap_index(q,tap)]!=0u {continue;}
+        let d=u32(x*x+y*y);let key=point(vec2<u32>(q));
+        if d<cost || (d==cost && key<best) {cost=d;best=key;}
+    }}
+    return best;
+}
+@compute @workgroup_size(64)
+fn scope_snap(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>){
+    let index=id.x+id.y*groups.x*64u+line.job.x;
+    let tap=vec2<i32>(line.options.xy);
+    if line.options.w==0u {
+        let count=min(atomicLoad(&cached[line.offsets.y]),line.offsets.w);if index>=count {return;}
+        let base=line.offsets.z+index*END_WORDS;
+        if atomicLoad(&cached[base+19u])!=0u {return;}
+        let start=vec2<i32>(coord(atomicLoad(&cached[base])));
+        for(var z=0u;z<4u;z++) {
+            let hit=atomicLoad(&cached[base+4u+z*4u]);if hit==INVALID {continue;}
+            let end=vec2<i32>(coord(hit));let bend=atomicLoad(&cached[base+6u+z*4u]);
+            if bend!=INVALID {cover_seal(start,vec2<i32>(coord(bend)),tap,z);cover_seal(vec2<i32>(coord(bend)),end,tap,z);}
+            else{cover_seal(start,end,tap,z);}
+        }
+        return;
+    }
+    if index!=0u {return;}
+    let unsealed=snapped(tap,4u);
+    for(var z=0u;z<4u;z++) {
+        let sealed=snapped(tap,z);
+        if sealed!=unsealed && sealed!=INVALID && second[4u*SNAP_AREA+snap_index(vec2<i32>(coord(sealed)),tap)]==0u {atomicOr(&cached[line.offsets.y+2u],4u);}
+    }
 }
 fn line_block(index:u32,bounds:vec4<u32>,barrier:bool)->vec3<u32> {
     let left=bounds.x/32u;let width=(bounds.x+bounds.z+31u)/32u-left;

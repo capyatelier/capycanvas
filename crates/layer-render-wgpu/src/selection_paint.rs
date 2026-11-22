@@ -404,7 +404,7 @@ impl SelectionPainter {
                 |result, changed, _| SelectionPaintResult {
                     request_id: result.request_id,
                     pixels: result.pixels,
-                    changed,
+                    changed: changed != 0,
                 },
             );
         }

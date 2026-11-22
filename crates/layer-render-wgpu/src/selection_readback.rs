@@ -16,7 +16,7 @@ struct Captured {
     underfill: Option<std::sync::Arc<layer_core::SelectionPixels>>,
     active: usize,
     line_bounded: bool,
-    stale: bool,
+    stale: u32,
     extra: Vec<u8>,
     seals: Vec<layer_render::RegionSeal>,
     next:Option<[u32;2]>,
@@ -53,7 +53,7 @@ fn read_coverage(bytes:&[u8],extent:[u32;2],byte_coverage:bool,coverage_size:u64
     }).collect();
     let next=read(coverage_size as usize+24);
     Ok(Captured {translucent_seed:seed_offset.is_some_and(|offset|f32::from_le_bytes(bytes[offset as usize+12..offset as usize+16].try_into().unwrap())<0.99999),colour_on_solid:read(coverage_size as usize+28)&1!=0,next:(next!=u32::MAX).then(||coord(next)),pixels:std::sync::Arc::new(pixels),underfill,active:read(24) as usize,line_bounded:read(28)!=0,
-        stale:read(coverage_size as usize+20)!=0,extra:bytes[extra_start+seal_records*20..seed_offset.map_or(bytes.len(),|offset|offset as usize)].to_vec(),seals})
+        stale:read(coverage_size as usize+20),extra:bytes[extra_start+seal_records*20..seed_offset.map_or(bytes.len(),|offset|offset as usize)].to_vec(),seals})
 }
 
 pub(super) fn capture_selection<T:Send+'static>(
@@ -64,7 +64,7 @@ pub(super) fn capture_selection<T:Send+'static>(
     request_id:u64,
     gaps:bool,
     tx:mpsc::Sender<Result<T,GpuRasterError>>,
-    convert:impl FnOnce(RegionResult,bool,&[u8])->T+Send+'static,
+    convert:impl FnOnce(RegionResult,u32,&[u8])->T+Send+'static,
 ) {
     let Capture {buffer,size,coverage_size,underfill_offset,seal_records,seed_offset}=capture;
     crate::raster::map_then(device,None,&buffer,size,move|bytes|read_coverage(bytes,extent,byte_coverage,coverage_size,underfill_offset,seal_records,seed_offset),move|part| {

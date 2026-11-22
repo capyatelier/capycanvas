@@ -129,7 +129,7 @@ fn region_cache_restore_keeps_all_pages_while_frame_time_advances() {
                 layer_core::EvaluationContext {elapsed:*elapsed,..Default::default()}));
             let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
             r.drain_image_decodes(&mut encoder).unwrap();
-            r.prefetch_regions(&frame,&mut encoder).unwrap();
+            r.prefetch_regions(&frame,&mut encoder,&mut crate::test_support::work(false)).unwrap();
             r.uploads.finish(&encoder);encoder.submit(&r.queue);
             r.wait_idle().unwrap();
             if !r.regions.as_ref().unwrap().background_pending() {break;}
@@ -295,12 +295,12 @@ fn region_cache_prewarm_pauses_for_contact_resumes_idle_and_promotes_demand() {
     assert!(r.next_frame()!=layer_render::FrameDemand::Work);
     let frame=r.artwork_frame.clone().unwrap();
     let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    r.prefetch_regions(&frame,&mut encoder).unwrap();
+    r.prefetch_regions(&frame,&mut encoder,&mut crate::test_support::work(false)).unwrap();
     assert_eq!(encoder.pass_count(),0);
     assert!(r.regions.as_ref().unwrap().raw.mask().is_none());
     r.shader_idle(true,true);
     assert!(r.next_frame()==layer_render::FrameDemand::Work);
-    r.prefetch_regions(&frame,&mut encoder).unwrap();
+    r.prefetch_regions(&frame,&mut encoder,&mut crate::test_support::work(false)).unwrap();
     r.shader_idle(false,false);
     assert!(r.next_frame()!=layer_render::FrameDemand::Work);
     let mut query=request(source,rectangle([0,0,1,1]),exact(),0.);
@@ -752,4 +752,135 @@ fn fill_drag_with_different_auto_reaches_commits_and_reopens_the_second_seal_in_
     assert!(!s.engine().can_undo());
     settle(&mut s);
     assert_eq!(s.renderer_mut().readback_srgb_rgba8().unwrap(),before);
+}
+
+fn open_rings(extent:[u32;2])->Document {
+    uniform_document(extent,&(0..extent[0]*extent[1]).map(|i| {
+        let (x,y)=((i%extent[0]) as i32,(i/extent[0]) as i32);
+        let centre=[x/256*256+128,y/256*256+128];let gap=6+(x/256*7+y/256*5)%5*6;
+        let radius=(((x-centre[0]).pow(2)+(y-centre[1]).pow(2)) as f32).sqrt();
+        f32::from((96.0..102.0).contains(&radius) && !(y>centre[1] && (x-centre[0]).abs()<gap/2) || (x+2*y)%611<3)
+    }).collect::<Vec<_>>())
+}
+
+#[test]
+fn background_line_chunks_pause_for_a_contact_and_fit_the_frame_grant() {
+    let extent=[768,512];
+    let document=open_rings(extent);
+    let source=RegionSource::Scene {snapshot:document.snapshot(),scope:layer_core::SceneScope::Raw(target(&document))};
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    submit_settled(&mut r,packet(document.scene(),extent));
+    r.startup=Some(startup::Startup::new(r.compilation.clone()).unwrap());
+    r.shader_idle(true,true);
+    r.prepare_regions(Some(&RegionPreparation {source,reference_count:None,paper:None,tolerance:0.,refinement:Default::default(),enclosed:false}));
+    let frame=r.artwork_frame.clone().unwrap();
+    let step=|r:&mut WgpuRasterizer| {
+        let mut work=crate::scene::Scene::begin_paced(false,16<<20);
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        r.prefetch_regions(&frame,&mut encoder,&mut work).unwrap();
+        let passes=encoder.pass_count();
+        r.uploads.finish(&encoder);encoder.submit(&r.queue);r.wait_idle().unwrap();
+        let [capacity,used]=work.counts();
+        assert!(used<=capacity,"a background line chunk planned {used} taps in a {capacity} tap frame grant");
+        (passes,used>0)
+    };
+    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(60);
+    let mut charged=0;
+    while charged==0 {
+        charged+=usize::from(step(&mut r).1);
+        assert!(std::time::Instant::now()<deadline,"background line preparation must start");
+    }
+    r.shader_idle(false,false);
+    assert!(r.regions.as_ref().unwrap().background_pending() && r.next_frame()!=layer_render::FrameDemand::Work);
+    for _ in 0..4 {assert_eq!(step(&mut r),(0,false),"background region work ran during a contact");}
+    r.shader_idle(true,true);
+    while r.regions.as_ref().unwrap().background_pending() {
+        charged+=usize::from(step(&mut r).1);
+        assert!(std::time::Instant::now()<deadline,"background line preparation must finish");
+    }
+    assert!(charged>2,"background line chunks were charged to {charged} frame grants");
+}
+
+#[test]
+fn taps_with_lines_built_around_their_region_match_taps_with_lines_built_everywhere() {
+    let extent=[2304,1536];
+    let document=open_rings(extent);
+    let source=RegionSource::Scene {snapshot:document.snapshot(),scope:layer_core::SceneScope::Raw(target(&document))};
+    let mut scoped=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut whole=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    for r in [&mut scoped,&mut whole] {frame(r,&document,extent);}
+    let mut query=request(source,rectangle([0,0,1,1]),RegionRefinement {close_gaps:true,edges:RegionEdges::LineMiddle,..exact()},0.);
+    query.enclosure=None;
+    receive_request(&mut whole,RegionRequest {contiguous:false,..query.clone()});
+    let blocks=extent.map(|n|n.div_ceil(128) as usize);
+    for (id,position) in [[128,128],[1152,640],[2176,1408],[640,1152],[1300,700],[200,1500]].into_iter().enumerate() {
+        for (tool,fill) in [("wand",None),("fill",Some(Default::default()))] {
+            let query=RegionRequest {request_id:id as u64,position,fill,..query.clone()};
+            let expected=receive_request(&mut whole,query.clone());
+            let result=receive_request(&mut scoped,query);
+            let built=crate::region_requests::tests::built_line_blocks(&scoped);
+            assert!(built.is_some_and(|built|built<blocks[0]*blocks[1]),"{position:?} built lines for {built:?} of {} blocks",blocks[0]*blocks[1]);
+            let gaps=|result:&layer_render::RegionResult|result.gaps.as_ref().map(|gaps|(gaps.active,gaps.line_bounded,gaps.seals.iter().map(|seal|(seal.id,seal.start,seal.end,seal.bend)).collect::<std::collections::BTreeSet<_>>()));
+            assert_eq!((&result.pixels,&result.underfill,gaps(&result)),(&expected.pixels,&expected.underfill,gaps(&expected)),"{tool} at {position:?}");
+        }
+    }
+}
+
+#[test]
+fn wand_and_fill_taps_on_a_photo_build_lines_only_around_the_tapped_patch() {
+    use layer_ui::{UiSession,UiAction,CommandId,Platform};
+    use layer_engine::{PenEvent,PenPhase,SampleFlags,ToolKind};
+    use layer_render::FrameDemand;
+    let extent=[2560u32,1920];
+    let pixels:Vec<u8>=(0..extent[1]).flat_map(|y|(0..extent[0]).flat_map(move |x| {
+        let patch=x/256*7+y/256*13;let grain=(x.wrapping_mul(2654435761)^y.wrapping_mul(40503))>>27;
+        [patch*37%200+grain,patch*91%200+grain,patch*53%200+grain].map(|channel|channel as u8)
+    })).collect();
+    let mut png=Vec::new();
+    let mut encoder=png::Encoder::new(&mut png,extent[0],extent[1]);
+    encoder.set_color(png::ColorType::Rgb);encoder.set_depth(png::BitDepth::Eight);
+    encoder.write_header().unwrap().write_image_data(&pixels).unwrap();
+    let photo=layer_color::photo::read_photo_detailed_with_cancel(std::io::Cursor::new(png),
+        layer_color::photo::DecodeLimits {source_bytes:1<<30,codec_bytes:1<<30,dimension:8192},&std::sync::atomic::AtomicBool::new(false)).unwrap();
+    let depth=photo.source.interpretation.depth;
+    let document=layer_color::photo_project(photo.source,photo.metadata,"Photo".into(),depth).unwrap();
+    let r=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+    let mut s=UiSession::new(r,document,[1200,900],Platform::Gtk).unwrap();
+    let clock=std::time::Instant::now();
+    let idle=|s:&mut UiSession<WgpuRasterizer>|matches!(s.frame_demand(),FrameDemand::Wait|FrameDemand::WaitUntil(_))
+        && matches!(s.renderer_mut().next_frame(),FrameDemand::Wait|FrameDemand::WaitUntil(_));
+    let step=|s:&mut UiSession<WgpuRasterizer>| {
+        let now=clock.elapsed().as_nanos() as u64;s.frame(now,now).unwrap();crate::test_support::complete(s.renderer_mut());
+    };
+    let settle=|s:&mut UiSession<WgpuRasterizer>,before:u64|{
+        let mut most=Some(0);
+        crate::test_support::wait_until("the photo must publish and settle",|| {
+            step(s);
+            most=most.zip(crate::region_requests::tests::built_line_blocks(s.renderer_mut())).map(|(most,built)|most.max(built));
+            if s.engine().document().revision!=before && s.paint_ready() && s.require_document_idle().is_ok() && idle(s) {Ok(())}else{Err(())}
+        });
+        most
+    };
+    let pen=|s:&mut UiSession<WgpuRasterizer>,sequence,phase,point:[f32;2]| {
+        let [a,b,c,d,x,y]=s.camera().document_to_surface();
+        s.pen(PenEvent {device_id:1,sequence,timestamp_ns:clock.elapsed().as_nanos() as u64,view_revision:s.camera().revision,
+            surface_position:Point {x:a*point[0]+c*point[1]+x,y:b*point[0]+d*point[1]+y},
+            pressure:1.,tilt_radians:[0.;2],twist_radians:0.,distance:0.,phase,tool:ToolKind::Pen,flags:SampleFlags::PRIMARY});
+    };
+    let revision=s.engine().document().revision;
+    s.dispatch(UiAction::Invoke {command:CommandId::AddLayer}).unwrap();
+    s.dispatch(UiAction::SetColor {rgba:[1.,0.,0.,1.]}).unwrap();
+    settle(&mut s,revision);
+    let blocks=extent.map(|n|n.div_ceil(128) as usize);
+    for (sequence,(tool,point)) in [(CommandId::AutoSelect,[700.,600.]),(CommandId::Fill,[1850.,1350.])].into_iter().enumerate() {
+        if s.engine().document().working.selection.is_some() {s.dispatch(UiAction::Invoke {command:CommandId::Deselect}).unwrap();}
+        s.dispatch(UiAction::Invoke {command:tool}).unwrap();
+        let revision=s.engine().document().revision;
+        for _ in 0..8 {step(&mut s);}
+        if sequence==0 {assert_eq!(crate::region_requests::tests::built_line_blocks(s.renderer_mut()),Some(0),"an opaque photo has no open pixels to prepare lines for");}
+        pen(&mut s,2*sequence as u64,PenPhase::Down,point);step(&mut s);
+        pen(&mut s,2*sequence as u64+1,PenPhase::Up,point);
+        let built=settle(&mut s,revision);
+        assert!(built.is_some_and(|built|built>0 && built<blocks[0]*blocks[1]/2),"{tool:?} built lines for {built:?} of {} blocks",blocks[0]*blocks[1]);
+    }
 }

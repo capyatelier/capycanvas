@@ -23,17 +23,29 @@ const FIT_DISPLACEMENT:u32=24;
 const NEIGHBOUR_REACH:u32=64;
 const PARAMS: u64 = 112;
 const PARAMETER_BATCH_BYTES:u64=64*1024;
+const MAX_CHUNK_TAPS:f64=5e8;
+const SCOPE_BLOCK:u32=128;
+const SCOPE_BLOCKS:i64=3;
 type Step = (&'static str,u64,Vec<u32>);
-struct Build { steps:std::collections::VecDeque<Step>, submission:Option<crate::submission::Submission>,in_flight:std::sync::Arc<std::sync::atomic::AtomicU32>, ends:Option<mpsc::Receiver<Result<[u32;2],GpuRasterError>>>, ranked:bool, incremental:bool }
+type Readback<T> = Option<mpsc::Receiver<Result<T,GpuRasterError>>>;
+const SNAP_AREA:usize=33*33;
+pub(crate) struct ScopeProbe {pub on_ink:bool, pub stale:u32, pub flagged:Vec<[u32;2]>, region:Vec<u32>}
+#[derive(Clone, PartialEq, Debug)]
+enum Built {Grain,Blocks(std::collections::BTreeSet<[u32;2]>),Full}
+struct Build { steps:std::collections::VecDeque<Step>, submission:Option<crate::submission::Submission>,in_flight:std::sync::Arc<std::sync::atomic::AtomicU32>, ends:Readback<[u32;2]>, ranked:bool, incremental:bool,
+    open:Readback<u32>, reads_open:bool, lines:bool, target:Built, grain:[f32;4], scoped:bool }
 impl Build {
+    fn new(steps:Vec<Step>,target:Built,grain:[f32;4])->Self {
+        Self {steps:steps.into(),submission:None,in_flight:Default::default(),ends:None,ranked:false,incremental:false,open:None,reads_open:false,lines:false,target,grain,scoped:false}
+    }
     fn available(&self,demand:bool)->bool {
         let count=self.in_flight.load(std::sync::atomic::Ordering::Acquire);
         self.submission.as_ref().is_none_or(|owner|owner.submitted())
-            && (self.ends.is_none() || count==0)
+            && (self.ends.is_none() && self.open.is_none() || count==0)
             && (count<u32::from(demand)+1 || demand && self.ranked && self.steps.is_empty())
     }
 }
-const STAGES: [&str; 23] = ["grain_bits", "distance_seeds", "jump_distance", "store_distance", "skeleton_seeds", "skeleton_ridges", "skeleton_prune", "line_ends", "refine_ends", "seal_candidates", "open_bits", "apply_seals", "region_seeds", "assign_region", "hold_barriers", "grow_region", "intersect_bits", "remember_thin", "check_seeds", "barrier_plane", "snap_seed", "reset_ends", "assign_tokens"];
+const STAGES: [&str; 25] = ["grain_bits", "distance_seeds", "jump_distance", "store_distance", "skeleton_seeds", "skeleton_ridges", "skeleton_prune", "line_ends", "refine_ends", "seal_candidates", "scope_region", "scope_snap", "open_bits", "apply_seals", "region_seeds", "assign_region", "hold_barriers", "grow_region", "intersect_bits", "remember_thin", "check_seeds", "barrier_plane", "snap_seed", "reset_ends", "assign_tokens"];
 
 pub(crate) struct Input<'a> {pub device:&'a PipelineDevice,pub mask:&'a wgpu::Buffer,pub paper:&'a wgpu::TextureView}
 pub(super) struct Lines {
@@ -51,6 +63,8 @@ pub(super) struct Lines {
     building:Option<Build>,
     ends:u32,
     overflow:bool,
+    built:Built,
+    open:bool,
 }
 impl Lines {
     pub fn new(device: &PipelineDevice) -> Self {
@@ -73,7 +87,7 @@ impl Lines {
             label:Some("area colours"),bind_group_layouts:&[Some(&colour_layout)],immediate_size:0,
         });
         let colour=Deferred::compute(device,"area colours",&colour_pipeline_layout,&shader,"colour_tokens");
-        Self {layout,colour_layout,colour,pipelines,scratch:None,tokens:None,frontier:None,data:None,extent:[0;2],offsets:[0;4],windows:Vec::new(),building:None,ends:0,overflow:false}
+        Self {layout,colour_layout,colour,pipelines,scratch:None,tokens:None,frontier:None,data:None,extent:[0;2],offsets:[0;4],windows:Vec::new(),building:None,ends:0,overflow:false,built:Built::Grain,open:true}
     }
     pub fn storage_bytes(&self)->u64 {
         self.tokens.as_ref().map_or(0,wgpu::Buffer::size)+self.frontier.as_ref().map_or(0,wgpu::Buffer::size)+self.data.as_ref().map_or(0,wgpu::Buffer::size)+self.scratch.as_ref().map_or(0,|buffers|buffers.iter().map(wgpu::Buffer::size).sum())
@@ -92,7 +106,7 @@ impl Lines {
     pub fn pipelines(&self,refinement:RegionRefinement,prepare_ends:bool)->impl Iterator<Item=&Deferred<wgpu::ComputePipeline>> {
         self.cache_pipelines().chain(STAGES[8..].iter().filter(move |entry|match **entry {
             "assign_tokens"=>false,
-            "refine_ends"|"seal_candidates"=>prepare_ends && !self.overflow,
+            "refine_ends"|"seal_candidates"=>!self.overflow,
             "grow_region"=>matches!(refinement.edges,layer_render::RegionEdges::GrowShrink(_)),
             "assign_region"=>matches!(refinement.edges,layer_render::RegionEdges::LineMiddle),
             "region_seeds"=>!matches!(refinement.edges,layer_render::RegionEdges::Exact),
@@ -139,8 +153,15 @@ impl Lines {
         let mut pass=encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {label:Some("area colours"),timestamp_writes:None});
         pass.set_pipeline(&self.colour);pass.set_bind_group(0,&group,&[]);pass.dispatch_workgroups(256,4,1);
     }
+    fn layout(&mut self,extent:[u32;2],limits:&wgpu::Limits,windows:&[(u32,[u32;4])])->Result<u64,GpuRasterError> {
+        let (offsets,size)=storage_layout(extent,limits).ok_or(GpuRasterError::SizeOverflow)?;
+        self.extent=extent;self.offsets=offsets;
+        self.windows=windows.iter().map(|(_,core)|(*core,analysis_window(*core,extent))).collect();
+        Ok(size)
+    }
     pub fn allocate(&mut self,device:&PipelineDevice,extent:[u32;2],side:u32,windows:&[(u32,[u32;4])])->Result<(),GpuRasterError> {
-        let (offsets,size)=storage_layout(extent,&device.limits()).ok_or(GpuRasterError::SizeOverflow)?;
+        let size=self.layout(extent,&device.limits(),windows)?;
+        let offsets=self.offsets;
         if self.data.as_ref().is_none_or(|buffer|buffer.size()<size) {
             self.data=Some(device.create_buffer(&wgpu::BufferDescriptor {label:Some("cached region lines"),size,
                 usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::COPY_SRC,mapped_at_creation:false}));
@@ -149,7 +170,7 @@ impl Lines {
         let compact_bytes=scratch_bytes.max(u64::from(offsets[3])*END_WORDS*4);
         if self.scratch.as_ref().is_none_or(|buffers|buffers[0].size()<compact_bytes || buffers[1].size()<scratch_bytes) {
             self.scratch=Some(std::array::from_fn(|index|device.create_buffer(&wgpu::BufferDescriptor {label:Some("region window coordinates"),size:if index==0 {compact_bytes}else{scratch_bytes},
-                usage:wgpu::BufferUsages::STORAGE,mapped_at_creation:false})));
+                usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::COPY_SRC,mapped_at_creation:false})));
         }
         if self.frontier.is_none() {
             let limits=device.limits();
@@ -157,8 +178,6 @@ impl Lines {
             self.frontier=Some(device.create_buffer(&wgpu::BufferDescriptor {label:Some("region seal search frontier"),size:slots*SLOT_BYTES,
                 usage:wgpu::BufferUsages::STORAGE,mapped_at_creation:false}));
         }
-        self.extent=extent;self.offsets=offsets;
-        self.windows=windows.iter().map(|(_,core)|(*core,analysis_window(*core,extent))).collect();
         Ok(())
     }
     fn params(&self,core:[u32;4],window:[u32;4],options:[u32;4],paper:[f32;4])->Vec<u32> {
@@ -204,35 +223,54 @@ impl Lines {
         }
         input
     }
-    fn build_steps(&self,grain:[f32;4],radius:u32,has_paper:bool,dirty:&std::collections::BTreeSet<[u32;2]>)->Vec<Step> {
-        let mut steps=Vec::new();
-        let changed=|halo|changed_regions(dirty,halo,self.extent);
-        let windows=|regions:Vec<PixelRect>,context|self.windows.iter().filter_map(move |&(core,window)| {
+    fn windows_in(&self,regions:&[PixelRect],context:u32)->Vec<([u32;4],[u32;4])> {
+        self.windows.iter().filter_map(|&(core,window)| {
             let core=rect(core);let window=rect(window);
             let core=regions.iter().map(|region|core.intersect(*region)).filter(|core|!core.is_empty()).reduce(PixelRect::union)?;
             Some((bounds(core),bounds(core.expand(context,self.extent).intersect(window))))
-        }).collect::<Vec<_>>();
-        let grain_windows=if dirty.is_empty() {self.windows.clone()}else{windows(changed(radius.max(1)),0)};
-        for (core,window) in grain_windows {
-            steps.push(("grain_bits",u64::from(core[2])*u64::from(core[3]),self.params(core,window,[radius,u32::from(has_paper),0,0],grain)));
-        }
-        let distance_windows=if dirty.is_empty() {self.windows.clone()}else{windows(changed(radius.max(1)+DISTANCE_HALO),DISTANCE_HALO)};
-        for (core,window) in distance_windows {
-            let input=self.jump_steps(&mut steps,core,window,"distance_seeds",0,DISTANCE_LIMIT_HALF_PIXELS.div_ceil(2));
-            steps.push(("store_distance",u64::from(core[2])*u64::from(core[3]),self.params(core,window,[DISTANCE_LIMIT_HALF_PIXELS,0,0,input],grain)));
-        }
+        }).collect()
+    }
+    fn grain_steps(&self,grain:[f32;4],radius:u32,has_paper:bool,dirty:&std::collections::BTreeSet<[u32;2]>)->Vec<Step> {
+        let windows=if dirty.is_empty() {self.windows.clone()}else{self.windows_in(&changed_regions(dirty,radius.max(1),self.extent),0)};
+        windows.into_iter().map(|(core,window)|("grain_bits",u64::from(core[2])*u64::from(core[3]),self.params(core,window,[radius,u32::from(has_paper),0,0],grain))).collect()
+    }
+    fn line_steps(&self,grain:[f32;4],radius:u32,dirty:&std::collections::BTreeSet<[u32;2]>)->Vec<Step> {
+        let mut steps=Vec::new();
+        let changed=|halo|changed_regions(dirty,halo,self.extent);
+        let distance_windows=if dirty.is_empty() {self.windows.clone()}else{self.windows_in(&changed(radius.max(1)+DISTANCE_HALO),DISTANCE_HALO)};
+        self.distance_steps(&mut steps,distance_windows,grain);
         let end_halo=radius.max(1)+DISTANCE_HALO+SKELETON_HALO+END_HALO;
-        let end_windows=if dirty.is_empty() {self.windows.clone()}else{windows(changed(end_halo),SKELETON_HALO+END_HALO)};
+        let end_windows=if dirty.is_empty() {self.windows.clone()}else{self.windows_in(&changed(end_halo),SKELETON_HALO+END_HALO)};
         if !dirty.is_empty() {
             steps.push(("reset_ends",u64::from(self.ends),self.params([0;4],[0;4],[3,self.ends,0,0],grain)));
             for &(core,_) in &end_windows {steps.push(("reset_ends",u64::from(self.ends),self.params(core,[0;4],[4,self.ends,0,0],grain)));}
             let candidate_halo=end_halo+2*(NEIGHBOUR_REACH+2*FIT_DISPLACEMENT);
-            for (core,_) in windows(changed(candidate_halo),0) {steps.push(("reset_ends",u64::from(self.ends),self.params(core,[0;4],[5,self.ends,0,0],grain)));}
-            steps.push(("reset_ends",u64::from(self.offsets[2]-self.offsets[1]-HEADER_WORDS).max(1),self.params([0;4],[0;4],[0;4],grain)));
+            for (core,_) in self.windows_in(&changed(candidate_halo),0) {steps.push(("reset_ends",u64::from(self.ends),self.params(core,[0;4],[5,self.ends,0,0],grain)));}
+            steps.push(self.clear_ends(grain));
             steps.push(("reset_ends",u64::from(self.ends),self.params([0;4],[0;4],[6,self.ends,0,0],grain)));
             steps.push(("reset_ends",u64::from(self.offsets[0]),self.params([0;4],[0;4],[7,0,0,0],grain)));
         }
         for (core,window) in end_windows {self.end_steps(&mut steps,core,window,grain);}
+        steps
+    }
+    fn distance_steps(&self,steps:&mut Vec<Step>,windows:Vec<([u32;4],[u32;4])>,grain:[f32;4]) {
+        for (core,window) in windows {
+            let input=self.jump_steps(steps,core,window,"distance_seeds",0,DISTANCE_LIMIT_HALF_PIXELS.div_ceil(2));
+            steps.push(("store_distance",u64::from(core[2])*u64::from(core[3]),self.params(core,window,[DISTANCE_LIMIT_HALF_PIXELS,0,0,input],grain)));
+        }
+    }
+    fn clear_ends(&self,grain:[f32;4])->Step {("reset_ends",u64::from(self.offsets[2]-self.offsets[1]-HEADER_WORDS).max(1),self.params([0;4],[0;4],[0;4],grain))}
+    fn scope_steps(&self,grain:[f32;4],target:&Built)->Vec<Step> {
+        let mut steps=vec![self.clear_ends(grain)];
+        let Built::Blocks(blocks)=target else {
+            steps.extend(self.line_steps(grain,1,&Default::default()));
+            return steps;
+        };
+        let cores:Vec<_>=blocks.iter().map(|&[x,y]|PixelRect::new(x*SCOPE_BLOCK,y*SCOPE_BLOCK,(x+1)*SCOPE_BLOCK,(y+1)*SCOPE_BLOCK).intersect(PixelRect::full(self.extent))).filter(|core|!core.is_empty()).collect();
+        let reach:Vec<_>=cores.iter().map(|core|core.expand(SKELETON_HALO+END_HALO,self.extent)).collect();
+        steps.push(("reset_ends",u64::from(self.offsets[0]),self.params([0;4],[0;4],[7,0,0,0],grain)));
+        self.distance_steps(&mut steps,self.windows_in(&reach,DISTANCE_HALO),grain);
+        for (core,window) in self.windows_in(&cores,SKELETON_HALO+END_HALO) {self.end_steps(&mut steps,core,window,grain);}
         steps
     }
     fn end_steps(&self,steps:&mut Vec<Step>,core:[u32;4],window:[u32;4],grain:[f32;4]) {
@@ -258,6 +296,11 @@ impl Lines {
     pub fn ready(&mut self,demand:bool)->Result<bool,GpuRasterError> {
         if !self.available(demand) {return Ok(false);}
         let Some(mut work)=self.building.take() else {return Ok(true);};
+        if let Some(rx)=&work.open {
+            let open=match rx.try_recv() {Ok(result)=>result?,Err(mpsc::TryRecvError::Empty)=>{self.building=Some(work);return Ok(false);},Err(error)=>return Err(GpuRasterError::MapFailed(error.to_string()))};
+            self.open=open!=0 || work.incremental && self.open;work.open=None;
+            if work.lines && self.open {work.steps=self.scope_steps(work.grain,&Built::Full).into();work.target=Built::Full;}else{work.ranked=true;}
+        }
         if let Some(rx)=&work.ends {
             let metadata=match rx.try_recv() {Ok(result)=>result?,Err(mpsc::TryRecvError::Empty)=>{self.building=Some(work);return Ok(false);},Err(error)=>return Err(GpuRasterError::MapFailed(error.to_string()))};
             self.overflow=metadata[1]!=0;self.ends=metadata[0].min(self.offsets[3]);work.ends=None;work.ranked=true;
@@ -268,39 +311,84 @@ impl Lines {
     pub fn submitted(&self)->bool {self.building.as_ref().is_none_or(|work|work.submission.as_ref().is_none_or(|owner|owner.submitted()))}
     pub fn discarded(&self)->bool {self.building.as_ref().is_some_and(|work|work.submission.as_ref().is_some_and(|owner|owner.discarded()))}
     pub fn cancel(&mut self) {self.building=None;}
-    pub fn build(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,paper:([f32;4],u32,bool),budget:f64,demand:bool,dirty:&std::collections::BTreeSet<[u32;2]>)->Result<(bool,f64),GpuRasterError> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn build(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,paper:([f32;4],u32,bool),budget:f64,demand:bool,dirty:&std::collections::BTreeSet<[u32;2]>,lines:bool)->Result<(bool,f64),GpuRasterError> {
         let (grain,radius,has_paper)=paper;
-        use std::sync::{Arc,atomic::AtomicU32};
+        if self.building.as_ref().is_some_and(|work|work.scoped) {self.building=None;}
         if self.building.is_none() {
             let incremental=!dirty.is_empty() && !self.overflow;
-            if !incremental {encoder.clear_buffer(self.data.as_ref().unwrap(),0,None);self.ends=0;self.overflow=false;}
-            let empty=std::collections::BTreeSet::new();
-            self.building=Some(Build {steps:self.build_steps(grain,radius,has_paper,if incremental {dirty}else{&empty}).into(),submission:None,in_flight:Arc::new(AtomicU32::new(0)),ends:None,ranked:false,incremental});
+            self.building=Some(if incremental && self.built==Built::Full {
+                Build {incremental,..Build::new([self.grain_steps(grain,radius,has_paper,dirty),self.line_steps(grain,radius,dirty)].concat(),Built::Full,grain)}
+            } else {
+                if incremental {encoder.clear_buffer(self.data.as_ref().unwrap(),u64::from(self.offsets[1]+2)*4,Some(4));}
+                else {encoder.clear_buffer(self.data.as_ref().unwrap(),0,None);self.overflow=false;}
+                self.ends=0;
+                let empty=std::collections::BTreeSet::new();
+                let steps=[if incremental {vec![self.clear_ends(grain)]} else {Vec::new()},self.grain_steps(grain,radius,has_paper,if incremental {dirty} else {&empty})].concat();
+                Build {incremental,reads_open:true,lines,..Build::new(steps,Built::Grain,grain)}
+            });
+            self.built=Built::Grain;
         }
         self.advance(input,encoder,radius,budget,demand)
+    }
+    pub fn build_scope(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,paper:([f32;4],u32),budget:f64,blocks:Option<std::collections::BTreeSet<[u32;2]>>)->Result<bool,GpuRasterError> {
+        let target=blocks.map_or(Built::Full,Built::Blocks);
+        if self.covers(&target) {return Ok(true);}
+        if self.building.as_ref().is_some_and(|work|work.target!=target) {self.building=None;}
+        if self.building.is_none() {self.building=Some(Build {scoped:true,..Build::new(self.scope_steps(paper.0,&target),target.clone(),paper.0)});}
+        Ok(self.advance(input,encoder,paper.1,budget,true)?.0 && self.covers(&target))
+    }
+    fn covers(&self,target:&Built)->bool {
+        match (&self.built,target) {(Built::Full,_)=>true,(Built::Blocks(built),Built::Blocks(blocks))=>blocks.is_subset(built),_=>false}
+    }
+    pub fn full(&self)->bool {self.built==Built::Full}
+    #[cfg(test)]
+    pub fn built_blocks(&self)->Option<usize> {match &self.built {Built::Full=>None,Built::Grain=>Some(0),Built::Blocks(blocks)=>Some(blocks.len())}}
+    pub fn open(&self)->bool {self.open}
+    pub fn scope_blocks(&self,seed:[u32;2],flagged:impl Iterator<Item=[u32;2]>)->std::collections::BTreeSet<[u32;2]> {
+        let blocks=self.extent.map(|n|i64::from(n.div_ceil(SCOPE_BLOCK)));
+        flagged.chain([seed.map(|n|n/SCOPE_BLOCK)]).flat_map(|[x,y]|(-SCOPE_BLOCKS..=SCOPE_BLOCKS).flat_map(move |dy|(-SCOPE_BLOCKS..=SCOPE_BLOCKS).map(move |dx|[i64::from(x)+dx,i64::from(y)+dy])))
+            .filter(|[x,y]|(0..blocks[0]).contains(x) && (0..blocks[1]).contains(y)).map(|[x,y]|[x as u32,y as u32]).collect()
+    }
+    pub fn probe_scope(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,tap:[u32;2])->mpsc::Receiver<Result<ScopeProbe,GpuRasterError>> {
+        let columns=self.extent[0].div_ceil(SCOPE_BLOCK);let blocks=columns as usize*self.extent[1].div_ceil(SCOPE_BLOCK) as usize;
+        let scope=&self.scratch.as_ref().unwrap()[0];let bytes=((2+blocks+SNAP_AREA)*4) as u64;
+        encoder.clear_buffer(scope,0,Some(bytes));
+        self.encode(input,encoder,None,None,vec![("scope_region",u64::from(self.offsets[0]),self.params([0;4],[0;4],[tap[0],tap[1],0,0],[1.,1.,0.,0.]))]);
+        let readback=input.device.create_buffer(&wgpu::BufferDescriptor {label:Some("region scope"),size:bytes,usage:wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::MAP_READ,mapped_at_creation:false});
+        encoder.copy_buffer_to_buffer(scope,0,&readback,0,bytes);
+        let (tx,rx)=mpsc::channel();
+        crate::raster::map_then(input.device,Some(encoder),&readback,bytes,move|bytes|{
+            let words:Vec<u32>=bytes.as_chunks::<4>().0.iter().map(|word|u32::from_le_bytes(*word)).collect();
+            let flagged=words[2..2+blocks].iter().enumerate().filter(|(_,flag)|**flag!=0).map(|(index,_)|[index as u32%columns,index as u32/columns]).collect();
+            Ok(ScopeProbe {on_ink:words[0]!=0,stale:words[1],flagged,region:words[2+blocks..].to_vec()})
+        },move|result|{let _=tx.send(result);});
+        rx
+    }
+    pub fn check_snap(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,tap:[u32;2],probe:&ScopeProbe,stop:Option<&wgpu::Buffer>) {
+        let marks=input.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {label:Some("region snap marks"),
+            contents:&[vec![0;4*SNAP_AREA],probe.region.clone()].concat().iter().flat_map(|word|word.to_ne_bytes()).collect::<Vec<_>>(),usage:wgpu::BufferUsages::STORAGE});
+        let checks=[0,1].map(|mode|("scope_snap",if mode==0 {u64::from(self.ends)}else{1},self.params([0;4],[0;4],[tap[0],tap[1],u32::from(stop.is_some()),mode],[1.,1.,0.,0.])));
+        self.encode(input,encoder,stop,Some(&marks),checks.to_vec());
     }
     fn advance(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,radius:u32,budget:f64,demand:bool)->Result<(bool,f64),GpuRasterError> {
         let device=input.device;
         use std::sync::atomic::Ordering;
         if !self.ready(demand)? {return Ok((false,0.));}
         let mut work=self.building.take().unwrap();
-        if work.steps.is_empty() && work.ranked {return Ok((true,0.));}
-        let mut steps=Vec::new();let mut spent=0.;
-        while spent<budget {
-            let Some((entry,remaining,mut params))=work.steps.pop_front() else {break;};
-            let weight=match entry {"grain_bits"=>f64::from(radius*16+32),"jump_distance"=>9.,"store_distance"=>16.,"skeleton_ridges"=>32.,"skeleton_prune"=>if params[16]==0 {1.}else{8.},"line_ends"=>32.,"refine_ends"=>1024.,"seal_candidates"=>4096.,_=>1.};
-            let sparse=entry=="skeleton_ridges" || entry=="jump_distance" && matches!(params[17],0|4);
-            let weight=weight*if sparse {32.}else{1.};
-            let count=((((budget-spent)/weight) as u64).max(64)/64*64).min(remaining).min(if entry=="seal_candidates" {self.frontier.as_ref().unwrap().size()/SLOT_BYTES}else{u64::MAX});
-            steps.push((entry,count,params.clone()));spent+=count as f64*weight;
-            if count<remaining {params[24]+=count as u32;work.steps.push_front((entry,remaining-count,params));}
-            if entry=="seal_candidates" {break;}
-        }
+        if work.steps.is_empty() && work.ranked {self.built=work.target;return Ok((true,0.));}
+        let (steps,spent)=plan_chunk(&mut work.steps,budget,radius,self.frontier.as_ref().unwrap().size()/SLOT_BYTES);
         let mut encoded=!steps.is_empty();
         for run in steps.chunk_by(|a,b|(a.0=="seal_candidates")==(b.0=="seal_candidates")) {
             self.encode(input,encoder,None,(run[0].0=="seal_candidates").then(||self.frontier.as_ref().unwrap()),run.to_vec());
         }
-        if work.steps.is_empty() && !work.ranked {
+        if work.steps.is_empty() && work.reads_open {
+            let readback=device.create_buffer(&wgpu::BufferDescriptor {label:Some("region open pixels"),size:4,usage:wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::MAP_READ,mapped_at_creation:false});
+            encoder.copy_buffer_to_buffer(self.data.as_ref().unwrap(),u64::from(self.offsets[1]+2)*4,&readback,0,4);
+            let (tx,rx)=mpsc::channel();
+            crate::raster::map_then(device,Some(encoder),&readback,4,|bytes|Ok(u32::from_le_bytes(bytes[..4].try_into().unwrap())),move|result|{let _=tx.send(result);});
+            work.open=Some(rx);work.reads_open=false;encoded=true;
+        } else if work.steps.is_empty() && !work.ranked {
             let readback=device.create_buffer(&wgpu::BufferDescriptor {label:Some("region line end count"),size:8,usage:wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::MAP_READ,mapped_at_creation:false});
             encoder.copy_buffer_to_buffer(self.data.as_ref().unwrap(),u64::from(self.offsets[1])*4,&readback,0,8);
             let (tx,rx)=mpsc::channel();
@@ -311,7 +399,7 @@ impl Lines {
             work.submission=Some(encoder.submission());work.in_flight.fetch_add(1,Ordering::AcqRel);
             let in_flight=crate::InFlightCompletion(work.in_flight.clone());encoder.hold(in_flight);
         }
-        if !encoded && work.steps.is_empty() && work.ranked {return Ok((true,spent));}
+        if !encoded && work.steps.is_empty() && work.ranked {self.built=work.target;return Ok((true,spent));}
         self.building=Some(work);Ok((false,spent))
     }
     pub fn has_seals(&self)->bool {!self.overflow && self.ends!=0}
@@ -444,6 +532,22 @@ fn changed_regions(pages:&std::collections::BTreeSet<[u32;2]>,halo:u32,extent:[u
 }
 
 pub(super) fn fits(extent:[u32;2],limits:&wgpu::Limits)->bool {storage_layout(extent,limits).is_some()}
+fn plan_chunk(queue:&mut std::collections::VecDeque<Step>,budget:f64,radius:u32,slots:u64)->(Vec<Step>,f64) {
+    let budget=budget.min(MAX_CHUNK_TAPS);
+    let mut steps=Vec::new();let mut spent=0.;
+    while let Some((entry,remaining,mut params))=queue.pop_front() {
+        let weight=match entry {"grain_bits"=>f64::from(radius*16+32),"jump_distance"=>9.,"store_distance"=>16.,"skeleton_ridges"=>32.,"skeleton_prune"=>if params[16]==0 {1.}else{8.},"line_ends"=>32.,"refine_ends"=>1024.,"seal_candidates"=>4096.,_=>1.};
+        let sparse=entry=="skeleton_ridges" || entry=="jump_distance" && matches!(params[17],0|4);
+        let weight=weight*if sparse {32.}else{1.};
+        let fits=((budget-spent).max(0.)/weight) as u64/64*64;
+        if fits==0 && !steps.is_empty() {queue.push_front((entry,remaining,params));break;}
+        let count=fits.max(64).min(remaining).min(if entry=="seal_candidates" {slots}else{u64::MAX});
+        steps.push((entry,count,params.clone()));spent+=count as f64*weight;
+        if count<remaining {params[24]+=count as u32;queue.push_front((entry,remaining-count,params));}
+        if entry=="seal_candidates" || spent>=budget {break;}
+    }
+    (steps,spent)
+}
 fn storage_layout(extent:[u32;2],limits:&wgpu::Limits)->Option<([u32;4],u64)> {
     let [w,h]=extent;if w==0 || h==0 || w>=65535 || h>=65535 {return None;}
         let bits=u64::from(w.div_ceil(32))*u64::from(h);
@@ -479,7 +583,7 @@ mod tests {
             let input=Input {device:&r.device,mask:&mask,paper:&r.empty_paper_view};
             let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
             if before_build {assert!(lines.prepare_cache(&compiler,startup::BRUSH));}
-            assert!(!lines.build(&input,&mut encoder,([1.,1.,0.,0.],1,false),1.,true,&Default::default()).unwrap().0);
+            assert!(!lines.build(&input,&mut encoder,([1.,1.,0.,0.],1,false),1.,true,&Default::default(),true).unwrap().0);
             assert!(!lines.building.as_ref().unwrap().ranked);
             assert!(lines.prepare_cache(&compiler,startup::BRUSH));
             for entry in ["refine_ends","seal_candidates"] {
@@ -488,6 +592,29 @@ mod tests {
             }
             drop(held);
             r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+        }
+    }
+
+    #[cfg(not(target_arch="wasm32"))]
+    #[test]
+    fn line_build_chunks_stay_bounded_however_fast_the_gpu_measures() {
+        let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let limits=r.device.limits();
+        for extent in [[4248,2832],[9504,6336]] {
+            let labels=super::super::Labels::new(extent,&limits).unwrap();
+            let windows:Vec<_>=labels.windows(extent).collect();
+            let mut lines=Lines::new(&r.device);
+            lines.layout(extent,&limits,&windows).unwrap();
+            let ranking=["refine_ends","seal_candidates"].map(|entry|(entry,u64::from(lines.offsets[3]),lines.params([0;4],[0;4],[THIN_CUTOFF,0,0,0],[1.,1.,0.,0.])));
+            let mut queue:std::collections::VecDeque<Step>=[lines.grain_steps([1.,1.,0.,0.],1,false,&Default::default()),lines.scope_steps([1.,1.,0.,0.],&Built::Full),ranking.to_vec()].concat().into();
+            let mut planned=0.;
+            while !queue.is_empty() {
+                let (steps,spent)=plan_chunk(&mut queue,f64::INFINITY,1,SEAL_SLOTS);
+                assert!(!steps.is_empty());
+                assert!(spent<=MAX_CHUNK_TAPS,"{extent:?}: one line chunk plans {spent:e} taps");
+                planned+=spent;
+            }
+            assert!(planned>10.*MAX_CHUNK_TAPS,"{extent:?}: {planned:e}");
         }
     }
 
@@ -518,7 +645,7 @@ mod tests {
         let pending=|lines:&Lines|lines.building.as_ref().map_or(0,|work|work.steps.iter().filter(|(entry,_,_)|*entry=="seal_candidates").map(|(_,count,_)|*count).sum::<u64>());
         for ends in [26932,lines.offsets[3]] {
             let (tx,rx)=mpsc::channel();tx.send(Ok([ends,0])).unwrap();
-            lines.building=Some(Build {steps:Default::default(),submission:None,in_flight:Default::default(),ends:Some(rx),ranked:false,incremental:false});
+            lines.building=Some(Build {ends:Some(rx),..Build::new(Vec::new(),Built::Full,[1.,1.,0.,0.])});
             let mut left=u64::from(ends);
             for _ in 0..=u64::from(ends).div_ceil(slots) {
                 let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
