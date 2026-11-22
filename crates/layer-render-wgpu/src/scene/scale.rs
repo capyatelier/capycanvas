@@ -1064,7 +1064,7 @@ impl Cache {
             else {self.select_cells(r,served,presented,&selected,arrivals)?};
         let transition=selection.transition;
         let direct=if view {self.stroke_only(packet)}else {stroking};
-        let pages::Selection {mut copies,mut composes,..}=selection;
+        let pages::Selection {mut copies,mut composes,waiting,..}=selection;
         let halves=if view && !live {self.edit_halves(packet,budget)}else {Vec::new()};
         let own=if view && stroking && !packet.dab_batches.iter().any(|batch|batch.target.is_coverage()) {self.dab_cells(packet)}else {Vec::new()};
         let mut streamed=if !live && !direct && matches!(destination,Destination::View|Destination::Navigator) && refinement::streams_exact(self,r,packet,presented)
@@ -1271,7 +1271,7 @@ impl Cache {
             for (region,input) in blocks {self.block(arrivals,region,input);}
             if !matches!(destination,Destination::Navigator) {for (region,waits) in sleeping {self.sleep(region,waits);}}
             for (region,refusal,since) in refusals {self.refuse(since,region,&refusal);}
-        }
+        } else if transition && !waiting {self.commit_window(r,encoder)?;}
         if view && !live && !stroking {self.pivot_pending=self.pivot_inputs_pending(scene,r,packet);}
         if view && live && self.ends_contact(packet) {self.end_contact(encoder);}
         else if view && !live && stroking {self.begin_contact(scene,r,packet,encoder,*retained,budget,&composed)?;}
