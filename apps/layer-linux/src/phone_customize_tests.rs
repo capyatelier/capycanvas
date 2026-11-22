@@ -113,7 +113,7 @@ fn restore(d: &mut Driver, phone: bool) {
     d.click(button.upcast_ref());
     until(|| layout(d) == expected && !d.w.workspaces.view().busy && d.w.visible_dialog().is_none(),
         "Restore Starting Layout adopts its scoped candidate");
-    assert_eq!(history(d).history.undo.len(), prior.history.undo.len() + 1);
+    assert_eq!(history(d).history.head.undo.len(), prior.history.head.undo.len() + 1);
     assert!(!ui_session(&d.w).command(CommandId::ResetLayout).enabled, "a second restore is unavailable");
     let mut current = serde_json::to_value(if phone { &before } else { &starting }).unwrap();
     let mut restored = serde_json::to_value(&expected).unwrap();
@@ -128,8 +128,10 @@ fn restore(d: &mut Driver, phone: bool) {
     }
     assert_eq!(current, restored, "scoped restore preserves the other arrangement");
     d.w.dispatch(UiAction::Invoke { command: CommandId::UndoWorkspace });
+    until(|| layout(d) == before, "stored restore undo applies");
     assert_eq!(layout(d), before, "one Undo restores exact IDs and arrangement");
     d.w.dispatch(UiAction::Invoke { command: CommandId::RedoWorkspace });
+    until(|| layout(d) == expected, "stored restore redo applies");
     assert_eq!(layout(d), expected);
     if phone { capture(d, "customize-phone-restored"); }
     else { capture_current(d, "customize-desktop-restored"); }
@@ -140,7 +142,7 @@ fn restore(d: &mut Driver, phone: bool) {
 fn native_phone_customize() {
     let mut d = setup("art.capycanvas.PhoneCustomize");
     let before = layout(&d);
-    let undo = history(&d).history.undo.len();
+    let undo = history(&d).history.head.undo.len();
     let removed = before.phone.as_ref().unwrap()[0].id;
     let mouse_point = d.point(&d.named(&format!("phone-tool-{removed}")));
     d.input.perform(serde_json::json!([contact("mouse", "down", mouse_point), { "wait_ms": 900 }]));
@@ -159,11 +161,13 @@ fn native_phone_customize() {
     if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() { inventory_monitor(&mut d, "customize-tile-menu"); }
     menu_action(&mut d, "Remove Tool");
     assert!(!layout(&d).phone.unwrap().iter().any(|tile| tile.id == removed));
-    assert_eq!(history(&d).history.undo.len(), undo + 1);
+    assert_eq!(history(&d).history.head.undo.len(), undo + 1);
     let after_remove = layout(&d);
     d.w.dispatch(UiAction::Invoke { command: CommandId::UndoWorkspace });
+    until(|| layout(&d) == before, "stored remove undo applies");
     assert_eq!(layout(&d), before);
     d.w.dispatch(UiAction::Invoke { command: CommandId::RedoWorkspace });
+    until(|| layout(&d) == after_remove, "stored remove redo applies");
     assert_eq!(layout(&d), after_remove);
 
     let anchor = after_remove.phone.as_ref().unwrap()[0].id;
@@ -171,12 +175,12 @@ fn native_phone_customize() {
     menu_action(&mut d, "Insert Tools…");
     let controls = select(&mut d, 2);
     capture(&mut d, "customize-insert-two");
-    let undo = history(&d).history.undo.len();
+    let undo = history(&d).history.head.undo.len();
     confirm(&mut d);
     let inserted = layout(&d);
     assert_eq!(inserted.phone.as_ref().unwrap()[..2].iter().map(|tile| tile.control).collect::<Vec<_>>(), controls);
     assert_eq!(inserted.phone.as_ref().unwrap()[2].id, anchor);
-    assert_eq!(history(&d).history.undo.len(), undo + 1);
+    assert_eq!(history(&d).history.head.undo.len(), undo + 1);
     hold(&mut d, Some(anchor));
     menu_action(&mut d, "Insert Tools…");
     select(&mut d, 1);
@@ -218,7 +222,8 @@ fn native_phone_customize() {
     d.input.key(0xff1b);
     until(|| ui_session(&d.w).tool_picker().is_none() && d.w.visible_dialog().is_none()
         && !d.w.pages.root.is_transition_running(), "cancel closes the capacity picker");
-    assert_eq!(history(&d), unchanged, "cancel adds no history");
+    assert_eq!(history(&d).history.head, unchanged.history.head, "cancel adds no history");
+    assert_eq!(history(&d).working, unchanged.working);
     capture(&mut d, "frame-ten-tools");
 
     let before_move = layout(&d);
@@ -226,7 +231,7 @@ fn native_phone_customize() {
     let from = d.point(&d.named(&format!("phone-tool-{}", tiles[0].id)));
     let mut to = d.point(&d.named(&format!("phone-tool-{}", tiles[2].id)));
     to[usize::from(presentation(&d).edge != Edge::Top)] += 1.;
-    let undo = history(&d).history.undo.len();
+    let undo = history(&d).history.head.undo.len();
     d.input.perform(serde_json::json!([contact("touch", "down", from), { "wait_ms": 900 }]));
     until(|| popup(&d).is_some(), "reorder hold opens its menu");
     d.input.perform(serde_json::json!([contact("touch", "move", to)]));
@@ -237,8 +242,9 @@ fn native_phone_customize() {
     let mut expected = tiles.clone();
     expected[..3].rotate_left(1);
     assert_eq!(layout(&d).phone.unwrap(), expected);
-    assert_eq!(history(&d).history.undo.len(), undo + 1);
+    assert_eq!(history(&d).history.head.undo.len(), undo + 1);
     d.w.dispatch(UiAction::Invoke { command: CommandId::UndoWorkspace });
+    until(|| layout(&d) == before_move, "stored move undo applies");
     assert_eq!(layout(&d), before_move);
     let unchanged = history(&d);
     let outside = [d.w.surface.width() as f32 * 0.5, d.w.surface.height() as f32 * 0.5];
@@ -246,12 +252,16 @@ fn native_phone_customize() {
     until(|| popup(&d).is_some(), "off-bar hold opens its menu");
     d.input.perform(serde_json::json!([contact("touch", "move", outside), contact("touch", "up", outside)]));
     assert!(popup(&d).is_none(), "off-bar cancellation closes the held menu");
-    assert_eq!(history(&d), unchanged, "off-bar release cancels without history");
+    assert_eq!(history(&d).history.head, unchanged.history.head, "off-bar release cancels without history");
+    assert_eq!(history(&d).working, unchanged.working);
     capture(&mut d, "customize-offbar-cancelled");
 
-    let mut empty = layout(&d);
-    empty.phone = Some(Vec::new());
-    d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState { layout: empty, ..Default::default() }) });
+    let manager = d.w.workspaces.manager().unwrap();
+    for tile in layout(&d).phone.unwrap() {
+        d.w.dispatch(UiAction::Phone { action: layer_ui::PhoneAction::RemoveTool { tile: tile.id } });
+        until(|| !manager.dirty() && !manager.saving(), "the removal saves");
+    }
+    assert!(layout(&d).phone.unwrap().is_empty());
     capture(&mut d, "frame-empty-tools");
     hold(&mut d, None);
     let model = ui_session(&d.w).context_menu(ContextTarget::PhoneToolbar).unwrap();
@@ -296,13 +306,14 @@ fn native_phone_customize() {
 fn native_phone_customize_desktop_restore() {
     let mut d = setup("art.capycanvas.PhoneCustomizeDesktopRestore");
     assert!(state(&d.w).phone_presentation([d.w.surface.width() as f32, d.w.surface.height() as f32]).is_none());
-    let mut custom = layout(&d);
+    let custom = layout(&d);
     let panel = custom.panels.iter().find(|panel| matches!(panel.id, Panel::CustomToolbar(_))).unwrap().id;
     let tile = custom.phone.as_ref().unwrap()[0].id;
-    custom.remove_phone_tool(tile).unwrap();
-    d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState { layout: custom, ..Default::default() }) });
+    d.w.dispatch(UiAction::Phone { action: layer_ui::PhoneAction::RemoveTool { tile } });
     d.w.dispatch(UiAction::MovePanel { panel, target: DockTarget::Float { position: [480., 220.] },
         viewport: [d.w.surface.width() as f32, d.w.surface.height() as f32] });
+    let manager = d.w.workspaces.manager().unwrap();
+    until(|| !manager.dirty() && !manager.saving(), "the phone and dock edits save");
     restore(&mut d, false);
     d.finish();
 }

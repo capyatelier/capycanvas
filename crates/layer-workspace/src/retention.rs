@@ -1,56 +1,53 @@
+use crate::stored_workspace::StoredWorkspace;
 use crate::*;
+use serde_json::value::RawValue;
+use std::collections::BTreeSet;
 
-pub(crate) fn readable_items(items: impl Iterator<Item = Result<StoredEntity, StoreError>>) -> Result<Vec<StoredEntity>, StoreError> {
-    items.filter_map(|item| match item {
-        Err(error) if error.kind == ErrorKind::InvalidData => None,
-        Ok(item) if item.fallback => None,
-        item => Some(item),
-    }).collect()
+pub(crate) struct Retained {
+    pub id: String,
+    pub claim: Option<Claim>,
+    pub content: StoredWorkspace,
 }
 
 /// Shared retention policy. An owner must settle its pending writes before
 /// allowing maintenance; other live owners are deferred, never overwritten.
 pub(crate) fn retention_plan(
-    items: &[StoredEntity],
+    items: &mut [Retained],
     owner: Option<&Owner>,
     now: u64,
-    budget: usize,
-) -> Result<Vec<Entity>, StoreError> {
-    let mut entities: Vec<_> = items.iter().map(|i| i.entity.clone()).collect();
+    budget: u64,
+    mut size: impl FnMut(&RawValue) -> u64,
+) -> BTreeSet<usize> {
+    #[derive(serde::Deserialize)]
+    struct Dated {
+        #[serde(with = "counter")]
+        timestamp_ms: u64,
+    }
     let mut eligible = Vec::new();
     let mut remaining = 0u64;
-    for (index, stored) in items.iter().enumerate() {
-        let elsewhere = stored
+    for (index, item) in items.iter().enumerate() {
+        let elsewhere = item
             .claim
             .as_ref()
             .is_some_and(|c| c.expires_at_ms > now && Some(&c.owner) != owner);
-        let ItemContent::Workspace { history, .. } = &stored.entity.content else {
-            continue;
-        };
-        for (id, revision) in &history.revisions {
-            if id != &history.current && !history.undo.contains(id) && !history.redo.contains(id) {
-                let bytes = serde_json::to_vec(revision)?.len() as u64;
-                remaining += bytes;
-                if !elsewhere {
-                    eligible.push((revision.timestamp_ms, index, id.clone(), bytes));
-                }
+        for (id, revision) in item.content.unreachable() {
+            let bytes = size(revision);
+            remaining += bytes;
+            if !elsewhere {
+                let date = serde_json::from_str::<Dated>(revision.get()).map_or(0, |dated| dated.timestamp_ms);
+                eligible.push((date, index, id.clone(), bytes));
             }
         }
     }
     eligible.sort_by_key(|(date, index, _, _)| (*date, *index));
+    let mut changed = BTreeSet::new();
     for (_, index, id, bytes) in eligible {
-        if remaining <= budget as u64 {
+        if remaining <= budget {
             break;
         }
-        if let ItemContent::Workspace { history, .. } = &mut entities[index].content {
-            history.revisions.remove(&id);
-        }
+        items[index].content.remove(&id);
+        changed.insert(index);
         remaining = remaining.saturating_sub(bytes);
     }
-    Ok(entities
-        .into_iter()
-        .zip(items)
-        .filter(|(e, s)| e != &s.entity)
-        .map(|(e, _)| e)
-        .collect())
+    changed
 }

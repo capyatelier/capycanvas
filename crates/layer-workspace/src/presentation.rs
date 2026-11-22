@@ -127,13 +127,9 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let current = self
             .current()
             .ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoWorkspaceIsActive))?;
-        let capture = current.capture()?;
-        let config = capture
-            .history
-            .layout()
-            .panel(panel)
-            .map_err(StoreError::invalid)?;
-        let visible = capture.history.layout().panel_group(panel).is_some();
+        let layout = current.layout()?;
+        let config = layout.panel(panel).map_err(StoreError::invalid)?;
+        let visible = layout.panel_group(panel).is_some();
         Ok(ManagerDetails {
             title: config.title_localized(&self.localization()),
             description: message(&self.localization(), layer_ui::MessageId::WORKSPACE_TOOLBAR_IN, &[("name", self.display_name(&current.id, &current.metadata))]),
@@ -149,12 +145,10 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             let Some(entity) = self.current() else {
                 return Vec::new();
             };
-            let Ok(capture) = entity.capture() else {
+            let Ok(layout) = entity.layout() else {
                 return Vec::new();
             };
-            return capture
-                .history
-                .layout()
+            return layout
                 .panels
                 .iter()
                 .filter(|p| p.id.kind() == layer_ui::PanelKind::Tiles)
@@ -162,7 +156,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 .map(|p| WorkspaceRow {
                     id: serde_json::to_string(&p.id).unwrap(),
                     title: p.title_localized(&self.localization()),
-                    subtitle: if capture.history.layout().panel_group(p.id).is_some() {
+                    subtitle: if layout.panel_group(p.id).is_some() {
                         self.localization().text(layer_ui::MessageId::WORKSPACE_VISIBLE).to_string()
                     } else {
                         self.localization().text(layer_ui::MessageId::WORKSPACE_HIDDEN).to_string()
@@ -290,8 +284,8 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub fn details(&self, stored: &StoredEntity, idle: bool, now: u64) -> ManagerDetails {
         let entity = &stored.entity;
         let preview = match &entity.content {
-            ItemContent::Workspace { history, .. } => Some(history.layout().clone()),
-            ItemContent::Toolbar { .. } => None,
+            HeadContent::Workspace { head, .. } => Some(head.layout().clone()),
+            HeadContent::Toolbar { .. } => None,
         };
         let mut description = entity.metadata.description.clone();
         if entity.metadata.builtin {

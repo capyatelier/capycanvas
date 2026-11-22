@@ -1822,7 +1822,7 @@ fn native_header_catalog_preview_input() {
         ui_session_mut(&d.w)
             .capture_workspace()
             .unwrap();
-    assert_eq!(saved.history.generation, capture.history.generation + 1);
+    assert_eq!(saved.history.head.generation, capture.history.head.generation + 1);
     d.edit();
     d.click_name("header-size-2");
     pump(120);

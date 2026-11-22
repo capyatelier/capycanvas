@@ -66,7 +66,7 @@ class AndroidWorkspaceManagerTest {
     private fun capture() = JSONObject(host.workspaceCapture())
     private fun normalized(value: JSONObject): String {
         val copy = JSONObject(value.toString())
-        copy.getJSONObject("history").getJSONObject("revisions").apply { keys().forEach { getJSONObject(it).put("timestamp_ms", "date") } }
+        copy.getJSONObject("history").getJSONObject("current").put("timestamp_ms", "date")
         return copy.toString()
     }
     private fun shot(name: String) = screenshot("validation/workspaces/$name.png")

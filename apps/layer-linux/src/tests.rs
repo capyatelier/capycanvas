@@ -13620,6 +13620,7 @@ fn native_workspace_database_resume_and_independent_windows() {
     reopened.dispatch(UiAction::Invoke {
         command: CommandId::UndoWorkspace,
     });
+    until(|| durable_layout(&state(&reopened).workspace.layout) == baseline, "stored undo applies after reopening");
     assert_eq!(durable_layout(&state(&reopened).workspace.layout), baseline);
     assert_eq!(state(&reopened).brush.diameter, 73.);
     assert!(state(&reopened).workspace.zen_mode);
@@ -13634,6 +13635,7 @@ fn native_workspace_database_resume_and_independent_windows() {
     again.dispatch(UiAction::Invoke {
         command: CommandId::RedoWorkspace,
     });
+    until(|| durable_layout(&state(&again).workspace.layout) == moved, "stored redo applies after reopening");
     assert_eq!(durable_layout(&state(&again).workspace.layout), moved);
     assert_eq!(state(&again).brush.diameter, 73.);
     wait_saved(&again);
@@ -13860,6 +13862,7 @@ fn native_named_workspace_manager_library_and_history() {
     w.dispatch(UiAction::Invoke {
         command: CommandId::UndoWorkspace,
     });
+    until(|| durable_layout(&state(&w).workspace.layout) == customized, "stored starting-layout undo applies");
     assert_eq!(durable_layout(&state(&w).workspace.layout), customized);
     let toolbar = state(&w)
         .workspace
@@ -13902,8 +13905,8 @@ fn native_named_workspace_manager_library_and_history() {
         .capture()
         .unwrap();
     assert_eq!(
-        persisted_original.history.generation,
-        original.history.generation
+        persisted_original.history.head.generation,
+        original.history.head.generation
     );
     let open_history = || {
         w.workspaces.send(
@@ -14013,14 +14016,15 @@ fn native_named_workspace_manager_library_and_history() {
         } else {
             assert_eq!(after.history.layout(), &baseline);
             assert_eq!(
-                after.history.revisions.len(),
-                original.history.revisions.len() + 1
+                after.history.head.undo.len(),
+                original.history.head.undo.len() + 1
             );
-            assert_eq!(after.history.generation, original.history.generation + 1);
+            assert_eq!(after.history.head.generation, original.history.head.generation + 1);
             assert_eq!(after.working, original.working);
             w.dispatch(UiAction::Invoke {
                 command: CommandId::UndoWorkspace,
             });
+            until(|| &durable_layout(&state(&w).workspace.layout) == original.history.layout(), "stored history restore undo applies");
             assert_eq!(
                 durable_layout(&state(&w).workspace.layout),
                 *original.history.layout()

@@ -8,40 +8,30 @@ impl SqliteStore {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         self.ownership.reconcile(&tx, now)?;
-        let items = retention::readable_items(strings(&tx, "SELECT id FROM items")?
-            .iter()
-            .map(|id| load(&tx, id)))?;
+        let mut items = Vec::new();
+        for id in strings(&tx, "SELECT id FROM items WHERE kind='workspace'")? {
+            match retained(&tx, id) {
+                Err(error) if error.kind == ErrorKind::InvalidData => {}
+                item => items.extend(item?),
+            }
+        }
+        let mut lengths = BTreeMap::new();
         let changed = retention::retention_plan(
-            &items,
+            &mut items,
             owner,
             now,
-            if clear_older {
-                0
-            } else {
-                HISTORY_BUDGET_BYTES as usize
-            },
-        )?;
-        for entity in changed {
-            let old = items.iter().find(|s| s.entity.id == entity.id).unwrap();
-            if old.entity.content != entity.content {
-                let mut components = BTreeMap::new();
-                let packed =
-                    protocol::pack(serde_json::to_value(entity.content)?, &mut components)?;
-                for (id, json) in components {
-                    tx.execute(
-                        "INSERT OR IGNORE INTO components(id,json) VALUES(?1,?2)",
-                        params![id, json],
-                    )?;
-                }
-                tx.execute(
-                    "UPDATE items SET content=?2,layout_generation=?3 WHERE id=?1",
-                    params![
-                        entity.id,
-                        serde_json::to_string(&packed)?,
-                        advance(old.generations.layout)?.to_string()
-                    ],
-                )?;
-            }
+            if clear_older { 0 } else { HISTORY_BUDGET_BYTES },
+            |revision| stored_workspace::resolved_len(revision.get(), &mut |id| component(&tx, id).ok(), &mut lengths),
+        );
+        for item in changed.into_iter().map(|index| &items[index]) {
+            tx.execute(
+                "UPDATE items SET content=?2,layout_generation=?3 WHERE id=?1",
+                params![
+                    item.id,
+                    item.content.encode()?,
+                    advance(header(&tx, &item.id)?.generations.layout)?.to_string()
+                ],
+            )?;
         }
         // Once delivery is acknowledged and its owner session has expired,
         // retries can no longer be legitimate fenced writes.
@@ -52,6 +42,12 @@ impl SqliteStore {
             .execute_batch("PRAGMA wal_checkpoint(PASSIVE)")?;
         Ok(())
     }
+}
+fn retained(connection: &Connection, id: String) -> Result<Option<retention::Retained>> {
+    let row = header(connection, &id)?;
+    serde_json::from_str::<Metadata>(&row.metadata)?.validate()?;
+    let content: String = connection.query_row("SELECT content FROM items WHERE id=?1", [&id], |r| r.get(0))?;
+    Ok(StoredWorkspace::parse(&content).ok().map(|content| retention::Retained { id, claim: row.claim, content }))
 }
 fn strings(connection: &Connection, sql: &str) -> Result<Vec<String>> {
     Ok(connection

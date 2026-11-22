@@ -10,7 +10,7 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
   };
   const view = () => evaluate('JSON.parse(layerApp.app.workspace_view())');
   const editing = () => evaluate("JSON.parse(layerApp.app.editing_state())");
-  const capture = () => evaluate('JSON.parse(layerApp.app.workspace_capture())');
+  const capture = () => evaluate('(capture=>({...capture,history:capture.history.head}))(JSON.parse(layerApp.app.workspace_capture()))');
   const idle = () => wait('!layerApp.documents.busy() && JSON.parse(layerApp.app.workspace_view()).ready && !JSON.parse(layerApp.app.workspace_view()).busy && !JSON.parse(layerApp.app.workspace_view()).dirty');
   const click = async selector => {
     await evaluate(`(()=>{const e=[...document.querySelectorAll(${JSON.stringify(selector)})].find(node=>node.checkVisibility());if(!e)throw Error('Missing '+${JSON.stringify(selector)});const scroll=e.closest('.workspace-list,.workspace-details');if(scroll){const row=e.getBoundingClientRect(),area=scroll.getBoundingClientRect();if(row.top<area.top)scroll.scrollTop+=row.top-area.top;else if(row.bottom>area.bottom)scroll.scrollTop+=row.bottom-area.bottom;}})()`);
@@ -152,7 +152,7 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     assert.deepEqual((await capture()).working,changed.working);
     await menu('Layout History…'); assert.equal((await view()).enabled,false); await shot('history');
     assert.equal(await evaluate('[...document.querySelectorAll(".workspace-manager input[type=search]")].every(n=>n.hidden||!n.getClientRects().length)'),true);
-    const currentVersion=(await capture()).history.current;
+    const currentVersion=(await capture()).history.current.id;
     assert.equal(await evaluate('document.querySelector(\'.workspace-choice[data-id="r0"] .workspace-row-title\').textContent'),'Starting layout');
     assert.match(await evaluate(`document.querySelector('.workspace-choice[data-id="${currentVersion}"] .workspace-row-subtitle').textContent`),/^Current layout · /);
     await click('.workspace-choice[data-id="r0"]'); await click('.workspace-manager footer .suggested-action'); await idle();
@@ -198,7 +198,7 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     assert.notEqual((await evaluate("layerApp.state().brush")).diameter,73);
     assert.deepEqual(normalized(await capture()),normalized(expectedReset),'Brush reset preserves selection, colors and layout history');
     const beforeLayoutReset=await capture(), beforeLayoutResetView=await evaluate('layerApp.state().workspace.layout');
-    assert.notDeepEqual(beforeLayoutReset.history.revisions[beforeLayoutReset.history.current].layout,originalCapture.history.revisions[originalCapture.history.current].layout);
+    assert.notDeepEqual(beforeLayoutReset.history.current.layout,originalCapture.history.current.layout);
     for(const confirm of [false,true]) {
       await menu('Restore Starting Layout…');
       const restoreMessage=await evaluate('document.querySelector(".workspace-form[open] .alert-description").textContent');

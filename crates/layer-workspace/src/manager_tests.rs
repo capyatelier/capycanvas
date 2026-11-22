@@ -198,7 +198,7 @@ fn startup_opens_an_unreadable_preference_with_the_initial_layout() {
         let incoming = fourth.initialize(3000).await.unwrap();
         assert_eq!(incoming.entity.id,id);
         let initial = Entity::included_workspace(DEFAULT_WORKSPACES[1].0,Platform::Gtk,false,0).unwrap();
-        assert_eq!(incoming.entity.capture().unwrap().history.layout(),initial.capture().unwrap().history.layout());
+        assert_eq!(incoming.entity.layout().unwrap(),EntityHead::from(initial).layout().unwrap());
         incoming.entity.validate().unwrap();
         fourth.release(&incoming).await;
         assert_eq!(sql.query_row("SELECT content FROM items WHERE id=?1",[&id],|row|row.get::<_,String>(0)).unwrap(),"{}");
@@ -272,11 +272,11 @@ fn startup_reuses_existing_workspaces_before_creating_an_independent_copy() {
 
         // Existing user workspaces, including legacy names, are preserved and
         // reused when all built-ins are busy.
-        let mut source = m.current().unwrap();
+        let mut source = m.item(&m.active_id().unwrap()).await.unwrap();
         let working = source.working.as_mut().unwrap();
         working.zen_mode = true;
         let custom = m
-            .create_from_snapshot(source, "My Workspace", true, 5_000)
+            .create_from_snapshot(source, "My Workspace", 5_000)
             .await
             .unwrap();
         let custom_id = custom.entity.id.clone();
@@ -441,12 +441,18 @@ fn included_workspace_history_restores_layout_but_respects_active_owners() {
         m.flush().await.unwrap();
         let other =
             WorkspaceManager::new(StoreWorker::shared(&f.directory).unwrap(), Platform::Gtk);
-        assert!(other.change_layout(&id, Some("r0"), 3_000).await.is_err());
-        let restored = m.change_layout(&id, Some("r0"), 4_000).await.unwrap();
+        assert_eq!(other.prepare_switch(&id, 3_000).await.unwrap_err().kind, ErrorKind::OwnedElsewhere);
+        let earlier = other.layout_revision(&id, "r0").await.unwrap();
+        assert_eq!(earlier.layout, original);
+        capture.history.append(&earlier.layout, layer_ui::LayoutChange::RestoredEarlier);
+        m.observe(capture.clone(), 4_000);
+        m.flush().await.unwrap();
+        let restored = m.load(&id).await.unwrap();
         assert_eq!(
             restored.entity.capture().unwrap().history.layout(),
             &original
         );
+        assert_eq!(restored.entity.capture().unwrap().history.head.undo.len(), 2);
         assert_eq!(restored.entity.capture().unwrap().working, capture.working);
         assert!(restored.entity.metadata.builtin);
         assert!(m.rename(&id, "Renamed", "", 5_000).await.is_err());
@@ -524,7 +530,7 @@ fn resumed_owner_revalidates_without_losing_dirty_edits_or_overwriting_successor
             .request(StoreRequest::Commit {
                 batch: CommitBatch::prepare(
                     other.clone(),
-                    vec![update(&successor, None, None, Some(working)).unwrap()],
+                    vec![update(&successor, None, None, None, Some(working)).unwrap()],
                 )
                 .unwrap(),
             })
@@ -667,8 +673,10 @@ fn interrupted_publication_recovers_after_reopen_and_cancels_delayed_delivery_at
         m.observe(capture, 2_000);
         let sql = rusqlite::Connection::open(f.directory.join("workspaces.sqlite3")).unwrap();
         sql.execute_batch("CREATE TRIGGER interrupt_creation BEFORE INSERT ON items WHEN NEW.name='Interrupted Copy' BEGIN SELECT RAISE(ABORT,'interrupted publication'); END;").unwrap();
+        m.flush().await.unwrap();
+        let source = m.item(&m.active_id().unwrap()).await.unwrap();
         assert!(
-            m.create_from_snapshot(m.current().unwrap(), "Interrupted Copy", true, 3_000)
+            m.create_from_snapshot(source, "Interrupted Copy", 3_000)
                 .await
                 .is_err()
         );
@@ -766,20 +774,22 @@ fn manager_recovery_library_and_backup_round_trip() {
                 .collect::<Vec<_>>(),
             vec!["Current workspace", "Rename…", "Delete…"]
         );
-        let reset = m
-            .change_layout(&painting.entity.id, None, 8_000)
-            .await
-            .unwrap();
+        let starting = m.current().unwrap().starting_layout(Platform::Gtk, false).unwrap();
+        capture.history.append(&starting, layer_ui::LayoutChange::Restored);
+        m.observe(capture.clone(), 8_000);
+        m.flush().await.unwrap();
+        let reset = m.load(&painting.entity.id).await.unwrap();
         let reset_capture = reset.entity.capture().unwrap();
         assert_eq!(reset_capture.history.layout(), &original);
         assert_eq!(reset_capture.working, capture.working);
         m.activate(reset);
         let mut recovered = m.current().unwrap().capture().unwrap();
-        assert!(recovered.history.undo());
+        let previous = m.layout_revision(&painting.entity.id, recovered.history.target(false).unwrap()).await.unwrap();
+        assert!(recovered.history.navigate(false, previous));
         assert_eq!(recovered.history.layout(), &changed);
         m.observe(recovered.clone(), 9_000);
         m.flush().await.unwrap();
-        let source = m.current().unwrap();
+        let source = m.item(&painting.entity.id).await.unwrap();
         let bytes = export_package(&source).unwrap();
         let restored = m.import_workspace_package(&bytes, 10_000).await.unwrap();
         assert_ne!(restored.entity.id, source.id);
@@ -787,16 +797,14 @@ fn manager_recovery_library_and_backup_round_trip() {
         assert_eq!(restored.entity.working, source.working);
         let mut backup = restored.entity.capture().unwrap();
         assert_eq!(backup.history.layout(), &changed);
-        assert!(backup.history.redo());
+        let next = m.layout_revision(&restored.entity.id, backup.history.target(true).unwrap()).await.unwrap();
+        assert!(backup.history.navigate(true, next));
         assert_eq!(backup.history.layout(), &original);
-        assert!(
-            backup
-                .history
-                .revisions
-                .keys()
-                .all(|id| !recovered.history.revisions.contains_key(id))
-        );
-        let ItemContent::Workspace { baseline, .. } = &restored.entity.content else {
+        let ItemContent::Workspace { history: copied, .. } = m.item(&restored.entity.id).await.unwrap().content else { panic!() };
+        let ItemContent::Workspace { history: kept, .. } = source.content else { panic!() };
+        assert_eq!(copied.revisions.len(), kept.revisions.len());
+        assert!(copied.revisions.keys().all(|id| !kept.revisions.contains_key(id)));
+        let HeadContent::Workspace { baseline, .. } = &restored.entity.content else {
             panic!()
         };
         assert_eq!(baseline.as_ref(), &original);
@@ -811,7 +819,7 @@ fn manager_recovery_library_and_backup_round_trip() {
             .save_toolbar(toolbar_panel, "Reusable Tools", 14_000)
             .await
             .unwrap();
-        let library_entity = m.load(&library).await.unwrap().entity;
+        let library_entity = m.item(&library).await.unwrap();
         for (ids, valid) in [([1, 2], true), ([u32::MAX - 1, 2], true),
             ([u32::MAX, 2], false), ([0, 2], false), ([1, 1], false)] {
             let mut candidate = library_entity.clone();
@@ -850,7 +858,7 @@ fn package_validation_and_failed_publication_never_expose_partial_imports() {
     pollster::block_on(async {
         let f = Fixture::new();
         let m = &f.manager;
-        let bytes = export_package(&m.current().unwrap()).unwrap();
+        let bytes = export_package(&m.item(&m.active_id().unwrap()).await.unwrap()).unwrap();
         let before = m.items().len();
         let mut corrupt: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let components = corrupt["components"].as_object_mut().unwrap();
@@ -909,23 +917,25 @@ fn duplication_switching_and_original_baselines_are_independent() {
         capture.working.zen_mode = true;
         capture.working.zen_mode = true;
         m.observe(capture.clone(), 2_000);
+        m.flush().await.unwrap();
         let duplicate = m
-            .create_from_snapshot(m.current().unwrap(), "Experiment", true, 4_000)
+            .create_from_snapshot(m.item(&initial.id).await.unwrap(), "Experiment", 4_000)
             .await
             .unwrap();
         assert_eq!(
             duplicate.entity.capture().unwrap().history.layout().phone,
             capture.history.layout().phone
         );
-        assert_eq!(
-            duplicate.entity.capture().unwrap().history.revisions.len(),
-            2
-        );
+        let revisions = |entity: Entity| match entity.content {
+            ItemContent::Workspace { history, .. } => history.revisions.len(),
+            ItemContent::Toolbar { .. } => 0,
+        };
+        assert_eq!(revisions(m.item(&duplicate.entity.id).await.unwrap()), 2);
         assert_eq!(duplicate.entity.capture().unwrap().working, capture.working);
-        let ItemContent::Workspace { baseline, .. } = &duplicate.entity.content else {
+        let HeadContent::Workspace { baseline, .. } = &duplicate.entity.content else {
             unreachable!()
         };
-        let ItemContent::Workspace {
+        let HeadContent::Workspace {
             baseline: original, ..
         } = initial.content
         else {
@@ -936,10 +946,7 @@ fn duplication_switching_and_original_baselines_are_independent() {
         m.release(&outgoing).await;
         let original = m.prepare_switch(&initial.id, 6_000).await.unwrap();
         assert_eq!(original.entity.capture().unwrap().working, capture.working);
-        assert_eq!(
-            original.entity.capture().unwrap().history.revisions.len(),
-            2
-        );
+        assert_eq!(revisions(m.item(&original.entity.id).await.unwrap()), 2);
         m.close().await.unwrap();
     });
 }
@@ -1073,7 +1080,7 @@ fn switcher_preferences_survive_restart_and_do_not_edit_or_claim_workspaces() {
             ]
         );
         let custom = m
-            .create_from_snapshot(initial.entity.clone(), "Sketching", false, 11_000)
+            .create_workspace("Sketching", 11_000)
             .await
             .unwrap();
         m.release(&custom).await;

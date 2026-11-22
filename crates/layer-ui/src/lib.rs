@@ -233,7 +233,7 @@ pub use theme::{
     ThemePalette,
 };
 pub use workspace::{
-    LayoutHistory, LayoutRevision, LayoutChange, LayoutPanelAction, LayoutPanelName, EditingState, WorkspaceCapture, WorkspaceState, WorkspaceWorkingState,
+    LayoutEdit, LayoutHead, LayoutHistory, LayoutRead, LayoutRevision, LayoutChange, LayoutPanelAction, LayoutPanelName, EditingState, WorkspaceCapture, WorkspaceState, WorkspaceWorkingState,
     counter, durable_layout, layout_change_description,
 };
 

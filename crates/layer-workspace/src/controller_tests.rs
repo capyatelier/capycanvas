@@ -812,7 +812,7 @@ impl Fixture {
         let mut host = crate::test_support::uncovered(layer_host::NativeHost::new(platform).unwrap());
         let capture = host.session.capture_workspace().unwrap();
         let baseline = capture.history.layout().clone();
-        let entity = Entity::workspace("My Workspace", capture, baseline, 1000);
+        let entity = Entity::workspace("My Workspace", capture.history.into_history(), capture.working, baseline, 1000);
         let batch = CommitBatch::prepare(
             Owner::fresh(),
             vec![Mutation::Create {
@@ -855,6 +855,9 @@ impl Fixture {
             .unwrap();
         self.controller
             .observe(&mut self.host.session, self.backend.now.get());
+        if self.host.session.workspace_layout_read().is_some() {
+            self.pump();
+        }
     }
     fn save(&mut self) {
         self.backend.now.set(self.backend.now.get() + 300);
@@ -1022,9 +1025,10 @@ fn starting_layout_dialog_previews_without_saving_and_restore_is_undoable() {
             old.header.size = layer_ui::HeaderSize::Large;
             let mut edited = old.clone();
             edited.header.size = layer_ui::HeaderSize::Small;
-            let mut history = layer_ui::LayoutHistory::new(&old);
-            history.append(&edited, layer_ui::LayoutChange::Automatic);
-            assert!(history.undo());
+            let mut edit = layer_ui::LayoutEdit::starting(&old);
+            edit.append(&edited, layer_ui::LayoutChange::Automatic);
+            assert!(edit.step(false));
+            let history = edit.into_history();
             let mut database: serde_json::Value = serde_json::from_str(&f.backend.database.borrow().encoded().unwrap()).unwrap();
             database["items"][id]["entity"]["content"] = serde_json::to_value(ItemContent::Workspace {
                 history, baseline: Box::new(old.clone()),
@@ -1099,7 +1103,7 @@ fn starting_layout_dialog_previews_without_saving_and_restore_is_undoable() {
         assert!(!f.host.session.command(layer_ui::CommandId::ResetLayout).enabled);
         assert_eq!(restored.history.layout(), &baseline);
         assert_eq!(restored.working, before.working);
-        assert_eq!(restored.history.undo.len(), before.history.undo.len() + 1);
+        assert_eq!(restored.history.head.undo.len(), before.history.head.undo.len() + 1);
         f.action(serde_json::json!({"type":"invoke","command":"undo_workspace"}));
         assert_eq!(
             &layer_ui::durable_layout(&f.host.session.state().workspace.layout),
@@ -1145,7 +1149,7 @@ fn previews_cancel_pending_replies_and_never_publish_temporary_layouts() {
     f.input(serde_json::json!({"type":"confirm"}));
     let restored = f.host.session.capture_workspace().unwrap();
     assert_eq!(restored.working, capture.working);
-    assert_eq!(restored.history.undo.len(), capture.history.undo.len() + 1);
+    assert_eq!(restored.history.head.undo.len(), capture.history.head.undo.len() + 1);
     f.action(serde_json::json!({"type":"invoke","command":"undo_workspace"}));
     assert_eq!(
         f.host.session.capture_workspace().unwrap().history.layout(),
@@ -1191,7 +1195,7 @@ fn save_failure_lost_ack_suspend_and_restart_preserve_working_history() {
     let saved = incoming.entity.capture().unwrap();
     assert_eq!(saved.working, expected.working);
     assert_eq!(saved.history.layout(), expected.history.layout());
-    assert_eq!(saved.history.undo, expected.history.undo);
+    assert_eq!(saved.history.head.undo, expected.history.head.undo);
 }
 
 #[test]
@@ -1550,7 +1554,9 @@ fn switcher_edit_during_autosave_is_acknowledged_without_interrupting_the_save()
     f.pump();
     assert!(!f.controller.manager.saving());
     assert!(!f.controller.manager.dirty());
-    assert_eq!(f.host.session.capture_workspace().unwrap(), capture);
+    let saved = f.host.session.capture_workspace().unwrap();
+    assert_eq!((saved.history.head, saved.working), (capture.history.head, capture.working));
+    assert!(saved.history.unsaved.is_empty(), "the session lets go of stored revisions");
     assert!(f.controller.view.error.is_none());
 }
 
@@ -1888,7 +1894,8 @@ fn phone_manager_selection_keeps_the_live_layout_until_confirmation() {
         let expected = if page == "workspaces" {
             pollster::block_on(f.controller.manager.load(selected)).unwrap().entity.capture().unwrap().history.layout().clone()
         } else {
-            before.history.revisions[selected].layout.clone()
+            let active = f.controller.manager.active_id().unwrap();
+            pollster::block_on(f.controller.manager.layout_revision(&active, selected)).unwrap().layout
         };
         f.input(serde_json::json!({"type":"open","page":page}));
         f.input(serde_json::json!({"type":"select","id":selected}));
@@ -2087,7 +2094,7 @@ fn import_toolbar_package_selects_it_and_backup_adopts() {
         .id;
     let m = f.controller.manager.clone();
     let saved = pollster::block_on(m.save_toolbar(panel, "Shared Ink", 1000)).unwrap();
-    let package = export_package(&pollster::block_on(m.load(&saved)).unwrap().entity).unwrap();
+    let package = export_package(&pollster::block_on(m.item(&saved)).unwrap()).unwrap();
     f.input(serde_json::json!({
         "type":"import","kind":"toolbar","text":String::from_utf8(package).unwrap()
     }));
@@ -2098,7 +2105,7 @@ fn import_toolbar_package_selects_it_and_backup_adopts() {
     assert!(f.controller.view.details.is_some());
     f.input(serde_json::json!({"type":"dismiss"}));
     let before = f.controller.view.id.clone();
-    let backup = String::from_utf8(export_package(&current).unwrap()).unwrap();
+    let backup = String::from_utf8(export_package(&pollster::block_on(m.item(&current.id)).unwrap()).unwrap()).unwrap();
     f.input(serde_json::json!({"type":"import","kind":"workspace_backup","text":backup}));
     assert!(f.controller.view.error.is_none(), "{:?}", f.controller.view.error);
     assert_ne!(f.controller.view.id, before);
@@ -2218,8 +2225,7 @@ fn saved_slots_alias_released_ids_and_drop_unknown_tiles_without_resetting_stora
     for slot in ["lasso_fill", "unknown_slot"] {
         let backend = Rc::new(Backend::default());
         let layout = layer_ui::WorkspacePreset::Illustrator.layout(Platform::Web);
-        let capture = layer_ui::WorkspaceCapture::from_template(&layout).unwrap();
-        let entity = Entity::workspace("Saved Paint", capture, layout, 1000);
+        let entity = Entity::workspace("Saved Paint", layer_ui::LayoutHistory::new(&layout), Default::default(), layout, 1000);
         let id = entity.id.clone();
         let batch = CommitBatch::prepare(Owner::fresh(), vec![Mutation::Create { entity, claim: false, name_policy: NamePolicy::Unique }]).unwrap();
         pollster::block_on(Store(backend.clone()).execute(StoreRequest::Commit { batch })).unwrap();
@@ -2626,7 +2632,7 @@ fn sqlite_startup_opens_unreadable_workspaces_without_rewriting_them() {
         assert!(!controller.manager.in_memory());
         let id = controller.manager.active_id().unwrap();
         let included = Entity::included_workspace(&id,Platform::Gtk,false,0).unwrap();
-        assert_eq!(host.session.capture_workspace().unwrap().history.layout(),included.capture().unwrap().history.layout(),"{launch}");
+        assert_eq!(host.session.capture_workspace().unwrap().history.layout(),EntityHead::from(included).layout().unwrap(),"{launch}");
         assert_eq!(controller.manager.items().iter().filter(|item|item.metadata.kind==ItemKind::Workspace).count(),stale);
         close_native(controller, &mut host);
         assert_eq!(unreadable_rows(),original);

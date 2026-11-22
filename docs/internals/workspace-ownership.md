@@ -9,8 +9,13 @@ are under `<database>-locks/`, keyed by a hash of the item ID; existence is not
 ownership. Never unlink/recreate a lock file while clients may be running.
 
 `WorkspaceController` presents workspace and layout-history rows through
-`WorkspaceView`. Restoring history uses `WorkspaceManager::change_layout`, which
-checks storage ownership before changing the layout.
+`WorkspaceView`. The manager, controller and session hold only a workspace's
+layout head (its current revision and Undo and Redo IDs) and the revisions not
+yet stored; a layout save writes those revisions and the new head. Layout
+History rows, a previewed revision and an Undo or Redo target are read from the
+store when needed, and one that can't be read is left out or skipped. Restoring
+an earlier or starting layout records a new revision through the same save,
+whose fenced write checks storage ownership.
 
 Lock acquisition and liveness probes run under an IMMEDIATE SQLite transaction.
 Claim/load/list, writes, renewal and maintenance reconcile stale claims before

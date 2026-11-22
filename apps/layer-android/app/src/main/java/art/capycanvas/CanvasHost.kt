@@ -1144,6 +1144,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
                     main.post { keymapFile = kind }
                     Native.dispatch(handle, obj("type" to "complete_request", "id" to request.getLong("id"), "error" to null).toString())
                 }
+                "workspace" -> onWorkspaceWake()
             }
         }
         if (measuredPublications != null && contentChanged(previousModel, next)) panelContentChanges++

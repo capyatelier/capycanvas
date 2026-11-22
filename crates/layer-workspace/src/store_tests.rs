@@ -510,26 +510,18 @@ fn sqlite_full_preserves_protected_records_and_retries_the_same_delivery() {
 fn maintenance_preserves_navigation_baselines_shared_content_and_fences() {
     let mut f = Fixture::new();
     let current = f.create("Retained");
-    let mut content = current.entity.content.clone();
-    let ItemContent::Workspace {
-        history, baseline, ..
-    } = &mut content
-    else {
-        panic!()
-    };
-    let original = baseline.as_ref().clone();
-    let mut first = original.clone();
-    first.bands[0].extent += 20.;
-    history.append(&first, layer_ui::LayoutChange::Automatic);
-    let abandoned = history.current.clone();
-    history.undo();
-    let mut second = original.clone();
-    second.bands[0].extent += 40.;
-    history.append(&second, layer_ui::LayoutChange::Automatic);
+    let mut edit = current.entity.capture().unwrap().history;
+    let starting = edit.head.current.clone();
+    let original = starting.layout.clone();
+    shifted(&mut edit, 20.);
+    let abandoned = edit.head.current.id.clone();
+    assert!(edit.navigate(false, starting));
+    shifted(&mut edit, 40.);
+    let second = edit.layout().clone();
     let navigation = (
-        history.current.clone(),
-        history.undo.clone(),
-        history.redo.clone(),
+        edit.head.current.id.clone(),
+        edit.head.undo.clone(),
+        edit.head.redo.clone(),
     );
     let mut metadata = current.entity.metadata.clone();
     metadata.rename("Renamed", "", 2_000_000).unwrap();
@@ -537,12 +529,15 @@ fn maintenance_preserves_navigation_baselines_shared_content_and_fences() {
         .commit(
             CommitBatch::prepare(
                 f.owner.clone(),
-                vec![change(&current, Some(metadata), Some(content), None)],
+                vec![relayout(&current, Some(metadata), &edit, None)],
             )
             .unwrap(),
         )
         .unwrap();
     let snapshot = f.store.load(&current.entity.id).unwrap();
+    let complete_snapshot = item(&mut f.store, &current.entity.id);
+    let ItemContent::Workspace { history, .. } = &complete_snapshot.content else { panic!() };
+    assert!(history.revisions.contains_key(&abandoned));
     f.store
         .handle(StoreRequest::Maintenance {
             owner: Some(Owner::fresh()),
@@ -550,6 +545,7 @@ fn maintenance_preserves_navigation_baselines_shared_content_and_fences() {
         })
         .unwrap();
     assert_eq!(f.store.load(&current.entity.id).unwrap(), snapshot);
+    assert_eq!(item(&mut f.store, &current.entity.id), complete_snapshot);
     f.store
         .handle(StoreRequest::Maintenance {
             owner: Some(f.owner.clone()),
@@ -559,7 +555,7 @@ fn maintenance_preserves_navigation_baselines_shared_content_and_fences() {
     let cleaned = f.store.load(&current.entity.id).unwrap();
     let ItemContent::Workspace {
         history, baseline, ..
-    } = &cleaned.entity.content
+    } = item(&mut f.store, &current.entity.id).content
     else {
         panic!()
     };
@@ -602,7 +598,7 @@ fn maintenance_preserves_navigation_baselines_shared_content_and_fences() {
                     vec![change(
                         &snapshot,
                         None,
-                        Some(snapshot.entity.content.clone()),
+                        Some(complete(&snapshot)),
                         None
                     )]
                 )
@@ -630,9 +626,26 @@ fn change(
         fence: stored.claim.as_ref().unwrap().fence,
         metadata,
         content,
+        layout: None,
         working,
         name_policy: NamePolicy::Exact,
     }
+}
+fn relayout(stored: &StoredEntity, metadata: Option<Metadata>, edit: &layer_ui::LayoutEdit, working: Option<layer_ui::WorkspaceWorkingState>) -> Mutation {
+    let Mutation::Update { id, generations, fence, metadata, working, name_policy, .. } = change(stored, metadata, None, working) else { unreachable!() };
+    Mutation::Update { id, generations, fence, metadata, content: None, layout: Some(edit.clone()), working, name_policy }
+}
+fn shifted(edit: &mut layer_ui::LayoutEdit, extent: f32) {
+    let mut layout = edit.layout().clone();
+    layout.bands[0].extent += extent;
+    edit.append(&layout, layer_ui::LayoutChange::Automatic);
+}
+fn complete(stored: &StoredEntity) -> ItemContent {
+    stored.entity.content.clone().into()
+}
+pub(super) fn item(store: &mut SqliteStore, id: &str) -> Entity {
+    let StoreResponse::Item(entity) = store.handle(StoreRequest::Item { id: id.into() }).unwrap() else { panic!() };
+    *entity
 }
 
 #[test]
@@ -673,25 +686,20 @@ fn layout_and_working_generations_are_independent_and_stale_writes_fail() {
             .unwrap(),
         )
         .unwrap();
-    let mut content = old.entity.content.clone();
-    let ItemContent::Workspace { history, .. } = &mut content else {
-        unreachable!()
-    };
-    let mut layout = history.layout().clone();
-    layout.bands[0].extent += 50.;
-    history.append(&layout, layer_ui::LayoutChange::Automatic);
+    let mut edit = old.entity.capture().unwrap().history;
+    shifted(&mut edit, 50.);
     // The old working generation does not invalidate an independent layout write.
     f.store
         .commit(
             CommitBatch::prepare(
                 f.owner.clone(),
-                vec![change(&old, None, Some(content.clone()), None)],
+                vec![relayout(&old, None, &edit, None)],
             )
             .unwrap(),
         )
         .unwrap();
     let latest = f.store.load(&old.entity.id).unwrap();
-    assert_eq!(latest.entity.content, content);
+    assert_eq!(latest.entity.capture().unwrap().history.head, edit.head);
     assert_eq!(latest.entity.working, Some(working));
     assert_eq!(
         latest.generations,
@@ -706,7 +714,7 @@ fn layout_and_working_generations_are_independent_and_stale_writes_fail() {
         .commit(
             CommitBatch::prepare(
                 f.owner.clone(),
-                vec![change(&old, None, Some(old.entity.content.clone()), None)],
+                vec![change(&old, None, Some(complete(&old)), None)],
             )
             .unwrap(),
         )
@@ -859,30 +867,24 @@ fn deletion_replacement_is_atomic_and_delayed_writes_cannot_resurrect() {
 fn undo_revisits_content_but_never_reuses_a_write_generation() {
     let mut f = Fixture::new();
     let original = f.create("Painting");
-    let mut content = original.entity.content.clone();
-    if let ItemContent::Workspace { history, .. } = &mut content {
-        let mut layout = history.layout().clone();
-        layout.bands[0].extent += 80.;
-        history.append(&layout, layer_ui::LayoutChange::Automatic);
-    }
+    let mut edit = original.entity.capture().unwrap().history;
+    shifted(&mut edit, 80.);
     f.store
         .commit(
             CommitBatch::prepare(
                 f.owner.clone(),
-                vec![change(&original, None, Some(content.clone()), None)],
+                vec![relayout(&original, None, &edit, None)],
             )
             .unwrap(),
         )
         .unwrap();
     let latest = f.store.load(&original.entity.id).unwrap();
-    if let ItemContent::Workspace { history, .. } = &mut content {
-        assert!(history.undo());
-    }
+    assert!(edit.navigate(false, original.entity.capture().unwrap().history.head.current));
     f.store
         .commit(
             CommitBatch::prepare(
                 f.owner.clone(),
-                vec![change(&latest, None, Some(content), None)],
+                vec![relayout(&latest, None, &edit, None)],
             )
             .unwrap(),
         )
@@ -901,7 +903,7 @@ fn undo_revisits_content_but_never_reuses_a_write_generation() {
                     vec![change(
                         &original,
                         None,
-                        Some(original.entity.content.clone()),
+                        Some(complete(&original)),
                         None
                     )]
                 )
@@ -1252,7 +1254,7 @@ fn failed_claim_and_creation_drop_unpublished_locks() {
     other
         .commit(CommitBatch::prepare(other_owner, vec![create(entity.clone())]).unwrap())
         .unwrap();
-    assert_eq!(other.load(&entity.id).unwrap().entity, entity);
+    assert_eq!(item(&mut other, &entity.id), entity);
 }
 
 #[test]
@@ -1319,19 +1321,17 @@ fn simultaneous_readers_observe_complete_layout_and_working_publication() {
         let mut store = SqliteStore::with_clock(&path, clock).unwrap();
         for index in 1..=30 {
             let old = store.load(&id).unwrap();
-            let mut content = old.entity.content.clone();
+            let mut edit = old.entity.capture().unwrap().history;
             let mut working = old.entity.working.clone().unwrap();
             working.zen_mode = index % 2 == 1;
-            if let ItemContent::Workspace { history, .. } = &mut content {
-                let mut layout = history.layout().clone();
-                layout.bands[0].extent = 100. + index as f32;
-                history.append(&layout, layer_ui::LayoutChange::Automatic);
-            }
+            let mut layout = edit.layout().clone();
+            layout.bands[0].extent = 100. + index as f32;
+            edit.append(&layout, layer_ui::LayoutChange::Automatic);
             store
                 .commit(
                     CommitBatch::prepare(
                         owner.clone(),
-                        vec![change(&old, None, Some(content), Some(working))],
+                        vec![relayout(&old, None, &edit, Some(working))],
                     )
                     .unwrap(),
                 )
@@ -1407,7 +1407,7 @@ fn items_with_unreadable_metadata_are_left_out_and_kept() {
     let stored = f.create("Literal 🖌 {name}");
     let kept = f.create("Kept");
     let mut browser = BrowserDatabase::default();
-    let batch = CommitBatch::prepare(f.owner.clone(), vec![create(stored.entity.clone()), create(kept.entity.clone())]).unwrap();
+    let batch = CommitBatch::prepare(f.owner.clone(), vec![create(item(&mut f.store, &stored.entity.id)), create(item(&mut f.store, &kept.entity.id))]).unwrap();
     browser.prepare_delivery(&batch).unwrap();
     browser.execute(StoreRequest::Commit { batch }, 1_000_000).unwrap();
     let snapshot: serde_json::Value = serde_json::from_str(&browser.encoded().unwrap()).unwrap();
@@ -1454,7 +1454,7 @@ fn an_unreadable_toolbar_opens_with_its_name_and_the_default_tiles() {
     let native = f.store.load(&id).unwrap();
     for stored in [*web, native] {
         assert!(!stored.fallback);
-        let ItemContent::Toolbar { definition } = stored.entity.content else { panic!() };
+        let HeadContent::Toolbar { definition } = stored.entity.content else { panic!() };
         assert_eq!(definition.name, "literal toolbar 🖌");
         assert_eq!(definition.tiles.iter().map(|tile| tile.control).collect::<Vec<_>>(), layer_ui::TOOLBAR_CONTROLS);
         definition.validate().unwrap();
@@ -1485,7 +1485,7 @@ fn a_toolbar_drops_only_the_tiles_this_build_cannot_read() {
     f.store.connection.execute("UPDATE items SET content=?2 WHERE id=?1", (&id, serde_json::json!({"type":"toolbar","definition":definition}).to_string())).unwrap();
     let StoreResponse::Entity(web) = browser.execute(StoreRequest::Load { id: id.clone() }, 1_000_000).unwrap() else { panic!() };
     for stored in [*web, f.store.load(&id).unwrap()] {
-        let ItemContent::Toolbar { definition } = stored.entity.content else { panic!() };
+        let HeadContent::Toolbar { definition } = stored.entity.content else { panic!() };
         assert_eq!(definition, ToolbarDefinition { name: "Released".into(), tiles: kept.clone(), tile_style: layer_ui::TileStyle::Small, hide_tab: true });
     }
 }

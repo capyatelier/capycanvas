@@ -280,6 +280,7 @@ fn browser_transactions_match_sqlite_contract() {
         fence: 1,
         metadata,
         content: None,
+        layout: None,
         working,
         name_policy: NamePolicy::Exact,
     };

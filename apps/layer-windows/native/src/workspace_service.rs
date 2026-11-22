@@ -173,26 +173,28 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
             ));
         }
         self.controller.observe(&mut native.session, now_ms());
-        let entity = self
-            .controller
-            .manager
-            .current()
-            .ok_or_else(|| StoreError::invalid("No workspace is open."))?;
+        if self.controller.manager.active_id().is_none() {
+            return Err(StoreError::invalid("No workspace is open."));
+        }
+        let manager = self.controller.manager.clone();
         let database = self.directory.join("workspaces.sqlite3");
-        let job = crate::workspace_async::BlockingTask::start(move || {
-            layer_workspace::validate_database_export_destination(&database, Path::new(&path))
-                ?;
-            let bytes = layer_workspace::export_package(&entity)?;
-            crate::document_io::atomic_write(Path::new(&path), &AtomicBool::new(false), |file| {
-                file.write_all(&bytes)
-                    .map_err(|_| "Could not write the workspace backup.".into())
-            }).map_err(|error| StoreError::new(ErrorKind::FailedWrite, error))
-        })
-        .map_err(|_| {
-            StoreError::new(ErrorKind::Unavailable, "Could not start workspace export.")
-        })?;
         self.notice = None;self.notice_source = None;
-        let _ = self.export.start(async move { job.await.map_err(|error| StoreError::new(ErrorKind::Unavailable,error)).and_then(|r| r) });
+        let _ = self.export.start(async move {
+            let entity = manager.complete_current().await?;
+            let job = crate::workspace_async::BlockingTask::start(move || {
+                layer_workspace::validate_database_export_destination(&database, Path::new(&path))
+                    ?;
+                let bytes = layer_workspace::export_package(&entity)?;
+                crate::document_io::atomic_write(Path::new(&path), &AtomicBool::new(false), |file| {
+                    file.write_all(&bytes)
+                        .map_err(|_| "Could not write the workspace backup.".into())
+                }).map_err(|error| StoreError::new(ErrorKind::FailedWrite, error))
+            })
+            .map_err(|_| {
+                StoreError::new(ErrorKind::Unavailable, "Could not start workspace export.")
+            })?;
+            job.await.map_err(|error| StoreError::new(ErrorKind::Unavailable,error)).and_then(|r| r)
+        });
         self.publish(native);
         Ok(())
     }

@@ -63,9 +63,8 @@ fn generate(output: &Path) {
     let toolbar = Entity::toolbar(definition, 1000);
     let mut layout = layer_ui::WorkspacePreset::Illustrator.layout(Platform::Gtk);
     layout.canvas_bar = false;
-    let mut capture = layer_ui::WorkspaceCapture::from_template(&layout).unwrap();
-    capture.working.zen_mode = true;
-    let custom = Entity::workspace("Release workspace", capture, layout, 1000);
+    let working = layer_ui::WorkspaceWorkingState { zen_mode: true, ..Default::default() };
+    let custom = Entity::workspace("Release workspace", layer_ui::LayoutHistory::new(&layout), working, layout, 1000);
     std::fs::write(directory.join("workspace.capyworkspace"), export_package(&custom).unwrap()).unwrap();
     std::fs::write(directory.join("toolbar.capytoolbar"), export_package(&toolbar).unwrap()).unwrap();
     let mut entities = vec![custom, toolbar];
@@ -272,8 +271,10 @@ fn check_inputs(directory: &Path, check: impl Fn(&str, Value)) {
     let entities: Vec<Entity> = serde_json::from_slice(&std::fs::read(directory.join("entities.json")).unwrap()).unwrap();
     let mut browser = BrowserDatabase::decode(&std::fs::read_to_string(directory.join("browser.json")).unwrap()).unwrap();
     for entity in &entities {
-        let StoreResponse::Entity(loaded) = browser.execute(StoreRequest::Load {id:entity.id.clone()},1000).unwrap() else {panic!()};
-        assert_eq!(portable(loaded.entity),portable(entity.clone()));
+        let StoreResponse::Entity(head) = browser.execute(StoreRequest::Load {id:entity.id.clone()},1000).unwrap() else {panic!()};
+        assert!(!head.fallback && !head.replaced);
+        let StoreResponse::Item(loaded) = browser.execute(StoreRequest::Item {id:entity.id.clone()},1000).unwrap() else {panic!()};
+        assert_eq!(portable(*loaded),portable(entity.clone()));
     }
     let temp = crate::test_support::temp_dir("released-store");
     std::fs::create_dir_all(&temp).unwrap();
@@ -292,8 +293,11 @@ fn check_inputs(directory: &Path, check: impl Fn(&str, Value)) {
         assert!(!controller.manager.in_memory());
         assert!(host.session.state().notice.is_none());
         for entity in &entities {
-            let loaded = pollster::block_on(controller.manager.load(&entity.id)).unwrap();
-            assert_eq!(portable(loaded.entity),portable(with_phone_defaults(entity.clone())));
+            let head = pollster::block_on(controller.manager.load(&entity.id)).unwrap();
+            assert!(!head.fallback && !head.replaced);
+            let loaded = pollster::block_on(controller.manager.item(&entity.id)).unwrap();
+            assert_eq!(head.entity, loaded.clone().into());
+            assert_eq!(portable(loaded),portable(with_phone_defaults(entity.clone())));
         }
         crate::controller_tests::close_native(controller,&mut host);
     }

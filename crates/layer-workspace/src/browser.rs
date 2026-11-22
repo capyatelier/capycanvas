@@ -2,6 +2,7 @@
 //! and invokes this synchronous reducer inside its read/write transaction. No
 //! JavaScript number arithmetic is used for fences or generation counters.
 use crate::store_rules::*;
+use crate::stored_workspace::{StoredHistory, StoredWorkspace};
 use crate::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -34,20 +35,28 @@ struct BrowserRecord {
     claim: Option<Claim>,
 }
 impl BrowserRecord {
+    fn content(&self) -> Result<String> {
+        Ok(serde_json::to_string(&self.entity["content"])?)
+    }
+    fn working(&self) -> Option<serde_json::Value> {
+        Some(self.entity["working"].clone()).filter(|working| !working.is_null())
+    }
     fn stored(&self, id: &str) -> Result<StoredEntity> {
-        let working = Some(self.entity["working"].clone()).filter(|working| !working.is_null());
-        let (entity, fallback) = Entity::read(id.into(), self.metadata()?, Ok(self.entity["content"].clone()), working)?;
-        Ok(StoredEntity { entity, generations: self.generations, claim: self.claim.clone(), fallback })
+        StoredEntity::read(id.into(), self.metadata()?, &self.content()?, self.working(), self.generations, self.claim.clone(), |_| Err(missing_resource()))
+    }
+    fn item(&self, id: &str) -> Result<Entity> {
+        Entity::read(id.into(), self.metadata()?, &self.content()?, self.working(), |_| Err(missing_resource()))
+    }
+    fn workspace(&self) -> Result<StoredWorkspace> {
+        StoredWorkspace::parse(&self.content()?)
+    }
+    fn set_workspace(&mut self, content: &StoredWorkspace) -> Result<()> {
+        self.entity["content"] = serde_json::from_str(&content.encode()?)?;
+        self.generations.layout = advance(self.generations.layout)?;
+        Ok(())
     }
     fn metadata(&self) -> Result<Metadata> {
         Ok(serde_json::from_value(self.entity["metadata"].clone())?)
-    }
-    fn from_stored(item: StoredEntity) -> Result<Self> {
-        Ok(Self {
-            entity: serde_json::to_value(item.entity)?,
-            generations: item.generations,
-            claim: item.claim,
-        })
     }
 }
 impl Default for BrowserDatabase {
@@ -220,6 +229,11 @@ impl BrowserDatabase {
                     .collect(),
             ),
             Load { id } => StoreResponse::Entity(Box::new(self.item(&id)?)),
+            Item { id } => StoreResponse::Item(Box::new(self.record(&id)?.item(&id)?)),
+            Revision { id, revision } => StoreResponse::Revision(Box::new(
+                self.record(&id)?.workspace()?.revision(&revision, &mut |_| Err(missing_resource()))?,
+            )),
+            Versions { id } => StoreResponse::Versions(self.record(&id)?.workspace()?.versions()),
             Claim { id, owner } => StoreResponse::Entity(Box::new(self.claim(&id, owner, now)?)),
             Renew { id, owner, fence } => {
                 let fence = parse_counter(&fence)?;
@@ -264,21 +278,16 @@ impl BrowserDatabase {
             Reopen | Adopted => StoreResponse::Done,
             SetAside => return Err(StoreError::new(ErrorKind::Unavailable,"Only persistent storage can be set aside.")),
             Maintenance { owner, clear_older } => {
-                let items = retention::readable_items(self.items.iter().map(|(id, record)| record.stored(id)))?;
-                let changed = retention::retention_plan(
-                    &items,
-                    owner.as_ref(),
-                    now,
-                    if clear_older {
-                        0
-                    } else {
-                        HISTORY_BUDGET_BYTES as usize
-                    },
-                )?;
-                for entity in changed {
-                    let record = self.items.get_mut(&entity.id).unwrap();
-                    record.generations.layout = advance(record.generations.layout)?;
-                    record.entity["content"] = serde_json::to_value(entity.content)?;
+                let mut items: Vec<_> = self
+                    .items
+                    .iter()
+                    .filter(|(_, record)| record.metadata().is_ok_and(|metadata| metadata.kind == ItemKind::Workspace && metadata.validate().is_ok()))
+                    .filter_map(|(id, record)| Some(retention::Retained { id: id.clone(), claim: record.claim.clone(), content: record.workspace().ok()? }))
+                    .collect();
+                let budget = if clear_older { 0 } else { HISTORY_BUDGET_BYTES };
+                for index in retention::retention_plan(&mut items, owner.as_ref(), now, budget, |revision| revision.get().len() as u64) {
+                    let item = &items[index];
+                    self.items.get_mut(&item.id).unwrap().set_workspace(&item.content)?;
                 }
                 StoreResponse::Done
             }
@@ -361,8 +370,8 @@ impl BrowserDatabase {
                     .insert(w.id.clone(), if w.claim { "1" } else { "0" }.into());
                 let entity = Entity { id: w.id.clone(), metadata, content, working };
                 entity.validate()?;
-                BrowserRecord::from_stored(StoredEntity {
-                    entity,
+                BrowserRecord {
+                    entity: serde_json::to_value(entity)?,
                     generations: Generations {
                         metadata: 1,
                         layout: 1,
@@ -373,8 +382,7 @@ impl BrowserDatabase {
                         fence: 1,
                         expires_at_ms: now.saturating_add(OWNER_LEASE_MS),
                     }),
-                    fallback: false,
-                })?
+                }
             } else {
                 let mut record = self.record(&w.id)?.clone();
                 let stored = record.metadata()?;
@@ -397,6 +405,11 @@ impl BrowserDatabase {
                     record.entity["content"] = serde_json::to_value(content)?;
                     record.generations.layout = advance(record.generations.layout)?;
                 }
+                if let Some(layout) = &w.layout_json {
+                    let mut content = record.workspace()?;
+                    content.apply(StoredHistory::parse(layout)?.resolved(|id| batch.components.get(id).cloned().ok_or_else(missing_resource))?)?;
+                    record.set_workspace(&content)?;
+                }
                 if let Some(j) = &w.working_json {
                     record.entity["working"] = serde_json::from_str(j)?;
                     record.generations.working = advance(record.generations.working)?;
@@ -414,10 +427,10 @@ impl BrowserDatabase {
         }
         for (key, id) in &batch.bindings {
             if let Some(id) = id {
-                let s = self.item(id)?;
+                let record = self.record(id)?;
                 check_binding(
-                    s.entity.metadata.kind == ItemKind::Workspace,
-                    s.claim.as_ref(),
+                    record.metadata()?.kind == ItemKind::Workspace,
+                    record.claim.as_ref(),
                     &batch.owner,
                     now,
                 )?;

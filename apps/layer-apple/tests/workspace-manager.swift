@@ -72,9 +72,8 @@ import SwiftUI
             precondition(sketching != inking && workspaces.view["prompt"].isNull)
             let created = try await workspaces.capture()
             precondition(SnapshotProjection.equal(created["working"].raw, source["working"].raw))
-            let sourceRevision = source["history"]["current"].string, createdRevision = created["history"]["current"].string
-            precondition(SnapshotProjection.equal(created["history"]["revisions"][createdRevision]["layout"].raw,
-                source["history"]["revisions"][sourceRevision]["layout"].raw))
+            precondition(SnapshotProjection.equal(created["history"]["current"]["layout"].raw,
+                source["history"]["current"]["layout"].raw))
             precondition(created["history"]["undo"].array.isEmpty, "A new workspace starts independent history")
             try await workspaces.perform(["type": "switch", "id": original])
             try await editor.apply(["type": "set_brush_size", "value": 67])
@@ -174,11 +173,11 @@ import SwiftUI
         let id = workspaces.view["id"].string
         let before = try await workspaces.capture()
         let document = editor.state["layers"].stableKey
-        let current = before["history"]["current"].string
-        let revisions = before["history"]["revisions"].object
-        let earlier = revisions.keys.first { key in
-            key != current && !SnapshotProjection.equal(JSON(revisions[key]!)["layout"].raw, JSON(revisions[current]!)["layout"].raw)
-        }!
+        let current = before["history"]["current"]["id"].string
+        let currentLayout = before["history"]["current"]["layout"]
+        try await workspaces.perform(["type": "action", "action": ["type": "history", "value": id]])
+        let earlier = workspaces.view["rows"].array.first { $0["id"].string != current }!["id"].string
+        try await workspaces.perform(["type": "dismiss"])
         func browse() async throws {
             try await workspaces.perform(["type": "action", "action": ["type": "history", "value": id]])
             precondition(workspaces.page == "history" && workspaces.view["selected"].string == current)
@@ -186,7 +185,7 @@ import SwiftUI
         }
         try await browse()
         try require(SnapshotProjection.equal(await workspaces.capture().raw, before.raw), "Preview must never enter the durable capture")
-        precondition(!SnapshotProjection.equal(editor.state["workspace"]["layout"].raw, JSON(revisions[current]!)["layout"].raw))
+        precondition(!SnapshotProjection.equal(editor.state["workspace"]["layout"].raw, currentLayout.raw))
         precondition(editor.state["layers"].stableKey == document)
         try await capture(workspaces, platform: platform, phase: "history")
         try await workspaces.perform(["type": "dismiss"])
@@ -201,11 +200,13 @@ import SwiftUI
         try await workspaces.perform(["type": "confirm"])
         precondition(!workspaces.presented)
         let restored = try await workspaces.capture()
+        let restoredLayout = editor.state["workspace"]["layout"].stableKey
         precondition(restored["history"]["undo"].array.count == before["history"]["undo"].array.count + 1)
         precondition(SnapshotProjection.equal(restored["working"].raw, before["working"].raw))
         precondition(workspaces.view["id"].string == id && editor.state["layers"].stableKey == document)
         try await editor.apply(["type": "invoke", "command": "undo_workspace"])
-        try require(await workspaces.capture()["history"]["current"].string == current, "Undo Workspace returns to the current history entry")
+        try await wait("stored history restore undo") { editor.state["workspace"]["layout"].stableKey != restoredLayout }
+        try require(await workspaces.capture()["history"]["current"]["id"].string == current, "Undo Workspace returns to the current history entry")
     }
     @MainActor static func startingLayoutPreview(_ editor: EditorStore) async throws {
         let workspaces = editor.workspaces!
@@ -238,9 +239,9 @@ import SwiftUI
         precondition(restored["history"]["undo"].array.count == before["history"]["undo"].array.count + 1)
         precondition(SnapshotProjection.equal(restored["working"].raw, before["working"].raw))
         try await editor.apply(["type": "invoke", "command": "undo_workspace"])
-        precondition(editor.state["workspace"]["layout"].stableKey == original)
+        try await wait("stored starting-layout undo") { editor.state["workspace"]["layout"].stableKey == original }
         try await editor.apply(["type": "invoke", "command": "redo_workspace"])
-        precondition(editor.state["workspace"]["layout"].stableKey == baseline)
+        try await wait("stored starting-layout redo") { editor.state["workspace"]["layout"].stableKey == baseline }
         precondition(editor.state["layers"].stableKey == layers)
     }
     @MainActor static func toolbarActions(_ editor: EditorStore) async throws {

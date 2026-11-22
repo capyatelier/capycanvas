@@ -1,5 +1,5 @@
 use crate::*;
-use layer_ui::{LayoutHistory, Platform, WorkspaceCapture, WorkspacePreset, WorkspaceWorkingState};
+use layer_ui::{LayoutHistory, Platform, WorkspacePreset, WorkspaceWorkingState};
 
 #[test]
 fn phone_defaults_follow_owner_and_preserve_history_and_empty() {
@@ -10,10 +10,8 @@ fn phone_defaults_follow_owner_and_preserve_history_and_empty() {
         let layout = WorkspacePreset::Painter.layout(Platform::Gtk);
         let mut entity = Entity::workspace(
             "Photo",
-            WorkspaceCapture {
-                history: LayoutHistory::new(&layout),
-                working: WorkspaceWorkingState::default(),
-            },
+            LayoutHistory::new(&layout),
+            WorkspaceWorkingState::default(),
             layout,
             10,
         );
@@ -109,10 +107,10 @@ fn new_workspace_copies_the_authored_phone_toolbar_including_explicit_empty() {
             manager.observe(capture, 2_000);
             let created = manager.create_workspace("Copied phone toolbar", 3_000).await.unwrap();
             let saved = manager.load(&created.entity.id).await.unwrap();
-            let ItemContent::Workspace { baseline, history } = &saved.entity.content else { unreachable!() };
+            let HeadContent::Workspace { baseline, head } = &saved.entity.content else { unreachable!() };
             assert_eq!(baseline.phone, layout.phone);
-            assert_eq!(history.layout().phone, layout.phone);
-            assert!(history.undo.is_empty() && history.redo.is_empty());
+            assert_eq!(head.layout().phone, layout.phone);
+            assert!(head.undo.is_empty() && head.redo.is_empty());
             manager.close().await.unwrap();
         });
         drop(manager);
@@ -136,21 +134,26 @@ fn phone_and_desktop_restore_each_record_one_exact_undo_redo_step() {
             let first = layout.phone.as_ref().unwrap()[0].id;
             layout.remove_phone_tool(first).unwrap();
             capture.history.append(&layout, layer_ui::LayoutChange::Automatic);
-            let undo_count = capture.history.undo.len();
-            manager.observe(capture, 2_000);
+            let undo_count = capture.history.head.undo.len();
             let expected = layout.starting_layout_candidate(&starting, phone).unwrap();
-            let restored = manager.change_layout_for_scope(&id, None, 3_000, phone).await.unwrap();
+            capture.history.append(&expected, layer_ui::LayoutChange::Restored);
+            manager.observe(capture, 2_000);
+            manager.flush().await.unwrap();
+            let restored = manager.load(&id).await.unwrap();
             let mut history = restored.entity.capture().unwrap().history;
             assert_eq!(history.layout(), &layer_ui::durable_layout(&expected));
-            assert_eq!(history.undo.len(), undo_count + 1);
-            assert!(history.redo.is_empty());
-            assert!(history.undo());
+            assert_eq!(history.head.current.description, layer_ui::LayoutChange::Restored);
+            assert_eq!(history.head.undo.len(), undo_count + 1);
+            assert!(history.head.redo.is_empty());
+            let previous = manager.layout_revision(&id, history.target(false).unwrap()).await.unwrap();
+            assert!(history.navigate(false, previous));
             assert_eq!(history.layout(), &layer_ui::durable_layout(&layout));
-            assert_eq!(history.undo.len(), undo_count);
-            assert_eq!(history.redo.len(), 1);
-            assert!(history.redo());
+            assert_eq!(history.head.undo.len(), undo_count);
+            assert_eq!(history.head.redo.len(), 1);
+            let next = manager.layout_revision(&id, history.target(true).unwrap()).await.unwrap();
+            assert!(history.navigate(true, next));
             assert_eq!(history.layout(), &layer_ui::durable_layout(&expected));
-            assert!(history.redo.is_empty());
+            assert!(history.head.redo.is_empty());
             manager.close().await.unwrap();
         });
         drop(manager);

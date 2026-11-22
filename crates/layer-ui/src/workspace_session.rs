@@ -94,7 +94,7 @@ impl WorkspaceCapture {
     pub fn from_template(layout: &DockLayout) -> Result<Self, String> {
         layout.validate()?;
         Ok(Self {
-            history: LayoutHistory::new(layout),
+            history: LayoutEdit::starting(layout),
             working: WorkspaceWorkingState::default(),
         })
     }
@@ -366,6 +366,43 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub fn workspace_layout_generation(&self) -> Option<u64> {
         self.workspace_history.generation()
+    }
+    pub fn workspace_layout_read(&self) -> Option<&LayoutRead> {
+        self.workspace_history.read()
+    }
+    pub fn finish_workspace_layout_read(&mut self, read: &LayoutRead, revision: Option<LayoutRevision>) -> Result<UiChange, String> {
+        if !self.workspace_history.supply(read, revision) {
+            return Ok(UiChange::default());
+        }
+        let command = if read.redo { CommandId::RedoWorkspace } else { CommandId::UndoWorkspace };
+        self.dispatch(UiAction::Invoke { command })
+    }
+    pub fn cancel_workspace_layout_read(&mut self) {
+        self.workspace_history.cancel_read();
+    }
+    pub fn acknowledge_workspace_layouts(&mut self, revisions: &[String]) {
+        self.workspace_history.acknowledge(revisions);
+    }
+    pub fn restore_workspace_layout(&mut self, layout: &DockLayout, description: LayoutChange) -> Result<UiChange, String> {
+        self.require_workspace_idle()?;
+        layout.validate()?;
+        if let Some(mut original) = self.workspace_preview.take() {
+            original.layout.adopt_runtime(&self.state.workspace.layout);
+            self.state.workspace = original;
+        }
+        let before = self.state.workspace.clone();
+        let mut next = durable_layout(layout);
+        next.open_default_columns(self.state.platform);
+        next.adopt_runtime(&before.layout);
+        self.state.workspace.layout = next;
+        self.workspace_history.record_named(before, &self.state.workspace, description);
+        self.state.customization = CustomizationState::default();
+        self.sync_work_area();
+        self.refresh_commands();
+        Ok(self.changed(
+            regions::LAYOUT | regions::CUSTOMIZATION | regions::COMMANDS,
+            false,
+        ))
     }
 
     /// Layout browsing changes only the presented layout. Every durable

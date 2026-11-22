@@ -1215,7 +1215,7 @@ fn check_paint_default_stack(platform: Platform) {
     let mut s = session(platform);
     let layout = crate::WorkspacePreset::Illustrator.layout(platform);
     let capture = crate::WorkspaceCapture {
-        history: crate::LayoutHistory::new(&layout),
+        history: crate::LayoutEdit::starting(&layout),
         working: crate::WorkspaceWorkingState::default(),
     };
     let assert_open = |s: &UiSession<Recorder>| {
@@ -1294,7 +1294,7 @@ fn check_paint_default_stack(platform: Platform) {
     customized.header.size = crate::HeaderSize::Large;
     s.adopt_workspace(
         crate::PreparedWorkspace::new(crate::WorkspaceCapture {
-            history: crate::LayoutHistory::new(&customized),
+            history: crate::LayoutEdit::starting(&customized),
             ..capture
         })
         .unwrap(),
@@ -1314,7 +1314,7 @@ fn replacing_the_workspace_keeps_host_measurements_and_follows_the_header_size()
     let preset = |preset: crate::WorkspacePreset| preset.layout(Platform::Gtk);
     let adopt = |s: &mut UiSession<Recorder>, layout: &DockLayout| {
         s.adopt_workspace(crate::PreparedWorkspace::new(crate::WorkspaceCapture {
-            history: crate::LayoutHistory::new(layout),
+            history: crate::LayoutEdit::starting(layout),
             working: crate::WorkspaceWorkingState::default(),
         }).unwrap()).unwrap();
     };

@@ -531,13 +531,14 @@ fn complete_layout(english:&Localizer)->DockLayout {
 }
 fn complete_history(english:&Localizer)->LayoutHistory {
     let mut layout=complete_layout(english);
-    let mut history=LayoutHistory::new(&layout);
+    let mut edit=crate::LayoutEdit::starting(&layout);
     let changes:Vec<LayoutChange>=serde_json::from_value(saved_names(english)["layout_change"].clone()).unwrap();
     let actions=LayoutPanelAction::ALL.into_iter().map(|action|LayoutChange::panels(action,vec![LayoutPanelName{panel:Panel::Layers,custom_name:None}]));
     for (index,change) in changes.into_iter().chain(actions).enumerate() {
         layout.canvas_bar = !layout.canvas_bar;layout.header.size=HeaderSize::ALL[index%HeaderSize::ALL.len()];
-        history.append(&layout,change);
+        edit.append(&layout,change);
     }
+    let history=edit.into_history();
     history.validate().unwrap();
     history
 }

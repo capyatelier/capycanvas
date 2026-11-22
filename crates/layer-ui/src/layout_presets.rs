@@ -541,7 +541,7 @@ mod tests {
                 let layout = preset.layout(platform);
                 layout.validate().unwrap();
                 crate::WorkspaceCapture {
-                    history: crate::LayoutHistory::new(&layout),
+                    history: crate::LayoutEdit::starting(&layout),
                     working: crate::WorkspaceWorkingState::default(),
                 }
                 .validate_structure()

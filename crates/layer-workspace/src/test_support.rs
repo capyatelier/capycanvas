@@ -1,5 +1,5 @@
 use crate::*;
-use layer_ui::{DockLayout, WorkspaceCapture};
+use layer_ui::{DockLayout, LayoutHistory, WorkspaceWorkingState};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) fn uncovered(mut host: layer_host::NativeHost) -> layer_host::NativeHost {
@@ -17,7 +17,8 @@ pub(crate) fn workspace(name: &str) -> Entity {
     let layout = DockLayout::default();
     Entity::workspace(
         name,
-        WorkspaceCapture::from_template(&layout).unwrap(),
+        LayoutHistory::new(&layout),
+        WorkspaceWorkingState::default(),
         layout,
         1_000_000,
     )

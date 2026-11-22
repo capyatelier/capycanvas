@@ -3053,7 +3053,7 @@ class AndroidPhoneAuditTest {
         fun shared() = host.snapshot!!.getJSONObject("state")
         fun layout() = shared().getJSONObject("workspace").getJSONObject("layout")
         fun tiles() = layout().array("phone").objects()
-        fun history() = JSONObject(runBlocking { host.withNative { Native.workspace(it,obj("type" to "capture").toString()) } }).getJSONObject("history")
+        fun history() = JSONObject(runBlocking { host.withNative { Native.workspace(it,obj("type" to "capture").toString()) } }).getJSONObject("history").getJSONObject("head")
         fun invoke(command: String) = host.drain(obj("type" to "invoke","command" to command))
         fun allocatedTools() {
             compose.waitForIdle()

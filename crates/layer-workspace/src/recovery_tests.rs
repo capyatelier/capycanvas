@@ -109,12 +109,12 @@ fn opens<S: WorkspaceStore + 'static>(controller: &WorkspaceController<S>, id: &
     pollster::block_on(controller.manager.load(id)).is_ok_and(|stored| !stored.fallback)
 }
 fn starting_layout(id: &str, platform: Platform) -> layer_ui::DockLayout {
-    Entity::included_workspace(id, platform, false, 0).unwrap().capture().unwrap().history.layout().clone()
+    EntityHead::from(Entity::included_workspace(id, platform, false, 0).unwrap()).layout().unwrap().clone()
 }
 fn opened_layout(name: &str, layout: layer_ui::DockLayout) -> layer_ui::DockLayout {
-    let mut entity = Entity::workspace(name, layer_ui::WorkspaceCapture::from_template(&layout).unwrap(), layout, 0);
+    let mut entity = Entity::workspace(name, layer_ui::LayoutHistory::new(&layout), Default::default(), layout, 0);
     entity.resolve_phone().unwrap();
-    entity.capture().unwrap().history.layout().clone()
+    EntityHead::from(entity).layout().unwrap().clone()
 }
 fn stored_layout<S: WorkspaceStore + 'static>(controller: &WorkspaceController<S>, id: &str) -> layer_ui::DockLayout {
     pollster::block_on(controller.manager.load(id)).unwrap().entity.capture().unwrap().history.layout().clone()
@@ -184,7 +184,7 @@ fn released_layout(id: &str) -> layer_ui::DockLayout {
     retain(&mut content);
     let mut entity = Entity { id: id.into(), metadata: Metadata::new(ItemKind::Workspace, "Released", 0), content: serde_json::from_value(content).unwrap(), working: Some(Default::default()) };
     entity.resolve_phone().unwrap();
-    entity.capture().unwrap().history.layout().clone()
+    EntityHead::from(entity).layout().unwrap().clone()
 }
 
 #[test]
@@ -222,7 +222,7 @@ fn a_native_store_with_released_1_0_12_workspaces_keeps_their_layouts() {
 fn an_unreadable_custom_workspace_opens_with_its_baseline_or_the_initial_layout() {
     let mut database = BrowserDatabase::decode(RELEASE_1_0_15).unwrap();
     let baseline = layer_ui::WorkspacePreset::Photographer.layout(Platform::Web);
-    let custom = Entity::workspace("Mine", layer_ui::WorkspaceCapture::from_template(&baseline).unwrap(), baseline.clone(), WEB_NOW);
+    let custom = Entity::workspace("Mine", layer_ui::LayoutHistory::new(&baseline), Default::default(), baseline.clone(), WEB_NOW);
     let id = custom.id.clone();
     let batch = CommitBatch::prepare(Owner::fresh(), vec![Mutation::Create { entity: custom, claim: false, name_policy: NamePolicy::Exact }]).unwrap();
     database.execute(StoreRequest::Commit { batch }, WEB_NOW).unwrap();
@@ -390,7 +390,7 @@ const INTERRUPTED: &str = "interrupted-change";
 fn interrupted() -> CommitBatch {
     let metadata = Entity::included_workspace(SKETCH, Platform::Gtk, false, 0).unwrap().metadata;
     let mut batch = CommitBatch::prepare(Owner { id: "closed-window".into(), epoch: "1".into() }, vec![Mutation::Update {
-        id: "deleted-workspace".into(), generations: Default::default(), fence: 0, metadata: Some(metadata), content: None, working: None, name_policy: NamePolicy::Unique,
+        id: "deleted-workspace".into(), generations: Default::default(), fence: 0, metadata: Some(metadata), content: None, layout: None, working: None, name_policy: NamePolicy::Unique,
     }]).unwrap();
     batch.operation_id = INTERRUPTED.into();
     batch

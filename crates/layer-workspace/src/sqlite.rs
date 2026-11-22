@@ -1,4 +1,5 @@
-use crate::protocol::{PreparedWrite, resolve};
+use crate::protocol::PreparedWrite;
+use crate::stored_workspace::{StoredHistory, StoredWorkspace};
 use crate::store_rules::*;
 use crate::*;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -152,6 +153,14 @@ impl SqliteStore {
                 Ok(StoreResponse::Done)
             }
             StoreRequest::Load { id } => self.load(&id).map(Box::new).map(StoreResponse::Entity),
+            StoreRequest::Item { id } => self.read(|tx| item(tx, &id)).map(Box::new).map(StoreResponse::Item),
+            StoreRequest::Revision { id, revision } => self
+                .read(|tx| workspace_content(tx, &id)?.revision(&revision, &mut |id| component(tx, id)))
+                .map(Box::new)
+                .map(StoreResponse::Revision),
+            StoreRequest::Versions { id } => self
+                .read(|tx| Ok(workspace_content(tx, &id)?.versions()))
+                .map(StoreResponse::Versions),
             StoreRequest::Claim { id, owner } => self
                 .claim(&id, owner)
                 .map(Box::new)
@@ -232,6 +241,12 @@ impl SqliteStore {
         tx.commit()?;
         Ok(result)
     }
+    fn read<T>(&mut self, read: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+        let tx = self.connection.transaction()?;
+        let result = read(&tx)?;
+        tx.commit()?;
+        Ok(result)
+    }
     fn update_preference_ids(
         &mut self,
         table: &str,
@@ -305,7 +320,7 @@ impl SqliteStore {
         self.ownership.reconcile(&tx, now)?;
         let row = header(&tx, id)?;
         let fence = claim_fence(row.claim.as_ref(), &owner, row.fence, now)?;
-        load(&tx, id)?;
+        let mut result = load(&tx, id)?;
         let guard = self.ownership.acquire(id, &owner)?;
         tx.execute(
             "UPDATE items SET owner=?2,epoch=?3,fence=?4,lease_until=?5 WHERE id=?1",
@@ -317,8 +332,11 @@ impl SqliteStore {
                 now.saturating_add(OWNER_LEASE_MS).to_string()
             ],
         )?;
-        // Ownership acquisition and the returned snapshot are one transaction.
-        let result = load(&tx, id)?;
+        result.claim = Some(Claim {
+            owner: owner.clone(),
+            fence,
+            expires_at_ms: now.saturating_add(OWNER_LEASE_MS),
+        });
         tx.commit()?;
         self.ownership.publish(id, &owner, fence, guard);
         Ok(result)
@@ -601,15 +619,28 @@ fn component(connection: &Connection, id: &str) -> Result<String> {
         .optional()?
         .ok_or_else(missing_resource)
 }
-fn load(connection: &Connection, id: &str) -> Result<StoredEntity> {
+fn stored(connection: &Connection, id: &str) -> Result<(Header, String, Option<serde_json::Value>)> {
     let row = header(connection, id)?;
     let (content, working): (String, Option<String>) =
         connection.query_row("SELECT content,working FROM items WHERE id=?1", [id], |r| {
             Ok((r.get(0)?, r.get(1)?))
         })?;
-    let working = working.and_then(|working| serde_json::from_str(&working).ok());
-    let (entity, fallback) = Entity::read(id.into(), serde_json::from_str(&row.metadata)?, resolve(&content, |id| component(connection, id)), working)?;
-    Ok(StoredEntity { entity, generations: row.generations, claim: row.claim, fallback })
+    Ok((row, content, working.and_then(|working| serde_json::from_str(&working).ok())))
+}
+fn load(connection: &Connection, id: &str) -> Result<StoredEntity> {
+    let (row, content, working) = stored(connection, id)?;
+    StoredEntity::read(id.into(), serde_json::from_str(&row.metadata)?, &content, working, row.generations, row.claim, |id| component(connection, id))
+}
+fn item(connection: &Connection, id: &str) -> Result<Entity> {
+    let (row, content, working) = stored(connection, id)?;
+    Entity::read(id.into(), serde_json::from_str(&row.metadata)?, &content, working, |id| component(connection, id))
+}
+fn workspace_content(connection: &Connection, id: &str) -> Result<StoredWorkspace> {
+    let content: String = connection
+        .query_row("SELECT content FROM items WHERE id=?1", [id], |r| r.get(0))
+        .optional()?
+        .ok_or_else(not_found)?;
+    StoredWorkspace::parse(&content)
 }
 fn receipt(connection: &Connection, id: &str) -> Result<Option<(String, CommitReceipt)>> {
     connection
@@ -683,6 +714,15 @@ fn apply_write(
         connection.execute(
             "UPDATE items SET content=?2,layout_generation=?3 WHERE id=?1",
             params![write.id, content, generations.layout.to_string()],
+        )?;
+    }
+    if let Some(layout) = &write.layout_json {
+        let mut content = workspace_content(connection, &write.id)?;
+        content.apply(StoredHistory::parse(layout)?)?;
+        generations.layout = advance(generations.layout)?;
+        connection.execute(
+            "UPDATE items SET content=?2,layout_generation=?3 WHERE id=?1",
+            params![write.id, content.encode()?, generations.layout.to_string()],
         )?;
     }
     if let Some(working) = &write.working_json {

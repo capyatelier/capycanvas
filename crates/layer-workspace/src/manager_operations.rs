@@ -6,38 +6,15 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         &self,
         mut source: Entity,
         name: &str,
-        duplicate: bool,
         now: u64,
     ) -> Result<StoredEntity> {
         self.flush().await?;
         source.resolve_phone()?;
-        let capture = source.capture()?;
-        let ItemContent::Workspace { baseline, .. } = source.content else {
-            unreachable!()
+        let (ItemContent::Workspace { history, baseline }, Some(working)) = (source.content, source.working) else {
+            return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseAWorkspace));
         };
-        let entity = if duplicate {
-            Entity::workspace(name, capture, *baseline, now)
-        } else {
-            let baseline = capture.history.layout().clone();
-            Entity::workspace(
-                name,
-                WorkspaceCapture {
-                    history: layer_ui::LayoutHistory::new(&baseline),
-                    working: capture.working,
-                },
-                baseline,
-                now,
-            )
-        };
-        self.create_and_bind(
-            entity,
-            if duplicate {
-                NamePolicy::Unique
-            } else {
-                NamePolicy::Exact
-            },
-        )
-        .await
+        self.create_and_bind(Entity::workspace(name, history, working, *baseline, now), NamePolicy::Unique)
+            .await
     }
     pub(crate) async fn save_reusable(&self, entity: Entity, policy: NamePolicy) -> Result<String> {
         let id = entity.id.clone();
@@ -63,13 +40,8 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let current = self
             .current()
             .ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoWorkspaceIsActive))?;
-        let capture = current.capture()?;
         let mut definition = ToolbarDefinition::capture(
-            capture
-                .history
-                .layout()
-                .panel(panel)
-                .map_err(StoreError::invalid)?,
+            current.layout()?.panel(panel).map_err(StoreError::invalid)?,
             &self.localization(),
         )?;
         definition.name = name.trim().into();
@@ -85,7 +57,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         self.flush().await?;
         let stored = self.claim(id).await?;
         let result: Result<()> = async {
-            if !matches!(stored.entity.content, ItemContent::Toolbar { .. }) {
+            if !matches!(stored.entity.content, HeadContent::Toolbar { .. }) {
                 return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseASavedToolbar));
             }
             let mut metadata = stored.entity.metadata.clone();
@@ -96,6 +68,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     &stored,
                     Some(metadata),
                     Some(ItemContent::Toolbar { definition }),
+                    None,
                     None,
                 )?],
             )?)
@@ -117,12 +90,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .current()
             .ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoWorkspaceIsActive))?;
         let definition = ToolbarDefinition::capture(
-            current
-                .capture()?
-                .history
-                .layout()
-                .panel(panel)
-                .map_err(StoreError::invalid)?,
+            current.layout()?.panel(panel).map_err(StoreError::invalid)?,
             &self.localization(),
         )?;
         self.update_toolbar(id, definition, now).await
@@ -137,7 +105,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let mut definition = match source.filter(|id| !id.is_empty()) {
             Some(id) => {
                 let stored = self.load(id).await?;
-                let ItemContent::Toolbar { mut definition } = stored.entity.content else {
+                let HeadContent::Toolbar { mut definition } = stored.entity.content else {
                     return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseASavedToolbar));
                 };
                 definition.name = stored.entity.metadata.name;
@@ -164,76 +132,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 tiles: definition.tiles,
             },
         })
-    }
-    async fn publish_layout(
-        &self,
-        stored: &StoredEntity,
-        layout: &DockLayout,
-        description: layer_ui::LayoutChange,
-        now: u64,
-    ) -> Result<StoredEntity> {
-        let mut content = stored.entity.content.clone();
-        let ItemContent::Workspace { history, .. } = &mut content else {
-            return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseAWorkspace));
-        };
-        history.append(layout, description);
-        for revision in history
-            .revisions
-            .values_mut()
-            .filter(|r| r.timestamp_ms == 0)
-        {
-            revision.timestamp_ms = now;
-        }
-        self.publish(CommitBatch::prepare(
-            self.owner.clone(),
-            vec![update(stored, None, Some(content), None)?],
-        )?)
-        .await?;
-        self.load(&stored.entity.id).await
-    }
-    pub async fn change_layout(
-        &self,
-        id: &str,
-        revision: Option<&str>,
-        now: u64,
-    ) -> Result<StoredEntity> {
-        self.change_layout_for_scope(id, revision, now, false).await
-    }
-    pub(crate) async fn change_layout_for_scope(&self, id: &str, revision: Option<&str>, now: u64, phone: bool) -> Result<StoredEntity> {
-        self.flush().await?;
-        let stored = self.claim(id).await?;
-        let result: Result<StoredEntity> = async {
-            let ItemContent::Workspace {
-                history, ..
-            } = &stored.entity.content
-            else {
-                return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseAWorkspace));
-            };
-            let layout = if let Some(revision) = revision {
-                history
-                    .revisions
-                    .get(revision)
-                    .ok_or_else(|| {
-                        StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ThisLayoutVersionIsNoLongerRetained)
-                    })?
-                    .layout
-                    .clone()
-            } else {
-                history.layout().starting_layout_candidate(&stored.entity.starting_layout(self.platform, self.tablet.get())?, phone).map_err(StoreError::invalid)?
-            };
-            self.publish_layout(
-                &stored,
-                &layout,
-                if revision.is_some() { layer_ui::LayoutChange::RestoredEarlier } else { layer_ui::LayoutChange::Restored },
-                now,
-            )
-            .await
-        }
-        .await;
-        if self.active_id().as_deref() != Some(id) {
-            self.release(&stored).await;
-        }
-        result
     }
     /// Choose an available included workspace when deleting the active one.
     /// Inactive items need no replacement; this never creates a new workspace.
@@ -293,7 +191,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 PreparedWorkspace::new(claimed.entity.capture()?).map_err(StoreError::workspace)?;
                 let mut metadata = claimed.entity.metadata.clone();
                 metadata.last_used_ms = now;
-                mutations.push(update(&claimed, Some(metadata), None, None)?);
+                mutations.push(update(&claimed, Some(metadata), None, None, None)?);
                 Some(replacement)
             } else {
                 None

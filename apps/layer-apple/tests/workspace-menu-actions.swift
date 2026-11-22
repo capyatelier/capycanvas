@@ -147,16 +147,13 @@ import Foundation
             // Storage timestamps newly committed revisions on their first
             // save. All existing timestamps and every other field must survive.
             let history = initial["history"]
-            var revisions = history["revisions"].object
-            for (id, raw) in revisions {
-                let revision = JSON(raw)
-                if revision["timestamp_ms"].string == "0" {
-                    let saved = restored["history"]["revisions"][id]["timestamp_ms"]
-                    precondition((UInt64(saved.string) ?? 0) > 0, "New history revision was not timestamped")
-                    revisions[id] = revision.replacing("timestamp_ms", with: saved).raw
-                }
+            var current = history["current"]
+            if current["timestamp_ms"].string == "0" {
+                let saved = restored["history"]["current"]["timestamp_ms"]
+                precondition((UInt64(saved.string) ?? 0) > 0, "New history revision was not timestamped")
+                current = current.replacing("timestamp_ms", with: saved)
             }
-            let expected = initial.replacing("history", with: history.replacing("revisions", with: JSON(revisions)))
+            let expected = initial.replacing("history", with: history.replacing("current", with: current))
             precondition(restored.stableKey == expected.stableKey, "Switch/return changed stored tools or layout history")
             precondition(editor.state["layers"].stableKey == document && workspaces.error == nil && editor.failure == nil)
             try await workspaces.closed()

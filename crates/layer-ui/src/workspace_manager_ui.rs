@@ -16,6 +16,7 @@ pub enum WorkspaceCommand {
     ManageToolbars,
     SaveToolbar { panel: Panel },
     NewToolbar { group: Option<u32> },
+    ReadLayout,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorkspaceChoice {

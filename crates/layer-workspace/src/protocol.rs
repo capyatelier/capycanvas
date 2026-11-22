@@ -72,6 +72,7 @@ pub enum Mutation {
         fence: u64,
         metadata: Option<Metadata>,
         content: Option<ItemContent>,
+        layout: Option<layer_ui::LayoutEdit>,
         working: Option<layer_ui::WorkspaceWorkingState>,
         name_policy: NamePolicy,
     },
@@ -94,6 +95,8 @@ pub(crate) struct PreparedWrite {
     pub metadata: Option<Metadata>,
     pub metadata_json: Option<String>,
     pub content_json: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout_json: Option<String>,
     pub working_json: Option<String>,
 }
 /// Immutable validated bytes are prepared before the backend opens a transaction.
@@ -128,73 +131,17 @@ impl CommitBatch {
             pin_workspaces: Vec::new(),
         };
         for mutation in mutations {
-            let (
-                id,
-                create,
-                delete,
-                claim,
-                expected,
-                fence,
-                metadata,
-                content,
-                working,
-                name_policy,
-            ) = match mutation {
-                Mutation::Create {
-                    entity,
-                    claim,
-                    name_policy,
-                } => {
+            let (id, create, delete, claim, expected, fence, metadata, content, layout, working, name_policy) = match mutation {
+                Mutation::Create { entity, claim, name_policy } => {
                     entity.validate()?;
-                    (
-                        entity.id,
-                        true,
-                        false,
-                        claim,
-                        Generations::default(),
-                        0,
-                        Some(entity.metadata),
-                        Some(entity.content),
-                        entity.working,
-                        name_policy,
-                    )
+                    (entity.id, true, false, claim, Generations::default(), 0, Some(entity.metadata), Some(entity.content), None, entity.working, name_policy)
                 }
-                Mutation::Update {
-                    id,
-                    generations,
-                    fence,
-                    metadata,
-                    content,
-                    working,
-                    name_policy,
-                } => (
-                    id,
-                    false,
-                    false,
-                    false,
-                    generations,
-                    fence,
-                    metadata,
-                    content,
-                    working,
-                    name_policy,
-                ),
-                Mutation::Delete {
-                    id,
-                    generations,
-                    fence,
-                } => (
-                    id,
-                    false,
-                    true,
-                    false,
-                    generations,
-                    fence,
-                    None,
-                    None,
-                    None,
-                    NamePolicy::Exact,
-                ),
+                Mutation::Update { id, generations, fence, metadata, content, layout, working, name_policy } => {
+                    (id, false, false, false, generations, fence, metadata, content, layout, working, name_policy)
+                }
+                Mutation::Delete { id, generations, fence } => {
+                    (id, false, true, false, generations, fence, None, None, None, None, NamePolicy::Exact)
+                }
             };
             if let Some(metadata) = &metadata {
                 metadata.validate()?;
@@ -204,7 +151,7 @@ impl CommitBatch {
             }
             if let Some(working) = &working {
                 layer_ui::WorkspaceCapture {
-                    history: layer_ui::LayoutHistory::new(&layer_ui::DockLayout::default()),
+                    history: layer_ui::LayoutEdit::starting(&layer_ui::DockLayout::default()),
                     working: working.clone(),
                 }
                 .validate_structure()
@@ -215,6 +162,12 @@ impl CommitBatch {
                 .map(|c| pack(serde_json::to_value(c)?, &mut batch.components))
                 .transpose()?
                 .map(|c| serde_json::to_string(&c))
+                .transpose()?;
+            let layout_json = layout
+                .map(|edit| {
+                    let delta = crate::stored_workspace::StoredHistory::delta(&edit)?;
+                    Ok::<_, StoreError>(serde_json::to_string(&pack(serde_json::to_value(delta)?, &mut batch.components)?)?)
+                })
                 .transpose()?;
             let working_json = working.as_ref().map(serde_json::to_string).transpose()?;
             if batch.writes.iter().any(|w| w.id == id) {
@@ -232,6 +185,7 @@ impl CommitBatch {
                 metadata,
                 metadata_json,
                 content_json,
+                layout_json,
                 working_json,
                 name_policy,
             });
@@ -383,6 +337,16 @@ pub enum StoreRequest {
     Load {
         id: String,
     },
+    Item {
+        id: String,
+    },
+    Revision {
+        id: String,
+        revision: String,
+    },
+    Versions {
+        id: String,
+    },
     Claim {
         id: String,
         owner: Owner,
@@ -432,6 +396,9 @@ pub enum StoreResponse {
     WorkspaceOrder(Option<Vec<String>>),
     List(Vec<ItemSummary>),
     Entity(Box<StoredEntity>),
+    Item(Box<Entity>),
+    Revision(Box<layer_ui::LayoutRevision>),
+    Versions(Vec<LayoutVersion>),
     Claim(Claim),
     Committed(CommitReceipt),
     Receipt(Option<CommitReceipt>),

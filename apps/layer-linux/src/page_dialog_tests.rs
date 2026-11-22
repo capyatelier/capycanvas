@@ -1261,7 +1261,7 @@ fn w9_interrupted_seed() -> (layer_workspace::StoreWorker, layer_workspace::Comm
         let worker = StoreWorker::shared(&directory).unwrap();
         assert!(matches!(pollster::block_on(worker.request(StoreRequest::List)).unwrap(), StoreResponse::List(_)));
         let layout = DockLayout::default();
-        let entity = Entity::workspace("M9 interrupted changes", layer_ui::WorkspaceCapture::from_template(&layout).unwrap(), layout, 1_000_000);
+        let entity = Entity::workspace("M9 interrupted changes", layer_ui::LayoutHistory::new(&layout), Default::default(), layout, 1_000_000);
         let id = entity.id.clone();
         let batch = CommitBatch::prepare(Owner::fresh(), vec![Mutation::Create { entity, claim: false, name_policy: NamePolicy::Exact }]).unwrap();
         let sql = rusqlite::Connection::open(directory.join("workspaces.sqlite3")).unwrap();

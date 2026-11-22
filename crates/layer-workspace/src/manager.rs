@@ -1,12 +1,14 @@
 use crate::*;
-use layer_ui::{DockLayout, Platform, PreparedWorkspace, WorkspaceCapture, WorkspaceWorkingState};
+use layer_ui::{LayoutEdit, LayoutRevision, Platform, PreparedWorkspace, WorkspaceCapture, WorkspaceWorkingState};
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 
 type Result<T> = std::result::Result<T, StoreError>;
 #[derive(Clone)]
 struct PendingSave {
     batch: CommitBatch,
-    snapshot: Entity,
+    snapshot: EntityHead,
+    revisions: Option<Vec<String>>,
     editing: Option<Box<layer_ui::EditingState>>,
 }
 #[derive(Default)]
@@ -15,7 +17,10 @@ struct State {
     editing: Option<Box<layer_ui::EditingState>>,
     saved_editing: Option<Box<layer_ui::EditingState>>,
     saved: Option<StoredEntity>,
-    latest: Option<Entity>,
+    latest: Option<EntityHead>,
+    unsaved: BTreeMap<String, LayoutRevision>,
+    acknowledged: Vec<String>,
+    written: std::collections::BTreeSet<String>,
     pending: Option<PendingSave>,
     failed_operation: Option<CommitBatch>,
     older_failed_operations: Vec<CommitBatch>,
@@ -85,11 +90,15 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         } else {
             self.store.execute(request).await?
         };
-        if let StoreResponse::Entity(stored) = &mut response {
-            if stored.fallback {
-                stored.entity.content = self.starting_content(&stored.entity.id);
+        match &mut response {
+            StoreResponse::Entity(stored) => {
+                if stored.fallback {
+                    stored.entity.content = self.starting_content(&stored.entity.id);
+                }
+                stored.entity.resolve_phone()?;
             }
-            stored.entity.resolve_phone()?;
+            StoreResponse::Item(entity) => entity.resolve_phone()?,
+            _ => {}
         }
         Ok(response)
     }
@@ -100,9 +109,9 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         }
         Ok(())
     }
-    fn starting_content(&self, id: &str) -> ItemContent {
+    fn starting_content(&self, id: &str) -> HeadContent {
         let id = if is_default_item(id) { id } else { self.initial_id() };
-        Entity::included_workspace(id, self.platform, self.tablet.get(), 0).unwrap().content
+        Entity::included_workspace(id, self.platform, self.tablet.get(), 0).unwrap().content.into()
     }
     fn initial_id(&self) -> &'static str {
         DEFAULT_WORKSPACES.iter().find(|(_, preset)| *preset == self.initial_workspace.get()).unwrap().0
@@ -132,7 +141,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .as_ref()
             .map(|e| self.display_name(&e.id, &e.metadata))
     }
-    pub fn current(&self) -> Option<Entity> {
+    pub fn current(&self) -> Option<EntityHead> {
         self.state.borrow().latest.clone()
     }
     pub fn current_record(&self) -> Option<StoredEntity> {
@@ -210,28 +219,40 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         }
     }
     pub fn observe(&self, capture: WorkspaceCapture, now: u64) {
-        if let Some(entity) = &mut self.state.borrow_mut().latest {
-            if let ItemContent::Workspace { history, .. } = &mut entity.content {
-                let mut incoming = capture.history;
-                for (id, revision) in &mut incoming.revisions {
-                    if revision.timestamp_ms == 0 {
-                        revision.timestamp_ms = history
-                            .revisions
-                            .get(id)
-                            .filter(|r| r.timestamp_ms != 0)
-                            .map_or(now, |r| r.timestamp_ms);
-                    }
-                }
-                *history = incoming;
-            }
-            entity.working = Some(capture.working);
+        let mut state = self.state.borrow_mut();
+        let state = &mut *state;
+        let Some(entity) = &mut state.latest else { return };
+        let HeadContent::Workspace { head, .. } = &mut entity.content else { return };
+        let known = |id: &str| {
+            state.unsaved.get(id).map(|revision| revision.timestamp_ms)
+                .or_else(|| (head.current.id == id).then_some(head.current.timestamp_ms))
+                .filter(|date| *date != 0)
+        };
+        let mut edit = capture.history;
+        edit.unsaved.retain(|id, _| !state.acknowledged.contains(id));
+        for revision in edit.unsaved.values_mut().filter(|revision| revision.timestamp_ms == 0) {
+            revision.timestamp_ms = known(&revision.id).unwrap_or(now);
         }
+        let current = &mut edit.head.current;
+        if current.timestamp_ms == 0 {
+            current.timestamp_ms = edit.unsaved.get(&current.id).map(|revision| revision.timestamp_ms)
+                .or_else(|| known(&current.id)).unwrap_or(now);
+        }
+        *head = edit.head;
+        state.unsaved = edit.unsaved;
+        entity.working = Some(capture.working);
+    }
+    pub fn take_acknowledged(&self) -> Vec<String> {
+        std::mem::take(&mut self.state.borrow_mut().acknowledged)
     }
     pub fn activate(&self, incoming: StoredEntity) -> Option<StoredEntity> {
         let mut s = self.state.borrow_mut();
         let outgoing = s.saved.take();
         s.latest = Some(incoming.entity.clone());
         s.saved = Some(incoming);
+        s.unsaved.clear();
+        s.acknowledged.clear();
+        s.written.clear();
         s.pending = None;
         s.error = None;
         s.error_operation = None;
@@ -360,7 +381,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .find(|(key, _)| key == &format!("window:{}", self.owner.id))
             .and_then(|(_, id)| id.clone())
             .or_else(|| self.active_id().filter(|id| batch.writes.iter().any(|write|
-                &write.id == id && (write.content_json.is_some() || write.working_json.is_some()))));
+                &write.id == id && (write.content_json.is_some() || write.layout_json.is_some() || write.working_json.is_some()))));
         let claims: Vec<_> = batch.writes.iter().filter(|write| !write.create && write.fence != 0)
             .map(|write| (write.id.clone(), write.fence)).collect();
         let metadata: Vec<_> = batch.writes.iter().filter_map(|write| write.metadata.clone().map(|metadata| (write.id.clone(), metadata))).collect();
@@ -390,6 +411,32 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub async fn load(&self, id: &str) -> Result<StoredEntity> {
         match self.execute(StoreRequest::Load { id: id.into() }).await? {
             StoreResponse::Entity(entity) => Ok(*entity),
+            _ => Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::UnexpectedWorkspaceLoadReply)),
+        }
+    }
+    pub async fn item(&self, id: &str) -> Result<Entity> {
+        match self.execute(StoreRequest::Item { id: id.into() }).await? {
+            StoreResponse::Item(entity) => Ok(*entity),
+            _ => Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::UnexpectedWorkspaceLoadReply)),
+        }
+    }
+    pub async fn layout_revision(&self, id: &str, revision: &str) -> Result<LayoutRevision> {
+        match self.execute(StoreRequest::Revision { id: id.into(), revision: revision.into() }).await? {
+            StoreResponse::Revision(mut revision) => {
+                let state = self.state.borrow();
+                let written = state.latest.as_ref().is_some_and(|latest| latest.id == id) && state.written.contains(&revision.id);
+                if !written {
+                    model::admit_revision(&mut revision)?;
+                    model::resolve_phone(id, &mut revision.layout)?;
+                }
+                Ok(*revision)
+            }
+            _ => Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::UnexpectedWorkspaceLoadReply)),
+        }
+    }
+    pub async fn layout_versions(&self, id: &str) -> Result<Vec<LayoutVersion>> {
+        match self.execute(StoreRequest::Versions { id: id.into() }).await? {
+            StoreResponse::Versions(versions) => Ok(layout_history_versions(versions)),
             _ => Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::UnexpectedWorkspaceLoadReply)),
         }
     }
@@ -510,18 +557,18 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             }
         }
         for candidate in candidates {
-            let source = match self.load(&candidate.id).await {
-                Ok(source) => source.entity,
+            let source = match self.item(&candidate.id).await {
+                Ok(source) => source,
                 Err(error) if error.kind == ErrorKind::InvalidData => continue,
                 Err(error) => return Err(error),
             };
             let name = message(&self.localization(), layer_ui::MessageId::WORKSPACE_COPY_NAME, &[("name", self.display_name(&source.id, &source.metadata))]);
-            return self.create_from_snapshot(source, &name, true, now).await;
+            return self.create_from_snapshot(source, &name, now).await;
         }
         if occupied { return Err(crate::store_rules::owned_elsewhere()); }
         let source = Entity::included_workspace(self.initial_id(),self.platform,self.tablet.get(),now).unwrap();
         let name = self.display_name(&source.id,&source.metadata);
-        self.create_from_snapshot(source,&name,true,now).await
+        self.create_from_snapshot(source,&name,now).await
     }
 
     async fn ensure_defaults(&self, now: u64) -> Result<()> {
@@ -603,7 +650,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             metadata.last_used_ms = now;
             let mut batch = CommitBatch::prepare(
                 self.owner.clone(),
-                vec![update(&incoming, Some(metadata.clone()), None, None)?],
+                vec![update(&incoming, Some(metadata.clone()), None, None, None)?],
             )?;
             self.bind_window(&mut batch, id);
             let receipt = self.publish(batch).await?;
@@ -635,13 +682,29 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             if let Some(pending) = &s.pending {
                 Some(pending.clone())
             } else if let (Some(saved), Some(latest)) = (&s.saved, &s.latest) {
-                if &saved.entity == latest && s.editing == s.saved_editing {
+                if saved.entity == *latest && s.editing == s.saved_editing {
                     None
                 } else {
-                    let mutations = if &saved.entity == latest { Vec::new() } else { vec![update(
+                    let (content, layout) = match &latest.content {
+                        HeadContent::Workspace { head, baseline } if saved.entity.content != latest.content => {
+                            let mut edit = LayoutEdit { head: head.clone(), unsaved: s.unsaved.clone() };
+                            if saved.replaced {
+                                if let HeadContent::Workspace { head: original, .. } = &saved.entity.content {
+                                    edit.unsaved.entry(original.current.id.clone()).or_insert_with(|| original.current.clone());
+                                }
+                                (Some(ItemContent::Workspace { history: edit.into_history(), baseline: baseline.clone() }), None)
+                            } else {
+                                (None, Some(edit))
+                            }
+                        }
+                        _ => (None, None),
+                    };
+                    let revisions = (content.is_some() || layout.is_some()).then(|| s.unsaved.keys().cloned().collect());
+                    let mutations = if saved.entity == *latest { Vec::new() } else { vec![update(
                         saved,
                         (saved.entity.metadata != latest.metadata).then(|| latest.metadata.clone()),
-                        (saved.entity.content != latest.content).then(|| latest.content.clone()),
+                        content,
+                        layout,
                         (saved.entity.working != latest.working).then(|| latest.working.clone()).flatten(),
                     )?] };
                     let editing = (s.editing != s.saved_editing).then(|| s.editing.clone()).flatten();
@@ -653,7 +716,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                         batch.editing_fields = Some(crate::store_rules::changed_editing_paths(&previous, &value));
                         batch.editing_json = Some(serde_json::to_string(editing)?);
                     }
-                    let pending = PendingSave { batch, snapshot: latest.clone(), editing };
+                    let pending = PendingSave { batch, snapshot: latest.clone(), revisions, editing };
                     s.pending = Some(pending.clone());
                     Some(pending)
                 }
@@ -667,11 +730,18 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         match self.publish(pending.batch.clone()).await {
             Ok(receipt) => {
                 let mut s = self.state.borrow_mut();
+                let s = &mut *s;
                 if let Some(saved) = &mut s.saved
                     && saved.entity.id == pending.snapshot.id
                 {
                     saved.entity = pending.snapshot;
                     if let Some((_, generations)) = receipt.items.first() { saved.generations = *generations; }
+                    if let Some(revisions) = pending.revisions {
+                        saved.replaced = false;
+                        s.unsaved.retain(|id, _| !revisions.contains(id));
+                        s.written.extend(revisions.iter().cloned());
+                        s.acknowledged.extend(revisions);
+                    }
                     if pending.editing.is_some() { s.saved_editing = pending.editing; }
                     s.pending = None;
                     if s.error_operation.as_deref() == Some(&pending.batch.operation_id) {
@@ -810,7 +880,14 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let current = self
             .current()
             .ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoWorkspaceIsActive))?;
-        self.create_from_snapshot(current, name, false, now).await
+        let layout = current.layout()?.clone();
+        let working = current.working.clone().unwrap_or_default();
+        self.flush().await?;
+        self.create_and_bind(
+            Entity::workspace(name, layer_ui::LayoutHistory::new(&layout), working, layout, now),
+            NamePolicy::Exact,
+        )
+        .await
     }
     pub async fn rename(&self, id: &str, name: &str, description: &str, now: u64) -> Result<()> {
         self.flush().await?;
@@ -821,7 +898,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             let receipt = self
                 .publish(CommitBatch::prepare(
                     self.owner.clone(),
-                    vec![update(&stored, Some(metadata.clone()), None, None)?],
+                    vec![update(&stored, Some(metadata.clone()), None, None, None)?],
                 )?)
                 .await?;
             self.apply_metadata_receipt(id, metadata, &receipt);
@@ -858,6 +935,24 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         Ok(())
     }
 
+    pub async fn complete_current(&self) -> Result<Entity> {
+        let (id, metadata, working, edit, baseline) = {
+            let state = self.state.borrow();
+            match state.latest.clone() {
+                Some(EntityHead { content: HeadContent::Workspace { head, baseline }, id, metadata, working }) => {
+                    (id, metadata, working, LayoutEdit { head, unsaved: state.unsaved.clone() }, baseline)
+                }
+                _ => return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoWorkspaceIsActive)),
+            }
+        };
+        let history = match self.item(&id).await {
+            Ok(Entity { content: ItemContent::Workspace { history, .. }, .. }) => {
+                stored_workspace::applied_edit(&history, &edit).unwrap_or_else(|_| edit.into_history())
+            }
+            _ => edit.into_history(),
+        };
+        Ok(Entity { id, metadata, content: ItemContent::Workspace { history, baseline }, working })
+    }
     /// Conflict recovery never requires overwriting or flushing the old owner.
     pub async fn save_as_new(
         &self,
@@ -865,12 +960,13 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         name: &str,
         now: u64,
     ) -> Result<StoredEntity> {
-        let baseline = match self.current().map(|e| e.content) {
-            Some(ItemContent::Workspace { baseline, .. }) => *baseline,
-            _ => capture.history.layout().clone(),
+        self.observe(capture.clone(), now);
+        let (history, baseline) = match self.complete_current().await {
+            Ok(Entity { content: ItemContent::Workspace { history, baseline }, .. }) => (history, *baseline),
+            _ => (capture.history.clone().into_history(), capture.history.layout().clone()),
         };
         self.create_and_bind(
-            Entity::workspace(name, capture, baseline, now),
+            Entity::workspace(name, history, capture.working, baseline, now),
             NamePolicy::Unique,
         )
         .await
@@ -880,6 +976,7 @@ fn update(
     stored: &StoredEntity,
     metadata: Option<Metadata>,
     content: Option<ItemContent>,
+    layout: Option<LayoutEdit>,
     working: Option<WorkspaceWorkingState>,
 ) -> Result<Mutation> {
     Ok(Mutation::Update {
@@ -892,6 +989,7 @@ fn update(
             .fence,
         metadata,
         content,
+        layout,
         working,
         name_policy: NamePolicy::Exact,
     })

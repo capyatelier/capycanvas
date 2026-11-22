@@ -138,7 +138,10 @@ extension WorkspaceController {
         try await withCheckedThrowingContinuation { done in
             store!.native!.workspace(JSON(["type": "capture"])) { value, error in
                 DispatchQueue.main.async {
-                    if let error { done.resume(throwing: HostFailure(message: error)) } else { done.resume(returning: value ?? JSON()) }
+                    if let error { done.resume(throwing: HostFailure(message: error)) } else {
+                        let capture = value ?? JSON()
+                        done.resume(returning: capture.replacing("history", with: capture["history"]["head"]))
+                    }
                 }
             }
         }

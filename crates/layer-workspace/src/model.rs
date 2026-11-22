@@ -1,7 +1,8 @@
 use layer_ui::{
-    DockLayout, LayoutHistory, PanelConfig, TileStyle, ToolbarTile, WorkspaceCapture,
+    DockLayout, LayoutEdit, LayoutHead, LayoutHistory, LayoutRevision, PanelConfig, TileStyle, ToolbarTile, WorkspaceCapture,
     WorkspaceWorkingState,
 };
+use crate::{protocol, stored_workspace::StoredWorkspace};
 use serde::{Deserialize, Serialize};
 
 pub const SCHEMA_VERSION: u32 = 9;
@@ -458,8 +459,52 @@ impl ItemContent {
         content.validate()?;
         Ok(content)
     }
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum HeadContent {
+    Workspace {
+        head: LayoutHead,
+        baseline: Box<DockLayout>,
+    },
+    Toolbar {
+        definition: ToolbarDefinition,
+    },
+}
+impl HeadContent {
+    pub fn kind(&self) -> ItemKind {
+        match self {
+            Self::Workspace { .. } => ItemKind::Workspace,
+            Self::Toolbar { .. } => ItemKind::Toolbar,
+        }
+    }
+    pub fn validate(&self) -> Result<(), StoreError> {
+        match self {
+            Self::Workspace { head, baseline } => {
+                head.validate().map_err(StoreError::invalid)?;
+                validate_stored_layout(baseline)
+            }
+            Self::Toolbar { definition } => definition.validate(),
+        }
+    }
     fn starting(layout: DockLayout) -> Self {
-        Self::Workspace { history: LayoutHistory::new(&layout), baseline: Box::new(layout) }
+        Self::Workspace { head: LayoutHead::new(&layout), baseline: Box::new(layout) }
+    }
+}
+impl From<ItemContent> for HeadContent {
+    fn from(content: ItemContent) -> Self {
+        match content {
+            ItemContent::Workspace { history, baseline } => Self::Workspace { head: history.head(), baseline },
+            ItemContent::Toolbar { definition } => Self::Toolbar { definition },
+        }
+    }
+}
+impl From<HeadContent> for ItemContent {
+    fn from(content: HeadContent) -> Self {
+        match content {
+            HeadContent::Workspace { head, baseline } => Self::Workspace { history: LayoutEdit::new(head).into_history(), baseline },
+            HeadContent::Toolbar { definition } => Self::Toolbar { definition },
+        }
     }
 }
 fn validate_stored_layout(layout: &DockLayout) -> Result<(), StoreError> {
@@ -468,6 +513,33 @@ fn validate_stored_layout(layout: &DockLayout) -> Result<(), StoreError> {
         return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::StoredLayoutsCannotIncludeMeasuredWidgetGeometryOrViewportFitting));
     }
     Ok(())
+}
+pub(crate) fn admit_revision(revision: &mut LayoutRevision) -> Result<(), StoreError> {
+    revision.retain_admitted();
+    revision.validate(&revision.id).map_err(|_| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ThisLayoutVersionIsNoLongerRetained))
+}
+pub(crate) fn resolve_phone(workspace: &str, layout: &mut DockLayout) -> Result<(), StoreError> {
+    layout.resolve_phone_defaults(phone_preset(workspace)).map_err(StoreError::invalid)
+}
+fn phone_preset(id: &str) -> layer_ui::WorkspacePreset {
+    DEFAULT_WORKSPACES
+        .iter()
+        .find(|(key, _)| *key == id)
+        .map_or(layer_ui::WorkspacePreset::Painter, |(_, preset)| *preset)
+}
+fn validate_item(id: &str, metadata: &Metadata, kind: ItemKind, working: Option<&WorkspaceWorkingState>) -> Result<(), StoreError> {
+    if id.is_empty() || id.len() > 128 {
+        return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::InvalidItemIdentity));
+    }
+    metadata.validate()?;
+    if metadata.kind != kind {
+        return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::InconsistentItemType));
+    }
+    match (kind, working) {
+        (ItemKind::Workspace, None) => Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseAWorkspace)),
+        (ItemKind::Toolbar, Some(_)) => Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::SavedToolbarsCannotContainWorkspaceToolSettings)),
+        _ => Ok(()),
+    }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Entity {
@@ -481,42 +553,30 @@ impl Entity {
     pub(crate) fn read(
         id: String,
         metadata: Metadata,
-        content: Result<serde_json::Value, StoreError>,
+        content: &str,
         working: Option<serde_json::Value>,
-    ) -> Result<(Self, bool), StoreError> {
+        mut read: impl FnMut(&str) -> Result<String, StoreError>,
+    ) -> Result<Self, StoreError> {
         metadata.validate()?;
-        let content = content.unwrap_or_default();
-        let fallback = match metadata.kind {
-            ItemKind::Toolbar => Some(ItemContent::Toolbar { definition: ToolbarDefinition::fallback(&metadata.name) }),
-            ItemKind::Workspace if !is_default_item(&id) => serde_json::from_value::<DockLayout>(content["baseline"].clone()).ok().map(|mut baseline| {
-                baseline.retain_admitted();
-                ItemContent::starting(baseline)
-            }),
-            ItemKind::Workspace => None,
+        let content = match metadata.kind {
+            ItemKind::Workspace => {
+                let (history, baseline) = StoredWorkspace::parse(content)?.complete(&mut read)?;
+                ItemContent::Workspace { history, baseline: Box::new(baseline) }
+            }
+            ItemKind::Toolbar => protocol::unpack(content, read)?,
         };
         let working = (metadata.kind == ItemKind::Workspace).then(|| WorkspaceWorkingState::restore(working.unwrap_or_default()));
-        let mut entity = Self { id, metadata, content: ItemContent::starting(DockLayout::default()), working };
-        for candidate in ItemContent::read(content).into_iter().chain(fallback) {
-            let placeholder = std::mem::replace(&mut entity.content, candidate);
-            if entity.validate().and_then(|()| entity.clone().resolve_phone()).is_ok() {
-                return Ok((entity, false));
-            }
-            entity.content = placeholder;
-        }
-        Ok((entity, true))
+        let entity = Self { id, metadata, content, working };
+        entity.validate()?;
+        entity.clone().resolve_phone()?;
+        Ok(entity)
     }
     pub(crate) fn resolve_phone(&mut self) -> Result<(), StoreError> {
-        let preset = DEFAULT_WORKSPACES
-            .iter()
-            .find(|(id, _)| *id == self.id)
-            .map_or(layer_ui::WorkspacePreset::Painter, |(_, preset)| *preset);
         if let ItemContent::Workspace { history, baseline } = &mut self.content {
             for layout in std::iter::once(baseline.as_mut())
                 .chain(history.revisions.values_mut().map(|r| &mut r.layout))
             {
-                layout
-                    .resolve_phone_defaults(preset)
-                    .map_err(StoreError::invalid)?;
+                resolve_phone(&self.id, layout)?;
             }
         }
         Ok(())
@@ -532,10 +592,8 @@ impl Entity {
         let layout = preset.layout_for_device(platform, tablet);
         let mut entity = Self::workspace(
             preset.name(),
-            WorkspaceCapture {
-                history: LayoutHistory::new(&layout),
-                working: WorkspaceWorkingState::default(),
-            },
+            LayoutHistory::new(&layout),
+            WorkspaceWorkingState::default(),
             layout,
             now,
         );
@@ -545,12 +603,12 @@ impl Entity {
     }
     pub fn workspace(
         name: &str,
-        mut capture: WorkspaceCapture,
+        mut history: LayoutHistory,
+        working: WorkspaceWorkingState,
         baseline: DockLayout,
         now: u64,
     ) -> Self {
-        for revision in capture
-            .history
+        for revision in history
             .revisions
             .values_mut()
             .filter(|r| r.timestamp_ms == 0)
@@ -561,10 +619,10 @@ impl Entity {
             id: new_id(),
             metadata: Metadata::new(ItemKind::Workspace, name, now),
             content: ItemContent::Workspace {
-                history: capture.history,
+                history,
                 baseline: Box::new(baseline),
             },
-            working: Some(capture.working),
+            working: Some(working),
         }
     }
     pub fn toolbar(definition: ToolbarDefinition, now: u64) -> Self {
@@ -575,10 +633,43 @@ impl Entity {
             content: ItemContent::Toolbar { definition },
         }
     }
+    pub fn validate(&self) -> Result<(), StoreError> {
+        self.content.validate()?;
+        validate_item(&self.id, &self.metadata, self.content.kind(), self.working.as_ref())
+    }
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EntityHead {
+    pub id: String,
+    pub metadata: Metadata,
+    pub content: HeadContent,
+    #[serde(default, deserialize_with = "WorkspaceWorkingState::deserialize_option")]
+    pub working: Option<WorkspaceWorkingState>,
+}
+impl From<Entity> for EntityHead {
+    fn from(entity: Entity) -> Self {
+        Self { id: entity.id, metadata: entity.metadata, content: entity.content.into(), working: entity.working }
+    }
+}
+impl EntityHead {
+    pub(crate) fn resolve_phone(&mut self) -> Result<(), StoreError> {
+        if let HeadContent::Workspace { head, baseline } = &mut self.content {
+            for layout in [baseline.as_mut(), &mut head.current.layout] {
+                resolve_phone(&self.id, layout)?;
+            }
+        }
+        Ok(())
+    }
+    pub fn layout(&self) -> Result<&DockLayout, StoreError> {
+        match &self.content {
+            HeadContent::Workspace { head, .. } => Ok(head.layout()),
+            HeadContent::Toolbar { .. } => Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseAWorkspace)),
+        }
+    }
     /// Built-in workspaces restore the current shipped preset for this host.
     /// Copies and custom workspaces retain their original saved baseline.
     pub fn starting_layout(&self, platform: layer_ui::Platform, tablet: bool) -> Result<DockLayout, StoreError> {
-        let ItemContent::Workspace { baseline, .. } = &self.content else {
+        let HeadContent::Workspace { baseline, .. } = &self.content else {
             return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseAWorkspace));
         };
         if self.metadata.builtin
@@ -590,28 +681,16 @@ impl Entity {
     }
     pub fn capture(&self) -> Result<WorkspaceCapture, StoreError> {
         match (&self.content, &self.working) {
-            (ItemContent::Workspace { history, .. }, Some(working)) => Ok(WorkspaceCapture {
-                history: history.clone(),
+            (HeadContent::Workspace { head, .. }, Some(working)) => Ok(WorkspaceCapture {
+                history: LayoutEdit::new(head.clone()),
                 working: working.clone(),
             }),
             _ => Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ChooseAWorkspace)),
         }
     }
     pub fn validate(&self) -> Result<(), StoreError> {
-        if self.id.is_empty() || self.id.len() > 128 {
-            return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::InvalidItemIdentity));
-        }
-        self.metadata.validate()?;
         self.content.validate()?;
-        if self.metadata.kind != self.content.kind() {
-            return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::InconsistentItemType));
-        }
-        if self.metadata.kind == ItemKind::Workspace {
-            self.capture()?.validate_structure().map_err(StoreError::workspace)?;
-        } else if self.working.is_some() {
-            return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::SavedToolbarsCannotContainWorkspaceToolSettings));
-        }
-        Ok(())
+        validate_item(&self.id, &self.metadata, self.content.kind(), self.working.as_ref())
     }
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -648,11 +727,47 @@ pub struct Claim {
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StoredEntity {
-    pub entity: Entity,
+    pub entity: EntityHead,
     pub generations: Generations,
     pub claim: Option<Claim>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub fallback: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub replaced: bool,
+}
+impl StoredEntity {
+    pub(crate) fn read(
+        id: String,
+        metadata: Metadata,
+        content: &str,
+        working: Option<serde_json::Value>,
+        generations: Generations,
+        claim: Option<Claim>,
+        mut read: impl FnMut(&str) -> Result<String, StoreError>,
+    ) -> Result<Self, StoreError> {
+        metadata.validate()?;
+        let stored = match metadata.kind {
+            ItemKind::Workspace => StoredWorkspace::parse(content)
+                .and_then(|stored| stored.head(&mut read))
+                .map(|(head, baseline)| HeadContent::Workspace { head, baseline: Box::new(baseline) }),
+            ItemKind::Toolbar => protocol::unpack(content, &mut read).map(HeadContent::from),
+        };
+        let fallback = match metadata.kind {
+            ItemKind::Toolbar => Some(HeadContent::Toolbar { definition: ToolbarDefinition::fallback(&metadata.name) }),
+            ItemKind::Workspace if !is_default_item(&id) => StoredWorkspace::baseline(content, &mut read).ok().map(HeadContent::starting),
+            ItemKind::Workspace => None,
+        };
+        let working = (metadata.kind == ItemKind::Workspace).then(|| WorkspaceWorkingState::restore(working.unwrap_or_default()));
+        let mut entity = EntityHead { id, metadata, content: HeadContent::starting(DockLayout::default()), working };
+        for (candidate, replaced) in stored.ok().map(|content| (content, false)).into_iter().chain(fallback.map(|content| (content, true))) {
+            entity.content = candidate;
+            if entity.validate().and_then(|()| entity.clone().resolve_phone()).is_ok() {
+                return Ok(Self { entity, generations, claim, fallback: false, replaced });
+            }
+        }
+        entity.content = HeadContent::starting(DockLayout::default());
+        Ok(Self { entity, generations, claim, fallback: true, replaced: true })
+    }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ItemSummary {
@@ -730,12 +845,14 @@ mod localization_tests {
         }
         assert_eq!(serde_json::to_vec(&entity).unwrap(), before);
         let ItemContent::Workspace { history, .. } = &mut entity.content else { panic!() };
+        let mut edit = layer_ui::LayoutEdit::starting(history.layout());
         let mut layout = history.layout().clone();
         let panel = layout.add_toolbar(None, "Sketch 日本語 🎨", &[]).unwrap();
-        history.append(&layout, layer_ui::LayoutChange::Automatic);
+        edit.append(&layout, layer_ui::LayoutChange::Automatic);
         layout.rename_toolbar(panel, "Tools").unwrap();
-        history.append(&layout, layer_ui::LayoutChange::Automatic);
-        let descriptions: Vec<_> = crate::layout_history_versions(history).into_iter().map(|r| r.description).collect();
+        edit.append(&layout, layer_ui::LayoutChange::Automatic);
+        *history = edit.into_history();
+        let descriptions: Vec<_> = history.revisions.values().map(|r| r.description.clone()).collect();
         let ids: Vec<_> = history.revisions.keys().cloned().collect();
         let localization = layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese);
         let bytes = crate::export_package_localized(&entity, &localization).unwrap();

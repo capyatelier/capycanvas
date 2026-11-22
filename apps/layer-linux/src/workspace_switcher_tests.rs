@@ -318,7 +318,7 @@ fn native_starting_layout_preview() {
         viewport: [w.surface.width() as f32, w.surface.height() as f32],
     });
     w.dispatch(UiAction::SetBrushSize { value: 73. });
-    pump(400);
+    until(|| !manager.dirty() && !manager.saving(), "the arranged layout saves");
     let capture = || {
         ui_session_mut(&w)
             .capture_workspace()
@@ -378,12 +378,13 @@ fn native_starting_layout_preview() {
             );
         }
     }
-    assert_eq!(capture().history.undo.len(), before.history.undo.len() + 1);
+    assert_eq!(capture().history.head.undo.len(), before.history.head.undo.len() + 1);
     assert_eq!(capture().working, before.working);
     assert_eq!(durable_layout(&state(&w).workspace.layout), baseline);
     w.dispatch(UiAction::Invoke {
         command: CommandId::UndoWorkspace,
     });
+    until(|| &durable_layout(&state(&w).workspace.layout) == before.history.layout(), "stored restore undo applies");
     assert_eq!(
         &durable_layout(&state(&w).workspace.layout),
         before.history.layout()
@@ -720,9 +721,9 @@ fn native_workspace_grip_menus() {
     };
     for (theme, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
-        let entity = layer_workspace::Entity::workspace(&format!("Grip study {name}"), original.clone(), original.history.layout().clone(), now_ms());
+        let entity = layer_workspace::Entity::workspace(&format!("Grip study {name}"), original.history.clone().into_history(), original.working.clone(), original.history.layout().clone(), now_ms());
         let custom = entity.id.clone();
-        let mut entities: Vec<_> = (0..4).map(|index| layer_workspace::Entity::workspace(&format!("Grip scroll study {name} {index}"), original.clone(), original.history.layout().clone(), now_ms())).collect();
+        let mut entities: Vec<_> = (0..4).map(|index| layer_workspace::Entity::workspace(&format!("Grip scroll study {name} {index}"), original.history.clone().into_history(), original.working.clone(), original.history.layout().clone(), now_ms())).collect();
         entities.push(entity);
         let mutations = entities.into_iter().map(|entity| layer_workspace::Mutation::Create { entity, claim: false, name_policy: layer_workspace::NamePolicy::Exact }).collect();
         glib::MainContext::default().block_on(async {
@@ -1095,7 +1096,7 @@ fn workspace_audit_fixture(id: &str, count: usize) -> (NativeTestApp, Rc<Workspa
     input.ready();
     let manager = w.workspaces.manager().unwrap();
     let original = manager.current().unwrap().capture().unwrap();
-    let entities: Vec<_> = (0..count).map(|index| layer_workspace::Entity::workspace(&format!("Workspace audit {index}"), original.clone(), original.history.layout().clone(), now_ms())).collect();
+    let entities: Vec<_> = (0..count).map(|index| layer_workspace::Entity::workspace(&format!("Workspace audit {index}"), original.history.clone().into_history(), original.working.clone(), original.history.layout().clone(), now_ms())).collect();
     let ids = entities.iter().map(|entity| entity.id.clone()).collect();
     let mutations = entities.into_iter().map(|entity| layer_workspace::Mutation::Create { entity, claim: false, name_policy: layer_workspace::NamePolicy::Exact }).collect();
     glib::MainContext::default().block_on(async {
@@ -2278,7 +2279,8 @@ fn native_workspace_switcher_input() {
             } else {
                 format!("Study {index}")
             },
-            original.clone(),
+            original.history.clone().into_history(),
+            original.working.clone(),
             original.history.layout().clone(),
             20_000,
         );

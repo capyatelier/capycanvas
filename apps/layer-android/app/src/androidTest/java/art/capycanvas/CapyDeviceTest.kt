@@ -167,7 +167,8 @@ fun CanvasHost.workspaceCapture(): String {
         }
     }
     assertTrue(done.await(10, TimeUnit.SECONDS))
-    return result
+    val capture = JSONObject(result)
+    return capture.put("history", capture.getJSONObject("history").getJSONObject("head")).toString()
 }
 
 fun CanvasHost.measurementReport(reset: Boolean = false): JSONObject {

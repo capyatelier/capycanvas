@@ -1259,7 +1259,7 @@ export async function checkPhoneAudit({call,evaluate,reload,settle,canvasPixels,
     }
     if(mode==='customize'){
       const durable=()=>evaluate('layerApp.app.workspace_persistence()');
-      const history=()=>evaluate('JSON.parse(layerApp.app.workspace_capture()).history');
+      const history=()=>evaluate('JSON.parse(layerApp.app.workspace_capture()).history.head');
       const before=await durable(),oldHistory=await history();
       const tiles=()=>evaluate('layerApp.state().workspace.layout.phone');
       const point=selector=>evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
@@ -1307,8 +1307,9 @@ export async function checkPhoneAudit({call,evaluate,reload,settle,canvasPixels,
       await menu(first);await captureCustom('customize-tile-menu');await menuAction('Remove Tool');
       const removed=await durable();assert.equal(removed.layout.phone.some(t=>t.id===first),false);
       assert.equal((await history()).undo.length,oldHistory.undo.length+1);
-      await send({type:'invoke',command:'undo_workspace'});assert.deepEqual(await durable(),before);
-      await send({type:'invoke',command:'redo_workspace'});assert.deepEqual(await durable(),removed);
+      const phoneIs=layout=>`JSON.stringify(layerApp.state().workspace.layout.phone)===${JSON.stringify(JSON.stringify(layout.phone))}`;
+      await send({type:'invoke',command:'undo_workspace'});await wait(phoneIs(before.layout));assert.deepEqual(await durable(),before);
+      await send({type:'invoke',command:'redo_workspace'});await wait(phoneIs(removed.layout));assert.deepEqual(await durable(),removed);
       const anchor=(await tiles())[0].id;
       await menu(anchor);await menuAction('Insert Tools…');
       await wait('!!document.querySelector("#tool-picker.dialog-page[open]")');
@@ -1354,13 +1355,17 @@ export async function checkPhoneAudit({call,evaluate,reload,settle,canvasPixels,
       await captureCustom('customize-reorder-held');await release();
       const expected=[sequence[1],sequence[2],sequence[0],...sequence.slice(3)];
       assert.deepEqual(await tiles(),expected);assert.equal((await history()).undo.length,moveHistory.undo.length+1);
-      await send({type:'invoke',command:'undo_workspace'});assert.deepEqual(await tiles(),sequence);
+      await send({type:'invoke',command:'undo_workspace'});await wait(phoneIs({phone:sequence}));assert.deepEqual(await tiles(),sequence);
       const outside={x:test.viewport[0]/2,y:test.viewport[1]/2},cancelled=await history();
       await hold(from);await touch('touchMove',outside);await release();assert.deepEqual(await history(),cancelled);
       await captureCustom('customize-offbar-cancelled');
       await hold(from);await escape();await release();assert.deepEqual(await history(),cancelled,'Escape cancels a held contact');
       assert.equal(await evaluate('!!document.querySelector(".panel-context-menu:popover-open")'),false,'Escape closes the held menu');
-      const empty=await durable();empty.layout.phone=[];await send({type:'restore_workspace',workspace:empty});
+      for(const tile of await tiles()){
+        await send({type:'phone',action:{kind:'remove_tool',tile:tile.id}});
+        await wait('!JSON.parse(layerApp.app.workspace_view()).dirty&&!JSON.parse(layerApp.app.workspace_view()).saving');
+      }
+      assert.deepEqual(await tiles(),[]);
       const blank=await evaluate(`(()=>{const p=layerApp.app.layout(innerWidth,innerHeight).phone,occupied=[...p.tool_hits,...p.tools,...p.controls,p.capy_hit,p.settings_hit,p.size,p.strength];for(const bar of p.bars)for(let y=Math.ceil(bar.y);y<Math.floor(bar.y+bar.height);y++)for(let x=Math.ceil(bar.x);x<Math.floor(bar.x+bar.width);x++){const point={x:x+.5,y:y+.5};if(!occupied.some(b=>b.width>0&&b.height>0&&point.x>=b.x&&point.x<b.x+b.width&&point.y>=b.y&&point.y<b.y+b.height))return point;}throw Error('The shared phone bars have no free background contact');})()`);
       await hold(blank);await release();
       assert.equal(await evaluate('!!document.querySelector(".panel-context-menu:popover-open")'),true,'The empty-toolbar hold keeps Add Tools open on release');
@@ -1377,7 +1382,6 @@ export async function checkPhoneAudit({call,evaluate,reload,settle,canvasPixels,
       const desktop=layout=>{const {phone,next_tile_id,...rest}=layout;return rest;};
       assert.deepEqual(desktop(restored.layout),desktop(full.layout),'Phone Restore preserves desktop topology');
       await captureCustom('customize-phone-restored');
-      await send({type:'restore_workspace',workspace:before});
       continue;
     }
     if(mode==='menus'){

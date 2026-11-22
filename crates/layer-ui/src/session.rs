@@ -3902,9 +3902,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 workspace.layout.open_default_columns(self.state.platform);
                 workspace.layout.adopt_runtime(&self.state.workspace.layout);
                 let bubbles = self.reset_bubbles()?;
-                self.state.workspace = *workspace;
+                self.workspace_history.cancel(&mut self.state.workspace);
+                let before = std::mem::replace(&mut self.state.workspace, *workspace);
+                if self.workspace_history.generation().is_some() {
+                    self.workspace_history.record(before, &self.state.workspace);
+                }
                 self.tool_origin = None;
-                self.workspace_history = workspace::WorkspaceHistory::default();
                 self.divider_drag = None;
                 self.floating_resize = None;
                 self.floating_auto_fit.clear();
@@ -6120,10 +6123,16 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::UndoWorkspace | CommandId::RedoWorkspace => {
                 let header_editing = self.state.customization.header_editing;
+                let waiting = self.workspace_history.read().cloned();
                 if command == CommandId::UndoWorkspace {
                     self.workspace_history.undo(&mut self.state.workspace);
                 } else {
                     self.workspace_history.redo(&mut self.state.workspace);
+                }
+                if self.managed_workspace.is_some()
+                    && self.workspace_history.read().is_some_and(|read| Some(read) != waiting.as_ref())
+                {
+                    self.request(HostRequestKind::Workspace { command: WorkspaceCommand::ReadLayout })?;
                 }
                 self.divider_drag = None;
                 self.state.customization = CustomizationState {
@@ -7819,8 +7828,8 @@ mod tests {
             }
         }
         assert_eq!(
-            s.capture_workspace().unwrap().history.generation,
-            original.history.generation + 1
+            s.capture_workspace().unwrap().history.head.generation,
+            original.history.head.generation + 1
         );
         invoke(&mut s, CommandId::UndoWorkspace);
         assert_eq!(s.state.workspace.layout.header, header);
@@ -7953,8 +7962,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            s.capture_workspace().unwrap().history.generation,
-            original.history.generation
+            s.capture_workspace().unwrap().history.head.generation,
+            original.history.head.generation
         );
         assert!(!s.command(CommandId::UndoWorkspace).enabled);
         assert!(s.state.customization.header_editing);
@@ -8004,7 +8013,7 @@ mod tests {
         let saved = s.capture_workspace().unwrap();
         saved.validate_structure().unwrap();
         assert!(!saved.history.layout().canvas_info.visible);
-        assert_eq!(saved.history.generation, original.history.generation + 1);
+        assert_eq!(saved.history.head.generation, original.history.head.generation + 1);
         assert_eq!(
             saved.history.layout().header_presentation,
             HeaderPresentation::default()
@@ -8118,7 +8127,7 @@ mod tests {
         invoke(&mut app, CommandId::RedoWorkspace);
         assert_eq!(app.state.workspace.layout.bottom_inset, 36.);
         let saved = app.capture_workspace().unwrap();
-        for revision in saved.history.revisions.values() {
+        for revision in saved.history.unsaved.values() {
             assert_eq!(revision.layout.bottom_inset, 0.);
             assert_eq!(revision.layout.titlebar_insets, [0.; 3]);
         }
@@ -8172,7 +8181,7 @@ mod tests {
         s.dispatch(UiAction::SetBrushSize { value: 73. }).unwrap();
         invoke(&mut s, CommandId::ZenMode);
         let original = s.capture_workspace().unwrap();
-        assert!(!original.history.redo.is_empty());
+        assert!(!original.history.head.redo.is_empty());
         let document = s.engine.document().clone();
         let durable = s.durable_workspace();
         assert!(s.begin_workspace_layout_preview().is_err());
@@ -8191,7 +8200,7 @@ mod tests {
             assert_eq!(s.durable_workspace(), durable);
             assert_eq!(
                 s.workspace_layout_generation(),
-                Some(original.history.generation)
+                Some(original.history.head.generation)
             );
         }
         assert!(s.dispatch(UiAction::SetBrushSize { value: 99. }).is_err());
@@ -8222,7 +8231,7 @@ mod tests {
         .unwrap();
         let history = s.capture_workspace().unwrap().history;
         assert_eq!(
-            history.revisions[&history.current].description.display(s.localization()),
+            history.head.current.description.display(s.localization()),
             "Moved Layers panel"
         );
         customize(&mut s, CustomizationAction::SetPanelVisible {
@@ -8231,7 +8240,7 @@ mod tests {
         });
         let history = s.capture_workspace().unwrap().history;
         assert_eq!(
-            history.revisions[&history.current].description.display(s.localization()),
+            history.head.current.description.display(s.localization()),
             "Hid Layers panel"
         );
         let mut toolbar = s
@@ -8247,7 +8256,7 @@ mod tests {
         let (panel, _) = s.install_workspace_toolbar(toolbar, None, None, false).unwrap();
         let history = s.capture_workspace().unwrap().history;
         assert_eq!(
-            history.revisions[&history.current].description.display(s.localization()),
+            history.head.current.description.display(s.localization()),
             "Added Inking toolbar"
         );
         let mut after = history.layout().clone();
@@ -8621,7 +8630,7 @@ mod tests {
         assert!(s.state.workspace.zen_mode);
         assert_eq!(s.state.brush.diameter, 83.);
         let captured = s.capture_workspace().unwrap();
-        assert_eq!(captured.history.revisions.len(), 2);
+        assert_eq!(captured.history.unsaved.len(), 2);
         let encoded = serde_json::to_string(&captured).unwrap();
         let mut reopened = session(Platform::Gtk);
         reopened.restore_editing(s.editing_state()).unwrap();
@@ -8646,11 +8655,11 @@ mod tests {
             })
             .unwrap();
         let recovered = reopened.capture_workspace().unwrap();
-        assert!(recovered.history.redo.is_empty());
+        assert!(recovered.history.head.redo.is_empty());
         assert!(
             recovered
                 .history
-                .revisions
+                .unsaved
                 .values()
                 .any(|r| r.layout == moved)
         );
@@ -8733,7 +8742,7 @@ mod tests {
         })
         .unwrap();
         assert!(s.editing_state().tools.overrides.is_empty());
-        assert_eq!(s.capture_workspace().unwrap().history.revisions.len(), 1);
+        assert_eq!(s.capture_workspace().unwrap().history.unsaved.len(), 1);
     }
 
     #[test]
@@ -8741,7 +8750,7 @@ mod tests {
         let mut s = session(Platform::Gtk);
         let captured = s.capture_workspace().unwrap();
         let mut invalid = captured.clone();
-        invalid.history.current = "missing".into();
+        invalid.history.head.current.id.clear();
         assert!(PreparedWorkspace::new(invalid).is_err());
         let before = s.editing_state();
         let mut invalid = before.clone();
@@ -12224,11 +12233,14 @@ mod tests {
             .is_err()
         );
         s.state.workspace.validate().unwrap();
+        let replaced = durable_layout(&s.state.workspace.layout);
         s.dispatch(UiAction::RestoreWorkspace {
-            workspace: Box::new(saved),
+            workspace: Box::new(saved.clone()),
         })
         .unwrap();
-        assert!(!s.command(CommandId::UndoWorkspace).enabled);
+        assert_eq!(durable_layout(&s.state.workspace.layout), durable_layout(&saved.layout));
+        invoke(&mut s, CommandId::UndoWorkspace);
+        assert_eq!(durable_layout(&s.state.workspace.layout), replaced, "a restored layout is one layout undo step");
     }
 
     #[test]
@@ -13299,9 +13311,10 @@ mod tests {
         );
         let moved = app.state.workspace.clone();
         assert_ne!(moved, baseline);
+        let steps = app.capture_workspace().unwrap().history.head.undo.len();
         invoke(&mut app, CommandId::UndoWorkspace);
         assert_eq!(app.state.workspace, baseline);
-        assert!(!app.command(CommandId::UndoWorkspace).enabled);
+        assert_eq!(app.capture_workspace().unwrap().history.head.undo.len(), steps - 1, "the drag is one layout undo step");
         invoke(&mut app, CommandId::RedoWorkspace);
         assert_eq!(app.state.workspace, moved);
         let b = bounds(&app);

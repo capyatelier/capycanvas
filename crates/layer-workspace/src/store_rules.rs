@@ -1,4 +1,5 @@
 use crate::protocol::{PreparedWrite, unpack};
+use crate::stored_workspace::StoredHistory;
 use crate::*;
 
 type Result<T> = std::result::Result<T, StoreError>;
@@ -139,11 +140,15 @@ pub(crate) fn validate_payload(
                 return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::InconsistentMetadataPayload));
             }
         }
+        let mut component = |id: &str| match batch.components.get(id) {
+            Some(json) => Ok(json.clone()),
+            None => lookup(id),
+        };
         if let Some(content) = &write.content_json {
-            unpack(content, |id| match batch.components.get(id) {
-                Some(json) => Ok(json.clone()),
-                None => lookup(id),
-            })?;
+            unpack(content, &mut component)?;
+        }
+        if let Some(layout) = &write.layout_json {
+            StoredHistory::parse(layout)?.validate(&mut component)?;
         }
     }
     Ok(())
@@ -163,7 +168,7 @@ pub(crate) fn check_update(
         return Ok(());
     }
     if (write.metadata.is_some() && write.expected.metadata != generations.metadata)
-        || (write.content_json.is_some() && write.expected.layout != generations.layout)
+        || ((write.content_json.is_some() || write.layout_json.is_some()) && write.expected.layout != generations.layout)
         || (write.working_json.is_some() && write.expected.working != generations.working)
     {
         return Err(StoreError::conflict());

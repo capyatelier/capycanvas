@@ -1454,7 +1454,7 @@ fn native_toolbar_variations_input() {
             let name = format!("tile-{tile}");
             let button = d.named(&name);
             let panels = state(&d.w).workspace.layout.panels;
-            let history = ui_session_mut(&d.w).capture_workspace().unwrap().history.generation;
+            let history = ui_session_mut(&d.w).capture_workspace().unwrap().history.head.generation;
             let revision = ui_session(&d.w).engine().document().revision;
             d.w.dispatch(UiAction::Invoke { command: if slot == ToolSlotId::Drawing {
                 CommandId::Lasso
@@ -1473,7 +1473,7 @@ fn native_toolbar_variations_input() {
             choose_variant(&mut d, anchor, 1);
             assert!(state(&d.w).customization.drawer.is_none());
             assert_eq!(state(&d.w).workspace.layout.panels, panels);
-            assert_eq!(ui_session_mut(&d.w).capture_workspace().unwrap().history.generation, history);
+            assert_eq!(ui_session_mut(&d.w).capture_workspace().unwrap().history.head.generation, history);
             assert_eq!(ui_session(&d.w).engine().document().revision, revision);
             assert_eq!(d.named(&name), button, "variant switches retain the native tile");
             let view = ui_session(&d.w).panel_view(panel).unwrap();
@@ -1724,7 +1724,7 @@ fn native_toolbar_added_sliders_input() {
         pump(300);
         assert!(state(&d.w).customization.picker.is_none());
         let panels = state(&d.w).workspace.layout.panels;
-        let generation = ui_session_mut(&d.w).capture_workspace().unwrap().history.generation;
+        let generation = ui_session_mut(&d.w).capture_workspace().unwrap().history.head.generation;
         for device in ["mouse", "touch"] {
             for control in [ToolbarControl::BrushSizeSlider, ToolbarControl::BrushStrengthSlider] {
                 let binding = control.slider().unwrap();
@@ -1749,7 +1749,7 @@ fn native_toolbar_added_sliders_input() {
                     "drag release closes the preview");
                 assert_eq!(d.named(&format!("component-slider-{id}")), scale.upcast::<gtk::Widget>());
                 assert_eq!(state(&d.w).workspace.layout.panels, panels, "value changes preserve the toolbar");
-                assert_eq!(ui_session_mut(&d.w).capture_workspace().unwrap().history.generation, generation,
+                assert_eq!(ui_session_mut(&d.w).capture_workspace().unwrap().history.head.generation, generation,
                     "value changes preserve workspace history");
             }
         }

@@ -16,7 +16,7 @@ export async function checkTitleBarState({call,evaluate,settle,reload,windowId})
   let innerWidthSafe=1440;
   const resize=async(width,height=1000,scale=1)=>{innerWidthSafe=width;await call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:scale,mobile:false});await settle();await pause(100);};
   const header=()=>evaluate('layerApp.state().workspace.layout.header');
-  const capture=()=>evaluate('JSON.parse(layerApp.app.workspace_capture()).history');
+  const capture=()=>evaluate('JSON.parse(layerApp.app.workspace_capture()).history.head');
   const idle=async()=>{await pause(200);await wait('JSON.parse(layerApp.app.workspace_view()).ready&&!JSON.parse(layerApp.app.workspace_view()).busy&&!JSON.parse(layerApp.app.workspace_view()).dirty');};
   const begin=async()=>{
     await call('Input.dispatchMouseEvent',{type:'mousePressed',x:720,y:2,button:'right',buttons:2,clickCount:1});
@@ -46,8 +46,9 @@ export async function checkTitleBarState({call,evaluate,settle,reload,windowId})
   await begin();await click('[data-header-size="large"]');await click('#header-canvas-info');
   const accepted=await header();await click('#header-edit-done');await idle();
   const acceptedCapture=await capture();assert.notDeepEqual(acceptedCapture,originalCapture);
-  await send({type:'invoke',command:'undo_workspace'});assert.deepEqual(await header(),original);
-  await send({type:'invoke',command:'redo_workspace'});assert.deepEqual(await header(),accepted);
+  const headerIs=layout=>`JSON.stringify(layerApp.state().workspace.layout.header)===${JSON.stringify(JSON.stringify(layout))}`;
+  await send({type:'invoke',command:'undo_workspace'});await wait(headerIs(original));assert.deepEqual(await header(),original);
+  await send({type:'invoke',command:'redo_workspace'});await wait(headerIs(accepted));assert.deepEqual(await header(),accepted);
   await idle();await reload();await wait('window.layerApp?.startupTimes.complete!=null');await idle();assert.deepEqual(await header(),accepted);
   await begin();await click('[data-header-size="small"]');await idle();
   await reload();await wait('window.layerApp?.startupTimes.complete!=null');await idle();

@@ -96,12 +96,22 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     }
     async fn rebuild_write(&self, batch: &CommitBatch, write: &PreparedWrite, now: u64) -> Result<((String, Metadata), Entity)> {
         let base = if write.create { None } else { Some(self.load(&write.id).await?.entity) };
+        let stored = if base.is_none() || write.content_json.is_some() { None } else { self.item(&write.id).await.ok() };
+        let component = |id: &str| batch.components.get(id).cloned().ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::AnInterruptedResourceIsMissing));
+        let content = match (&write.content_json, &write.layout_json, stored, &base) {
+            (Some(content), _, _, _) => protocol::unpack(content, component)?,
+            (None, Some(layout), Some(Entity { content: ItemContent::Workspace { history, baseline }, .. }), _) => ItemContent::Workspace {
+                history: stored_workspace::applied(&history, stored_workspace::StoredHistory::parse(layout)?.resolved(component)?)?,
+                baseline,
+            },
+            (None, None, Some(stored), _) => stored.content,
+            (None, None, None, Some(base)) => base.content.clone().into(),
+            _ => return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::TheInterruptedItemIsMissingItsLayout)),
+        };
         let mut entity=Entity {
             id: write.id.clone(),
             metadata:write.metadata.clone().or_else(||base.as_ref().map(|e|e.metadata.clone())).ok_or_else(||StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::TheInterruptedItemIsMissingMetadata))?,
-            content:if let Some(content)=&write.content_json {
-                protocol::unpack(content,|id|batch.components.get(id).cloned().ok_or_else(||StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::AnInterruptedResourceIsMissing)))?
-            } else {base.as_ref().ok_or_else(||StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::TheInterruptedItemIsMissingItsLayout))?.content.clone()},
+            content,
             working:if let Some(working)=&write.working_json {Some(serde_json::from_str(working)?)} else {base.as_ref().and_then(|e|e.working.clone())},
         };
         let source = (write.id.clone(), entity.metadata.clone());

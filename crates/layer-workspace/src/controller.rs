@@ -9,7 +9,7 @@ mod saved_data;
 pub use saved_data::*;
 use layer_render::CanvasRenderer;
 use layer_ui::{
-    CustomizationAction, DockLayout, HostRequestKind, Panel, PanelConfig, Platform,
+    CustomizationAction, DockLayout, HostRequestKind, LayoutChange, LayoutRead, LayoutRevision, Panel, PanelConfig, Platform,
     PreparedWorkspace, UiAction, UiChange, UiSession, WorkspaceCommand, regions,
 };
 use serde::{Deserialize, Serialize};
@@ -83,6 +83,19 @@ impl<T> Task<T> {
                 ready: AtomicBool::new(true),
                 wake: wake.clone(),
             }),
+        }
+    }
+    fn started(mut self) -> Self
+    where
+        T: 'static,
+    {
+        match self.poll() {
+            Some(result) => {
+                let ready = Self::new(&self.signal.wake, std::future::ready(result));
+                ready.signal.wake_by_ref();
+                ready
+            }
+            None => self,
         }
     }
     fn poll(&mut self) -> Option<Result<T>> {
@@ -249,6 +262,8 @@ enum Outcome {
     Focus(FocusTarget),
     Install(Box<Install>),
     Show(ManagerPage, String),
+    History(Vec<LayoutVersion>),
+    Restore(Box<DockLayout>, LayoutChange),
 }
 impl Outcome {
     fn adopt(entity: StoredEntity) -> Self {
@@ -331,6 +346,8 @@ pub struct WorkspaceController<S: WorkspaceStore + 'static> {
     resume_key: Option<String>,
     renew: Option<Task<Vec<manager::InterruptedChange>>>,
     preview: Option<(u64, Task<Selection>)>,
+    layout_read: Option<(String, LayoutRead, Task<Option<LayoutRevision>>)>,
+    history: Vec<LayoutVersion>,
     interrupted: Vec<manager::InterruptedChange>,
     selection_generation: u64,
     generation: Option<u64>,
@@ -452,6 +469,8 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             resume_key: None,
             renew: None,
             preview: None,
+            layout_read: None,
+            history: Vec::new(),
             interrupted: Vec::new(),
             selection_generation: 0,
             generation: None,
@@ -613,6 +632,24 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             }
             self.last_edit = now;
         }
+        self.read_layout(session);
+    }
+    fn read_layout<R: CanvasRenderer>(&mut self, session: &UiSession<R>) {
+        let (Some(read), Some(id)) = (session.workspace_layout_read(), self.manager.active_id()) else { return };
+        if self.layout_read.as_ref().is_some_and(|(workspace, reading, _)| *workspace == id && reading == read) {
+            return;
+        }
+        let m = self.manager.clone();
+        let (workspace, revision) = (id.clone(), read.revision.clone());
+        self.layout_read = self
+            .spawn(async move {
+                match m.layout_revision(&workspace, &revision).await {
+                    Ok(revision) => Ok(Some(revision)),
+                    Err(error) if error.kind == ErrorKind::InvalidData => Ok(None),
+                    Err(error) => Err(error),
+                }
+            })
+            .map(|task| (id, read.clone(), task.started()));
     }
     /// Observe the regions of accepted host changes, ignoring camera-only motion.
     pub fn observe_regions<R: CanvasRenderer>(
@@ -748,45 +785,45 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         };
         self.view.title = title;
         self.view.intro = intro;
-        let history = m
-            .current()
-            .and_then(|e| e.capture().ok())
-            .map(|c| c.history);
-        self.view.rows = match (page, &history) {
-            (None, _) => Vec::new(),
-            (Some(ManagerPage::History), history) => history
+        let current = m.current();
+        let head = current.as_ref().and_then(|e| match &e.content {
+            HeadContent::Workspace { head, .. } => Some(head),
+            HeadContent::Toolbar { .. } => None,
+        });
+        self.view.rows = match page {
+            None => Vec::new(),
+            Some(ManagerPage::History) => self
+                .history
                 .iter()
-                .flat_map(|history| {
-                    layout_history_versions(history).into_iter().map(|r| {
-                        let current = r.id == history.current;
-                        WorkspaceRow {
-                            subtitle: if current {
-                                message(&self.localization, layer_ui::MessageId::WORKSPACE_HISTORY_CURRENT, &[("date", date(r.timestamp_ms))])
-                            } else {
-                                date(r.timestamp_ms)
-                            },
-                            current,
-                            id: r.id,
-                            title: r.description.display(&self.localization),
-                            actions: Vec::new(),
-                            options: Vec::new(),
-                            pin: None,
-                        }
-                    })
+                .map(|r| {
+                    let current = head.is_some_and(|head| r.id == head.current.id);
+                    WorkspaceRow {
+                        subtitle: if current {
+                            message(&self.localization, layer_ui::MessageId::WORKSPACE_HISTORY_CURRENT, &[("date", date(r.timestamp_ms))])
+                        } else {
+                            date(r.timestamp_ms)
+                        },
+                        current,
+                        id: r.id.clone(),
+                        title: r.description.display(&self.localization),
+                        actions: Vec::new(),
+                        options: Vec::new(),
+                        pin: None,
+                    }
                 })
                 .collect(),
-            (Some(ManagerPage::ThisWorkspace), history) => m
+            Some(ManagerPage::ThisWorkspace) => m
                 .rows(ManagerPage::ThisWorkspace, &self.view.query, now)
                 .into_iter()
                 .map(|r| {
                     let actions = serde_json::from_str::<Panel>(&r.id)
                         .ok()
-                        .zip(history.as_ref())
-                        .map(|(panel, history)| {
+                        .zip(head)
+                        .map(|(panel, head)| {
                             toolbar_actions(
                                 &self.localization,
                                 panel,
-                                history.layout().panel_group(panel).is_some(),
+                                head.layout().panel_group(panel).is_some(),
                                 true,
                             )
                         })
@@ -797,7 +834,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     }
                 })
                 .collect(),
-            (Some(page), _) => m
+            Some(page) => m
                 .rows(page, &self.view.query, now)
                 .into_iter()
                 .map(|r| WorkspaceRow {
@@ -826,7 +863,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         match page {
             Some(ManagerPage::Workspaces | ManagerPage::History) => {
                 let current = if page == Some(ManagerPage::History) {
-                    history.map(|h| h.current)
+                    head.map(|head| head.current.id.clone())
                 } else {
                     active
                 };
@@ -894,22 +931,16 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         self.preview = self
             .spawn(async move {
                 if page == ManagerPage::History {
-                    return m
-                        .current()
-                        .and_then(|e| e.capture().ok())
-                        .and_then(|c| c.history.revisions.get(&id).map(|r| r.layout.clone()))
-                        .map(|layout| (None, Some(layout)))
-                        .ok_or_else(|| {
-                            StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ThisLayoutVersionIsNoLongerRetained)
-                        });
+                    let active = m.active_id().ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::OpenAWorkspace))?;
+                    return Ok((None, Some(m.layout_revision(&active, &id).await?.layout)));
                 }
                 let stored = match m.current_record().filter(|s| s.entity.id == id) {
                     Some(stored) => stored,
                     None => m.load(&id).await?,
                 };
                 let layout = match &stored.entity.content {
-                    ItemContent::Workspace { history, .. } => Some(history.layout().clone()),
-                    ItemContent::Toolbar { .. } => None,
+                    HeadContent::Workspace { head, .. } => Some(head.layout().clone()),
+                    HeadContent::Toolbar { .. } => None,
                 };
                 Ok((Some(stored), layout))
             })
@@ -1146,11 +1177,10 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         session: &mut UiSession<R>,
         page: ManagerPage,
     ) -> Result<UiChange> {
-        let history = self
-            .manager
-            .current()
-            .and_then(|e| e.capture().ok())
-            .map(|c| c.history.current);
+        let history = self.manager.current().and_then(|e| match e.content {
+            HeadContent::Workspace { head, .. } => Some((e.id, head.current.id)),
+            HeadContent::Toolbar { .. } => None,
+        });
         if page == ManagerPage::History && history.is_none() {
             return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::OpenAWorkspaceFirst));
         }
@@ -1164,16 +1194,24 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         self.view.details_requested=false;
         self.view.details = None;
         self.details_source = None;
-        self.view.selected = match page {
-            ManagerPage::Workspaces => self.manager.active_id(),
-            ManagerPage::History => history,
+        self.view.selected = match (page, &history) {
+            (ManagerPage::Workspaces, _) => self.manager.active_id(),
+            (ManagerPage::History, Some((_, current))) => Some(current.clone()),
             _ => None,
         };
+        self.history.clear();
         let m = self.manager.clone();
+        let active = history.filter(|_| page == ManagerPage::History).map(|(id, _)| id);
         self.run(async move {
             m.refresh().await?;
             m.refresh_switcher().await?;
-            Ok(Outcome::Done)
+            Ok(match active {
+                Some(id) => {
+                    m.flush().await?;
+                    Outcome::History(m.layout_versions(&id).await?)
+                }
+                None => Outcome::Done,
+            })
         });
         Ok(change)
     }
@@ -1299,7 +1337,14 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     Some(s) => Outcome::adopt(s),
                     None => Outcome::Deleted(id),
                 },
-                ManagerAction::Reset(id) => Outcome::adopt(m.change_layout_for_scope(&id, None, now, phone).await?),
+                ManagerAction::Reset(id) => {
+                    m.flush().await?;
+                    let current = m.current().filter(|current| current.id == id)
+                        .ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::SwitchToThisWorkspaceBeforeRestoringItsLayout))?;
+                    let starting = current.starting_layout(m.platform, m.tablet.get())?;
+                    let layout = current.layout()?.starting_layout_candidate(&starting, phone).map_err(StoreError::invalid)?;
+                    Outcome::Restore(Box::new(layout), LayoutChange::Restored)
+                }
                 ManagerAction::SaveAsNew => {
                     Outcome::adopt(m.save_as_new(capture.unwrap(), &name, now).await?)
                 }
@@ -1477,9 +1522,8 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     let active = m
                         .active_id()
                         .ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::OpenAWorkspace))?;
-                    Ok(Outcome::adopt(
-                        m.change_layout(&active, Some(&id), now).await?,
-                    ))
+                    let revision = m.layout_revision(&active, &id).await?;
+                    Ok(Outcome::Restore(Box::new(revision.layout), LayoutChange::RestoredEarlier))
                 });
                 Ok(UiChange::default())
             }
@@ -1533,9 +1577,9 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
     fn command_input(
         &mut self,
         command: WorkspaceCommand,
-    ) -> Result<WorkspaceInput> {
+    ) -> Result<Option<WorkspaceInput>> {
         let form = |action| WorkspaceInput::Form { action };
-        Ok(match command {
+        Ok(Some(match command {
             WorkspaceCommand::Manage => WorkspaceInput::Open {
                 page: ManagerPage::Workspaces,
             },
@@ -1560,7 +1604,8 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             WorkspaceCommand::NewToolbar { group } => {
                 form(ManagerAction::NewToolbar(group))
             }
-        })
+            WorkspaceCommand::ReadLayout => return Ok(None),
+        }))
     }
     /// Complete each host workspace request once and run it as controller input.
     fn route_requests<R: CanvasRenderer>(&mut self, session: &mut UiSession<R>, now: u64) {
@@ -1587,7 +1632,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             }
             match self
                 .command_input(command)
-                .and_then(|input| self.input(session, input, now)) {
+                .and_then(|input| input.map_or(Ok(UiChange::default()), |input| self.input(session, input, now))) {
                 Ok(c) => merge(&mut self.routed, c),
                 Err(error) => self.set_error(error),
             }
@@ -1725,6 +1770,15 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                         Outcome::Deleted(id) => {
                             if self.view.selected.as_ref() == Some(&id) { self.view.selected = None; }
                         }
+                        Outcome::History(versions) => self.history = versions,
+                        Outcome::Restore(layout, description) => {
+                            match session.restore_workspace_layout(&layout, description).map_err(StoreError::invalid)
+                                .and_then(|restored| self.capture(session, now).map(|()| restored)) {
+                                Ok(c) => merge(&mut change, c),
+                                Err(e) => self.set_error(e),
+                            }
+                            merge(&mut change, self.dismiss(session));
+                        }
                     }
                     if self.incoming.is_none() && !self.preview_open {
                         merge(&mut change, session.cancel_workspace_layout_preview());
@@ -1760,6 +1814,30 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 }
             }
         }
+        let acknowledged = self.manager.take_acknowledged();
+        if !acknowledged.is_empty() {
+            session.acknowledge_workspace_layouts(&acknowledged);
+        }
+        if let Some((workspace, read, result)) = self.layout_read.as_mut()
+            .and_then(|(workspace, read, task)| task.poll().map(|result| (workspace.clone(), read.clone(), result)))
+        {
+            self.layout_read = None;
+            presentation_changed = true;
+            if self.manager.active_id() == Some(workspace) {
+                match result {
+                    Ok(revision) => match session.finish_workspace_layout_read(&read, revision) {
+                        Ok(c) => merge(&mut change, c),
+                        Err(_) => session.cancel_workspace_layout_read(),
+                    },
+                    Err(e) => {
+                        session.cancel_workspace_layout_read();
+                        self.set_error(e);
+                    }
+                }
+                self.observe(session, now);
+            }
+        }
+        self.read_layout(session);
         if self.install.is_some() && self.task.is_none() && session.require_workspace_idle().is_ok()
         {
             presentation_changed = true;
@@ -1857,6 +1935,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     self.startup = None;
                     self.startup_error = None;
                     let id = incoming.entity.id.clone();
+                    self.layout_read = None;
                     let outgoing = self
                         .manager
                         .activate(incoming)

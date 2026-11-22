@@ -95,6 +95,7 @@ pub fn workspace_database(
         }
         let read_only = !pending && matches!(&request,
             StoreRequest::Editing { .. } | StoreRequest::List | StoreRequest::Load { .. }
+            | StoreRequest::Item { .. } | StoreRequest::Revision { .. } | StoreRequest::Versions { .. }
             | StoreRequest::Receipt { .. } | StoreRequest::Binding { .. }
             | StoreRequest::Pending | StoreRequest::Reopen | StoreRequest::Adopted
             | StoreRequest::Switcher | StoreRequest::WorkspaceOrder);

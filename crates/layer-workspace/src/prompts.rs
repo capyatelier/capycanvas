@@ -89,9 +89,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .current()
             .ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoWorkspaceIsActive))?;
         Ok(current
-            .capture()?
-            .history
-            .layout()
+            .layout()?
             .panels
             .iter()
             .filter(|p| p.id.kind() == layer_ui::PanelKind::Tiles)
@@ -171,12 +169,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 let current = self
                     .current()
                     .ok_or_else(|| StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoWorkspaceIsActive))?;
-                let capture = current.capture()?;
-                let toolbar = capture
-                    .history
-                    .layout()
-                    .panel(*panel)
-                    .map_err(StoreError::invalid)?;
+                let toolbar = current.layout()?.panel(*panel).map_err(StoreError::invalid)?;
                 ToolbarDefinition::capture(toolbar, &self.localization())?;
                 let mut p = ManagerPrompt::confirm(
                     self.localization().text(layer_ui::MessageId::WORKSPACE_SAVE_TO_TOOLBAR_LIBRARY).to_string(),

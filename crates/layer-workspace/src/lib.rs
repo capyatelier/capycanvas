@@ -16,6 +16,7 @@ mod protocol;
 pub use package::*;
 mod browser;
 mod retention;
+mod stored_workspace;
 pub mod snapshots;
 mod store_rules;
 pub use browser::BrowserDatabase;
@@ -25,6 +26,8 @@ pub use controller::*;
 mod browser_tests;
 #[cfg(all(test, feature = "native"))]
 mod controller_tests;
+#[cfg(all(test, feature = "native"))]
+mod history_tests;
 #[cfg(all(test, feature = "native"))]
 mod recovery_tests;
 #[cfg(all(test, feature = "native"))]
