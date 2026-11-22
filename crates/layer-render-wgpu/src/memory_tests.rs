@@ -2245,3 +2245,72 @@ fn a_display_blocked_while_ram_is_exhausted_completes_once_another_owner_release
     assert!(!r.refuses(&blocked), "without a frame, the blocked request is judged against the room the ledger now gives the display");
     assert!(r.admit_display(None, class, bytes).is_ok(), "and the request is admitted");
 }
+
+#[test]
+fn a_tablet_ellipse_at_fit_keeps_each_predicted_page_s_display_inputs() {
+    use crate::test_support::pen;
+    use layer_engine::{CanvasEngine, InstantFeedbackConfig, PenEvent, PenPhase, SampleFlags, ViewTransform, input_queue};
+    const EXTENT: [u32; 2] = [4248, 2832];
+    const SIZE: [u32; 2] = [2004, 1316];
+    const SAMPLES: u32 = 504;
+    let budget = MemoryBudget::with_facts(MemoryFacts { total_bytes: Some(5648 << 20), available_bytes: Some(2183 << 20), tablet: true, ..Default::default() });
+    let mut document = layer_core::Document::new(layer_core::PortableId::random(), EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Photo".into(), paper: "Paper".into() });
+    let layer_core::SourceTarget::Paint(photo) = document.working.target.unwrap() else { panic!() };
+    let source = crate::test_support::depth_source(EXTENT, layer_core::color::SampleDepth::U8, layer_core::color::RgbSpace::Srgb, 128 << 20,
+        |x, y| [x as f32 / EXTENT[0] as f32, y as f32 / EXTENT[1] as f32, ((x ^ y) & 63) as f32 / 255. + 0.5, 1.]);
+    document.artwork.paint.get_mut(photo).unwrap().base = Some(layer_core::authored::PaintBase::new(source.into()));
+    let (owner, target) = crate::test_support::add_paint(&mut document.artwork, "Ink", EXTENT);
+    let stack = document.artwork.compositions.get(document.artwork.root).unwrap().result;
+    let entries = &mut document.artwork.stacks.get_mut(stack).unwrap().entries;
+    entries.retain(|h| *h != owner);
+    entries.insert(0, owner);
+    let mut document = layer_core::Document::from_artwork(document.artwork).unwrap();
+    document.working.target = Some(target);
+    document.working.occurrence = Some(owner);
+    let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+    brush.diameter = 1024.;
+    let mut gpu = renderer_in_budget(document.composition().color, layer_core::DeviceMemoryFacts { unified: true, ..Default::default() }, budget).unwrap();
+    gpu.prepare_startup(&document, &brush, false).unwrap();
+    gpu.finish_startup_catalog();
+    crate::test_support::wait_startup(&mut gpu, std::time::Instant::now() + std::time::Duration::from_secs(60), |progress| progress.complete, format_args!("startup"));
+    let (mut input, consumer) = input_queue(1024);
+    let scale = 0.33686f32;
+    let [tx, ty] = [0, 1].map(|axis| (SIZE[axis] as f32 - EXTENT[axis] as f32 * scale) * 0.5);
+    let view = layer_render::ViewState { width_px: SIZE[0], height_px: SIZE[1], document_to_surface: [scale, 0., 0., scale, tx, ty] };
+    let mut engine = CanvasEngine::new(gpu, document, consumer, view,
+        ViewTransform { revision: 0, surface_to_document: [1. / scale, 0., 0., 1. / scale, -tx / scale, -ty / scale] }).unwrap();
+    engine.set_instant_feedback(InstantFeedbackConfig { use_platform_prediction: false, ..Default::default() }).unwrap();
+    engine.render_frame_at(0).unwrap();
+    engine.set_brush(brush).unwrap();
+    let mut clock = 1_000_000_000u64;
+    let settle = |engine: &mut CanvasEngine<WgpuRasterizer>, clock: &mut u64| {
+        while !(engine.backend().raster_ready() && !crate::scene::scale::tests::publication_pending(engine.backend()) && !engine.has_pending_document_edits() && !engine.has_pending_input()) {
+            *clock += 4_166_667;
+            engine.render_frame_at(*clock).unwrap();
+            engine.backend_mut().wait_idle().unwrap();
+        }
+    };
+    settle(&mut engine, &mut clock);
+    let mut frames = Vec::new();
+    for contact in 0..2 {
+        frames.clear();
+        for first in (0..SAMPLES).step_by(9) {
+            for sample in first..(first + 9).min(SAMPLES) {
+                clock += 5_000_000;
+                let angle = sample as f32 / SAMPLES as f32 * std::f32::consts::TAU;
+                let phase = if sample == 0 { PenPhase::Down } else if sample + 1 == SAMPLES { PenPhase::Up } else { PenPhase::Move };
+                input.push(PenEvent { timestamp_ns: clock, ..pen(clock, phase, [1002. + 543.6 * angle.cos(), 658. + 212. * angle.sin()], SampleFlags::PRIMARY) }).unwrap();
+            }
+            let shown = engine.backend().preview_footprint.clone();
+            let before = crate::test_support::PassCounts::snapshot();
+            engine.render_frame_at(clock).unwrap();
+            engine.backend_mut().wait_idle().unwrap();
+            let entered = engine.backend().preview_footprint.difference(&shown).count() as u64;
+            frames.push((crate::test_support::PassCounts::snapshot().delta(before).display_gathers, entered));
+        }
+        if contact == 0 { settle(&mut engine, &mut clock); }
+    }
+    assert!(frames.iter().map(|(gathers, _)| gathers).sum::<u64>() > 0, "the prediction averages its pages at display resolution");
+    let rebound: Vec<_> = frames.iter().enumerate().skip(3).filter(|(_, (gathers, entered))| gathers > entered).collect();
+    assert!(rebound.is_empty(), "a page that stays in the prediction keeps its display inputs; (frame, (gathers, entered pages)): {rebound:?}");
+}

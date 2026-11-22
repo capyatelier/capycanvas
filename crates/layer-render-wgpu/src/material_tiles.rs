@@ -114,6 +114,15 @@ impl WgpuRasterizer {
         for tile in tiles.iter() {
             add_job(tile.coordinate, tile.local, tile.dabs.clone())?;
         }
+        let gathers = !transported && self.dry_display_gathers(batch);
+        if gathers {
+            while self.dry_display_inputs.len() < jobs.len().min(dry_material::DISPLAY_INPUT_SETS) {
+                let inputs = dry_material::DisplayInputs::new(&self.device);
+                self.dry_display_inputs.push(inputs);
+            }
+            let (sets, mut ranks) = (self.dry_display_inputs.len(), [0; dry_material::DISPLAY_INPUT_SETS]);
+            jobs.sort_by_cached_key(|job| {let set = dry_material::display_set(job.coordinate, sets); ranks[set] += 1; (ranks[set], set)});
+        }
         let retouches = batch.style.execution.retouches();
         let mappings = if retouches {
             jobs.iter().map(|job| self.retouch_mapping(batch, job.coordinate, job.local)).collect::<Result<Vec<_>, _>>()?
@@ -127,24 +136,19 @@ impl WgpuRasterizer {
         if transported {
             self.encode_transport_jobs(encoder, batch_index, batch, batch_dabs, &jobs, layer_index, context.target)?;
         }
-        let gathers = self.dry_display_gathers(batch);
-        if gathers {
-            while self.dry_display_inputs.len() < jobs.len().min(dry_material::DISPLAY_INPUT_SETS) {
-                let inputs = dry_material::DisplayInputs::new(&self.device);
-                self.dry_display_inputs.push(inputs);
-            }
-        }
         let mut publications=Vec::with_capacity(jobs.len()*2);
         let mut written=Vec::with_capacity(jobs.len()*2);
         let mut compute_jobs = mem::take(&mut self.dry_jobs);
         if !transported {encoder.end_compute_pass();}
+        let mut chunk_sets = 0u32;
         for (record_index, job) in jobs.iter().enumerate().filter(|_| !transported) {
-            if gathers && compute_jobs.len()==dry_material::DISPLAY_INPUT_SETS {
+            let display_slot = gathers.then(|| dry_material::display_set(job.coordinate, self.dry_display_inputs.len()));
+            if display_slot.is_some_and(|set| chunk_sets & 1 << set != 0) {
                 self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
                 let receipt=encoder.submission();written.extend(publications.drain(..).map(|publication:MaterialPublication|publication.encoded(&receipt)));
-                compute_jobs.clear();
+                compute_jobs.clear();chunk_sets = 0;
             }
-            let display_slot = gathers.then_some(compute_jobs.len());
+            chunk_sets |= display_slot.map_or(0, |set| 1 << set);
             let intent=self.raster_intent(batch.target,RasterPlane::Color,job.coordinate)?;
             let sources = if retouches {
                 self.clone_source_binding(batch,batch_index, job.coordinate, &mappings[record_index], context.target, &intent, display_slot, encoder)?
