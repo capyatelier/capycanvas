@@ -4392,6 +4392,7 @@ impl WgpuRasterizer {
         let submitted = self.metrics.submissions;
         let navigator_revision = self.navigator.revision;
         let result = self.submit_frame_inner(packet, native_commit);
+        self.release_original_room();
         self.end_frame_memory();
         self.fit_grants();
         self.brush_inputs=None;

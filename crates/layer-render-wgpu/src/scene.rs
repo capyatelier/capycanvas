@@ -1033,6 +1033,7 @@ impl Scene {
         }
         Ok(())
     }
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn raster_tile_for_query(&mut self, r: &mut WgpuRasterizer, blob: &std::sync::Arc<layer_core::raster::TileBlob>, space: layer_core::color::RgbSpace, encoder: &mut crate::submission::CommandEncoder) -> Result<crate::source_access::RawTile, GpuRasterError> {
         let mut requested=sources::Inputs::default();requested.raster(blob.clone(),space,r.document_color().space);
         let inputs=requested.accept_query(r,Some(self))?;
