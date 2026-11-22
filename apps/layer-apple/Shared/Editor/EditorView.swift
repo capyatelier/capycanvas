@@ -73,7 +73,7 @@ struct EditorView<Canvas: View>: View {
                 if store.launchVisible {
                     LaunchCover(store: store).transition(.opacity)
                 }
-            }.id(store.launchRevealCut)
+            }.allowsHitTesting(store.launchVisible).id(store.launchRevealCut)
             #if DEBUG
             if ProcessInfo.processInfo.environment["CAPY_PERSISTENCE_PROBE"] == "1" {
                 PersistenceProbe(store: store)
