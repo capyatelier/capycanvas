@@ -2411,7 +2411,8 @@ fn predicted_pencil_strokes_on_a_photo_at_full_size_publish_only_what_their_dabs
             let painted=reach(&dabs[0]).union(if step==frames {PixelRect::EMPTY}else {reach(&dabs[1])}).union(tip);
             tip=if step==frames {PixelRect::EMPTY}else {reach(&dabs[1])};
             let allowed=projected.into_iter().filter(|cell|!cell.intersect(cells(painted)).is_empty()).fold(painted,PixelRect::union);
-            if r.composite_revision!=revision && r.composite_damage.union(allowed)!=allowed {wide.push((stroke,step,r.composite_damage,allowed));}
+            let damage=r.composite_damage_since(revision).unwrap();
+            if damage.union(allowed)!=allowed {wide.push((stroke,step,damage,allowed));}
             if !presents_whole(&r) {stale.push((stroke,step));}
         }
     }
@@ -2461,10 +2462,68 @@ fn refinement_after_a_pencil_stroke_on_a_complete_photo_view_publishes_only_the_
     let cells=pages::coordinates(reached,0).fold(PixelRect::EMPTY,|cells,coordinate|cells.union(pages::bounds(coordinate,0,extent)));
     let (mut revision,mut wide,mut stale)=(r.composite_revision,Vec::new(),0);
     crate::test_support::submit_settled_observing(&mut r,frame,|r| {
-        if r.composite_revision!=revision && r.composite_damage.union(cells)!=cells {wide.push(r.composite_damage);}
+        let damage=r.composite_damage_since(revision).unwrap();
+        if damage.union(cells)!=cells {wide.push(damage);}
         revision=r.composite_revision;
         stale+=usize::from(!presents_whole(r));
     });
     assert!(wide.is_empty(),"refinement after pen-up published more than the cells the stroke reached {cells:?}: {wide:?}");
     assert_eq!(stale,0,"a refinement frame's retained picture differs from a full repaint");
+}
+
+#[test]
+fn a_presenter_that_misses_refinement_pictures_repaints_only_what_they_changed() {
+    let (extent,surface)=([3072,2048],[1536,1024]);
+    let photo=rgba8_source(extent,|x,y|[(x*7%256) as u8,(y*5%256) as u8,((x+y)%256) as u8,255]);
+    let doc=layer_color::photo_project(Arc::unwrap_or_clone(photo),Default::default(),"Ink".into(),SampleDepth::U8).unwrap();
+    let target=doc.active_target().unwrap();
+    let mut style=crate::layer_tests::preset_style(DefaultBrushPreset::Pencil);style.blend_space=doc.composition().blend;
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.blend_space=doc.composition().blend;
+    frame.view=layer_render::ViewState {width_px:surface[0],height_px:surface[1],document_to_surface:[1.,0.,0.,1.,-768.,-512.]};
+    let mut r=renderer(&doc);
+    crate::test_support::submit_settled(&mut r,frame);
+    let format=wgpu::TextureFormat::Rgba8UnormSrgb;
+    let (shown,shown_view)=crate::create_target(r.device(),surface,format,"retained refinement");
+    let (whole,whole_view)=crate::create_target(r.device(),surface,format,"repainted refinement");
+    let retained=std::cell::RefCell::new(crate::ViewportPresenter::for_surface(&r,format,crate::SdrSurfaceColor::Srgb).unwrap());
+    retained.borrow_mut().set_target_retention(true);
+    let marker=[255u8,0,255,255].repeat(64);
+    let present=|r:&WgpuRasterizer| {
+        pollster::block_on(retained.borrow_mut().prepare(r)).unwrap();
+        retained.borrow_mut().present(r,&shown_view,frame.view,[0.2;4]).unwrap();
+        let mut full=crate::ViewportPresenter::for_surface(r,format,crate::SdrSurfaceColor::Srgb).unwrap();
+        pollster::block_on(full.prepare(r)).unwrap();
+        full.present(r,&whole_view,frame.view,[0.2;4]).unwrap();
+        let (kept,repainted)=(crate::layer_tests::page_bytes(r,&shown),crate::layer_tests::page_bytes(r,&whole));
+        let marked=|index:usize|index%(surface[0] as usize)<8 && index/(surface[0] as usize)<8;
+        let kept_marker=kept.chunks(4).enumerate().filter(|(index,_)|marked(*index)).all(|(_,pixel)|pixel==&marker[..4]);
+        (kept_marker,kept.chunks(4).zip(repainted.chunks(4)).enumerate().all(|(index,(a,b))|marked(index) || a==b))
+    };
+    assert_eq!(present(&r).1,true,"the settled photo presents like a full repaint");
+    r.queue().write_texture(wgpu::TexelCopyTextureInfo {texture:&shown,mip_level:0,origin:wgpu::Origin3d::ZERO,aspect:wgpu::TextureAspect::All},&marker,
+        wgpu::TexelCopyBufferLayout {offset:0,bytes_per_row:Some(32),rows_per_image:None},wgpu::Extent3d {width:8,height:8,depth_or_array_layers:1});
+    for (stroke,y) in [(1,900.),(2,1150.),(3,1400.)] {
+        for step in 0..=10 {
+            let x=1100.+100.*step as f32;
+            let dabs=[pencil(x,y,15.,&style),pencil(x+8.,y,15.,&style)];
+            let [persistent,preview]=predicted_batches(target,&style,stroke,&dabs,step==0);
+            let batches=if step==10 {vec![layer_render::DabBatch {stroke_end:true,..persistent}]}else {vec![persistent,preview]};
+            crate::test_support::submit_ready(&mut r,FramePacket {dabs:&dabs,dab_batches:&batches,time_seconds:0.01*(step+1) as f32,..frame}).unwrap();
+            crate::test_support::complete(&r);
+            assert_eq!(present(&r),(true,true),"stroke {stroke} frame {step} keeps the marked corner and presents like a full repaint");
+        }
+    }
+    let (mut presented,mut skipped,mut failures,mut frames)=(r.composite_revision,0,Vec::new(),0);
+    let mut check=|r:&WgpuRasterizer| {
+        skipped+=usize::from(r.composite_revision.wrapping_sub(presented)>1);presented=r.composite_revision;
+        let outcome=present(r);
+        if outcome!=(true,true) {failures.push((r.composite_revision,outcome));}
+    };
+    crate::test_support::with_pace([crate::frame_pace::MOVING_TAPS,1<<18],||crate::test_support::submit_settled_observing(&mut r,frame,|r| {
+        frames+=1;
+        if frames%3==0 {check(r);}
+    }));
+    check(&r);
+    assert!(skipped>0,"the presenter misses at least one refinement picture");
+    assert!(failures.is_empty(),"a present after missed refinement pictures repainted the marked corner or differs from a full repaint (revision, (marker kept, picture equal)): {failures:?}");
 }

@@ -359,8 +359,9 @@ for its completion. Required raster work keeps submission backpressure, and
 each held batch owns its completion token. Dependent painting still waits for
 Healing publication.
 Intermediate idle batches do not require a present; completion and new
-artwork, navigation or overlays do. A skipped revision forces the next retained
-presentation to redraw the complete view. Native identity composition already
+artwork, navigation or overlays do. A retained presentation that skipped revisions
+repaints the union of their damage, and the complete view once it is more than
+sixteen revisions behind. Native identity composition already
 contains exact pixels. Moving transform previews defer refinement until release.
 Each cache tracks exact validity alongside ordinary display validity; edits
 invalidate both through the same dependency regions. The first stroke on an empty

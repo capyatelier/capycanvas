@@ -636,14 +636,16 @@ fn moving_pixels_invalidate_the_cut_only_when_its_coverage_changes() {
             let preview = layer_render::TransformPreview {transaction:1,target: source_at(&doc,0),
                 moving:true,selection:Some(selection.clone()),transform:ImageTransform { placement: LayerPlacement::from_affine(Affine::translation(Point {x:offset,y:0.})),
                     keep_source,..Default::default()}};
+            let revision=r.composite_revision;
             for renderer in [&mut r,&mut exact] {
                 renderer.set_transform_preview(Some(&preview)).unwrap();crate::test_support::submit_ready(renderer, frame).unwrap();
             }
+            let damage=r.composite_damage_since(revision).unwrap();
             if step == 1 || step == 3 {
-                assert!(r.composite_damage.intersect(cut).is_empty(),
-                    "unchanged cut scale={scale} step={step} damage={:?}",r.composite_damage);
+                assert!(damage.intersect(cut).is_empty(),
+                    "unchanged cut scale={scale} step={step} damage={damage:?}");
             } else {
-                assert_eq!(r.composite_damage.intersect(cut),cut,
+                assert_eq!(damage.intersect(cut),cut,
                     "changed cut scale={scale} step={step}");
             }
             let error = quality(&display_pixels(&r), &pixels(&exact,crate::test_support::document_texture(&exact)),r.scale_display.as_ref().unwrap().plan, r.scale_display.as_ref().unwrap().texture().format());
