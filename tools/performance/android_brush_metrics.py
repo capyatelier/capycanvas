@@ -3,6 +3,11 @@ import math
 import bisect
 
 
+def quantile(values, q):
+    values = sorted(values)
+    return values[max(0, math.ceil(len(values) * q) - 1)] if values else None
+
+
 def input_completions(report, processed_timestamps=None):
     if processed_timestamps is None:
         events = [dict(zip(report["input_fields"], row)) for row in report["inputs"]]

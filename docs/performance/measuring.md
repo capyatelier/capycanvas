@@ -335,6 +335,22 @@ Record every result with its device, build (commit and profile), canvas, brush,
 size and date. Keep raw data in ignored `artifacts/` directories, and put the
 headline number with its source in the table.
 
+### Bench chain
+
+`tools/performance/bench.py` compares versions on whole painting sessions. One
+pass runs every step of [`bench-chain.json`](../../tools/performance/bench-chain.json)
+once: strokes, navigation, selections, filters, panels, documents and saving.
+`build --versions v1.0.15,origin/main` caches each version's benchmark APK.
+Reserve the devices, then `run --versions … --devices movinkpad14,sm_n970u1`
+with Perfetto's `trace_processor_shell` in `--processor` or `CAPY_TRACE_PROCESSOR`.
+Passes run in mirrored order (A B B A), the first of each version from empty
+storage; `--quick` runs one warm pass each and `--steps` picks steps. Runs land
+in `~/capy-bench/runs/`; `analyze RUN_DIR` prints the comparison and
+`publish RUN_DIR` appends its rows to the per-device CSVs in
+`docs/performance/results/`. The Windows PCs run the same chain over SSH with
+`bench_windows.py` (`bench-chain-windows.ps1` on the PC), and the Mac and iPad
+with `bench_apple.py`; both write the same run layout for `analyze`.
+
 **Brushes (Android).**
 
 - Reserve the tier's tablet and run device commands through

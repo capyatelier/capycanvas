@@ -3,5 +3,7 @@
         android:targetPackage="${applicationId}" />
     <instrumentation android:name="art.capycanvas.BrushBenchmarkInstrumentation"
         android:targetPackage="${applicationId}" />
+    <instrumentation android:name="art.capycanvas.BenchChainInstrumentation"
+        android:targetPackage="${applicationId}" />
     <application><profileable android:shell="true" /></application>
 </manifest>

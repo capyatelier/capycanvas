@@ -9,6 +9,7 @@ SurfaceFlinger's actual display-frame times, so no clock conversion is needed.
 import argparse
 import uuid
 from android_adaptive import cleanup_steps, enable_adaptive, restore_adaptive, validate_identity
+from android_brush_metrics import quantile
 import csv
 import io
 import json
@@ -20,12 +21,11 @@ import struct
 import time
 
 
-def quantile(values, q):
-    values = sorted(values)
-    return values[max(0, math.ceil(len(values) * q) - 1)] if values else None
-
-
 def presents(processor, trace, package, workspace=False):
+    return {(latch if workspace else int(latch.rsplit(" ", 1)[1])): time for latch, time in present_rows(processor, trace, package, workspace)}
+
+
+def present_rows(processor, trace, package, workspace=False):
     identity = (package + "/art.capycanvas.MainActivity").replace("'", "''")
     owned = ""
     if workspace:
@@ -51,7 +51,7 @@ JOIN actual_frame_timeline_slice f ON f.layer_name IS NULL AND CAST(f.name AS IN
 WHERE {match} ORDER BY presented_at"""
     out = subprocess.run([processor, "query", str(trace), query], capture_output=True, text=True, check=True).stdout
     rows = list(csv.DictReader(io.StringIO(out[out.index('"latch"'):]))) if '"latch"' in out else []
-    return {(r["latch"] if workspace else int(r["latch"].rsplit(" ", 1)[1])): int(r["presented_at"]) for r in rows}
+    return [(r["latch"], int(r["presented_at"])) for r in rows]
 
 
 def presentation_stats(times):
