@@ -28,6 +28,9 @@ pub(super) struct DisplayJob {
 
 pub(super) const FINE_TIP_RADIUS: f32 = 8.;
 pub(super) const DISPLAY_INPUT_SETS: usize = 8;
+pub(super) fn display_set(coordinate: [u32; 2], sets: usize) -> usize {
+    (coordinate[0] as usize % 4 + 4 * (coordinate[1] as usize % 2)) % sets
+}
 pub(super) const AGGREGATE: u32 = 8192;
 pub(super) const FINE_TIP: u32 = 16384;
 pub(super) const COMPLETION: u32 = 65536;
@@ -239,7 +242,7 @@ impl DisplayInputs {
             }].into_iter().chain(views.iter().zip(4..).map(|(view, binding)| wgpu::BindGroupEntry {
                 binding, resource: wgpu::BindingResource::TextureView(view),
             })).collect::<Vec<_>>();
-            #[cfg(test)] crate::test_support::PassCounts {material_bind_groups:1,..Default::default()}.record();
+            #[cfg(test)] crate::test_support::PassCounts {material_bind_groups:1,display_gathers:1,..Default::default()}.record();
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("dry display input gather"),
                 layout,
