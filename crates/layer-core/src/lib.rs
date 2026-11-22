@@ -571,29 +571,50 @@ impl Default for BrushStabilization {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum TaperMode {
+    #[default]
+    Off,
+    Fixed,
+    Proportional,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BrushTaper {
-    pub start_distance_diameters: f32,
-    pub end_distance_diameters: f32,
-    pub start_size: f32,
-    pub end_size: f32,
-    pub start_opacity: f32,
-    pub end_opacity: f32,
-    /// Shape of the taper: 1 preserves the smooth envelope; higher values
-    /// narrow more quickly toward the endpoint. Independent of taper length.
-    pub tip_sharpness: f32,
+    pub mode: TaperMode,
+    pub fixed_widths: [f32; 2],
+    pub proportional_shares: [f32; 2],
+    pub pointiness: f32,
+}
+
+impl BrushTaper {
+    pub const MAX_FIXED_WIDTHS: f32 = 10.0;
+    pub const MAX_PROPORTIONAL_SHARE: f32 = 0.5;
+
+    pub fn lengths(&self) -> Option<[f32; 2]> {
+        match self.mode {
+            TaperMode::Off => None,
+            TaperMode::Fixed => Some(self.fixed_widths),
+            TaperMode::Proportional => Some(self.proportional_shares),
+        }
+        .filter(|lengths| lengths.iter().any(|length| *length > 0.0))
+    }
+
+    fn valid(&self) -> bool {
+        let within = |values: [f32; 2], maximum: f32| values.iter().all(|value| (0.0..=maximum).contains(value));
+        within(self.fixed_widths, Self::MAX_FIXED_WIDTHS)
+            && within(self.proportional_shares, Self::MAX_PROPORTIONAL_SHARE)
+            && (0.0..=1.0).contains(&self.pointiness)
+    }
 }
 
 impl Default for BrushTaper {
     fn default() -> Self {
         Self {
-            start_distance_diameters: 0.0,
-            end_distance_diameters: 0.0,
-            start_size: 1.0,
-            end_size: 1.0,
-            start_opacity: 1.0,
-            end_opacity: 1.0,
-            tip_sharpness: 1.0,
+            mode: TaperMode::Off,
+            fixed_widths: [2.0, 2.0],
+            proportional_shares: [0.3, 0.3],
+            pointiness: 0.5,
         }
     }
 }
@@ -1118,20 +1139,12 @@ impl BrushSnapshot {
             self.path.jitter_across,
             self.path.falloff_distance,
             self.path.continuous_rate_hz,
-            self.taper.start_distance_diameters,
-            self.taper.end_distance_diameters,
             self.rendering.edge_width,
             self.wet_mix.stretch,
             self.blender.rate,
             self.blender.character,
             self.blender.pressure_gain,
             self.blender.lift,
-        ];
-        let taper = [
-            self.taper.start_size,
-            self.taper.end_size,
-            self.taper.start_opacity,
-            self.taper.end_opacity,
         ];
         let colors = self.color_dynamics.secondary_color_rgba_linear;
         let bounds = [
@@ -1163,9 +1176,7 @@ impl BrushSnapshot {
             || finite_nonnegative
                 .iter()
                 .any(|value| !value.is_finite() || *value < 0.0)
-            || taper
-                .iter()
-                .any(|value| !value.is_finite() || !(0.0..=1.0).contains(value))
+            || !self.taper.valid()
             || colors
                 .iter()
                 .any(|value| !value.is_finite())
@@ -1175,8 +1186,6 @@ impl BrushSnapshot {
             || self.path.jitter_across > MAX_BRUSH_SCATTER_DIAMETERS
             || self.path.continuous_rate_hz > 1_000.0
             || self.shape.count == 0
-            || !self.taper.tip_sharpness.is_finite()
-            || !(0.25..=4.0).contains(&self.taper.tip_sharpness)
             || self.shape.count > MAX_BRUSH_STAMP_COUNT
             || transport_invalid
             || self.contact.is_some_and(|c| c.dry.is_some()) && self.execution != BrushExecution::Dry
@@ -1353,6 +1362,7 @@ pub struct Stroke {
     /// after each update, so replay must preserve these boundaries, not merge
     /// an entire stroke into one transport step. Empty means one update.
     pub material_updates: Arc<[u32]>,
+    pub taper_cuts: Arc<[u32]>,
     pub bounds: Rect,
     /// Captured at contact start; replay must not use today's alpha lock.
     pub alpha_locked: bool,
@@ -1411,6 +1421,7 @@ impl Stroke {
             points,
             pen_up: true,
             material_updates: Arc::default(),
+            taper_cuts: Arc::default(),
             bounds,
             alpha_locked: false,
             barrel_twist: false,

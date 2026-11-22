@@ -1,6 +1,7 @@
 use crate::input::{StrokeBuilder, to_stroke_point};
 use crate::feedback::{PredictionState, PreviewTip, TipInput, finalized_count, tip_times};
 use crate::{CanvasEngine, DabGenerator, InstantFeedbackConfig, PenEvent, PenPhase, PressureCurve, SampleFlags, ViewTransform};
+use crate::brush::tapers;
 use layer_core::authored::vector::{Anchor, AnchorKind, PathGeometry, Subpath, WidthKnot, WidthProfile};
 use layer_core::{BrushSnapshot, RulerConstraint, StrokeId, StrokePoint};
 use layer_render::{CanvasRenderer, Dab};
@@ -123,7 +124,7 @@ impl VectorStroke {
     }
     pub fn fitted(&self) -> Option<(PathGeometry, Option<WidthProfile>, f64)> { self.fit.fitted(&self.samples()) }
     pub fn samples(&self) -> Vec<Sample> {
-        if self.brush.taper.end_distance_diameters > 0. && !self.builder.real_points().is_empty()
+        if tapers(&self.brush) && !self.builder.real_points().is_empty()
             && let Ok(mut stroke) = layer_core::Stroke::new(
                 StrokeId(self.id),
                 layer_core::SourceTarget::Paint(layer_core::authored::PaintHandle::from_index(0)),
@@ -794,8 +795,7 @@ mod tests {
                 stroke.preview(Some(3_000_000_000), Some(3_016_000_000)),
                 frozen
             );
-            stroke.brush.taper.end_distance_diameters = 2.;
-            stroke.brush.taper.end_size = 0.;
+            stroke.brush.taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: [0., 2.], ..Default::default() };
             let mut pen = crate::test_support::event(15, PenPhase::Move, 240.);
             pen.timestamp_ns = 4_000_000_000;
             pen.pressure = 0.6;

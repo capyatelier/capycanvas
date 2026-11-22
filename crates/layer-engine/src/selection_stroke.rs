@@ -2,6 +2,7 @@
 //! detection indexes centerline segments, never the expanded brush footprint.
 use crate::input::to_stroke_point;
 use crate::{DabGenerator, PenEvent, PenPhase, PressureCurve, SampleFlags, ViewTransform};
+use crate::brush::tapers;
 use layer_core::{BrushSnapshot, Point, Selection, StrokeId};
 use layer_render::Dab;
 use std::collections::{BTreeMap, BTreeSet};
@@ -65,7 +66,7 @@ impl SelectionStroke {
         if !point.position.x.is_finite() || !point.position.y.is_finite() {
             return Vec::new();
         }
-        if self.brush.taper.end_distance_diameters > 0. {
+        if tapers(&self.brush) {
             self.replay_points.push(point);
         }
         self.real_points += 1;
@@ -109,6 +110,7 @@ impl SelectionStroke {
                 generator.flush_contact(&stroke.brush, &mut dabs);
             }
         }
+        generator.shape_final(&stroke.brush, &mut dabs);
         Some(dabs)
     }
     pub fn cursor(&self, event: PenEvent) -> Vec<Dab> {
@@ -294,8 +296,7 @@ mod tests {
         for preset in [Pencil, PointyPencil, ShadingPencil, Charcoal, Chalk, PastelBlock, Crayon] {
             for scale in [0.1_f32, 1., 10.] { for drag in [false, true] {
                 let transform = ViewTransform { surface_to_document: [scale.recip(), 0., 0., scale.recip(), 0., 0.], ..ViewTransform::IDENTITY };
-                let mut brush = default_brush(preset);
-                brush.taper.end_distance_diameters = 0.5;
+                let brush = default_brush(preset);
                 let mut stroke = SelectionStroke::new(1, brush.clone(), transform, PressureCurve::default(), None);
                 let mut live = Vec::new();
                 let mut pen = crate::test_support::event(1, PenPhase::Down, 32.);
@@ -313,16 +314,13 @@ mod tests {
                 }
                 pen.sequence += 1; pen.timestamp_ns += 16_000_000; pen.phase = PenPhase::Up; pen.pressure = 0.;
                 stroke.push(pen, &mut live);
-                let replay = stroke.finished_replay().unwrap();
+                assert!(stroke.finished_replay().is_none(), "{preset:?}: dry media do not taper");
                 if drag {
-                    for dabs in [&live,&replay] {
-                        assert!(dabs.iter().any(|dab|!dab.is_completion()),"{preset:?}: drag retains its moving body");
-                        assert!(dabs.iter().filter(|dab|!dab.is_completion()).all(|dab|dab.motion!=[0.,0.]),"{preset:?}");
-                        assert_eq!(dabs.iter().filter(|dab|dab.is_completion()).count(),2,"{preset:?}: both ends complete in live and replay");
-                    }
+                    assert!(live.iter().any(|dab|!dab.is_completion()),"{preset:?}: drag retains its moving body");
+                    assert!(live.iter().filter(|dab|!dab.is_completion()).all(|dab|dab.motion!=[0.,0.]),"{preset:?}");
+                    assert_eq!(live.iter().filter(|dab|dab.is_completion()).count(),2,"{preset:?}: both ends complete");
                 } else {
                     assert_eq!(live.len(), 1, "{preset:?}");
-                    assert_eq!(replay.len(), 1, "{preset:?}");
                     let mut reference = SelectionStroke::new(1, brush, transform, PressureCurve::default(), None);
                     let mut peak = Vec::new();
                     reference.push(crate::PenEvent {phase: PenPhase::Down, pressure: 0.8, ..pen}, &mut peak);
@@ -338,8 +336,7 @@ mod tests {
     fn large_gpen_publishes_every_real_endpoint_and_replays_the_same_path() {
         let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
         brush.diameter = 800.;
-        brush.taper.end_distance_diameters = 1.;
-        brush.taper.end_size = 0.;
+        brush.taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: [0., 1.], ..Default::default() };
         let mut stroke = SelectionStroke::new(
             1,
             brush,

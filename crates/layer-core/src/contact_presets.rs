@@ -132,7 +132,12 @@ pub(crate) fn contact_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
     match preset {
         GPen => {}
         Monoline => {
-            brush.mappings = Arc::from([]);
+            brush.mappings = Arc::from([BrushMapping {
+                curve: BrushCurve { samples: [1.0; BRUSH_CURVE_SAMPLES] },
+                output_scale: 1.0,
+                output_bias: 0.0,
+                ..BrushMapping::pressure_size()
+            }]);
         }
         RoughGPen => {
             model.edge_roughness = 0.3;
@@ -231,7 +236,8 @@ mod vector_line_tests {
     fn only_solid_round_contact_pens_draw_vector_lines() {
         assert!(contact_brush(DefaultBrushPreset::GPen).draws_vector_lines());
         assert!(contact_brush(DefaultBrushPreset::Monoline).draws_vector_lines());
-        assert!(contact_brush(DefaultBrushPreset::Monoline).mappings.is_empty(), "Monoline keeps one width");
+        assert!(contact_brush(DefaultBrushPreset::Monoline).mappings.iter().all(|mapping| mapping.curve.samples == [1.0; BRUSH_CURVE_SAMPLES]
+            && mapping.output_scale == 1.0 && mapping.output_bias == 0.0), "Monoline keeps one width");
         for preset in [DefaultBrushPreset::RoughGPen, DefaultBrushPreset::CalligraphyPen, DefaultBrushPreset::BrushedInk, DefaultBrushPreset::WetInk] {
             assert!(!contact_brush(preset).draws_vector_lines(), "{preset:?}");
         }

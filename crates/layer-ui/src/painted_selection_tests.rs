@@ -195,8 +195,9 @@ mod painted_selection_checks {
     #[test]
     fn mask_final_replay_waits_for_the_existing_submission_acknowledgement() {
         let mut s = session(Platform::Gtk);
+        s.select_brush(layer_core::DefaultBrushPreset::GPen as u32).unwrap();
         let mut brush = s.engine.configured_brush().clone();
-        brush.taper.end_distance_diameters = 2.;
+        brush.taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: [0., 2.], ..Default::default() };
         s.engine.set_brush(brush).unwrap();
         invoke(&mut s, CommandId::QuickMask);
         s.engine.backend_mut().selection_wait = true;
@@ -218,8 +219,9 @@ mod painted_selection_checks {
     #[test]
     fn quick_mask_final_taper_replaces_preview() {
         let mut s = session(Platform::Gtk);
+        s.select_brush(layer_core::DefaultBrushPreset::GPen as u32).unwrap();
         let mut brush = s.engine.configured_brush().clone();
-        brush.taper.end_distance_diameters = 2.;
+        brush.taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: [0., 2.], ..Default::default() };
         s.engine.set_brush(brush).unwrap();
         invoke(&mut s, CommandId::QuickMask);
         send(&mut s, PenPhase::Down, 100.);

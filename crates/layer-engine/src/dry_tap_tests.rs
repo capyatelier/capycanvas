@@ -585,7 +585,7 @@ fn dry_contact_budget_keeps_the_last_real_move_after_a_sample_gap() {
                 .push(pen, ViewTransform::IDENTITY, PressureCurve::default());
             if !feedback {
                 let point = *engine.builder.real_points().last().unwrap();
-                engine.append_real_dab(point, engine.builder.real_points().len() - 1, false);
+                engine.append_real_dab(Some((point, engine.builder.real_points().len() - 1)), false);
             }
         }
         assert_eq!(engine.builder.real_points().len(), MAX_CONTACT_POINTS);

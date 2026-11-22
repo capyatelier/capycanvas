@@ -304,8 +304,7 @@ pipelines are ready before pen-down, and reference pages around the focus points
 are captured a few per still frame. While the pen is down the sources never
 upload or wait for the GPU: a reference page that would need filter images, a
 decode or a wait stays empty, and the stroke is reported as a miss. The engine
-replays it once contact ends, as it replays an end taper, and the replay stays
-one undo step. Completed-stroke replay restores only its target raster on
+replays it once contact ends, and the replay stays one undo step. Completed-stroke replay restores only its target raster on
 renderers that track raster damage; untouched composition pages remain valid.
 Object layers among the references are read through their canonical pixels,
 whatever the view's zoom. When a replay finds such a page still being evaluated,
@@ -446,7 +445,7 @@ A slower device keeps the rest of the input queued
 for the next frame instead of building one frame from its whole backlog. Watercolor
 transport runs once per frame, so a device that falls behind now runs it as often
 as one that keeps up. A replay that repaints a whole stroke, after a late sensor
-correction, an end taper or a renderer rebuild, is submitted in windows of at most
+correction, a taper repair or a renderer rebuild, is submitted in windows of at most
 512 page jobs that never split one watercolor update; the layer is captured once,
 after the last window, so the result matches a single-frame replay.
 

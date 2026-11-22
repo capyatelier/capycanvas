@@ -4,7 +4,7 @@
 //! producer. Renderers receive one borrowed packet per display frame. The two
 //! queue halves may also run sequentially on one event loop.
 
-use crate::brush::{DabGenerator, damage_for_dabs, pen_up_settlement_micros};
+use crate::brush::{DabGenerator, HeldStroke, Release, damage_for_dabs, pen_up_settlement_micros};
 use crate::feedback::{
     FeedbackConfigError, InstantFeedbackConfig, MAX_FINALIZATION_LAG_MICROS, PreviewTip,
     TipInput, TipSource, finalized_count, tip_times,
@@ -113,6 +113,7 @@ struct ActiveStroke {
     clone_start: Option<CloneSource>,
     barrel_twist: bool,
     momentum: Option<(Vec<Dab>, usize)>,
+    taper: Option<HeldStroke>,
 }
 
 #[derive(Clone)]
@@ -1650,6 +1651,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             self.append_continuous(timestamp_ns);
         }
         self.advance_finalized_prefix();
+        self.release_taper(Release::Settled);
         self.record_material_update();
         if self.rebuild_all || self.rebuild_completed {
             rebuilt |= self.rebuild_all;
@@ -1756,7 +1758,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     .push((self.builder.real_points().len() - 1, point));
             }
             if !feedback {
-                self.append_real_dab(point, self.builder.real_points().len() - 1, false);
+                self.append_real_dab(Some((point, self.builder.real_points().len() - 1)), false);
             }
         }
     }
@@ -1811,16 +1813,20 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         );
         while self.finalized_real_points < count {
             let point = self.builder.real_points()[self.finalized_real_points];
-            self.append_real_dab(point, self.finalized_real_points, false);
+            self.append_real_dab(Some((point, self.finalized_real_points)), false);
             self.finalized_real_points += 1;
         }
     }
 
     fn finalize_active_tail(&mut self) {
-        while self.finalized_real_points < self.builder.real_points().len() {
+        let count = self.builder.real_points().len();
+        if self.finalized_real_points == count {
+            self.append_real_dab(None, true);
+        }
+        while self.finalized_real_points < count {
             let point = self.builder.real_points()[self.finalized_real_points];
-            let terminal = self.finalized_real_points + 1 == self.builder.real_points().len();
-            self.append_real_dab(point, self.finalized_real_points, terminal);
+            let terminal = self.finalized_real_points + 1 == count;
+            self.append_real_dab(Some((point, self.finalized_real_points)), terminal);
             self.finalized_real_points += 1;
         }
     }
@@ -2088,6 +2094,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     clone_start: None,
                     barrel_twist: event.flags.contains(SampleFlags::BARREL_TWIST),
                     momentum: None,
+                    taper: None,
                 };
                 self.active_stroke = Some(active);
                 self.admitted_pen |= event.tool.is_pen() && !event.flags.contains(SampleFlags::UNCLASSIFIED);
@@ -2112,9 +2119,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 self.builder.begin_calibrated(event, transform, self.settings.pressure.clone(), self.settings.tilt.clone());
                 self.record_builder_sample(event);
                 self.track_estimate(event, transform);
-                let active = self.active_stroke.as_ref().expect("set above");
+                let active = self.active_stroke.as_mut().expect("set above");
                 self.dab_generator.reset_for_stroke(id, &active.brush);
                 self.dab_generator.set_barrel_twist(active.barrel_twist);
+                active.taper = self.dab_generator.begin_taper(&active.brush).then(HeldStroke::default);
                 let point = *self
                     .builder
                     .real_points()
@@ -2127,7 +2135,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     .expect("set above")
                     .feedback.enabled
                 {
-                    self.append_real_dab(point, self.builder.real_points().len() - 1, false);
+                    self.append_real_dab(Some((point, self.builder.real_points().len() - 1)), false);
                 }
             }
             PenPhase::Move => {
@@ -2154,7 +2162,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                         .real_points()
                         .last()
                         .expect("real move adds a point");
-                    self.append_real_dab(point, self.builder.real_points().len() - 1, false);
+                    self.append_real_dab(Some((point, self.builder.real_points().len() - 1)), false);
                 }
             }
             PenPhase::Up => {
@@ -2199,10 +2207,13 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                         .feedback.enabled
                     {
                         self.finalize_active_tail();
-                    } else {
+                    } else if self.builder.ending() {
                         let point = *self.builder.real_points().last().expect("up adds a point");
-                        self.append_real_dab(point, self.builder.real_points().len() - 1, true);
+                        self.append_real_dab(Some((point, self.builder.real_points().len() - 1)), true);
+                    } else {
+                        self.append_real_dab(None, true);
                     }
+                    self.lift_taper();
                     let tail = self.dab_generator.momentum(&self.active_stroke.as_ref().unwrap().brush);
                     if !tail.is_empty() {
                         self.active_stroke.as_mut().unwrap().momentum = Some((tail, 0));
@@ -2232,7 +2243,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     self.finalized_real_points = 0;
                     return Ok(());
                 }
-                let replay = active.brush.taper.end_distance_diameters > 0.0 || active.replay_after_contact;
+                let replay = active.taper.as_ref().is_some_and(HeldStroke::forced) || active.replay_after_contact;
                 let alpha_locked = active.style.alpha_locked;
                 let mut stroke = Stroke::new(
                     active.id,
@@ -2247,6 +2258,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 stroke.blend_space = active.style.blend_space;
                 stroke.barrel_twist = active.barrel_twist;
                 stroke.material_updates = active.material_updates.into();
+                stroke.taper_cuts = active.taper.as_ref().map_or_else(Default::default, |taper| taper.cuts().into());
                 stroke.selection = active.style.selection.clone();
                 stroke.retouch = active.style.retouch.clone();
                 stroke.paper = active.style.paper.clone();
@@ -2287,61 +2299,82 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         Ok(())
     }
 
-    fn append_real_dab(
-        &mut self,
-        point: layer_core::StrokePoint,
-        point_index: usize,
-        terminal: bool,
-    ) {
+    fn append_real_dab(&mut self, input: Option<(layer_core::StrokePoint, usize)>, terminal: bool) {
         let active = self.active_stroke.as_ref().expect("stroke is active");
         if matches!(active.style.execution, BrushExecution::Smudge | BrushExecution::Liquify) {
-            self.dab_generator
-                .append(point, &active.brush, &mut self.pending_chunk_dabs);
+            if let Some((point, _)) = input {
+                self.dab_generator.append(point, &active.brush, &mut self.pending_chunk_dabs);
+            }
             if terminal { self.dab_generator.finish_contact(&active.brush, &mut self.pending_chunk_dabs); }
             self.flush_material_chunks(false);
             return;
         }
-        let stroke_id = active.id;
-        let target = active.target;
-        let style = active.style.clone();
-        let stroke_start = !active.persistent_started;
-        let material_update = active
-            .material_updates
-            .partition_point(|end| *end as usize <= point_index)
-            as u32;
         let start = self.dabs.len();
-        let mut damage = if terminal && self.builder.ending() {
-            self.dab_generator
-                .append_end(point, &active.brush, &mut self.dabs)
-        } else {
-            self.dab_generator
-                .append(point, &active.brush, &mut self.dabs)
+        let mut damage = match input {
+            Some((point, _)) if terminal && self.builder.ending() => {
+                self.dab_generator.append_end(point, &active.brush, &mut self.dabs)
+            }
+            Some((point, _)) => self.dab_generator.append(point, &active.brush, &mut self.dabs),
+            None => Rect::EMPTY,
         };
         if terminal {
             damage = damage.union(self.dab_generator.finish(&active.brush, &mut self.dabs));
         }
+        let point_index = input.map_or(self.builder.real_points().len(), |(_, index)| index);
+        let active = self.active_stroke.as_mut().expect("stroke remains active");
+        if let Some(taper) = active.taper.as_mut() {
+            let end = (point_index + usize::from(input.is_some())).min(u32::MAX as usize) as u32;
+            taper.stage(&mut self.dab_generator, self.dabs.drain(start..), end);
+            if input.is_some() && taper.at_cut(end) {
+                taper.seal();
+            }
+            return;
+        }
         if self.dabs.len() > start {
-            self.active_stroke
-                .as_mut()
-                .expect("stroke remains active")
-                .persistent_started = true;
+            let stroke_start = !active.persistent_started;
+            active.persistent_started = true;
             push_batches(
                 &mut self.batches,
                 &self.dabs,
                 DabBatch {
                     preview_end: None,
-                    material_update,
-                    stroke_id,
-                    target,
+                    material_update: active.material_updates.partition_point(|end| *end as usize <= point_index) as u32,
+                    stroke_id: active.id,
+                    target: active.target,
                     kind: DabBatchKind::Persistent,
                     stroke_start,
                     stroke_end: false,
                     first_dab: start.min(u32::MAX as usize) as u32,
                     dab_count: self.dabs.len().saturating_sub(start).min(u32::MAX as usize) as u32,
-                    style,
+                    style: active.style.clone(),
                     damage,
                 },
             );
+        }
+    }
+
+    fn release_taper(&mut self, release: Release) {
+        let Some(active) = self.active_stroke.as_mut() else {
+            return;
+        };
+        let Some(taper) = active.taper.as_mut() else {
+            return;
+        };
+        taper.seal();
+        let (dabs, batches, started) = (&mut self.dabs, &mut self.batches, &mut active.persistent_started);
+        let (id, target, style) = (active.id, active.target, &active.style);
+        taper.release(&self.dab_generator, &active.brush, release, |slice| {
+            push_slice(dabs, batches, slice, id, target, style, started);
+        });
+    }
+
+    fn lift_taper(&mut self) {
+        let forced = self.active_stroke.as_mut().and_then(|active| active.taper.as_mut()).is_some_and(|taper| {
+            taper.seal();
+            taper.forced()
+        });
+        if !forced {
+            self.release_taper(Release::All);
         }
     }
 
@@ -2571,45 +2604,49 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             generator.reset_for_replay(stroke);
             let mut started = false;
             let liquify = stroke.brush.execution == BrushExecution::Liquify;
-            for (point_index, point) in stroke.points.iter().copied().enumerate() {
-                let start = if liquify { 0 } else { self.dabs.len() };
-                let mut damage = if stroke.pen_up && point_index + 1 == stroke.points.len() {
-                    generator.append_end(point, &stroke.brush, &mut self.dabs)
-                } else {
-                    generator.append(point, &stroke.brush, &mut self.dabs)
-                };
-                if point_index + 1 == stroke.points.len() {
-                    damage = damage.union(generator.finish(&stroke.brush, &mut self.dabs));
+            if crate::brush::tapers(&stroke.brush) {
+                replay_tapered(stroke, &mut generator, &style, &mut self.dabs, &mut self.batches);
+            } else {
+                for (point_index, point) in stroke.points.iter().copied().enumerate() {
+                    let start = if liquify { 0 } else { self.dabs.len() };
+                    let mut damage = if stroke.pen_up && point_index + 1 == stroke.points.len() {
+                        generator.append_end(point, &stroke.brush, &mut self.dabs)
+                    } else {
+                        generator.append(point, &stroke.brush, &mut self.dabs)
+                    };
+                    if point_index + 1 == stroke.points.len() {
+                        damage = damage.union(generator.finish(&stroke.brush, &mut self.dabs));
+                    }
+                    if liquify {
+                        if point_index + 1 != stroke.points.len() { continue; }
+                        damage = damage_for_dabs(&self.dabs);
+                    }
+                    if self.dabs.len() == start {
+                        continue;
+                    }
+                    push_batches(
+                        &mut self.batches,
+                        &self.dabs,
+                        DabBatch {
+                            preview_end: None,
+                            material_update: stroke
+                                .material_updates
+                                .partition_point(|end| *end as usize <= point_index)
+                                as u32,
+                            stroke_id: stroke.id,
+                            target: stroke.target,
+                            kind: DabBatchKind::Persistent,
+                            stroke_start: !started,
+                            stroke_end: false,
+                            first_dab: start.min(u32::MAX as usize) as u32,
+                            dab_count: self.dabs.len().saturating_sub(start).min(u32::MAX as usize)
+                                as u32,
+                            style: style.clone(),
+                            damage,
+                        },
+                    );
+                    started = true;
                 }
-                if liquify {
-                    if point_index + 1 != stroke.points.len() { continue; }
-                    damage = damage_for_dabs(&self.dabs);
-                }
-                if self.dabs.len() == start {
-                    continue;
-                }
-                push_batches(
-                    &mut self.batches,
-                    &self.dabs,
-                    DabBatch {
-                        preview_end: None,
-                        material_update: stroke
-                            .material_updates
-                            .partition_point(|end| *end as usize <= point_index)
-                            as u32,
-                        stroke_id: stroke.id,
-                        target: stroke.target,
-                        kind: DabBatchKind::Persistent,
-                        stroke_start: !started,
-                        stroke_end: false,
-                        first_dab: start.min(u32::MAX as usize) as u32,
-                        dab_count: self.dabs.len().saturating_sub(start).min(u32::MAX as usize)
-                            as u32,
-                        style: style.clone(),
-                        damage,
-                    },
-                );
-                started = true;
             }
             if let Some(batch) = self
                 .batches
@@ -2661,6 +2698,25 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                         },
                     );
                 }
+                return;
+            }
+            if let Some(held) = &active.taper {
+                generator.begin_taper(&active.brush);
+                let mut replica = HeldStroke::with_cuts(held.cuts());
+                let mut fed = Vec::new();
+                let sealed = held.cuts().last().map_or(0, |end| *end as usize);
+                for (index, point) in self.builder.real_points()[..sealed].iter().copied().enumerate() {
+                    let end = index as u32 + 1;
+                    generator.append(point, &active.brush, &mut fed);
+                    replica.stage(&mut generator, fed.drain(..), end);
+                    if replica.at_cut(end) {
+                        replica.seal();
+                    }
+                }
+                let (dabs, batches, mut started) = (&mut self.dabs, &mut self.batches, false);
+                replica.release(&generator, &active.brush, Release::First(held.released()), |slice| {
+                    push_slice(dabs, batches, slice, active.id, active.target, &active.style, &mut started);
+                });
                 return;
             }
             let mut started = false;
@@ -2750,6 +2806,62 @@ fn clone_mapping(document: &Document, layer: SourceTarget, retouch: Retouch, off
 fn raster_edit_batch(batch: &DabBatch) -> bool {
     matches!(batch.kind, DabBatchKind::RasterOperation(_))
         || batch.kind == DabBatchKind::Persistent && batch.style.liquify.as_ref().is_some_and(|context| context.amount.is_some())
+}
+
+fn replay_tapered(stroke: &Stroke, generator: &mut DabGenerator, style: &DabStyle, dabs: &mut Vec<Dab>, batches: &mut Vec<DabBatch>) {
+    let count = stroke.points.len() as u32;
+    let whole = [count];
+    let mut started = false;
+    let mut replica = HeldStroke::with_cuts(if stroke.taper_cuts.is_empty() { &whole } else { &stroke.taper_cuts });
+    let mut fed = Vec::new();
+    for (index, point) in stroke.points.iter().copied().enumerate() {
+        let end = index as u32 + 1;
+        if stroke.pen_up && end == count {
+            generator.append_end(point, &stroke.brush, &mut fed);
+        } else {
+            generator.append(point, &stroke.brush, &mut fed);
+        }
+        replica.stage(generator, fed.drain(..), end);
+        if replica.at_cut(end) && (end < count || replica.finishes_alone(end)) {
+            replica.seal();
+        }
+    }
+    generator.finish(&stroke.brush, &mut fed);
+    replica.stage(generator, fed.drain(..), count);
+    replica.seal();
+    replica.release(generator, &stroke.brush, Release::All, |slice| {
+        push_slice(dabs, batches, slice, stroke.id, stroke.target, style, &mut started);
+    });
+}
+
+fn push_slice(
+    dabs: &mut Vec<Dab>,
+    batches: &mut Vec<DabBatch>,
+    slice: &[Dab],
+    stroke_id: StrokeId,
+    target: SourceTarget,
+    style: &DabStyle,
+    started: &mut bool,
+) {
+    if slice.is_empty() {
+        return;
+    }
+    let first_dab = dabs.len();
+    dabs.extend_from_slice(slice);
+    batches.push(DabBatch {
+        preview_end: None,
+        material_update: 0,
+        stroke_id,
+        target,
+        kind: DabBatchKind::Persistent,
+        stroke_start: !*started,
+        stroke_end: false,
+        first_dab: first_dab.min(u32::MAX as usize) as u32,
+        dab_count: slice.len().min(u32::MAX as usize) as u32,
+        style: style.clone(),
+        damage: damage_for_dabs(slice),
+    });
+    *started = true;
 }
 
 fn push_batches(batches: &mut Vec<DabBatch>, dabs: &[Dab], batch: DabBatch) {
@@ -6600,6 +6712,162 @@ mod tests {
         }
     }
 
+    fn tapered_engine(taper: layer_core::BrushTaper, feedback: bool) -> (InputProducer<PenEvent>, CanvasEngine<RecordingRenderer>) {
+        let (input, mut engine) = engine("taper", 1024, 1024);
+        let mut brush = default_brush(DefaultBrushPreset::GPen);
+        brush.stabilization.strength = 0.;
+        brush.taper = taper;
+        engine.set_brush(brush).unwrap();
+        engine.set_instant_feedback(InstantFeedbackConfig { enabled: feedback, use_platform_prediction: false, ..Default::default() }).unwrap();
+        (input, engine)
+    }
+
+    fn circle(count: usize) -> Vec<PenEvent> {
+        (0..count)
+            .map(|i| {
+                let phase = if i == 0 { PenPhase::Down } else if i + 1 == count { PenPhase::Up } else { PenPhase::Move };
+                let angle = i as f32 / 400.;
+                let mut sample = event(i as u64 + 1, phase, 512. + 400. * angle.cos());
+                sample.surface_position.y = 512. + 400. * angle.sin();
+                sample.pressure = if i % 2 == 0 { 0.7 } else { 0.85 };
+                sample.timestamp_ns = 1_000_000_000 + i as u64 * 4_000_000;
+                sample
+            })
+            .collect()
+    }
+
+    fn draw_tapered(
+        engine: &mut CanvasEngine<RecordingRenderer>,
+        input: &mut InputProducer<PenEvent>,
+        events: &[PenEvent],
+        mut during: impl FnMut(&mut CanvasEngine<RecordingRenderer>, usize),
+    ) -> Vec<(StrokeId, bool, bool, u32)> {
+        let first = engine.backend.persistent_batches.len();
+        for (i, sample) in events.iter().enumerate() {
+            input.push(*sample).unwrap();
+            if i % 4 == 3 || i + 1 == events.len() {
+                engine.render_frame_at(sample.timestamp_ns).unwrap();
+                during(engine, i);
+            }
+        }
+        let mut clock = events.last().unwrap().timestamp_ns;
+        while engine.completed_stroke.is_none() || engine.has_pending_input() || engine.has_pending_document_edits() {
+            clock += 4_000_000;
+            engine.render_frame_at(clock).unwrap();
+        }
+        engine.backend.persistent_batches[first..].to_vec()
+    }
+
+    fn assert_matches_replay(engine: &mut CanvasEngine<RecordingRenderer>, live: &[(StrokeId, bool, bool, u32)]) {
+        let mut replay = Vec::new();
+        DabGenerator::generate(engine.completed_stroke.as_ref().unwrap(), engine.document().composition().color.space, &mut replay);
+        assert_eq!(engine.backend.persistent, replay);
+        let first = engine.backend.persistent_batches.len();
+        engine.replay_completed().unwrap();
+        let mut clock = 9_000_000_000;
+        while engine.has_pending_document_edits() || engine.backend.persistent_batches.len() == first {
+            clock += 4_000_000;
+            engine.render_frame_at(clock).unwrap();
+        }
+        assert_eq!(engine.backend.persistent, replay);
+        assert_eq!(&engine.backend.persistent_batches[first..], live, "the replay keeps the live slices");
+    }
+
+    #[test]
+    fn live_taper_slices_match_the_replay_batch_for_batch() {
+        for feedback in [false, true] {
+            let taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: [2., 3.], ..Default::default() };
+            let (mut input, mut engine) = tapered_engine(taper, feedback);
+            let live = draw_tapered(&mut engine, &mut input, &circle(240), |_, _| {});
+            assert!(live.len() > 10, "slices are saved separately: {live:?}");
+            assert!(!engine.completed_stroke.as_ref().unwrap().taper_cuts.is_empty());
+            let width = |dab: &layer_render::Dab| dab.radii[0] * 2.;
+            let persistent = &engine.backend.persistent;
+            assert!(width(&persistent[0]) < 2. && width(persistent.last().unwrap()) < 2.);
+            assert_matches_replay(&mut engine, &live);
+        }
+    }
+
+    #[test]
+    fn a_held_region_over_its_ceiling_saves_early_and_repairs_at_lift() {
+        let taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Proportional, proportional_shares: [0.5, 0.5], ..Default::default() };
+        let (mut input, mut engine) = tapered_engine(taper, false);
+        let mut forced = false;
+        let live = draw_tapered(&mut engine, &mut input, &circle(6000), |engine, _| {
+            forced |= engine.active_stroke.as_ref().and_then(|active| active.taper.as_ref()).is_some_and(HeldStroke::forced);
+        });
+        assert!(forced, "the held region reached its ceiling");
+        assert!(engine.backend.saw_reset, "the forced stroke repairs at lift");
+        let repair = live[live.iter().rposition(|batch| batch.1).unwrap()..].to_vec();
+        assert!(repair.len() < live.len(), "the repair replaced the early saves");
+        assert_matches_replay(&mut engine, &repair);
+    }
+
+    #[test]
+    fn a_sensor_correction_regenerates_the_held_slices_along_their_cuts() {
+        let taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: [2., 3.], ..Default::default() };
+        let (mut input, mut engine) = tapered_engine(taper, false);
+        let mut events = circle(240);
+        let mut correction = events[50];
+        events[50].flags = SampleFlags(SampleFlags::PRIMARY.0 | SampleFlags::ESTIMATED.0);
+        events[50].pressure = 0.2;
+        correction.flags = SampleFlags::CORRECTION;
+        correction.pressure = 0.95;
+        events.insert(150, correction);
+        let live = draw_tapered(&mut engine, &mut input, &events, |_, _| {});
+        assert!(engine.backend.saw_reset, "the correction rebuilt the stroke");
+        let repair = live[live.iter().rposition(|batch| batch.1).unwrap()..].to_vec();
+        assert_matches_replay(&mut engine, &repair);
+        assert_eq!(engine.completed_stroke.as_ref().unwrap().points[50].pressure, 0.95);
+    }
+
+    #[test]
+    fn a_tapered_stroke_closed_by_the_input_limit_matches_its_replay() {
+        let taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: [2., 3.], ..Default::default() };
+        for feedback in [false, true] {
+            let (mut input, mut canvas) = tapered_engine(taper, feedback);
+            input.push(event(1, PenPhase::Down, 24.)).unwrap();
+            canvas.render_frame().unwrap();
+            for sequence in 2..=MAX_CONTACT_POINTS {
+                let mut sample = event(sequence as u64, PenPhase::Move, 24. + (sequence % 640) as f32);
+                sample.surface_position.y = 24. + (sequence / 640) as f32 * 4.;
+                sample.pressure = if sequence % 3 == 0 { 0.5 } else { 0.9 };
+                if feedback {
+                    canvas.builder.push(sample, TRANSFORM, PressureCurve::default());
+                } else {
+                    input.push(sample).unwrap();
+                    if sequence % 512 == 0 { canvas.render_frame().unwrap(); }
+                }
+            }
+            canvas.render_frame().unwrap();
+            while canvas.has_active_stroke() || canvas.has_pending_document_edits() {
+                canvas.render_frame().unwrap();
+            }
+            assert_eq!(canvas.metrics().input_budget_completions, 1, "feedback {feedback}");
+            let live = canvas.backend.persistent_batches.clone();
+            assert_matches_replay(&mut canvas, &live);
+        }
+    }
+
+    #[test]
+    fn a_scene_rebuild_keeps_the_slice_cuts() {
+        let taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: [2., 3.], ..Default::default() };
+        let (mut input, mut engine) = tapered_engine(taper, true);
+        draw_tapered(&mut engine, &mut input, &circle(240), |_, _| {});
+        let cuts = engine.completed_stroke.as_ref().unwrap().taper_cuts.clone();
+        let (mut input, mut engine) = tapered_engine(taper, true);
+        let live = draw_tapered(&mut engine, &mut input, &circle(240), |engine, i| {
+            if i == 119 {
+                engine.rebuild_all = true;
+            }
+        });
+        assert_eq!(engine.completed_stroke.as_ref().unwrap().taper_cuts, cuts);
+        let mut replay = Vec::new();
+        DabGenerator::generate(engine.completed_stroke.as_ref().unwrap(), engine.document().composition().color.space, &mut replay);
+        assert_eq!(engine.backend.persistent, replay);
+        assert!(!live.is_empty());
+    }
+
     #[test]
     fn smoothing_committed_ink_matches_replay_across_delivery_cadences() {
 
@@ -7321,10 +7589,9 @@ mod tests {
 
     const MATERIAL_STROKE_SAMPLES: usize = 3000;
 
-    fn material_stroke(preset: DefaultBrushPreset, taper: f32) -> (InputProducer<PenEvent>, CanvasEngine<RecordingRenderer>) {
+    fn material_stroke(preset: DefaultBrushPreset) -> (InputProducer<PenEvent>, CanvasEngine<RecordingRenderer>) {
         let mut brush = default_brush(preset);
         brush.diameter = 512.;
-        brush.taper.end_distance_diameters = taper;
         let (producer, mut engine) = engine("material stroke", 4096, 4096);
         engine.set_brush(brush).unwrap();
         engine.set_instant_feedback(InstantFeedbackConfig { enabled: true, ..Default::default() }).unwrap();
@@ -7353,7 +7620,7 @@ mod tests {
     fn material_replays_are_submitted_in_bounded_windows() {
         for preset in [DefaultBrushPreset::OpaqueGouache, DefaultBrushPreset::WatercolorWash] {
             for rebuild in [false, true] {
-                let (mut producer, mut engine) = material_stroke(preset, if rebuild { 0. } else { 1. });
+                let (mut producer, mut engine) = material_stroke(preset);
                 let mut clock = MATERIAL_STROKE_SAMPLES as u64;
                 let mut largest = 0;
                 let mut drain = |engine: &mut CanvasEngine<RecordingRenderer>| {
@@ -7371,6 +7638,10 @@ mod tests {
                 }
                 queue_material_samples(&mut producer, MATERIAL_STROKE_SAMPLES / 2..MATERIAL_STROKE_SAMPLES);
                 drain(&mut engine);
+                if !rebuild {
+                    engine.replay_completed().unwrap();
+                    drain(&mut engine);
+                }
                 assert!(largest <= 2 * frame_steps::MATERIAL_PAGE_JOBS_PER_FRAME, "{preset:?} rebuild {rebuild}: {largest}");
                 assert_replays_completed_stroke(&engine, preset);
             }
@@ -7380,7 +7651,7 @@ mod tests {
     #[test]
     fn material_input_backlog_is_consumed_in_bounded_frames() {
         for preset in [DefaultBrushPreset::OpaqueGouache, DefaultBrushPreset::NaturalBlender, DefaultBrushPreset::DitherBlender, DefaultBrushPreset::WatercolorWash, DefaultBrushPreset::LiquifyPush] {
-            let (mut producer, mut engine) = material_stroke(preset, 0.);
+            let (mut producer, mut engine) = material_stroke(preset);
             let count = MATERIAL_STROKE_SAMPLES;
             queue_material_samples(&mut producer, 0..count);
             let mut frames = 0;

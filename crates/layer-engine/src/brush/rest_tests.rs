@@ -789,33 +789,3 @@ fn pending_up_preview_keeps_the_stored_up_time_when_rendered_late() {
     );
     assert_eq!(build(3_000_000), immediate);
 }
-
-#[test]
-fn ignored_late_up_pose_does_not_change_tapered_replay() {
-    let mut brush = brush();
-    brush.taper.end_distance_diameters = 2.;
-    brush.taper.end_size = 0.;
-    brush.taper.end_opacity = 0.;
-    let (_, real, _) = moving_gap_stroke(&brush);
-    let latest = *real.last().unwrap();
-    let render = |position| {
-        let mut points = real.clone();
-        points.push(StrokePoint {
-            position,
-            elapsed_micros: 3_000_000,
-            ..latest
-        });
-        let stroke = Stroke::new(
-            StrokeId(1),
-            layer_core::SourceTarget::Paint(layer_core::authored::PaintHandle::from_index(0)),
-            layer_core::StrokeTool::Brush,
-            brush.clone(),
-            points,
-        )
-        .unwrap();
-        let mut output = Vec::new();
-        DabGenerator::generate(&stroke, RgbSpace::Srgb, &mut output);
-        output
-    };
-    assert_eq!(render(Point { x: 500., y: 20. }), render(latest.position));
-}

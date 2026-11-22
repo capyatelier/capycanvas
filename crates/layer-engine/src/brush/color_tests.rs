@@ -1,5 +1,5 @@
 use super::*;
-use layer_core::BrushCurve;
+use layer_core::{BrushCombine, BrushCurve};
 
 fn point(x: f32) -> StrokePoint {
     crate::test_support::point(x, 16., 1., (x * 1000.) as u32)

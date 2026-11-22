@@ -136,7 +136,7 @@ fn strokes_and_replays_repair_only_touched_pages() {
         engine.set_instant_feedback(InstantFeedbackConfig { enabled, prediction_horizon_micros: 16_000, ..Default::default() }).unwrap();
         let mut brush = layer_core::default_brush(preset);
         brush.diameter = 50.;
-        brush.taper.end_distance_diameters = taper;
+        brush.taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: [0., taper], ..Default::default() };
         brush.color_rgba_linear = [0.08, 0.015, 0.25, 1.];
         engine.set_brush(brush).unwrap();
         if preset == DefaultBrushPreset::CloneStamp {

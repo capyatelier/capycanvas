@@ -6,7 +6,7 @@
 
 use layer_core::color::RgbSpace;
 use layer_core::{
-    BrushCombine, BrushMapping, BrushSensor, BrushSnapshot, BrushTarget, MAX_BRUSH_DIAMETER,
+    BrushMapping, BrushSensor, BrushSnapshot, BrushTarget, MAX_BRUSH_DIAMETER,
     MAX_BRUSH_MAPPINGS, MAX_BRUSH_SCATTER_DIAMETERS, Point, Rect, Stroke, StrokeId, StrokePoint,
 };
 use layer_render::{Dab, DabPreview};
@@ -17,9 +17,14 @@ use std::{
 
 mod smoothing;
 mod completion;
+mod taper;
 #[cfg(test)]
 mod rest_tests;
+#[cfg(test)]
+mod taper_tests;
 pub(crate) use smoothing::{CurveModel, PositionField, CurvePreview, pen_up_settlement_micros};
+pub(crate) use taper::{tapers, HeldStroke, Release};
+use taper::{ContactRecord, TaperPlan, Transfer};
 
 const SPEED_FILTER_SECONDS: f32 = 0.015;
 const BARREL_TWIST_RESPONSE_SECONDS: f32 = 0.025;
@@ -80,9 +85,19 @@ struct Registers {
 #[derive(Clone, Copy, Debug)]
 struct EvaluatedDab {
     dab: Dab,
+    pose: DynamicPoint,
+    variant: u32,
+    index: u32,
     spacing: f32,
     direction_radians: f32,
     values: Registers,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct Evaluation {
+    last: Option<DynamicPoint>,
+    edge_normal: [f32; 2],
+    azimuth: Option<f32>,
 }
 
 /// Stateful emitter for one stroke. Reset it with the committed stroke ID so
@@ -94,10 +109,8 @@ pub struct DabGenerator {
     last: Option<DynamicPoint>,
     stabilized_input: Option<StrokePoint>,
     position_smoother: smoothing::PositionSmoother,
-    bristle_azimuth: Option<f32>,
     barrel_twist: bool,
     fan_slide: f32,
-    edge_normal: [f32; 2],
     touchdown: Point,
     tap_peak: Option<DynamicPoint>,
     peak_pressure: f32,
@@ -117,10 +130,13 @@ pub struct DabGenerator {
     rng: u32,
     stroke_seed: u32,
     dab_index: u32,
-    last_evaluated: Option<DynamicPoint>,
+    evaluation: Evaluation,
     last_contact: Option<Dab>,
-    total_distance: Option<f32>,
     continuous_fraction: f32,
+    taper: Option<TaperPlan>,
+    records: Vec<ContactRecord>,
+    interval_peak: f32,
+    prefix_peak: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -153,10 +169,8 @@ impl Default for DabGenerator {
             last: None,
             stabilized_input: None,
             position_smoother: smoothing::PositionSmoother::default(),
-            bristle_azimuth: None,
             barrel_twist: false,
             fan_slide: 0.,
-            edge_normal: [0.; 2],
             touchdown: Point { x: 0., y: 0. },
             tap_peak: None,
             peak_pressure: 0.,
@@ -176,10 +190,13 @@ impl Default for DabGenerator {
             rng: 1,
             stroke_seed: 1,
             dab_index: 0,
-            last_evaluated: None,
+            evaluation: Evaluation::default(),
             last_contact: None,
-            total_distance: None,
             continuous_fraction: 0.0,
+            taper: None,
+            records: Vec::new(),
+            interval_peak: 0.,
+            prefix_peak: 0.,
         }
     }
 }
@@ -220,7 +237,7 @@ impl DabGenerator {
                 fan.texture_sign = [1.; 2];
             }
         }
-        self.bristle_azimuth = preview.bristle_azimuth;
+        self.evaluation.azimuth = preview.evaluation.azimuth;
         self.last = Some(current);
         output
     }
@@ -355,7 +372,7 @@ impl DabGenerator {
             && let Some(rest) = self.rest
         {
             main_tip.last_contact = Some(main_tip.imprint(rest.pose, brush));
-            main_tip.last_evaluated = Some(rest.pose);
+            main_tip.evaluation.last = Some(rest.pose);
         }
         let source = main(&mut main_tip, output);
         Self::compose_preview(lift, output, start);
@@ -397,28 +414,7 @@ impl DabGenerator {
     pub fn reset_for_replay(&mut self, stroke: &Stroke) {
         self.reset_for_stroke(stroke.id, &stroke.brush);
         self.barrel_twist = stroke.barrel_twist;
-        let points = if stroke.pen_up
-            && stroke.points.windows(2).last().is_some_and(|pair| {
-                freezes_end(
-                    Some(pair[0].elapsed_micros),
-                    pair[1].elapsed_micros,
-                    &stroke.brush,
-                )
-            }) {
-            &stroke.points[..stroke.points.len() - 1]
-        } else {
-            &stroke.points
-        };
-        self.total_distance = Some(
-            points
-                .windows(2)
-                .map(|pair| {
-                    let dx = pair[1].position.x - pair[0].position.x;
-                    let dy = pair[1].position.y - pair[0].position.y;
-                    dx.hypot(dy)
-                })
-                .sum(),
-        );
+        self.taper = TaperPlan::new(&stroke.brush);
     }
 
     pub fn append(
@@ -598,7 +594,7 @@ impl DabGenerator {
             if self.opening() {
                 let opening = self.imprint(rest.pose, brush);
                 self.last_contact = Some(opening);
-                self.last_evaluated = Some(rest.pose);
+                self.evaluation.last = Some(rest.pose);
                 if let Some(path) = &mut self.dry_completion {
                     path.replace_opening(opening);
                 }
@@ -645,7 +641,7 @@ impl DabGenerator {
         let Some(mut pose) = self.last else {
             return;
         };
-        if let Some(emitted) = self.last_evaluated
+        if let Some(emitted) = self.evaluation.last
             && self
                 .anchor
                 .as_ref()
@@ -690,6 +686,9 @@ impl DabGenerator {
         output: &mut Vec<Dab>,
     ) -> Rect {
         let current = self.characterize(point);
+        if self.taper.is_some() && let Some(last) = self.last {
+            self.interval_peak = self.interval_peak.max(last.point.pressure);
+        }
 
         let mut damage = Rect::EMPTY;
         let Some(last) = self.last else {
@@ -775,7 +774,7 @@ impl DabGenerator {
         output: &mut Vec<Dab>,
         damage: &mut Rect,
     ) {
-        let start = self.last_evaluated.unwrap_or(last);
+        let start = self.evaluation.last.unwrap_or(last);
         let bristles = brush.contact.is_some_and(|c| c.bristles.is_some());
         let reference = brush.reference_diameter();
         let radius = self.last_contact.map_or(reference * 0.5, |dab| {
@@ -819,7 +818,7 @@ impl DabGenerator {
             self.emit_contacts(evaluated, brush, output, damage);
         }
 
-        let start = self.last_evaluated.unwrap_or(last);
+        let start = self.evaluation.last.unwrap_or(last);
         // Bound live spacing too: prediction can expose the pending endpoint,
         // but committed ink must also advance when prediction is disabled.
         // Large, steady brushes retain coarse sampling rather than emitting at
@@ -842,8 +841,13 @@ impl DabGenerator {
     pub fn generate(stroke: &Stroke, space: RgbSpace, output: &mut Vec<Dab>) -> Rect {
         let mut generator = Self::new(space);
         generator.reset_for_replay(stroke);
+        let start = output.len();
         let damage = generator.append_points(&stroke.points, &stroke.brush, stroke.pen_up, output);
-        damage.union(generator.finish(&stroke.brush, output))
+        let damage = damage.union(generator.finish(&stroke.brush, output));
+        if generator.shape_final(&stroke.brush, &mut output[start..]) {
+            return damage.union(damage_for_dabs(&output[start..]));
+        }
+        damage
     }
 
     /// Close the last sub-spacing segment using the final pressure/pose. This
@@ -1048,10 +1052,13 @@ impl DabGenerator {
         let variant = self.next_random();
         let dab_index = self.dab_index;
         self.dab_index = self.dab_index.wrapping_add(1);
-        self.evaluate_variant(point, brush, variant, dab_index)
+        let mut evaluation = self.evaluation;
+        let evaluated = self.evaluate_variant(&mut evaluation, point, brush, variant, dab_index, None);
+        self.evaluation = evaluation;
+        evaluated
     }
 
-    fn mapped_values(&self, point: DynamicPoint, brush: &BrushSnapshot, variant: u32) -> Registers {
+    fn mapped_values(&self, point: DynamicPoint, brush: &BrushSnapshot, variant: u32, transfer: Option<Transfer>) -> Registers {
         let mut values = Registers {
             diameter: brush.diameter,
             opacity: 1.,
@@ -1078,6 +1085,7 @@ impl DabGenerator {
                 &mut values,
                 mapping,
                 sensor_value(point, mapping.sensor, variant, index as u32),
+                transfer.filter(|transfer| transfer.mapping == index),
             );
         }
 
@@ -1085,14 +1093,16 @@ impl DabGenerator {
     }
 
     fn evaluate_variant(
-        &mut self,
+        &self,
+        evaluation: &mut Evaluation,
         point: DynamicPoint,
         brush: &BrushSnapshot,
         variant: u32,
         dab_index: u32,
+        transfer: Option<Transfer>,
     ) -> EvaluatedDab {
-        let mut values = self.mapped_values(point, brush, variant);
-        let (diameter, aspect, taper_opacity) = tip_size(point, brush, values, self.total_distance);
+        let mut values = self.mapped_values(point, brush, variant, transfer);
+        let (diameter, aspect) = tip_size(brush, values);
         let direction = point.direction_turns * std::f32::consts::TAU;
         let along = finite_or(values.scatter_along, 0.0)
             .clamp(-MAX_BRUSH_SCATTER_DIAMETERS, MAX_BRUSH_SCATTER_DIAMETERS)
@@ -1117,7 +1127,7 @@ impl DabGenerator {
         if let Some(contact) = brush.contact {
             if let Some(bristles) = contact.bristles {
                 (rotation, radii, contact_tilt) = self.fan_pose(
-                    point.point, tilt, tilt_direction, diameter, bristles, brush.angle_radians,
+                    &mut evaluation.azimuth, point.point, tilt, tilt_direction, diameter, bristles, brush.angle_radians,
                 );
             } else if let Some(dry) = contact.dry {
                 contact_tilt = (point.point.tilt[0].hypot(point.point.tilt[1]) / std::f32::consts::FRAC_PI_2).clamp(0., 1.);
@@ -1132,21 +1142,21 @@ impl DabGenerator {
         let (rotation_sin, rotation_cos) = rotation.sin_cos();
         let liquify = brush.execution == layer_core::BrushExecution::Liquify;
         if liquify { radii = radii.map(|radius| radius.max(1.)); }
-        let motion = self.last_evaluated.map_or([0.0; 2], |last| {
+        let motion = evaluation.last.map_or([0.0; 2], |last| {
             [point.position().x - last.position().x, point.position().y - last.position().y]
         });
         if motion[0].hypot(motion[1]) > 0. {
             let length = motion[0].hypot(motion[1]);
-            self.edge_normal = [-motion[1] / length, motion[0] / length];
+            evaluation.edge_normal = [-motion[1] / length, motion[0] / length];
         }
-        self.last_evaluated = Some(point);
+        evaluation.last = Some(point);
         let falloff = if brush.path.falloff_distance > 0.0 {
             (1.0 - point.stroke_distance / (brush.path.falloff_distance * diameter).max(0.01))
                 .clamp(0.0, 1.0)
         } else {
             1.0
         };
-        values.opacity = (values.opacity * taper_opacity * falloff)
+        values.opacity = (values.opacity * falloff)
             .clamp(brush.bounds.minimum_opacity, brush.bounds.maximum_opacity);
         let charge = brush.wet_mix.charge
             * (-brush.wet_mix.charge_depletion * point.stroke_distance / diameter.max(0.01)).exp();
@@ -1187,14 +1197,14 @@ impl DabGenerator {
                 ],
                 previous: [0.0; 4],
                 contact: dry_relief.map_or([
-                    point.point.pressure,
+                    transfer.map_or(point.point.pressure, |transfer| transfer.apply(point.point.pressure, transfer.pressure)),
                     contact_tilt,
                     point.stroke_distance / brush.diameter.max(0.01),
                     (self.stroke_seed & 65535) as f32,
                 ], |r| [pressure, r[0], r[1], r[2]]),
                 previous_contact: if liquify {
                     [layer_core::liquify::substeps(brush.deform.mode, radii, hardness, deformation, motion) as f32,
-                        (dab_index & 0xffffff) as f32, self.edge_normal[0], self.edge_normal[1]]
+                        (dab_index & 0xffffff) as f32, evaluation.edge_normal[0], evaluation.edge_normal[1]]
                 } else { [0.; 4] },
             },
             spacing: if brush.contact.is_some_and(|c| c.dry.is_some()) { 0. } else { (finite_or(values.spacing, brush.spacing)
@@ -1202,11 +1212,15 @@ impl DabGenerator {
                 .max(0.005) },
             direction_radians: direction,
             values,
+            pose: point,
+            variant,
+            index: dab_index,
         }
     }
 
     fn fan_pose(
-        &mut self,
+        &self,
+        bristle_azimuth: &mut Option<f32>,
         point: StrokePoint,
         tilt: f32,
         azimuth: f32,
@@ -1214,7 +1228,7 @@ impl DabGenerator {
         bristles: layer_core::BrushBristles,
         angle: f32,
     ) -> (f32, [f32; 2], f32) {
-        let previous = self.bristle_azimuth.unwrap_or(if tilt > 0.02 { azimuth } else { 0. });
+        let previous = bristle_azimuth.unwrap_or(if tilt > 0.02 { azimuth } else { 0. });
         let facing = if tilt > 0.08 {
             mix_angle_unwrapped(
                 previous,
@@ -1225,7 +1239,7 @@ impl DabGenerator {
         } else {
             previous
         };
-        self.bristle_azimuth = Some(facing);
+        *bristle_azimuth = Some(facing);
         let roll = angle + if self.barrel_twist { point.twist - facing } else { 0. };
         let (lean_sin, lean_cos) = (tilt * 1.2).sin_cos();
         let (roll_sin, roll_cos) = roll.sin_cos();
@@ -1276,60 +1290,80 @@ impl DabGenerator {
         } else {
             minimum + (self.next_random() % u32::from(maximum - minimum + 1)) as u8
         };
+        let copy_seed = self.rng;
         for _ in 0..count {
             let variant = self.next_random();
-            let mut dab = evaluated.dab;
-            let diameter = dab.radii[0] * 2.0;
-            let distortion = if brush.execution == layer_core::BrushExecution::Liquify
-                && !matches!(brush.deform.mode, layer_core::LiquifyMode::Crystals | layer_core::LiquifyMode::Reconstruct)
-                { brush.deform.distortion * 0.1 } else { 0. };
-            let along = signed_unit(hash32(variant ^ 0x68bc_21eb))
-                * (brush.path.jitter_along + distortion).min(MAX_BRUSH_SCATTER_DIAMETERS)
-                * diameter;
-            let across = signed_unit(hash32(variant ^ 0x02e5_be93))
-                * (brush.path.jitter_across + distortion).min(MAX_BRUSH_SCATTER_DIAMETERS)
-                * diameter;
-            let (sin, cos) = evaluated.direction_radians.sin_cos();
-            dab.center.x += cos.mul_add(along, -sin * across);
-            dab.center.y += sin.mul_add(along, cos * across);
-
-            let size = 1.0 + signed_unit(hash32(variant ^ 0x31e7_9db5)) * brush.shape.size_jitter;
-            dab.radii[0] *= size;
-            dab.radii[1] *= size;
-
-            let rotation = signed_unit(hash32(variant ^ 0x967a_889b))
-                * brush.shape.rotation_jitter
-                * std::f32::consts::TAU;
-            let current = dab.rotation[1].atan2(dab.rotation[0]) + rotation;
-            let (rotation_sin, rotation_cos) = current.sin_cos();
-            dab.rotation = [rotation_cos, rotation_sin];
-            dab.texture_sign = [
-                if hash_to_unit(hash32(variant ^ 0xa511_e9b3)) < brush.shape.flip_x_probability {
-                    -1.0
-                } else {
-                    1.0
-                },
-                if hash_to_unit(hash32(variant ^ 0x63d8_35d9)) < brush.shape.flip_y_probability {
-                    -1.0
-                } else {
-                    1.0
-                },
-            ];
-            dab.color_rgba_linear = resolve_color(
-                self.space,
-                brush.color_rgba_linear,
-                evaluated.values,
-                brush,
-                variant,
-                self.stroke_seed,
-            );
+            let mut dab = self.copy_contact(&evaluated, brush, variant);
             if brush.contact.is_some() {
-                self.connect_contact(&mut dab);
+                connect_contact(self.last_contact, &mut dab);
             }
             include_dab(damage, dab);
             self.last_contact = Some(dab);
             output.push(dab);
         }
+        if self.taper.is_some() {
+            let interval = self.interval_peak.max(evaluated.pose.point.pressure);
+            self.prefix_peak = self.prefix_peak.max(interval);
+            self.records.push(ContactRecord {
+                pose: evaluated.pose,
+                variant: evaluated.variant,
+                index: evaluated.index,
+                copy_seed,
+                copies: count,
+                interval,
+                peak: self.prefix_peak,
+            });
+            self.interval_peak = 0.;
+        }
+    }
+
+    fn copy_contact(&self, evaluated: &EvaluatedDab, brush: &BrushSnapshot, variant: u32) -> Dab {
+        let mut dab = evaluated.dab;
+        let diameter = dab.radii[0] * 2.0;
+        let distortion = if brush.execution == layer_core::BrushExecution::Liquify
+            && !matches!(brush.deform.mode, layer_core::LiquifyMode::Crystals | layer_core::LiquifyMode::Reconstruct)
+            { brush.deform.distortion * 0.1 } else { 0. };
+        let along = signed_unit(hash32(variant ^ 0x68bc_21eb))
+            * (brush.path.jitter_along + distortion).min(MAX_BRUSH_SCATTER_DIAMETERS)
+            * diameter;
+        let across = signed_unit(hash32(variant ^ 0x02e5_be93))
+            * (brush.path.jitter_across + distortion).min(MAX_BRUSH_SCATTER_DIAMETERS)
+            * diameter;
+        let (sin, cos) = evaluated.direction_radians.sin_cos();
+        dab.center.x += cos.mul_add(along, -sin * across);
+        dab.center.y += sin.mul_add(along, cos * across);
+
+        let size = 1.0 + signed_unit(hash32(variant ^ 0x31e7_9db5)) * brush.shape.size_jitter;
+        dab.radii[0] *= size;
+        dab.radii[1] *= size;
+
+        let rotation = signed_unit(hash32(variant ^ 0x967a_889b))
+            * brush.shape.rotation_jitter
+            * std::f32::consts::TAU;
+        let current = dab.rotation[1].atan2(dab.rotation[0]) + rotation;
+        let (rotation_sin, rotation_cos) = current.sin_cos();
+        dab.rotation = [rotation_cos, rotation_sin];
+        dab.texture_sign = [
+            if hash_to_unit(hash32(variant ^ 0xa511_e9b3)) < brush.shape.flip_x_probability {
+                -1.0
+            } else {
+                1.0
+            },
+            if hash_to_unit(hash32(variant ^ 0x63d8_35d9)) < brush.shape.flip_y_probability {
+                -1.0
+            } else {
+                1.0
+            },
+        ];
+        dab.color_rgba_linear = resolve_color(
+            self.space,
+            brush.color_rgba_linear,
+            evaluated.values,
+            brush,
+            variant,
+            self.stroke_seed,
+        );
+        dab
     }
 
     fn emit_dry(
@@ -1340,7 +1374,7 @@ impl DabGenerator {
         damage: &mut Rect,
     ) {
         let opening = self.last_contact.is_none();
-        self.connect_contact(&mut dab);
+        connect_contact(self.last_contact, &mut dab);
         self.last_contact = Some(dab);
         if dab.motion != [0.; 2] || opening {
             let ending = if completions {
@@ -1367,8 +1401,8 @@ impl DabGenerator {
     }
 
     fn anchor_radius(&self, anchor: &Anchor, brush: &BrushSnapshot) -> f32 {
-        let values = self.mapped_values(anchor.pose, brush, anchor.variant);
-        let (diameter, aspect, _) = tip_size(anchor.pose, brush, values, self.total_distance);
+        let values = self.mapped_values(anchor.pose, brush, anchor.variant, None);
+        let (diameter, aspect) = tip_size(brush, values);
         let pose = brush
             .contact
             .unwrap()
@@ -1379,16 +1413,12 @@ impl DabGenerator {
         radii[0].min(radii[1])
     }
 
-    fn anchor_contact(&mut self, anchor: &Anchor, brush: &BrushSnapshot) -> Dab {
-        let state = (self.last_evaluated, self.edge_normal, self.bristle_azimuth);
-        let dab = self
-            .evaluate_variant(anchor.pose, brush, anchor.variant, self.dab_index)
-            .dab;
-        (self.last_evaluated, self.edge_normal, self.bristle_azimuth) = state;
-        dab
+    fn anchor_contact(&self, anchor: &Anchor, brush: &BrushSnapshot) -> Dab {
+        let mut evaluation = self.evaluation;
+        self.evaluate_variant(&mut evaluation, anchor.pose, brush, anchor.variant, self.dab_index, None).dab
     }
 
-    fn imprint(&mut self, pose: DynamicPoint, brush: &BrushSnapshot) -> Dab {
+    fn imprint(&self, pose: DynamicPoint, brush: &BrushSnapshot) -> Dab {
         let mut dab = self.anchor_contact(
             &Anchor {
                 pose,
@@ -1444,13 +1474,6 @@ impl DabGenerator {
             }
         }
         damage
-    }
-
-    fn connect_contact(&self, dab: &mut Dab) {
-        let previous = self.last_contact.unwrap_or(*dab);
-        dab.previous = [previous.radii[0], previous.radii[1], previous.rotation[0], previous.rotation[1]];
-        dab.previous_contact = previous.contact;
-        dab.motion = [dab.center.x - previous.center.x, dab.center.y - previous.center.y];
     }
 
     fn emit_fan(&mut self, dab: Dab, output: &mut Vec<Dab>, damage: &mut Rect) {
@@ -1599,28 +1622,21 @@ fn random_variant(mut value: u32) -> u32 {
     value
 }
 
-fn tip_size(
-    point: DynamicPoint,
-    brush: &BrushSnapshot,
-    values: Registers,
-    total_distance: Option<f32>,
-) -> (f32, f32, f32) {
-    let mut diameter = finite_or(values.diameter, brush.diameter)
-        .clamp(brush.bounds.minimum_size, brush.bounds.maximum_size);
-    let taper_reference = if brush.contact.is_some() {
-        brush.reference_diameter()
-    } else {
-        diameter
-    };
-    let (taper_size, taper_opacity) = taper_factors(
-        point.stroke_distance,
-        total_distance,
-        taper_reference,
-        brush,
-    );
-    diameter = (diameter * taper_size).clamp(0.01, MAX_BRUSH_DIAMETER);
-    let aspect = finite_or(values.aspect, brush.aspect).clamp(0.02, 50.0);
-    (diameter, aspect, taper_opacity)
+fn tip_size(brush: &BrushSnapshot, values: Registers) -> (f32, f32) {
+    (tip_diameter(brush, values.diameter), finite_or(values.aspect, brush.aspect).clamp(0.02, 50.0))
+}
+
+fn tip_diameter(brush: &BrushSnapshot, diameter: f32) -> f32 {
+    finite_or(diameter, brush.diameter)
+        .clamp(brush.bounds.minimum_size, brush.bounds.maximum_size)
+        .clamp(0.01, MAX_BRUSH_DIAMETER)
+}
+
+fn connect_contact(previous: Option<Dab>, dab: &mut Dab) {
+    let previous = previous.unwrap_or(*dab);
+    dab.previous = [previous.radii[0], previous.radii[1], previous.rotation[0], previous.rotation[1]];
+    dab.previous_contact = previous.contact;
+    dab.motion = [dab.center.x - previous.center.x, dab.center.y - previous.center.y];
 }
 
 fn dry_radii(radii: [f32; 2], pose: layer_core::BrushDryPose) -> [f32; 2] {
@@ -1708,17 +1724,8 @@ impl DynamicPoint {
     }
 }
 
-fn apply_mapping(registers: &mut Registers, mapping: &BrushMapping, input: f32) {
-    let width = mapping.input_max - mapping.input_min;
-    let normalized = if width.abs() > f32::EPSILON {
-        (input - mapping.input_min) / width
-    } else {
-        0.0
-    };
-    let contribution = mapping
-        .curve
-        .sample(normalized)
-        .mul_add(mapping.output_scale, mapping.output_bias);
+fn apply_mapping(registers: &mut Registers, mapping: &BrushMapping, input: f32, transfer: Option<Transfer>) {
+    let contribution = taper::mapping_output(mapping, input, transfer);
     let target = match mapping.target {
         BrushTarget::Diameter => &mut registers.diameter,
         BrushTarget::Opacity => &mut registers.opacity,
@@ -1738,11 +1745,7 @@ fn apply_mapping(registers: &mut Registers, mapping: &BrushMapping, input: f32) 
         BrushTarget::Deposit => &mut registers.deposit,
         BrushTarget::DeformStrength => &mut registers.deform_strength,
     };
-    *target = match mapping.combine {
-        BrushCombine::Replace => contribution,
-        BrushCombine::Add => *target + contribution,
-        BrushCombine::Multiply => *target * contribution,
-    };
+    *target = taper::combine(*target, contribution, mapping.combine);
 }
 
 fn sensor_value(point: DynamicPoint, sensor: BrushSensor, variant: u32, index: u32) -> f32 {
@@ -1834,38 +1837,6 @@ fn include_dab(damage: &mut Rect, dab: Dab) {
 
 fn finite_or(value: f32, fallback: f32) -> f32 {
     if value.is_finite() { value } else { fallback }
-}
-
-fn taper_factors(
-    distance: f32,
-    total_distance: Option<f32>,
-    diameter: f32,
-    brush: &BrushSnapshot,
-) -> (f32, f32) {
-    let envelope = |progress: f32, minimum: f32| {
-        let progress = progress.clamp(0.0, 1.0);
-        let smooth = (progress * progress * (3.0 - 2.0 * progress)).powf(brush.taper.tip_sharpness);
-        minimum + (1.0 - minimum) * smooth
-    };
-    let start_extent = brush.taper.start_distance_diameters * diameter;
-    let start_progress = if start_extent > 0.0 {
-        distance / start_extent
-    } else {
-        1.0
-    };
-    let mut size = envelope(start_progress, brush.taper.start_size);
-    let mut opacity = envelope(start_progress, brush.taper.start_opacity);
-    if let Some(total) = total_distance {
-        let end_extent = brush.taper.end_distance_diameters * diameter;
-        let end_progress = if end_extent > 0.0 {
-            (total - distance).max(0.0) / end_extent
-        } else {
-            1.0
-        };
-        size *= envelope(end_progress, brush.taper.end_size);
-        opacity *= envelope(end_progress, brush.taper.end_opacity);
-    }
-    (size, opacity)
 }
 
 fn resolve_color(
@@ -2012,7 +1983,7 @@ mod color_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layer_core::BrushCurve;
+    use layer_core::{BrushCombine, BrushCurve};
 
     fn point(x: f32, pressure: f32, micros: u32) -> StrokePoint {
         crate::test_support::point(x, 0., pressure, micros)
@@ -2277,19 +2248,6 @@ mod tests {
         taper_prediction(&mut ordinary, origin, 1.);
         taper_prediction(&mut prefixed, origin, 1.);
         assert_eq!(&prefixed[1..], ordinary);
-    }
-
-    #[test]
-    fn taper_sharpness_changes_the_tip_without_changing_its_length() {
-        let mut brush = BrushSnapshot::default();
-        brush.taper.end_distance_diameters = 1.;
-        brush.taper.end_size = 0.;
-        let soft = taper_factors(95., Some(100.), 10., &brush).0;
-        brush.taper.tip_sharpness = 2.;
-        let sharp = taper_factors(95., Some(100.), 10., &brush).0;
-        assert!(sharp < soft);
-        assert_eq!(taper_factors(100., Some(100.), 10., &brush).0, 0.);
-        assert_eq!(taper_factors(90., Some(100.), 10., &brush).0, 1.);
     }
 
     #[test]

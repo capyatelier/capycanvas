@@ -141,13 +141,17 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.dab_generator
             .reset_for_stroke(active.id, &active.brush);
         self.dab_generator.set_barrel_twist(active.barrel_twist);
+        if let Some(taper) = active.taper.as_mut() {
+            taper.restart();
+            self.dab_generator.begin_taper(&active.brush);
+        }
         self.pending_chunk_dabs.clear();
         // A correction may invalidate persistent pigment or smudge work. Replay
         // faithfully; do not try to cover the old result with a second stroke.
         self.dabs.clear();
         self.batches.clear();
         for index in 0..count {
-            self.append_real_dab(self.builder.real_points()[index], index, false);
+            self.append_real_dab(Some((self.builder.real_points()[index], index)), false);
         }
         if let Some(emitted) = momentum {
             let active = self.active_stroke.as_mut().unwrap();
