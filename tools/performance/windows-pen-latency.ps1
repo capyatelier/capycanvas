@@ -20,6 +20,7 @@ if($ObjectMotionMode -and (!$ObjectPreflight -or !$SkipPresentMon)){throw 'Objec
 if($NavigationMode -and !$SkipPresentMon){throw 'Navigation capture uses bounded host traces; specify -SkipPresentMon'}
 if($ColdPaperPreflight -and ($NavigationMode -or $ObjectMotionMode -or $brushSeries -or !$SkipPresentMon -or $Seconds -lt 5 -or $Seconds -gt 10)){throw 'Cold paper requires one five-to-ten-second contact, -SkipPresentMon and no other workload'}
 . (Join-Path $PSScriptRoot '../../apps/layer-windows/scripts/CapyUia.ps1')
+. (Join-Path $PSScriptRoot 'WindowsCanvasMotion.ps1')
 $CapyWaitSeconds=45
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $Executable=(Resolve-Path $Executable).Path;$Project=(Resolve-Path $Project).Path
@@ -55,14 +56,6 @@ if($ColdPaperPreflight){
  if(@(0..($plan.offstroke_points.Count-1)|Where-Object {$plan.offstroke_lit[$_] -ne $plan.offstroke_unlit[$_]}).Count -lt 4){throw 'Four off-stroke points must distinguish real lighting'}
  Add-Type -Path (Join-Path $PSScriptRoot 'WindowsPenMotion.cs')
  Add-Type -Path (Join-Path $repo 'apps/layer-windows/scripts/RowPointerDriver.cs')
- Add-Type -AssemblyName WindowsBase
- $motionTokens=$null;$motionErrors=$null;$motionAst=[Management.Automation.Language.Parser]::ParseFile($PSCommandPath,[ref]$motionTokens,[ref]$motionErrors)
- if(@($motionErrors).Count){throw 'The existing motion guards did not parse'}
- foreach($name in 'Motion-Canvas','Motion-Point','Motion-Path'){
-  $definition=@($motionAst.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$true))
-  if($definition.Count -ne 1){throw "The existing $name guard is ambiguous"}
-  . ([scriptblock]::Create($definition[0].Extent.Text))
- }
  function Cold-Samples([int[]]$Coordinates){
   for($i=0;$i -lt $Coordinates.Length;$i+=2){$null=Motion-Point $script:paperRegion ([Windows.Point]::new($Coordinates[$i],$Coordinates[$i+1]))}
   [WindowsPenMotion]::Sample([uint32]$review.Id,$Coordinates)
@@ -198,19 +191,6 @@ Wait-Until {
 if($NavigationMode -or $ObjectMotionMode -or $brushSeries){
  Add-Type -Path (Join-Path $repo 'apps/layer-windows/scripts/RowPointerDriver.cs')
 }
- function Navigation-Focus {
-  [CapyWindowApi]::SetForegroundWindow($window)|Out-Null
-  (Control 'drawing-canvas').SetFocus()
-  Wait-Until {(Control 'drawing-canvas').Current.HasKeyboardFocus -and [CapyRowPointer]::GetForegroundWindow() -eq $window} 'Navigation canvas did not acquire owned keyboard focus'
- }
- function Navigation-Command([string]$Label) {
-  Navigation-Focus;[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x4b)
-  Wait-Until {$search=Find 'command-search' -Visible;$search -and $search.Current.HasKeyboardFocus} 'Command search did not open'
-  (Control 'command-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Label)
-  Wait-Until {$row=Find 'command-result-0' -Visible;$row -and $row.Current.Name -eq $Label -and $row.Current.IsEnabled} "Command search did not resolve $Label"
-  Invoke-Id 'command-result-0'
-  Wait-Until {!(Find 'command-search' -Visible)} "Command search did not close after $Label"
- }
  function Navigation-State([bool]$ExpectedUndo=$false,[bool]$ExpectedRedo=$false,[bool]$Modified=$false) {
   $chosen=@{items=@()}
   Wait-Until {$chosen.items=@($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$navigationLabel))|Where-Object {$_.Current.AutomationId -like 'tool-subtool-*' -and $_.Current.ItemStatus -eq 'Selected'});$chosen.items.Count -eq 1} 'The selected navigation tool is not exposed by its native tool-set state'
@@ -229,60 +209,6 @@ if($NavigationMode -or $ObjectMotionMode -or $brushSeries){
   [pscustomobject]$state
  }
 
-if($NavigationMode -or $ObjectMotionMode -or $brushSeries){
- Add-Type -AssemblyName WindowsBase
- function Motion-Canvas {
-  $canvas=Control 'drawing-canvas' -Arranged
-  $excluded=[Collections.Generic.HashSet[string]]::new()
-  foreach($node in $canvas.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)){$null=$excluded.Add(($node.GetRuntimeId() -join ':'))}
-  $node=$canvas;$bridge=$null
-  while($node){
-   $null=$excluded.Add(($node.GetRuntimeId() -join ':'))
-   if(!$bridge -and $node.Current.NativeWindowHandle -and !$node.Current.IsOffscreen){$bridge=$node}
-   if(($node.GetRuntimeId() -join ':') -eq ($root.GetRuntimeId() -join ':')){break}
-   $node=[System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($node)
-  }
-  if(!$bridge -or !$node -or $bridge.Current.ProcessId -ne $review.Id){throw 'The canvas has no owned visible native ancestor'}
-  $parent=[System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($canvas)
-  $parentId=$parent.GetRuntimeId() -join ':'
-  $workspace=Control 'canvas-view-info' -Arranged
-  while($workspace){
-   $container=[System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($workspace)
-   if($container -and ($container.GetRuntimeId() -join ':') -eq $parentId){break}
-   $workspace=$container
-  }
-  if(!$workspace -or ($workspace.GetRuntimeId() -join ':') -eq ($canvas.GetRuntimeId() -join ':') -or $workspace.Current.FrameworkId -ne 'XAML' -or $workspace.Current.ControlType -ne [System.Windows.Automation.ControlType]::Group -or $workspace.Current.AutomationId -or $workspace.Current.NativeWindowHandle -or $workspace.Current.Name -ne $parent.Current.Name){throw 'The transparent workspace container could not be identified'}
-  $null=$excluded.Add(($workspace.GetRuntimeId() -join ':'))
-  $bounds=$canvas.Current.BoundingRectangle
-  $obstacles=@(foreach($item in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)){
-   if($excluded.Contains(($item.GetRuntimeId() -join ':')) -or $item.Current.IsOffscreen){continue}
-   $rect=$item.Current.BoundingRectangle
-   if(!$rect.IsEmpty -and $rect.Width -gt 0 -and $rect.Height -gt 0 -and $bounds.IntersectsWith($rect)){
-    [pscustomobject]@{id=$item.Current.AutomationId;name=$item.Current.Name;bounds=$rect}
-   }
-  })
-  [pscustomobject]@{bounds=$bounds;bridge_hwnd=$bridge.Current.NativeWindowHandle;window_hwnd=$root.Current.NativeWindowHandle;obstacles=$obstacles}
- }
- function Motion-Point($Region,[Windows.Point]$Point) {
-  if(!$Region.bounds.Contains($Point)){throw "Motion point $Point is outside the arranged canvas"}
-  foreach($item in $Region.obstacles){if($item.bounds.Contains($Point)){throw "Motion point $Point is covered by '$($item.id)' ('$($item.name)')"}}
-  [WindowsPenMotion]::VerifyPoint([uint32]$review.Id,[IntPtr]$Region.window_hwnd,[int]$Point.X,[int]$Point.Y)
-  [System.Windows.Automation.AutomationElement]::FromPoint($Point)
- }
- function Motion-Path($Region,[int]$Cx,[int]$Cy,[int]$Rx,[int]$Ry,[int]$Seconds){
-  if($Seconds -lt 1 -or $Seconds -gt 30){throw 'Motion duration exceeds the producer bounds'}
-  $seen=[Collections.Generic.HashSet[string]]::new();$points=[Collections.Generic.List[object]]::new();$hits=@{};$last=$null
-  for($step=0;$step -lt $Seconds*240;$step++){
-   $angle=2*[Math]::PI*$step/240;$x=$Cx+[int][Math]::Truncate($Rx*[Math]::Cos($angle));$y=$Cy+[int][Math]::Truncate($Ry*[Math]::Sin($angle));$last=@($x,$y)
-   if($seen.Add("$x,$y")){
-    $hit=Motion-Point $Region ([Windows.Point]::new($x,$y));$points.Add($last)
-    $key=$hit.Current.AutomationId;if(!$key){$key='runtime:'+($hit.GetRuntimeId() -join ':')}
-    $hits[$key]=$hit.Current.Name
-   }
-  }
-  [pscustomobject]@{process_id=$review.Id;root_id=($root.GetRuntimeId() -join ':');region=$Region;center=@($Cx,$Cy);radii=@($Rx,$Ry);seconds=$Seconds;rate_hz=240;distinct_points=$points.ToArray();final_up_point=$last;hits=$hits}
- }
-}
 if($NavigationMode -or $ObjectMotionMode){
  $run=$OutputDirectory;$CapyPopups=$true
  $navigationLabel=@{hand='Hand';zoom='Zoom';rotate_view='Rotate view'}[$NavigationMode]
