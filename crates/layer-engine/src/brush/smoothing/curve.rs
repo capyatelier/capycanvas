@@ -1,7 +1,7 @@
 use layer_core::{Point, StrokePoint};
 use std::collections::VecDeque;
 
-type Vector = [f64; 2];
+type Vector = [f64; 3];
 type Moments = [Vector; 5];
 const KERNEL: [f64; 5] = [0., 20., -60., 60., -20.];
 
@@ -63,7 +63,7 @@ struct Node {
     origin: Vector,
     prefix: Moments,
 }
-fn vector(point: Point) -> Vector { [f64::from(point.x), f64::from(point.y)] }
+fn vector(point: StrokePoint) -> Vector { [f64::from(point.position.x), f64::from(point.position.y), f64::from(point.pressure)] }
 fn mix(a: Vector, b: Vector, u: f64) -> Vector { std::array::from_fn(|axis| a[axis] + (b[axis] - a[axis]) * u) }
 fn integral(begin: f64, end: f64, intercept: Vector, slope: Vector) -> Moments {
     std::array::from_fn(|j| {
@@ -81,17 +81,17 @@ fn kernel_bound(lo: f64, hi: f64) -> f64 {
 pub(super) struct Curve { nodes: VecDeque<Node> }
 impl Curve {
     pub(super) fn new(first: StrokePoint) -> Self {
-        Self { nodes: VecDeque::from([Node { point: first, clock: 0., rate: 0., slope: [0.; 2], slope_norm: 0., slope_change_norm: 0., rate_change_bound: 0., origin: vector(first.position), prefix: [[0.; 2]; 5] }]) }
+        Self { nodes: VecDeque::from([Node { point: first, clock: 0., rate: 0., slope: [0.; 3], slope_norm: 0., slope_change_norm: 0., rate_change_bound: 0., origin: vector(first), prefix: [[0.; 3]; 5] }]) }
     }
-    pub(super) fn append(&mut self, point: StrokePoint, support: f64) -> Point {
+    pub(super) fn append(&mut self, point: StrokePoint, support: f64) -> (Point, f32) {
         let previous = self.nodes.back().unwrap();
         let dt = f64::from(point.elapsed_micros.saturating_sub(previous.point.elapsed_micros)) * 1e-6;
-        if dt == 0. { return self.position(f64::from(previous.point.elapsed_micros) * 1e-6); }
+        if dt == 0. { return self.sample(f64::from(previous.point.elapsed_micros) * 1e-6); }
         let rate = 1. / support.max(1e-9);
         let previous_rate = if previous.rate > 0. { previous.rate } else { rate };
         let clock = previous.clock + dt * (previous_rate + rate) * 0.5;
-        let input = vector(previous.point.position);
-        let target = vector(point.position);
+        let input = vector(previous.point);
+        let target = vector(point);
         let slope: Vector = std::array::from_fn(|axis| (target[axis] - input[axis]) / (clock - previous.clock));
         let slope_norm = slope[0].hypot(slope[1]);
         let slope_change_norm = (slope[0] - previous.slope[0]).hypot(slope[1] - previous.slope[1]);
@@ -105,7 +105,7 @@ impl Curve {
         let prefix = std::array::from_fn(|j| std::array::from_fn(|axis| added[j][axis] + if same_block { previous.prefix[j][axis] } else { 0. }));
         if self.nodes.back().unwrap().rate == 0. { self.nodes.back_mut().unwrap().rate = rate; }
         self.nodes.push_back(Node { point, clock, rate, slope, slope_norm, slope_change_norm, rate_change_bound, origin, prefix });
-        self.position(f64::from(point.elapsed_micros) * 1e-6)
+        self.sample(f64::from(point.elapsed_micros) * 1e-6)
     }
     pub(super) fn latest(&self) -> StrokePoint { self.nodes.back().unwrap().point }
     pub(super) fn support(&self) -> f64 { let rate = self.nodes.back().unwrap().rate; if rate > 0. { 1. / rate } else { 0. } }
@@ -124,18 +124,18 @@ impl Curve {
     }
     fn input(&self, clock: f64) -> (Vector, Vector) {
         let index = self.nodes.partition_point(|node| node.clock <= clock);
-        if index == 0 { return (vector(self.nodes[0].point.position), [0.; 2]); }
+        if index == 0 { return (vector(self.nodes[0].point), [0.; 3]); }
         let a = &self.nodes[index - 1];
-        let Some(b) = self.nodes.get(index) else { return (vector(a.point.position), [0.; 2]); };
-        (mix(vector(a.point.position), vector(b.point.position), (clock - a.clock) / (b.clock - a.clock)), b.slope)
+        let Some(b) = self.nodes.get(index) else { return (vector(a.point), [0.; 3]); };
+        (mix(vector(a.point), vector(b.point), (clock - a.clock) / (b.clock - a.clock)), b.slope)
     }
     fn primitive(&self, clock: f64, block: f64) -> (Moments, Vector) {
         let index = self.nodes.partition_point(|node| node.clock < clock);
-        if index == 0 { return ([[0.; 2]; 5], vector(self.nodes[0].point.position)); }
+        if index == 0 { return ([[0.; 3]; 5], vector(self.nodes[0].point)); }
         let a = &self.nodes[index - 1];
-        let slope = self.nodes.get(index).map_or([0.; 2], |node| node.slope);
+        let slope = self.nodes.get(index).map_or([0.; 3], |node| node.slope);
         let same_block = a.clock.floor() == block;
-        let at = vector(a.point.position);
+        let at = vector(a.point);
         let origin = if same_block { a.origin } else { std::array::from_fn(|axis| at[axis] + slope[axis] * (block - a.clock)) };
         let intercept = std::array::from_fn(|axis| at[axis] + slope[axis] * (block - a.clock) - origin[axis]);
         let added = integral(if same_block { a.clock - block } else { 0. }, clock - block, intercept, slope);
@@ -145,9 +145,9 @@ impl Curve {
         let (anchor, slope) = self.input(clock);
         let index = self.nodes.partition_point(|node| node.clock <= clock - 1.);
         if index > 0 && self.nodes.get(index).is_none_or(|node| node.clock > clock) {
-            return std::array::from_fn(|derivative| match derivative { 0 => std::array::from_fn(|axis| anchor[axis] - slope[axis] / 3.), 1 => slope, _ => [0.; 2] });
+            return std::array::from_fn(|derivative| match derivative { 0 => std::array::from_fn(|axis| anchor[axis] - slope[axis] / 3.), 1 => slope, _ => [0.; 3] });
         }
-        let mut jet = [[0.; 2]; N];
+        let mut jet = [[0.; 3]; N];
         jet[0] = anchor;
         let mut lo = clock - 1.;
         for _ in 0..2 {
@@ -171,7 +171,7 @@ impl Curve {
                         for k in 0..j { choose *= (n - k) as f64 / (k + 1) as f64; }
                         coefficient += factor * choose * x.powi((n - j) as i32) * if j % 2 == 0 { 1. } else { -1. };
                     }
-                    for axis in 0..2 { jet[derivative][axis] += coefficient * moment[axis]; }
+                    for (value, moment) in jet[derivative].iter_mut().zip(moment) { *value += coefficient * moment; }
                 }
             }
             lo = hi;
@@ -179,9 +179,9 @@ impl Curve {
         }
         jet
     }
-    pub(super) fn position(&self, time: f64) -> Point {
+    pub(super) fn sample(&self, time: f64) -> (Point, f32) {
         let value = self.evaluate::<1>(self.clock(time).0)[0];
-        Point { x: value[0] as f32, y: value[1] as f32 }
+        (Point { x: value[0] as f32, y: value[1] as f32 }, value[2].clamp(0., 1.) as f32)
     }
     pub(super) fn retain_from(&mut self, time: u32) {
         let cutoff = self.clock(f64::from(time) * 1e-6).0 - 1.;
@@ -231,7 +231,7 @@ pub(super) mod tests {
         fn full_scan(curve: &Curve, begin: f64, end: f64) -> f64 {
             let lo = curve.clock(begin).0; let hi = curve.clock(end).0;
             let mut velocity: f64 = 0.; let mut acceleration = 0.;
-            let mut previous = [0.; 2];
+            let mut previous = [0.; 3];
             for (at, node) in curve.nodes.iter().enumerate() {
                 if at > 0 && node.clock >= lo - 1. && curve.nodes[at - 1].clock <= hi {
                     velocity = velocity.max(node.slope[0].hypot(node.slope[1]));
@@ -300,7 +300,7 @@ pub(super) mod tests {
             let t = i as f64 * 0.004; let clock = t / 0.1;
             let mut expected = [0.; 2];
             for j in 0..20000 { let u = (j as f64 + 0.5) / 20000.; let p = curve.input(clock - u).0; for axis in 0..2 { expected[axis] += kernel(u) * p[axis] / 20000.; } }
-            let got = curve.position(t);
+            let got = curve.sample(t).0;
             assert!((f64::from(got.x) - expected[0]).hypot(f64::from(got.y) - expected[1]) < 0.00002, "{t}: {got:?} {expected:?}");
         }
     }
@@ -309,7 +309,7 @@ pub(super) mod tests {
         for support in [1e-9, 0.006, 0.05, 0.3] {
             let mut coarse = Curve::new(point(0., 0., 1., 0)); coarse.append(point(16., 32., 1., 16000), support);
             let mut dense = Curve::new(point(0., 0., 1., 0)); for i in 1..=16 { dense.append(point(i as f32, i as f32 * 2., 1., i * 1000), support); }
-            for i in 0..=160 { let a = coarse.position(i as f64 * 0.0001); let b = dense.position(i as f64 * 0.0001); assert!((a.x-b.x).hypot(a.y-b.y) < 0.00001, "{support}, {i}: {a:?} {b:?}"); }
+            for i in 0..=160 { let a = coarse.sample(i as f64 * 0.0001).0; let b = dense.sample(i as f64 * 0.0001).0; assert!((a.x-b.x).hypot(a.y-b.y) < 0.00001, "{support}, {i}: {a:?} {b:?}"); }
         }
     }
     #[test]
@@ -317,7 +317,7 @@ pub(super) mod tests {
         let mut curve = Curve::new(point(0., 0., 1., 0));
         for i in 1..=100 { curve.append(point(i as f32 * 2., (i as f32 * 0.05).sin() * 30., 1., i * 4000), 0.3); }
         let end = curve.end_time(); let jet = jet_at(&curve, end);
-        assert_eq!(curve.position(end), curve.latest().position);
+        assert_eq!(curve.sample(end).0, curve.latest().position);
         assert!(jet[1][0].hypot(jet[1][1]) < 1e-7 && jet[2][0].hypot(jet[2][1]) < 1e-5);
         for i in 1..100 { let t=i as f64*0.004; let a=jet_at(&curve,t-1e-9); let b=jet_at(&curve,t+1e-9); for axis in 0..2 { assert!((a[2][axis]-b[2][axis]).abs()<0.02); } }
     }
@@ -340,6 +340,6 @@ pub(super) mod tests {
     fn single_point_has_no_completion_horizon() {
         let curve = Curve::new(point(10., 20., 1., 12345));
         assert_eq!(curve.end_time(), 0.012345);
-        assert_eq!(curve.position(curve.end_time()), curve.latest().position);
+        assert_eq!(curve.sample(curve.end_time()).0, curve.latest().position);
     }
 }

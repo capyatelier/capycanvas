@@ -129,11 +129,8 @@ pub(crate) fn contact_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
         }]),
         ..Default::default()
     };
-    brush.stabilization.pressure_fall_micros = 80_000;
     match preset {
-        GPen => {
-            brush.stabilization.pressure_fall_micros = 34_133;
-        }
+        GPen => {}
         Monoline => {
             brush.mappings = Arc::from([]);
         }

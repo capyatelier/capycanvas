@@ -10,7 +10,7 @@ pub(crate) use preview::{CurveModel, PositionField, CurvePreview, pen_up_settlem
 #[derive(Clone, Debug, Default)]
 pub(super) struct PositionSmoother {
     previous: Option<StrokePoint>,
-    position: Option<Point>,
+    sample: Option<(Point, f32)>,
     interval: f64,
     curve: Option<curve::Curve>,
 }
@@ -20,14 +20,18 @@ impl PositionSmoother {
         self.curve.as_ref().map(|curve| curve.latest().position)
     }
     pub(super) fn observe(&mut self, point: StrokePoint) { self.previous = Some(point); }
-    pub(super) fn preview_model(&self, settings: &BrushStabilization, real: &[StrokePoint]) -> Option<CurveModel> {
-        CurveModel::from_smoother(self.clone(), settings, real)
+    pub(super) fn lift(&self, point: StrokePoint) -> StrokePoint {
+        self.previous.map_or(point, |last| StrokePoint { pressure: last.pressure, ..point })
     }
-    pub(super) fn append(&mut self, point: StrokePoint, settings: &BrushStabilization) -> Point {
+    pub(super) fn preview_model(&self, settings: &BrushStabilization, real: &[StrokePoint], ending: bool) -> Option<CurveModel> {
+        CurveModel::from_smoother(self.clone(), settings, real, ending)
+    }
+    pub(super) fn append(&mut self, point: StrokePoint, settings: &BrushStabilization) -> (Point, f32) {
         let previous = self.previous.replace(point);
+        let raw = (point.position, point.pressure);
         if settings.strength == 0. {
-            self.position = Some(point.position);
-            return point.position;
+            self.sample = Some(raw);
+            return raw;
         }
         let elapsed = previous.map_or(0., |p| f64::from(point.elapsed_micros.saturating_sub(p.elapsed_micros)) * 1e-6);
         if elapsed > 0. {
@@ -35,18 +39,18 @@ impl PositionSmoother {
             self.interval = if self.interval == 0. { elapsed } else { self.interval+response*(elapsed-self.interval) };
         }
         let tau = f64::from(settings.strength)*MAX_TIME_SECONDS;
-        let Some(last) = self.position else {
-            self.position = Some(point.position);
+        let Some(last) = self.sample else {
+            self.sample = Some(raw);
             self.curve = Some(curve::Curve::new(point));
-            return point.position;
+            return raw;
         };
         let next = if elapsed == 0. {
             self.curve.as_mut().unwrap().append(point, curve::calibrated_support(tau, self.interval));
-            if previous.is_some_and(|p| p.elapsed_micros > 0) { last } else { point.position }
+            if previous.is_some_and(|p| p.elapsed_micros > 0) { last } else { raw }
         } else {
             self.curve.as_mut().unwrap().append(point, curve::calibrated_support(tau, self.interval))
         };
-        self.position = Some(next);
+        self.sample = Some(next);
         next
     }
     pub(super) fn completion_model(&self) -> Option<CurveModel> {
@@ -59,7 +63,7 @@ impl PositionSmoother {
     pub(super) fn take_completion_model(&mut self) -> Option<CurveModel> {
         self.curve.take().filter(|curve| curve.latest().elapsed_micros > 0).map(CurveModel::completion)
     }
-    pub(super) fn curve_position(&self, time: f64) -> Option<Point> { self.curve.as_ref().map(|c| c.position(time)) }
+    pub(super) fn curve_sample(&self, time: f64) -> Option<(Point, f32)> { self.curve.as_ref().map(|c| c.sample(time)) }
     pub(super) fn retain_from(&mut self, time: u32) { if let Some(curve) = &mut self.curve { curve.retain_from(time); } }
     pub(super) fn acceleration_bound(&self, begin: f64, end: f64) -> f64 {
         self.curve.as_ref().map_or(0., |curve| curve.acceleration_bound(begin, end))
@@ -72,7 +76,7 @@ mod tests {
 
     fn filter(points: &[StrokePoint], settings: BrushStabilization) -> Vec<Point> {
         let mut smoother = PositionSmoother::default();
-        points.iter().map(|&p| smoother.append(p, &settings)).collect()
+        points.iter().map(|&p| smoother.append(p, &settings).0).collect()
     }
 
     #[test]

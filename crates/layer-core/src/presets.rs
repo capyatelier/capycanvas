@@ -1,7 +1,7 @@
 use crate::{
     AssetId, BrushAccumulation, BrushBlendMode, BrushColorDynamics, BrushCombine, BrushContact, BrushCurve,
     BrushDeform, BrushExecution, BrushGrain, BrushMapping, BrushPath,
-    BrushRendering, BrushSensor, BrushShape, BrushSnapshot, BrushStabilization, BrushTarget, BrushTip, BrushTransport,
+    BrushRendering, BrushSensor, BrushShape, BrushSnapshot, BrushTarget, BrushTip, BrushTransport,
     BrushWetMix, BlenderKind, BrushBlender, ColorMixSpace, LiquifyMode,
 };
 use std::sync::Arc;
@@ -596,7 +596,6 @@ fn retouching(execution: BrushExecution, diameter: f32, hardness: f32) -> BrushS
             accumulation: BrushAccumulation::Uniform,
             ..BrushRendering::default()
         },
-        stabilization: BrushStabilization { pressure_fall_micros: 80_000, ..BrushStabilization::default() },
         ..BrushSnapshot::default()
     }
 }

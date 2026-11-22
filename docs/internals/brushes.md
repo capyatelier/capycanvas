@@ -69,13 +69,15 @@ tile does not make it evaluate intervening contacts elsewhere on the canvas.
 
 Smoothing is one control from 0 to 100, initially 6, without a section heading.
 Slider travel is logarithmic, with 30 at 75% of the track.
-Zero bypasses position smoothing. Each brush keeps its own choices. Selection
+Zero bypasses position and pressure smoothing. Each brush keeps its own choices. Selection
 and coverage-mask painting use unsmoothed positions.
 
 The shared engine uses the Curve fit model described in the
 [curve design record](../history/brushes/curve-fit-work-in-progress.md).
-It integrates a positive polynomial kernel over every delivered position;
-continuous evaluation between samples keeps the path smooth at low input rates.
+It integrates a positive polynomial kernel over every delivered position and
+pressure, so width changes land where the pen made them; continuous evaluation
+between samples keeps the path smooth at low input rates. A press at the start
+of a stroke, before the pen moves, keeps the pen's peak pressure.
 Input-interval calibration keeps strength comparable across sample rates.
 The selected smoothing strength applies at every pen speed. The captured view
 scale keeps curve evaluation tolerance in surface pixels.
@@ -84,8 +86,10 @@ Committed geometry depends on real samples, regardless of whether stroke preview
 is enabled. Preview continues that same curve with reduced prediction lead at
 high strengths, and ends with a contact at the curve's endpoint, as it does
 without smoothing, so widely spaced brushes such as Liquify and Smudge follow
-the pen every frame. On pen-up, the curve completes through its held endpoint;
-an enabled preview lands over 32 ms before publication. With preview off, or
+the pen every frame. On pen-up, the curve completes through its held endpoint, pressure included.
+The up event's own pressure is not used: the lift continues the last measured
+fall for at most one input interval. An enabled preview lands over 32 ms before
+publication. With preview off, or
 strength zero, there is no additional preview settlement wait. Live drawing and
 replay use the same completion path, including Smudge.
 
@@ -321,8 +325,8 @@ Aligned flag, the flips and, once an aligned stroke has started, its offset.
   footprint sweeps between contacts, so a stroke is one continuous stamp whose
   coverage falls linearly from its hard core to its rim, as an analytic stamp's
   does, without the scallops of stamps a spacing apart. Contacts follow the
-  swept generator, a few per update, and falling pressure is limited as for
-  the pens, so lifting without moving keeps the stroke's width to its end.
+  swept generator, a few per update, so lifting without moving keeps the
+  stroke's width to its end.
 - **Mapping.** A stroke copies document point `p` from `flip · p + offset`. It
   takes the offset at pen-down: the kept offset when Aligned has one, otherwise
   the source point minus the stroke's first point. Aligned keeps that offset for

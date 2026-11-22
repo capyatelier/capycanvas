@@ -974,7 +974,6 @@ mod tests {
         brush.color_rgba_linear = [8., 0.25, 0.5, 1.];
         brush.diameter *= 2.;
         brush.stabilization.input_scale *= 0.5;
-        brush.stabilization.pressure_fall_micros += 1;
         assert!(key == ShaderBrushKey::new(&document, &brush));
         brush.rendering.accumulation = if brush.rendering.accumulation == BrushAccumulation::Uniform {
             BrushAccumulation::Flow

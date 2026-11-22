@@ -1952,12 +1952,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         Ok(())
     }
 
-    pub(crate) fn stroke_brush(&self, event: &PenEvent) -> BrushSnapshot {
+    pub(crate) fn stroke_brush(&self) -> BrushSnapshot {
         let mut brush = self.settings.brush.clone();
         brush.stabilization.input_scale = self.view.document_to_surface[0].hypot(self.view.document_to_surface[1]).max(f32::EPSILON);
-        if !matches!(event.tool, ToolKind::Pen | ToolKind::Brush | ToolKind::Pencil | ToolKind::Airbrush) {
-            brush.stabilization.pressure_fall_micros = 0;
-        }
         brush
     }
 
@@ -2025,7 +2022,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     return Ok(());
                 }
                 let id = self.editor.allocate_stroke_id();
-                let mut brush = self.stroke_brush(&event);
+                let mut brush = self.stroke_brush();
                 let mut feedback = self.settings.instant_feedback;
                 if is_mask {
                     // Coverage brushes use the same tip/dynamics, not pigment or fluid state.
@@ -5293,7 +5290,7 @@ mod tests {
     }
 
     #[test]
-    fn pressure_limiter_is_pressure_tool_only_and_cancellation_needs_no_release_tail() {
+    fn cancellation_needs_no_release_tail_for_any_tool() {
         for tool in [
             ToolKind::Pen,
             ToolKind::Mouse,
@@ -5322,10 +5319,6 @@ mod tests {
                     .unwrap();
                 engine.render_frame().unwrap();
             }
-            assert_eq!(
-                engine.active_stroke.as_ref().unwrap().brush.stabilization.pressure_fall_micros > 0,
-                tool == ToolKind::Pen
-            );
             assert!(!engine.active_stroke.as_ref().unwrap().feedback.enabled);
             assert!(engine.backend.preview.is_empty());
             input
@@ -6691,7 +6684,7 @@ mod tests {
                         let latest = *engine.builder.real_points().last().unwrap();
                         let preview = &engine.active_stroke.as_ref().unwrap().tip.curve_preview;
                         let end = preview.endpoint(latest).unwrap().elapsed_micros;
-                        let y = |time| { let p = preview.position(time); policy.transform[1] * p.x + policy.transform[3] * p.y };
+                        let y = |time| { let p = preview.sample(time).0; policy.transform[1] * p.x + policy.transform[3] * p.y };
                         let mut previous = y(f64::from(latest.elapsed_micros) * 1e-6);
                         let mut reversal = 0.;
                         for i in 1..=256 {
@@ -6747,7 +6740,7 @@ mod tests {
                 if i > 30 {
                     let active = engine.active_stroke.as_ref().unwrap();
                     let source = active.tip.curve_preview.endpoint(*engine.builder.real_points().last().unwrap()).unwrap().elapsed_micros;
-                    let tip = active.tip.curve_preview.position(f64::from(source) * 1e-6);
+                    let tip = active.tip.curve_preview.sample(f64::from(source) * 1e-6).0;
                     assert!(tip.x <= sample.surface_position.x + 4.01, "strength={strength}, tip={tip:?}, pen={:?}", sample.surface_position);
                     tips.push(tip);
                 }

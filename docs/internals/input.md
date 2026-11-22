@@ -89,7 +89,7 @@ the same way as `stylus_action` input, carrying the system's choice
 
 Some pens, such as the Wacom Pro Pen 3 on Android, report the final up event at
 the last move's position with nonzero pressure. Adapters keep the raw values;
-the brush's pressure-fall limit shapes the lift taper.
+the [brush engine](brushes.md#stroke-smoothing) ignores the up event's pressure.
 
 Native control pickup follows the [drag and reorder convention](../ui/drag-and-reorder.md).
 Preserve actual device identity: pen requires the touch-style hold before list

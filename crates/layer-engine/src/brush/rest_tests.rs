@@ -39,7 +39,6 @@ fn brush() -> BrushSnapshot {
     brush.diameter = 36.;
     brush.stabilization.strength = 0.;
     brush.stabilization.pressure_smoothing = 0.;
-    brush.stabilization.pressure_fall_micros = 0;
     brush.stabilization.input_scale = 1.;
     brush
 }

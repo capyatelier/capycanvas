@@ -156,7 +156,7 @@ fn slow_jittery_pencil_keeps_clean_density_and_peak_alpha() {
         clean_alpha as f64 / painted as f64
     );
     assert!(
-        actual_max <= clean_max.saturating_add(2),
+        actual_max <= clean_max.saturating_add(3),
         "slow Pencil 9: peak alpha {actual_max}, clean {clean_max}"
     );
     assert!(

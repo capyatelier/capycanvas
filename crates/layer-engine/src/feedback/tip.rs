@@ -77,7 +77,7 @@ impl PreviewTip {
             self.preview_taper = estimate.is_some_and(|estimate| estimate.source == TipSource::Engine);
             points
         } else { Vec::new() };
-        let has_field = if let Some(model) = generator.preview_model(input.brush, input.real) {
+        let has_field = if let Some(model) = generator.preview_model(input.brush, input.real, input.ending.is_some()) {
             if let Some(ready) = input.ending {
                 self.curve_preview.land(input.now, ready, model);
             } else {
@@ -87,9 +87,8 @@ impl PreviewTip {
         } else { false };
         let field = has_field.then_some(&self.curve_preview as &dyn PositionField);
         let prediction_start = output.len();
-        let mut previous = generator.preview_previous();
         for point in input.pending.iter().copied() {
-            tip.append_preview(point, input.brush, field, &mut previous, output);
+            tip.append_preview(point, input.brush, field, output);
         }
         if has_completions(input.brush) {
             tip.flush_contact(input.brush, output);
@@ -117,7 +116,7 @@ impl PreviewTip {
         let taper_start = tip.modeled_position().unwrap_or(latest.position);
         let taper = estimate.source == TipSource::Engine;
         for point in predicted {
-            tip.append_preview(point, input.brush, field, &mut previous, output);
+            tip.append_preview(point, input.brush, field, output);
         }
         // Flush the actual swept endpoint just as finalization does. Coverage
         // by an earlier, wider contact is not the final pressure/pose.

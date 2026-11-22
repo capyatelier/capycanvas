@@ -2,17 +2,20 @@ use super::{PositionSmoother, curve::Curve};
 use layer_core::{BrushStabilization, Point, StrokePoint};
 
 pub(crate) trait PositionField {
-    fn position(&self, time: f64) -> Point;
+    fn sample(&self, time: f64) -> (Point, f32);
     fn acceleration_bound(&self, begin: f64, end: f64) -> f64;
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct CurveModel { curve: Curve, real_through: u32 }
 impl CurveModel {
-    pub(super) fn from_smoother(mut smoother: PositionSmoother, settings: &BrushStabilization, real: &[StrokePoint]) -> Option<Self> {
+    pub(super) fn from_smoother(mut smoother: PositionSmoother, settings: &BrushStabilization, real: &[StrokePoint], ending: bool) -> Option<Self> {
         if settings.strength <= 0. || real.last().is_none_or(|point| point.elapsed_micros == 0) { return None; }
         let begin = smoother.previous().map_or(0, |last| real.partition_point(|point| point.elapsed_micros <= last.elapsed_micros));
-        for &point in &real[begin..] { smoother.append(point, settings); }
+        for (index, &point) in real.iter().enumerate().skip(begin) {
+            let point = if ending && index + 1 == real.len() { smoother.lift(point) } else { point };
+            smoother.append(point, settings);
+        }
         Some(Self { curve: smoother.curve?, real_through: real.last()?.elapsed_micros })
     }
     pub(super) fn completion(curve: Curve) -> Self {
@@ -24,7 +27,7 @@ impl CurveModel {
     }
 }
 impl PositionField for CurveModel {
-    fn position(&self, time: f64) -> Point { self.curve.position(time) }
+    fn sample(&self, time: f64) -> (Point, f32) { self.curve.sample(time) }
     fn acceleration_bound(&self, begin: f64, end: f64) -> f64 { self.curve.acceleration_bound(begin, end) }
 }
 
@@ -109,13 +112,16 @@ impl CurvePreview {
     pub(crate) fn endpoint(&self, latest: StrokePoint) -> Option<StrokePoint> {
         let display = self.current.as_ref()?;
         let elapsed_micros = (display.endpoint * 1e6).ceil() as u32;
-        (elapsed_micros > latest.elapsed_micros).then(|| StrokePoint { position: self.position(f64::from(elapsed_micros) * 1e-6), elapsed_micros, ..latest })
+        (elapsed_micros > latest.elapsed_micros).then(|| {
+            let (position, pressure) = self.sample(f64::from(elapsed_micros) * 1e-6);
+            StrokePoint { position, pressure, elapsed_micros, ..latest }
+        })
     }
 }
 impl PositionField for CurvePreview {
-    fn position(&self, time: f64) -> Point {
+    fn sample(&self, time: f64) -> (Point, f32) {
         let display = self.current.as_ref().unwrap();
-        if time * 1e6 <= f64::from(display.canonical.real_through) { display.canonical.position(time) } else { display.continuation.position(time) }
+        if time * 1e6 <= f64::from(display.canonical.real_through) { display.canonical.sample(time) } else { display.continuation.sample(time) }
     }
     fn acceleration_bound(&self, begin: f64, end: f64) -> f64 {
         let display = self.current.as_ref().unwrap();
@@ -132,11 +138,11 @@ mod tests {
         for strength in [0.06,0.5,1.] {
             let settings=BrushStabilization { strength,..Default::default() };
             let real:Vec<_>=(0..=100).map(|i| point(i as f32*2., (i as f32*0.04).sin()*30.,1.,i*4000)).collect();
-            let model=CurveModel::from_smoother(PositionSmoother::default(),&settings,&real).unwrap();
+            let model=CurveModel::from_smoother(PositionSmoother::default(),&settings,&real,false).unwrap();
             let mut preview=CurvePreview::default();
             preview.observe(400000,model.clone(),&settings,&[point(204.,-24.,1.,408000)]);
             let end=preview.endpoint(*real.last().unwrap()).unwrap();
-            for i in 0..100 { let t=0.4+(f64::from(end.elapsed_micros)*1e-6-0.4)*i as f64/99.; let p=preview.position(t); assert!(p.x<=204.0001 && p.x>=0. && p.y.abs()<=30.0001); }
+            for i in 0..100 { let t=0.4+(f64::from(end.elapsed_micros)*1e-6-0.4)*i as f64/99.; let p=preview.sample(t).0; assert!(p.x<=204.0001 && p.x>=0. && p.y.abs()<=30.0001); }
             preview.land(400000,400000,model.clone());
             preview.land(416000,400000,model.clone());
             let taper = preview.taper_amount();
@@ -151,7 +157,7 @@ mod tests {
     fn preview_join_preserves_position_tangent_and_curvature() {
         let settings=BrushStabilization { strength:0.06,..Default::default() };
         let real:Vec<_>=(0..=100).map(|i| point(i as f32*2.,(i as f32*0.05).sin()*20.,1.,i*4000)).collect();
-        let model=CurveModel::from_smoother(PositionSmoother::default(),&settings,&real).unwrap();
+        let model=CurveModel::from_smoother(PositionSmoother::default(),&settings,&real,false).unwrap();
         let mut preview=CurvePreview::default();preview.observe(400000,model,&settings,&[point(204.,-15.,1.,408000)]);
         let display=preview.current.as_ref().unwrap();
         let a=super::super::curve::tests::jet_at(&display.canonical.curve,0.4);let b=super::super::curve::tests::jet_at(&display.continuation,0.4);

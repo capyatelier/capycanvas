@@ -559,10 +559,6 @@ pub struct BrushStabilization {
     pub strength: f32,
     pub input_scale: f32,
     pub pressure_smoothing: f32,
-    /// Minimum time for modeled pressure to fall by one full unit. Its fall
-    /// velocity eases with a 4 ms response to smooth repeated sensor values.
-    /// Zero disables the limiter. Uses input time, independent of zoom and DPI.
-    pub pressure_fall_micros: u32,
 }
 
 impl Default for BrushStabilization {
@@ -571,7 +567,6 @@ impl Default for BrushStabilization {
             strength: 0.06,
             input_scale: 1.0,
             pressure_smoothing: 0.0,
-            pressure_fall_micros: 0,
         }
     }
 }
@@ -1163,7 +1158,6 @@ impl BrushSnapshot {
         if unit
             .iter()
             .any(|value| !value.is_finite() || !(0.0..=1.0).contains(value))
-            || self.stabilization.pressure_fall_micros > 1_000_000
             || !self.stabilization.input_scale.is_finite()
             || self.stabilization.input_scale <= 0.
             || finite_nonnegative
