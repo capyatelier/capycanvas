@@ -685,7 +685,7 @@ fn check_seeds(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgrou
     }
     if index>=arrayLength(&first){return;}
     let p=vec2<i32>(line.options.xy);
-    if ink(p) && distance(middle(p))<=line.options.z {return;}
+    if line.job.y==0u && ink(p) && distance(middle(p))<=line.options.z {return;}
     if ((first[index/4u*4u+3u]|second[index/4u*4u+3u])&0x7fffffffu)==0u {return;}
     let a=first[index];let b=second[index];
     if a!=b && ((a|b)&0x7fffffffu)!=0u {atomicOr(&cached[line.offsets.y+2u],1u);}

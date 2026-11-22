@@ -278,11 +278,12 @@ impl RegionRequests {
         if !self.flood.prepare(&r.compilation,Self::refinement(request),request.enclosure.is_some(),request.contiguous,startup::BRUSH) {return Err(GpuRasterError::NotReady);}
         let source=cache::source(r,request);
         let base=RegionRequest {source,limit:None,reference_count:None,..request.clone()};
+        let seeded=self.cache.as_ref().is_some_and(|cache|cache.sampling==region_sources::Sampling::Retained);
         let classified={
             self.raw.encode_sampling(r,&base,encoder,region_sources::Sampling::Seeds)?;
             let mask=self.raw.mask().ok_or(GpuRasterError::InvalidExtent)?;
             let (paper,_,_)=Self::paper(r,request)?;
-            self.flood.check_seeds(&flood::Input {device:&r.device,mask:&mask,paper:&paper},encoder,&self.cache.as_ref().unwrap().seeds,self.raw.seeds(),request.position,request.tolerance);
+            self.flood.check_seeds(&flood::Input {device:&r.device,mask:&mask,paper:&paper},encoder,&self.cache.as_ref().unwrap().seeds,self.raw.seeds(),request.position,request.tolerance,seeded);
             mask
         };
         if let Some(count)=request.reference_count && count<request.source.sources().len() && self.stop_mask.is_none() {
@@ -1020,6 +1021,36 @@ pub(crate) mod tests {
         RegionRequest { fill_areas: None, colour_mode: Default::default(), fill: None, source, reference_count: None, paper: None, enclosure: None,
             contiguous: true, selection: None, request_id: 91, position: [32, 32], tolerance: 0.,
             refinement: RegionRefinement { close_gaps: false, edges: layer_render::RegionEdges::Exact, smooth_edges: false }, limit: None }
+    }
+
+    #[test]
+    fn a_fill_on_a_thin_line_after_wand_taps_matches_a_fresh_classification_of_its_colour() {
+        let extent=[256,128];
+        let mut document=layer_core::Document::new(layer_core::authored::PortableId::random(),extent[0],extent[1],
+            layer_core::DocumentNames {paint:"Photo".into(),paper:"Paper".into()});
+        placement::set_source(&mut document,layer_core::color::source::rgba8_source(extent,|x,_| {
+            if x==100 {[40,40,200,255]}else if x<160 {[200,40,40,255]}else{[40,160,40,255]}
+        }));
+        let source=RegionSource::Scene {snapshot:document.snapshot(),scope:SceneScope::Raw(placement::target(&document))};
+        let renderer=|| {
+            let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+            test_support::submit_ready(&mut r,test_support::packet(document.scene(),extent)).unwrap();
+            r.set_refine_chunk(Some(1_048_576.));
+            r.prepare_regions(Some(&RegionPreparation {source:source.clone(),reference_count:None,paper:None,tolerance:0.,refinement:Default::default(),enclosed:false}));
+            test_support::submit_settled(&mut r,test_support::packet(document.scene(),extent));
+            r
+        };
+        let refinement=RegionRefinement {close_gaps:true,edges:layer_render::RegionEdges::LineMiddle,smooth_edges:false};
+        let query=|request_id,position,fill:bool|RegionRequest {request_id,position,refinement,fill:fill.then(Default::default),..reference_query(source.clone())};
+        let mut r=renderer();
+        for (id,position) in [[32,32],[200,64],[64,100]].into_iter().enumerate() {test_support::receive_request(&mut r,query(id as u64,position,false));}
+        let result=test_support::receive_request(&mut r,query(3,[100,64],true));
+        let expected=test_support::receive_request(&mut renderer(),query(3,[100,64],true));
+        assert_ne!(expected.pixels.bounds(),[0;4]);
+        let gaps=|result:&layer_render::RegionResult|result.gaps.as_ref().map(|gaps|(gaps.active,gaps.line_bounded,gaps.seals.len()));
+        assert_eq!(result.pixels.bounds(),expected.pixels.bounds(),"a Fill on the thin line flooded the last wand tap's colour instead of its own");
+        assert!(result.pixels.words()==expected.pixels.words() && gaps(&result)==gaps(&expected)
+            && result.underfill.as_ref().map(|band|band.words())==expected.underfill.as_ref().map(|band|band.words()));
     }
 
     #[test]
