@@ -261,7 +261,9 @@ impl WgpuRasterizer {
             }else {None};
             destination.value().preview.set(None);
             let output=self.pipelines.destination_material.output(&self.device,&self.style_buffer,&destination,coverage.as_ref(),wetness.as_ref());
-            let (sources,_)=coverage.as_ref().unwrap_or(&destination).value().material.inputs(sources,|key|create_material_inputs(&self.device,&self.material_layout,self.material_records.binding().size,key));
+            let held=&coverage.as_ref().unwrap_or(&destination).value().material;
+            self.material_holders.hold((!preview).then_some(batch.target),job.coordinate,held);
+            let (sources,_)=held.inputs(sources,|key|create_material_inputs(&self.device,&self.material_layout,self.material_records.binding().size,key));
             let entry=if wetness.is_some() {Entry::Watercolor}else if coverage.is_some() {Entry::Coverage}else {Entry::Color};
             let next_publications=[
                 Some(MaterialPublication {kind:MaterialOutputKind::Color,coordinate:job.coordinate,preview:color_ticket.clone(),input:intent.clone(),

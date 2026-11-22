@@ -897,7 +897,7 @@ struct PageSurface {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     texture_bind_group: wgpu::BindGroup,
-    material: bindings::MaterialBindings,
+    material: Arc<bindings::MaterialBindings>,
     scene_output: std::cell::OnceCell<wgpu::BindGroup>,
     charge: Arc<residency::Charge>,
 }
@@ -1234,6 +1234,7 @@ pub struct WgpuRasterizer {
     held_brush:Option<raster::staging::HeldBrush>,
     preview_working:Option<residency::Reservation>,
     transport_bindings: scene::RecentBindings<scene::TransportBindingKey>,
+    material_holders: bindings::MaterialHolders,
     transport_records: material_sources::TileRecords,
     transport_regions: Vec<PixelRect>,
     preview_names: std::cell::RefCell<Option<IdMap<(SourceTarget,usize,[u32;2],scene::PreviewStage),scene::PreviewVersion>>>,
@@ -1668,6 +1669,7 @@ impl WgpuRasterizer {
             held_brush:None,
             preview_working:None,
             transport_bindings: Default::default(),
+            material_holders: Default::default(),
             transport_records: Default::default(),
             transport_regions: Vec::new(),
             preview_names: Default::default(),
@@ -2372,12 +2374,7 @@ impl WgpuRasterizer {
     }
 
     fn forget_bindings(&self, target: Option<SourceTarget>, coordinate: [u32; 2], views: &[wgpu::TextureView], buffers: &[wgpu::Buffer]) {
-        let layer = self.paint_layers.iter().filter(|layer| Some(layer.id) == target);
-        let colors = layer.clone().flat_map(|layer| &layer.pages).chain(&self.preview_pages).filter(|page| page.coordinate == coordinate);
-        let coverage = layer.flat_map(|layer| &layer.coverage_pages).chain(&self.preview_coverage_pages).filter(|page| page.coordinate == coordinate);
-        for surface in colors.flat_map(LayerPage::surfaces).chain(coverage.flat_map(|page| [&page.primary, &page.secondary])) {
-            surface.forget_bindings(views, buffers);
-        }
+        self.material_holders.forget(target, coordinate, views, buffers);
     }
 
     fn material_key(&self,views:[&wgpu::TextureView;11])->bindings::MaterialKey {
@@ -4124,6 +4121,7 @@ impl CanvasRenderer for WgpuRasterizer {
         self.preview_coverage_pages.retain(|p| p.primary.size().height == PAGE_SIZE);
         for page in &self.preview_coverage_pages { page.release_bindings(); }
         for (target, coordinate, views) in retired { self.forget_bindings(Some(target), coordinate, &views, &[]); }
+        self.material_holders.release_prediction();
         self.live_stroke = None;
     }
     fn set_transform_preview(
