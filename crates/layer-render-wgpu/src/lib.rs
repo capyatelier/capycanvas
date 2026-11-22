@@ -1397,7 +1397,7 @@ impl WgpuRasterizer {
         device.sample_memory = Some(memory.sample_owner());
         device.resource_limit = memory.resource_limit();
         device.source_samples.set_limit(memory.sample_grant().min(usize::MAX as u64) as usize);
-        let scene_tiers = scene::Tiers::default();
+        let scene_tiers = scene::Tiers::new(memory.display_owner());
         if device.analysis_memory.is_root() { device.analysis_memory = residency::Tier::within(&scene_tiers.display); }
         let sampler = recipes.sampler.clone();
         let brush_sampler = recipes.brush_sampler.clone();
@@ -3603,8 +3603,7 @@ impl WgpuRasterizer {
         self.memory.set_wake(wake.clone());
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let edge=self.device.retirement_handle();
-            self.memory.watch(self.factory.memory_budget(),Arc::new(move||edge.signal_release()));
+            self.watch_ledger();
             if let Some((_,queue))=&self.moving_decode {queue.set_wake(wake.clone());}
             self.decode_wake=Some(wake.clone());
         }
@@ -3612,6 +3611,11 @@ impl WgpuRasterizer {
         let wake:Arc<dyn Fn() + Send + Sync>=Arc::new(move||{arrivals.fetch_add(1,std::sync::atomic::Ordering::AcqRel);wake();});
         self.set_raster_preparation_wake(wake.clone());
         self.preparation_wake=Some(wake);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn watch_ledger(&self) {
+        let edge=self.device.retirement_handle();
+        self.memory.watch(self.factory.memory_budget(),Arc::new(move||edge.signal_release()));
     }
     pub fn preparation_progress(&self) -> u64 { self.preparation_progress }
     pub(crate) fn arrival_token(&self) -> frame_demand::ArrivalToken { frame_demand::ArrivalToken(self.arrivals.load(std::sync::atomic::Ordering::Acquire)) }

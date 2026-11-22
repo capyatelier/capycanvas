@@ -141,9 +141,10 @@ fn a_ledger_refused_object_admission_is_blocked_on_the_ledger_and_wakes_once_whe
     let held=r.scene_tiers.display.charge(384*MIB);
     let (send,woken)=std::sync::mpsc::channel();
     r.preparation_wake=Some(Arc::new(move||{let _=send.send(());}));
+    r.watch_ledger();
     let blocked=scene.object_results.admit(&r,Class::Visible,std::slice::from_ref(&request),None).unwrap().expect("the ledger refuses the object window");
-    assert!(r.scene_tiers.display.blocked(Class::Visible,bytes).is_none(),"the display tier alone would admit the window");
-    assert!(!blocked.fits(),"a ledger refusal stays blocked while only the tier fits");
+    assert!(r.scene_tiers.display.blocked(Class::Visible,bytes).is_some(),"the display tier judges the window against the ledger's room, not its stored limit");
+    assert!(!blocked.fits(),"a ledger refusal stays blocked while the raster holds the device");
     assert!(woken.recv_timeout(std::time::Duration::from_millis(200)).is_err(),"a ledger-refused admission is not woken before a release");
     r.commit_raster_working(raster);
     woken.recv_timeout(std::time::Duration::from_secs(1)).expect("the ledger's release edge wakes the refused admission");
