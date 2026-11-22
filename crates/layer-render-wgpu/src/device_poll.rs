@@ -83,8 +83,9 @@ impl RetirementHandle {
     pub fn on_next_completion(&self,wake:&Notify)->u64 {
         let mut completion=self.0.completion.lock().unwrap();
         if !completion.iter().any(|old|Arc::ptr_eq(old,wake)) {completion.push(wake.clone());}
-        drop(completion);self.0.completions.load(SeqCst)
+        drop(completion);self.completions()
     }
+    pub fn completions(&self)->u64 {self.0.completions.load(SeqCst)}
     fn completed(&self) {
         self.0.completions.fetch_add(1,SeqCst);
         let wakes=std::mem::take(&mut *self.0.completion.lock().unwrap());for wake in wakes {wake();}

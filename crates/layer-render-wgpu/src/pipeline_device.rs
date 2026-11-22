@@ -204,6 +204,12 @@ impl PipelineDevice {
             for wake in wakes {wake();}
         }}
     }
+    pub(crate) fn completions(&self)->u64 {
+        #[cfg(not(target_arch="wasm32"))]
+        {self.retirement_handle().completions()}
+        #[cfg(target_arch="wasm32")]
+        {COMPLETION.with_borrow(|(count,_)|*count)}
+    }
     pub(crate) fn on_next_completion(&self,wake:&std::sync::Arc<dyn Fn()+Send+Sync>)->u64 {
         #[cfg(not(target_arch="wasm32"))]
         {self.retirement_handle().on_next_completion(wake)}

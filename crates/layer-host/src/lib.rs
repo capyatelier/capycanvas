@@ -1557,6 +1557,36 @@ mod tests {
     }
 
     #[test]
+    fn frames_served_before_a_held_layer_touch_deadline_do_not_wake_the_owner() {
+        use std::time::{Duration, Instant};
+        let (_reference, mut host) = gpu_host(layer_ui::Platform::Android, [64; 2]);
+        let (woken, wakes) = std::sync::mpsc::channel();
+        host.set_wake(std::sync::Arc::new(move || { let _ = woken.send(()); }));
+        host.session.renderer_mut().0.as_mut().unwrap().finish_startup_catalog();
+        let clock = std::cell::Cell::new(0);
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !host.startup.complete || host.frame_demand() != layer_render::FrameDemand::Wait {
+            frame_step(&mut host, &clock, deadline);
+        }
+        host.session.set_touch_policy(layer_ui::TouchPolicy { tap_ms: 2000, slop: 16. }).unwrap();
+        let row = host.session.state().layers.iter().find(|layer| layer.editing).unwrap().id;
+        for id in [1, 2] {
+            host.input(UiInput::LayerTouch { surface: 1, id, phase: ContactPhase::Down, position: [40., 40.], row: Some(row), time_ns: id }).unwrap();
+        }
+        frame_step(&mut host, &clock, deadline);
+        for frame in 0..3 {
+            host.session.renderer_mut().0.as_mut().unwrap().wait_idle().unwrap();
+            while wakes.try_recv().is_ok() {}
+            let submitted = host.session.engine().backend().0.as_ref().unwrap().submitted_updates();
+            frame_step(&mut host, &clock, deadline);
+            assert!(host.session.engine().backend().0.as_ref().unwrap().submitted_updates() > submitted, "frame {frame} submits GPU work");
+            assert!(matches!(host.poll_preparation(), layer_render::FrameDemand::WaitUntil(_)), "frame {frame}: the hold waits for its deadline");
+            host.session.renderer_mut().0.as_mut().unwrap().wait_idle().unwrap();
+            assert!(wakes.try_recv().is_err(), "frame {frame}: the served frame's GPU completion woke the owner before the deadline");
+        }
+    }
+
+    #[test]
     fn a_settled_native_canvas_does_not_wake_for_completed_gpu_work() {
         use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
         use std::time::{Duration, Instant};

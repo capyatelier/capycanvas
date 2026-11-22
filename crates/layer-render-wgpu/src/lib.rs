@@ -3970,7 +3970,7 @@ impl CanvasRenderer for WgpuRasterizer {
     fn stroke_waits_for_memory(&self) -> bool { self.lane_waits() }
     fn stroke_memory_refusals(&self) -> u64 { self.memory.stroke_memory_refusals() }
     fn poll_pending(&mut self, view: layer_render::ViewState) -> Result<(), Self::Error> {
-        if let Some(wake) = &self.preparation_wake { self.observed_completions.store(self.device.on_next_completion(wake), std::sync::atomic::Ordering::Release); }
+        self.observed_completions.store(self.device.completions(), std::sync::atomic::Ordering::Release);
         self.refresh_memory_limits();
         if let Some(selection) = self.pending_display_selection.clone() { self.set_selection_outline(Some(&selection))?; }
         let Some(mut pending) = self.settling.take() else { return Ok(()); };
