@@ -23,12 +23,18 @@ impl WgpuRasterizer {
                 page.stroke_start.is_none()
                     && !contents.is_some_and(|contents| contents.modified(page.coordinate))
                     && !held(page.coordinate)
-                    && native.backing.get(&layer.id).and_then(|data| data.tiles.get(&TileKey { plane: RasterPlane::Color, coordinate: page.coordinate }))
-                        .is_some_and(|tile| matches!(tile.try_backing(), Some(Ok(_))))
+                    && self.restorable_color(native.backing.get(&layer.id), layer.id, contents, page.coordinate)
             }).map(|page| page.primary.storage_bytes() + page.secondary.as_ref().map_or(0, |surface|surface.storage_bytes())).sum::<u64>()
             + layer.coverage_pages.iter().filter(|page| page.owner.is_none_or(|owner| Some(owner) != self.live_stroke) && !held(page.coordinate))
                 .map(|page| page.primary.storage_bytes() + page.secondary.storage_bytes()).sum::<u64>()
         }).sum::<u64>()
+    }
+    fn restorable_color(&self, backing: Option<&Arc<RasterData>>, target: SourceTarget, contents: Option<&contents::Contents>, coordinate: [u32; 2]) -> bool {
+        let key = TileKey { plane: RasterPlane::Color, coordinate };
+        backing.and_then(|data| data.tiles.get(&key)).map_or_else(
+            || contents.is_some_and(|contents| !contents.data().tiles.contains_key(&key))
+                && self.tiled_sources.get(&target).is_some_and(|base| source_access::paint_base_contains(base, coordinate)),
+            |tile| matches!(tile.try_backing(), Some(Ok(_))))
     }
     pub(crate) fn native_backing(&self, id: SourceTarget) -> Option<&Arc<RasterData>> {
         self.native_edit.as_ref()?.backing.get(&id)
@@ -193,9 +199,7 @@ impl WgpuRasterizer {
             for page in &layer.pages {
                 if page.stroke_start.is_some() || held(page.coordinate) { continue; }
                 if let Some(spare) = &page.secondary { offer((layer.id, page.coordinate, Offered::Spare), spare.storage_bytes(), 0); }
-                let ready = data.and_then(|data| data.tiles.get(&TileKey { plane: RasterPlane::Color, coordinate: page.coordinate }))
-                    .is_some_and(|tile| matches!(tile.try_backing(), Some(Ok(_))));
-                if ready && !contents.is_some_and(|contents| contents.modified(page.coordinate)) {
+                if self.restorable_color(data, layer.id, contents, page.coordinate) && !contents.is_some_and(|contents| contents.modified(page.coordinate)) {
                     let bytes = page.primary.storage_bytes();
                     offer((layer.id, page.coordinate, Offered::Color), bytes, crate::residency::rebuild_value(bytes, bytes));
                 }
