@@ -186,8 +186,9 @@ export function createLaunchCover({ container, asset, now = () => performance.no
         container.dataset.launch = 'loading';
       } else if (!view.finished) {
         container.hidden = true;
-      } else if (container.dataset.launch === 'loading') {
-        container.dataset.launch = 'leaving';
+      } else {
+        if (container.dataset.launch === 'loading') container.dataset.launch = 'leaving';
+        if (!view.revealing) container.hidden = true;
       }
     },
     diagnostic() {

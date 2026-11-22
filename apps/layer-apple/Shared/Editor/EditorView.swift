@@ -69,9 +69,11 @@ struct EditorView<Canvas: View>: View {
                 .allowsHitTesting(!store.launchVisible)
                 .accessibilityHidden(store.launchVisible)
                 .disabled(store.launchVisible)
-            if store.launchVisible {
-                LaunchCover(store: store).transition(.opacity)
-            }
+            ZStack {
+                if store.launchVisible {
+                    LaunchCover(store: store).transition(.opacity)
+                }
+            }.id(store.launchRevealCut)
             #if DEBUG
             if ProcessInfo.processInfo.environment["CAPY_PERSISTENCE_PROBE"] == "1" {
                 PersistenceProbe(store: store)

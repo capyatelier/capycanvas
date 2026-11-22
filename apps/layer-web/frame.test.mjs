@@ -36,7 +36,7 @@ test('launch cover delays its existing localized caption and fades only a finish
   h.advance(1);assert.equal(h.caption.dataset.visible,'');
   h.cover.update({visible:true,finished:false},copy);
   assert.equal(h.caption.textContent,copy.launch_caption);
-  h.cover.update({visible:false,finished:true},copy);
+  h.cover.update({visible:false,finished:true,revealing:true},copy);
   assert.equal(h.cover.pending,false);
   assert.equal(h.controls.inert,false);assert.equal(h.cover.blocking,false);
   assert.equal(h.container.dataset.launch,'leaving');assert.equal(h.container.hidden,false);
@@ -45,10 +45,19 @@ test('launch cover delays its existing localized caption and fades only a finish
   h.transition();assert.equal(h.container.hidden,true);
 });
 
+test('a canvas contact during the reveal hides the launch cover at once',()=>{
+  const h=launchCoverHarness(),copy=launchCopy();
+  h.cover.update({visible:true,finished:false},copy);
+  h.cover.update({visible:false,finished:true,revealing:true},copy);
+  assert.equal(h.container.hidden,false);
+  h.cover.update({visible:false,finished:true,revealing:false},copy);
+  assert.equal(h.container.hidden,true);assert.equal(h.cover.pending,false);
+});
+
 test('launch cover releases controls moved into the phone layout before reveal',()=>{
   const h=launchCoverHarness();
   h.container.parentElement.children=[h.container];
-  h.cover.update({visible:false,finished:true},launchCopy());
+  h.cover.update({visible:false,finished:true,revealing:true},launchCopy());
   assert.equal(h.controls.inert,false);
 });
 
@@ -56,7 +65,7 @@ test('launch cover preserves independently inert controls added during startup',
   const h=launchCoverHarness(),independent={inert:true};
   h.container.parentElement.children.push(independent);
   h.cover.update({visible:true,finished:false},launchCopy());
-  h.cover.update({visible:false,finished:true},launchCopy());
+  h.cover.update({visible:false,finished:true,revealing:true},launchCopy());
   assert.equal(independent.inert,true);
 });
 
@@ -67,11 +76,11 @@ test('interactive launch bypass is immediate and diagnostics survive later share
   assert.equal(h.cover.pending,true);
   h.cover.update({visible:true,finished:false},copy);
   assert.equal(h.container.hidden,false);
-  h.cover.update({visible:false,finished:true},copy);
+  h.cover.update({visible:false,finished:true,revealing:true},copy);
   h.cover.diagnostic();h.container.replaceChildren({error:true});
   h.advance(copy.launch_caption_delay_ms);
   h.transition();
-  h.cover.update({visible:false,finished:true},copy);
+  h.cover.update({visible:false,finished:true,revealing:true},copy);
   assert.equal(h.container.hidden,false);assert.equal(h.container.firstElementChild.error,true);
 });
 
@@ -97,7 +106,7 @@ test('launch caption accepts the Wasm Bootstrap u64 delay',()=>{
 test('launch reveal waits for CSS completion after a delayed first paint',()=>{
   const h=launchCoverHarness(),copy=launchCopy({launch_caption_delay_ms:5000n,launch_reveal_ms:1379n});
   h.cover.update({visible:true,finished:false},copy);
-  h.cover.update({visible:false,finished:true},copy);
+  h.cover.update({visible:false,finished:true,revealing:true},copy);
   assert.equal(h.properties.get('--launch-reveal'),'1379ms');
   assert.equal(h.properties.get('--launch-caption-size'),`${copy.launch_caption_size}px`);
   assert.equal(h.properties.get('--launch-caption-color'),'var(--settings-secondary)');
@@ -109,7 +118,7 @@ test('launch reveal waits for CSS completion after a delayed first paint',()=>{
 test('only the leaving cover opacity transition can hide the launch',()=>{
   const h=launchCoverHarness(),copy=launchCopy();
   h.cover.update({visible:true,finished:false},copy);
-  h.cover.update({visible:false,finished:true},copy);
+  h.cover.update({visible:false,finished:true,revealing:true},copy);
   h.transition({target:h.caption});assert.equal(h.container.hidden,false);
   h.transition({propertyName:'transform'});assert.equal(h.container.hidden,false);
   h.transition();assert.equal(h.container.hidden,true);
@@ -118,7 +127,7 @@ test('only the leaving cover opacity transition can hide the launch',()=>{
 test('retired transition events cannot hide resumed loading or GPU diagnostics',()=>{
   const h=launchCoverHarness(),copy=launchCopy();
   h.cover.update({visible:true,finished:false},copy);
-  h.cover.update({visible:false,finished:true},copy);
+  h.cover.update({visible:false,finished:true,revealing:true},copy);
   h.cover.update({visible:true,finished:false},copy);
   h.transition();assert.equal(h.container.hidden,false);assert.equal(h.cover.blocking,true);
   h.cover.diagnostic();h.container.replaceChildren({error:true});

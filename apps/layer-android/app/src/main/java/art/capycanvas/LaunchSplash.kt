@@ -351,7 +351,7 @@ internal fun CanvasHost.launchHolding(reveal: LaunchReveal?): Boolean {
     val activity = LocalActivity.current as? MainActivity ?: return
     val window = activity.launchSplash
     val visible = host.launchCovered()
-    val finished = host.launchFinished()
+    val revealing = host.launchFinished() && host.snapshot?.objectOrNull("launch")?.optBoolean("revealing") == true
     val bootstrap = host.bootstrap
     val mark = bootstrap?.objectOrNull("launch_mark")
     val markIcon = mark?.getString("icon")
@@ -375,14 +375,15 @@ internal fun CanvasHost.launchHolding(reveal: LaunchReveal?): Boolean {
     val role = bootstrap?.optString("launch_caption_color_role").orEmpty()
     val color = host.snapshot?.objectOrNull("state")?.objectOrNull("palette")?.optString(role)
         ?.takeIf { it.isNotEmpty() }?.let { android.graphics.Color.parseColor(it) } ?: window.foreground
-    SideEffect { window.update(visible, finished, markIcon, caption, reveal, gap * density.density, size * density.density, color) }
+    SideEffect { window.update(visible, revealing, markIcon, caption, reveal, gap * density.density, size * density.density, color) }
     val holding = host.launchHolding(window.reveal)
-    val alpha by animateFloatAsState(if (holding) 1f else 0f,
-        tween(if (finished) reveal?.toInt() ?: 0 else 0), label = "launch-reveal")
-    val native = window.nativeActive || (window.hadNativeVisual && finished)
-    if (alpha > 0f || window.nativeActive) BoxWithConstraints(Modifier.fillMaxSize().pointerInput(Unit) {
+    val fade by animateFloatAsState(if (holding) 1f else 0f,
+        tween(if (revealing) reveal?.toInt() ?: 0 else 0), label = "launch-reveal")
+    val alpha = if (holding || revealing) fade else 0f
+    val native = window.nativeActive || (window.hadNativeVisual && revealing)
+    if (alpha > 0f || window.nativeActive) BoxWithConstraints(Modifier.fillMaxSize().then(if (holding) Modifier.pointerInput(Unit) {
         awaitPointerEventScope { while (true) awaitPointerEvent().changes.forEach { it.consume() } }
-    }) {
+    } else Modifier)) {
         if (!native && alpha > 0f) {
             val drawable = window.markDrawable(markIcon)
             val inkBottom = mark?.getDouble("ink_bottom")?.toFloat() ?: 0f

@@ -77,18 +77,19 @@ impl LaunchSplash {
         self.label.set_attributes(Some(&attributes));
     }
     pub fn update(&self, view: layer_ui::LaunchView, localization: &layer_ui::Localizer) {
-        if !view.visible && !self.root.reveals_child() { return; }
+        if !view.visible && !self.covering() { return; }
         if view.visible {
             self.cancel_paint();
             self.label.set_text(&layer_ui::bootstrap_view(localization).launch_caption);
         }
         if view.visible {
+            self.root.set_visible(true);
             self.root.set_can_target(true);
             self.root.set_transition_duration(0);
             self.root.set_reveal_child(true);
-        } else if !view.finished {
+        } else if !view.finished || !view.revealing {
             self.bypass();
-        } else if self.paint.borrow().is_none() {
+        } else if self.paint.borrow().is_none() && self.root.reveals_child() {
             self.root.set_transition_duration(layer_ui::LAUNCH_REVEAL_MS as u32);
             let pending = Rc::downgrade(&self.paint);
             let frame = Cell::new(None);
@@ -116,8 +117,8 @@ impl LaunchSplash {
         self.root.set_transition_duration(0);
         self.root.set_reveal_child(false);
         self.root.set_can_target(false);
+        self.root.set_visible(false);
     }
-    #[cfg(test)]
     pub fn covering(&self) -> bool { self.root.reveals_child() || self.root.is_child_revealed() }
 }
 
@@ -205,7 +206,7 @@ mod tests {
         assert_eq!(icon.compute_bounds(&window).unwrap(), bounds, "caption reveal keeps the mark centered");
         geometry();
         capture("launch-after-caption.png");
-        let view = layer_ui::LaunchView {visible: false, finished: true, frame: None};
+        let view = layer_ui::LaunchView {visible: false, finished: true, revealing: true, frame: None};
         splash.update(view, &localization);
         assert!(splash.root.reveals_child() && splash.root.can_target(), "readiness does not reveal an unpainted editor");
         assert!(splash.paint.borrow().is_some());

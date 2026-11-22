@@ -157,7 +157,9 @@ dialogs bypass the cover without completing launch. The workspace controller
 reports its errors, prompts and recovery action to the session; hosts report only
 their own modal surfaces through launch readiness. Notices raised under the cover
 wait for its reveal. A finished window never restarts its launch cover for a
-drawing switch or renderer recovery.
+drawing switch or renderer recovery. The reveal releases input and fades the
+cover over `BootstrapView.launch_reveal_ms` while `LaunchView.revealing` holds.
+A canvas contact clears `revealing`, and hosts then remove the cover at once.
 
 The cover shows only the painter's chosen Zen capy and, after the delay, its
 caption. `BootstrapView.launch_mark` names the capy and its ink placement; hosts
