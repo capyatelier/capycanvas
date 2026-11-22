@@ -577,7 +577,9 @@ its field the same way; accept it rather than restrict these tools.
   within the portable limit of sixteen sampled textures. Original pixels
   occupy 16-layer texture arrays, with a sparse tile-index buffer.
   Reconstruction binds at most eleven arrays per source chunk. Large sources use
-  additional chunks; scratch textures accumulate disjoint contributions. No
+  additional chunks; scratch textures accumulate disjoint contributions. A
+  tile's chunk is its block of 16 × 11 pages, so the order of those sums never
+  depends on which tiles a session copied first or rebuilt later. No
   Float32 filtering, Float32 blending, bindless texture arrays or float atomics
   are required. The same manual sampling path runs on Mali and other GPUs.
 - **Lazy originals.** A tile is captured before its first deformation or source

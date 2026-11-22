@@ -4,9 +4,17 @@ use std::{collections::{BTreeMap, BTreeSet}, sync::{Mutex, Weak, atomic::{Atomic
 
 const ORIGINAL_LAYERS: u32 = 16;
 const ORIGINAL_BINDINGS: usize = 11;
+const CHUNK_TILES: u32 = ORIGINAL_BINDINGS as u32 * ORIGINAL_LAYERS;
 pub(super) const ORIGINAL_ATLAS_BYTES: u64 = 87381 * ORIGINAL_LAYERS as u64 * 16;
 const MAP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Uint;
 static NEXT_RESOURCE: AtomicU64 = AtomicU64::new(1);
+
+fn original_chunk(coordinate: [u32; 2], extent: [u32; 2]) -> u32 {
+    coordinate[1] / ORIGINAL_BINDINGS as u32 * extent[0].div_ceil(PAGE_SIZE).div_ceil(ORIGINAL_LAYERS) + coordinate[0] / ORIGINAL_LAYERS
+}
+fn new_atlases(missing: impl IntoIterator<Item = usize>) -> u64 {
+    missing.into_iter().map(|count| (count as u64).div_ceil(u64::from(ORIGINAL_LAYERS))).sum()
+}
 
 fn map_bindings(mode: u32) -> usize {
     if matches!(mode, 0..=2 | 6) { 12 } else { 9 }
@@ -95,14 +103,17 @@ impl Originals {
         self.atlases.iter().enumerate().filter(|(_,atlas)|atlas.as_ref().is_some_and(|atlas|!atlas.held)).map(|(at,_)|at)
     }
     fn release(&mut self) {for atlas in self.atlases.iter_mut().flatten() {atlas.held=false;}}
-    fn hold(&mut self,needed:&BTreeSet<[u32;2]>)->u64 {
-        let present=needed.iter().filter_map(|at|self.tiles.get(at)).map(|tile|tile.index).collect::<Vec<_>>();
-        let missing=needed.len()-present.len();
-        let reused=self.free.iter().copied().take(missing).collect::<Vec<_>>();
-        for index in present.iter().chain(&reused) {
-            if let Some(atlas)=&mut self.atlases[(index/ORIGINAL_LAYERS) as usize] {atlas.held=true;}
+    fn hold(&mut self,needed:&BTreeSet<[u32;2]>,extent:[u32;2])->u64 {
+        let (mut held,mut missing)=(Vec::new(),BTreeMap::<u32,usize>::new());
+        for at in needed {match self.tiles.get(at) {Some(tile)=>held.push(tile.index),None=>*missing.entry(original_chunk(*at,extent)).or_default()+=1}}
+        let mut unplaced=Vec::new();
+        for (chunk,count) in missing {
+            let reused=self.free.range(chunk*CHUNK_TILES..(chunk+1)*CHUNK_TILES).copied().take(count).collect::<Vec<_>>();
+            unplaced.push(count-reused.len());
+            held.extend(reused);
         }
-        ((missing-reused.len()) as u64).div_ceil(u64::from(ORIGINAL_LAYERS))
+        for index in held {if let Some(atlas)=&mut self.atlases[(index/ORIGINAL_LAYERS) as usize] {atlas.held=true;}}
+        new_atlases(unplaced)
     }
     fn evict(&mut self,atlas:usize)->Option<wgpu::Texture> {
         let OriginalAtlas {texture,..}=self.atlases.get_mut(atlas)?.take()?;
@@ -424,19 +435,22 @@ impl Liquify {
             if !preview {session.fields.extend(outputs);}
         }
         let mut demand=OriginalDemand::default();
-        let mut shared:Vec<(Arc<Mutex<Originals>>,BTreeSet<[u32;2]>)>=Vec::new();
+        let mut shared:Vec<(Arc<Mutex<Originals>>,BTreeSet<[u32;2]>,[u32;2])>=Vec::new();
         for (target,session) in sessions {
+            let extent=packet.scene.target_extent(target);
             let Some(originals)=session.originals else {
-                demand.atlases+=(session.needed.len() as u64).div_ceil(u64::from(ORIGINAL_LAYERS));
+                let mut chunks=BTreeMap::<u32,usize>::new();
+                for at in &session.needed {*chunks.entry(original_chunk(*at,extent)).or_default()+=1;}
+                demand.atlases+=new_atlases(chunks.into_values());
                 continue;
             };
             if let Some(source)=session.source.filter(|_|!session.staged.is_empty()) {demand.staged.push((target,source,session.staged.into_iter().collect()));}
-            match shared.iter_mut().find(|(known,_)|Arc::ptr_eq(known,&originals)) {
-                Some((_,needed))=>needed.extend(session.needed),
-                None=>shared.push((originals,session.needed)),
+            match shared.iter_mut().find(|(known,..)|Arc::ptr_eq(known,&originals)) {
+                Some((_,needed,_))=>needed.extend(session.needed),
+                None=>shared.push((originals,session.needed,extent)),
             }
         }
-        for (originals,needed) in shared {demand.atlases+=originals.lock().expect("liquify sources").hold(&needed);}
+        for (originals,needed,extent) in shared {demand.atlases+=originals.lock().expect("liquify sources").hold(&needed,extent);}
         demand
     }
 
@@ -526,8 +540,10 @@ impl Liquify {
             }
             None
         };
+        let chunk=original_chunk(coordinate,r.target_extent(target));
+        let layers=chunk*CHUNK_TILES..(chunk+1)*CHUNK_TILES;
         let mut originals=stroke.field.originals.lock().expect("liquify sources");
-        if prior.is_none() && originals.free.is_empty() {
+        if prior.is_none() && originals.free.range(layers.clone()).next().is_none() {
             r.admitted_original_atlas()?;
             let texture=r.device.create_texture(&wgpu::TextureDescriptor {
                 label:Some("liquify original tiles"),size:wgpu::Extent3d {width:PAGE_SIZE,height:PAGE_SIZE,depth_or_array_layers:ORIGINAL_LAYERS},
@@ -536,12 +552,17 @@ impl Liquify {
                 view_formats:&[],
             });
             let view=texture.create_view(&wgpu::TextureViewDescriptor {dimension:Some(wgpu::TextureViewDimension::D2Array),..Default::default()});
-            let atlas=originals.atlases.iter().position(Option::is_none).unwrap_or(originals.atlases.len());
-            if atlas==originals.atlases.len() {originals.atlases.push(None);}
+            let first=chunk as usize*ORIGINAL_BINDINGS;
+            let atlas=(first..first+ORIGINAL_BINDINGS).find(|at|originals.atlases.get(*at).is_none_or(Option::is_none))
+                .ok_or(GpuRasterError::Invariant("Liquify original chunk is full"))?;
+            if originals.atlases.len()<=atlas {originals.atlases.resize_with(atlas+1,||None);}
             originals.atlases[atlas]=Some(OriginalAtlas {id:NEXT_RESOURCE.fetch_add(1,Ordering::Relaxed),held:true,_charge:r.raster_tiers.paint.charge(texture_bytes(&texture)),texture,view});
             originals.free.extend((0..ORIGINAL_LAYERS).map(|layer|atlas as u32*ORIGINAL_LAYERS+layer));
         }
-        let index=match &prior {Some(tile)=>tile.index,None=>originals.free.pop_first().ok_or(GpuRasterError::Invariant("Liquify original has no atlas layer"))?};
+        let index=match &prior {Some(tile)=>tile.index,None=> {
+            let index=originals.free.range(layers).next().copied().ok_or(GpuRasterError::Invariant("Liquify original has no atlas layer"))?;
+            originals.free.remove(&index);index
+        }};
         let layer=index%ORIGINAL_LAYERS;
         let atlas=originals.atlases[index as usize/ORIGINAL_LAYERS as usize].as_mut().ok_or(GpuRasterError::Invariant("Liquify original has no atlas"))?;
         atlas.held=true;

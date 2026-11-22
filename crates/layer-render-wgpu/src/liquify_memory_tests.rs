@@ -24,14 +24,15 @@ struct Canvas {
 struct Memory { lane: u64, admitted: u64, strokes: u64 }
 
 impl Canvas {
-    fn photo(budget_mib: u64) -> Self {
-        let photo = layer_core::color::source::rgba8_source(EXTENT, |x, y| [
+    fn photo(budget_mib: u64) -> Self { Self::photo_of(EXTENT, layer_core::color::SampleDepth::U8, budget_mib) }
+    fn photo_of(extent: [u32; 2], depth: layer_core::color::SampleDepth, budget_mib: u64) -> Self {
+        let photo = layer_core::color::source::rgba8_source(extent, |x, y| [
             ((3 * x + y / 8) % 251) as u8, ((5 * y + x / 8) % 241) as u8, (((x + y) / 4 + x * y % 31) % 197) as u8, 255]);
-        let document = layer_color::photo_project(Arc::unwrap_or_clone(photo), Default::default(), "Photo".into(), layer_core::color::SampleDepth::U8).unwrap();
+        let document = layer_color::photo_project(Arc::unwrap_or_clone(photo), Default::default(), "Photo".into(), depth).unwrap();
         let target = document.active_target().unwrap();
         let r = crate::memory::memory_tests::renderer(document.composition().color,
             layer_core::DeviceMemoryFacts { budget_bytes: Some(budget_mib << 20), ..Default::default() }).unwrap();
-        let view = layer_render::ViewState { width_px: (EXTENT[0] as f32 * FIT) as u32, height_px: (EXTENT[1] as f32 * FIT) as u32,
+        let view = layer_render::ViewState { width_px: (extent[0] as f32 * FIT) as u32, height_px: (extent[1] as f32 * FIT) as u32,
             document_to_surface: [FIT, 0., 0., FIT, 0., 0.] };
         let (input, consumer) = input_queue(1024);
         let engine = CanvasEngine::new(r, document, consumer, view, ViewTransform { revision: 1, surface_to_document: [1. / FIT, 0., 0., 1. / FIT, 0., 0.] }).unwrap();
@@ -263,4 +264,33 @@ fn a_stroke_that_fits_keeps_its_passes_and_dispatches() {
     };
     assert_eq!([frames(0.25), frames(1.)], [[[8, 12], [5, 12], [6, 18], [5, 16], [5, 22], [5, 26], [3, 14]], [[7, 16], [6, 16], [7, 20], [6, 16], [6, 24], [6, 20], [3, 8]]],
         "the command passes and Liquify dispatches of each frame, below full size and at it");
+}
+
+#[test]
+fn a_contact_reconstructs_the_same_pixels_whatever_order_its_session_kept_its_originals_in() {
+    let session = |history: bool, pressed: bool| {
+        let mut canvas = Canvas::photo_of([6144, 3072], layer_core::color::SampleDepth::F32, 8192);
+        canvas.brush(layer_core::DefaultBrushPreset::LiquifyPush, 740.);
+        if history { assert!(canvas.ovals([1. / 24., 1. / 12.], 1. / 64., 1), "the corner contact must end, not wait on {:?}", canvas.engine.backend().outstanding_terms()); }
+        assert!(canvas.ovals([0.5; 2], 1. / 4., 1), "the first wide contact must end, not wait on {:?}", canvas.engine.backend().outstanding_terms());
+        if pressed {
+            let r = canvas.engine.backend();
+            let unpinned = r.raster_tiers.raster.limit() - r.raster_tiers.raster.used() + r.paint_memory_bytes() - r.pinned_paint_bytes();
+            let taken = canvas.take(unpinned - (1 << 20)).expect("the lane admits the bytes no edit pins");
+            canvas.engine.backend_mut().commit_raster_working(taken);
+            assert!(canvas.settle());
+        }
+        assert!(canvas.ovals([0.5 + 1. / 12., 0.5], 1. / 4., 1), "the second wide contact must end, not wait on {:?}", canvas.engine.backend().outstanding_terms());
+        assert_eq!(canvas.refused, Vec::<u64>::new(), "every contact fits");
+        canvas.contents()
+    };
+    let samples = |bytes: &[u8]| bytes.chunks_exact(4).map(|sample| f32::from_ne_bytes(sample.try_into().unwrap())).collect::<Vec<_>>();
+    let roomy = session(false, false);
+    for (history, pressed) in [(false, true), (true, false)] {
+        let other = session(history, pressed);
+        let errors = roomy.iter().flat_map(|(key, expected)| samples(expected).into_iter().zip(samples(&other[key])).map(|(a, b)| f64::from((a - b).abs()))).collect::<Vec<_>>();
+        let (max, mean) = (errors.iter().copied().fold(0., f64::max), errors.iter().sum::<f64>() / errors.len() as f64);
+        assert!(roomy.iter().all(|(key, expected)| other.get(key) == Some(expected)),
+            "kept, rebuilt and shifted originals reconstruct the same pixels (history {history}, pressed {pressed}): max error {max:e}, mean error {mean:e} over {} samples", errors.len());
+    }
 }
