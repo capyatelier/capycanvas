@@ -67,7 +67,7 @@ fn painted_at(uv: vec2<f32>) -> vec4<f32> {
 @fragment fn fragment_main(v: Vertex) -> @location(0) vec4<f32> {
     if record.options.x == 4u {
         let size = vec2<f32>(record.tile.zw) / f32(record.options.z);
-        return hdr_map_sdr(mip_sample(pixels,sampling,size,0.,v.uv*size,0u),record.rendition,record.highlight);
+        return hdr_map_sdr(mip_sample(pixels,sampling,size,0.,v.uv*size,0u,vec2(0.)),record.rendition,record.highlight);
     }
     if record.options.x >= 2u {
         let gray = transparency_checker(v.position.xy, 4.);

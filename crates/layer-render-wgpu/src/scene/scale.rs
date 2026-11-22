@@ -339,7 +339,8 @@ fn fine_request_capacity(r:&WgpuRasterizer,packet:FramePacket<'_>,plan:display_m
     let owner=packet.scene.source_owner(preview.target)?;
     if !packet.scene.visible(owner) || packet.scene.effect(owner).is_some() {return None;}
     let extent=packet.scene.target_extent(preview.target);
-    if display_mips::Plan::at(extent,1).size.into_iter().any(|n|n>r.device.limits().max_texture_dimension_2d) {return None;}
+    if paint_transform::display_plans(packet.scene,preview.target,1,r.transforms.as_ref()?.input_requirements(preview,1,packet.scene).1)
+        .any(|plan|plan.size.into_iter().any(|n|n>r.device.limits().max_texture_dimension_2d)) {return None;}
     if let Some(capacity)=r.transforms.as_ref()?.fine_capacity(preview) {return (capacity<=48).then_some(capacity);}
     let kept=paint_transform::keeps_pixels(preview.selection.as_ref(),PixelRect::full(extent));
     let available=r.memory.display_grant()
@@ -371,7 +372,7 @@ pub(crate) fn request(r: &WgpuRasterizer, packet: FramePacket<'_>) -> Result<Req
 fn request_at(r: &WgpuRasterizer, packet: FramePacket<'_>, level: u32) -> Result<Request, GpuRasterError> {
     let plan = view_plan(packet, level).ok_or(GpuRasterError::InvalidExtent)?;
     let input = input_plan(plan, packet.scene,r.scene.as_ref().map(|s|&s.object_spatial));
-    let fits = transform_plans(r, plan, packet.scene).all(|(source, _)| source.size.iter()
+    let fits = transform_plans(r, plan, packet.scene).all(|source| source.size.iter()
         .all(|size| *size <= r.device.limits().max_texture_dimension_2d)) && targets(r, packet).all(|(_, id)| {
         let source = source_plan(input, source_frame(r.scene.as_ref().map(|s| &s.scale_sources), packet.scene, id), packet.scene.target_extent(id), r.moving_layer == packet.scene.source_owner(id), 0);
         (plan.level == 0 && source.level == 0) || source.size.iter().all(|size| *size <= r.device.limits().max_texture_dimension_2d)
@@ -536,25 +537,23 @@ fn use_tiles(_r:&WgpuRasterizer,_plan:display_mips::Plan,packet:FramePacket<'_>,
 }
 
 fn transform_plans<'a>(r: &'a WgpuRasterizer, plan: display_mips::Plan, scene: SceneView<'a>)
-    -> impl Iterator<Item = (display_mips::Plan, bool)> + 'a {
+    -> impl Iterator<Item = display_mips::Plan> + 'a {
     let active = r.transform_preview.iter().filter(move |_| plan.level > 0)
         .flat_map(move |preview| std::iter::once(preview.clone()).chain(preview.companion(scene)))
         .map(move |preview| {
-            let extent = scene.target_extent(preview.target);
-            let level = paint_transform::input_level(plan.level, &preview, extent);
-            let (level, kept) = r.transforms.as_ref().map_or_else(
-                || (level, paint_transform::keeps_pixels(preview.selection.as_ref(), PixelRect::full(extent))),
-                |transforms| transforms.input_requirements(&preview, level, extent));
-            (display_mips::Plan::at(extent, level), kept)
+            let level = paint_transform::input_level(plan.level, &preview, scene.target_extent(preview.target));
+            let (level, windows) = r.transforms.as_ref().map_or_else(
+                || (level, paint_transform::scene_windows(scene, preview.target, preview.selection.as_ref())),
+                |transforms| transforms.input_requirements(&preview, level, scene));
+            (preview.target, level, windows)
         });
     let standby = r.moving_pixels.as_ref().filter(|_| r.transform_preview.is_none() && plan.level > 0)
         .map(move |(target, selection)| {
-            let extent = scene.target_extent(*target);
-            let level = paint_transform::sampling::selection_level(plan.level, Some(selection), extent);
-            let (level, kept) = r.transforms.as_ref().unwrap().standby_requirements(scene, *target, selection, level, extent);
-            (display_mips::Plan::at(extent, level), kept)
+            let level = paint_transform::sampling::selection_level(plan.level, Some(selection), scene.target_extent(*target));
+            let (level, windows) = r.transforms.as_ref().unwrap().standby_requirements(scene, *target, selection, level);
+            (*target, level, windows)
         });
-    active.chain(standby)
+    active.chain(standby).flat_map(move |(target, level, windows)| paint_transform::display_plans(scene, target, level, windows))
 }
 
 #[cfg(test)]
@@ -1437,7 +1436,7 @@ impl Placed {
             moved: &self.transform, kept: &self.transform,
             clip: layer_core::Affine([scale, 0., 0., scale, -(target.doc_bounds.min[0] as f32), -(target.doc_bounds.min[1] as f32)]), extent: [output.bounds.width(), output.bounds.height()], texels,
             display: pixel_transform::DisplayLevel { side, opacity: self.opacity, extent: output.extent, backdrop: self.backdrop, encode: self.encode },
-            target, source: self.plan, max_lod: 0, outside: self.outside, keep_source: false, identity: false,
+            target, source: self.plan, origins: [[0; 2]; 2], max_lod: 0, outside: self.outside, keep_source: false, identity: false,
         })
     }
 }

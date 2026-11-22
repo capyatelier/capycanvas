@@ -93,10 +93,10 @@ fn source_image(r:&WgpuRasterizer,cache:&Cache,source:&sources::Source,id:Source
 }
 
 pub(crate) fn source_copy_ready(r:&WgpuRasterizer,scene:SceneView<'_>,id:SourceTarget,extent:[u32;2],level:u32)->bool {
-    let output=Image::new(r,display_mips::Plan::at(extent,level),"raw transform source eligibility");
+    let output=display_mips::Image::with_mips(r,display_mips::Plan::at(extent,level),level);
     let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
     pages::coordinates(PixelRect::full(extent),level).all(|coordinate|
-        r.scene.as_ref().unwrap().copy_reduced_source(r,scene,id,extent,level,pages::bounds(coordinate,level,extent),&output.texture,&mut encoder))
+        r.scene.as_ref().unwrap().copy_reduced_source(r,scene,id,extent,level,pages::bounds(coordinate,level,extent),&output,&mut encoder))
 }
 
 pub(crate) fn publication_pending(r: &WgpuRasterizer) -> bool {
@@ -2357,7 +2357,7 @@ fn analytic_display_resample(transform: layer_core::Projective) {
         let values=crate::scene::resample::Resample::values(crate::scene::resample::Request {moved:&moved,kept:&ImageTransform::default(),
             clip:layer_core::Affine::IDENTITY,extent,texels,
             display:pixel_transform::DisplayLevel {side:1,extent,opacity:0.65,backdrop:[0.1,0.05,0.15,0.5],encode},
-            target:plan,source:plan,max_lod:0,outside:0.,keep_source:false,identity:false}).unwrap();
+            target:plan,source:plan,origins:[[0;2];2],max_lod:0,outside:0.,keep_source:false,identity:false}).unwrap();
         let uniforms=r.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {label:None,contents:&values,usage:wgpu::BufferUsages::UNIFORM});
         let compute=(transform.0[6..]==[0.,0.,1.]).then(||crate::test_support::page_texture(&r,wgpu::TextureFormat::Rgba32Float));
         let fragment=crate::test_support::page_texture(&r,wgpu::TextureFormat::Rgba32Float);

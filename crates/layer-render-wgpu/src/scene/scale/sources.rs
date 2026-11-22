@@ -402,7 +402,7 @@ impl Scene {
     }
 
     pub(crate) fn copy_reduced_source(&self,r:&WgpuRasterizer,scene:SceneView<'_>,id:SourceTarget,extent:[u32;2],level:u32,
-        region:PixelRect,output:&wgpu::Texture,encoder:&mut submission::CommandEncoder,
+        region:PixelRect,output:&display_mips::Image,encoder:&mut submission::CommandEncoder,
     )->bool {
         let Some(source)=self.scale_sources.entries.get(&id) else {return false;};
         let Some(paint)=scene.source_owner(id).and_then(|owner|scene.paint_source(owner)) else {return false;};
@@ -421,7 +421,8 @@ impl Scene {
         for (_,image,area) in inputs {
             let [sx,sy,width,height]=paint_transform::texel_rect(area.window_local(image.plan.bounds),1<<level);
             encoder.copy_texture_to_texture(wgpu::TexelCopyTextureInfo {origin:wgpu::Origin3d {x:sx,y:sy,z:0},..image.texture.as_image_copy()},
-                wgpu::TexelCopyTextureInfo {origin:wgpu::Origin3d {x:area.min_x()>>level,y:area.min_y()>>level,z:0},..output.as_image_copy()},
+                wgpu::TexelCopyTextureInfo {origin:wgpu::Origin3d {x:(area.min_x()-output.plan.bounds.min_x())>>level,
+                    y:(area.min_y()-output.plan.bounds.min_y())>>level,z:0},..output.texture.as_image_copy()},
                 wgpu::Extent3d {width,height,depth_or_array_layers:1});
             image.track(encoder);
         }

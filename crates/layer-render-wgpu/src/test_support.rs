@@ -879,6 +879,15 @@ pub(crate) fn depth_source(extent: [u32; 2], depth: layer_core::color::SampleDep
     Arc::new(builder.finish().unwrap())
 }
 
+pub(crate) fn tiled_raster(color: layer_core::color::DocumentColor, pages: &[[u32; 2]]) -> layer_core::raster::RasterRevision {
+    use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey, TILE_SIZE};
+    RasterRevision::backed(RasterData { tiles: pages.iter().map(|&coordinate| {
+        let bytes: Vec<u8> = (0..TILE_SIZE * TILE_SIZE).flat_map(|i| [i % TILE_SIZE, i / TILE_SIZE, coordinate[0] * 37 + coordinate[1] * 11, 64 + i % 191]
+            .map(|value| value as u8)).collect();
+        (TileKey { plane: RasterPlane::Color, coordinate }, RasterTile::backed(TileBlob::encode(color.paint_descriptor(), &bytes).unwrap()))
+    }).collect(), watercolor: None })
+}
+
 pub(crate) fn floats(bytes: &[u8]) -> Vec<[f32; 4]> {
     bytes
         .as_chunks::<16>().0.iter()

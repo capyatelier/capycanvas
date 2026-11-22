@@ -3,13 +3,13 @@ struct Resample {
     kept_x:vec4<f32>, kept_y:vec4<f32>, kept_w:vec4<f32>,
     clip_x:vec4<f32>, clip_y:vec4<f32>, extent:vec4<f32>,
     texels:vec4<u32>, backdrop:vec4<f32>, options:vec4<f32>,
-    source_extent:vec4<f32>, target_extent:vec4<f32>,
+    source_extent:vec2<f32>, moved_origin:vec2<f32>, target_extent:vec2<f32>, kept_origin:vec2<f32>,
     affine_taps:vec4<u32>,
     encoding:vec4<f32>,
 }
 fn mapped_source(plane:u32,q:vec2<f32>,lod:f32)->vec4<f32> {
-    if plane==1u {return pyramid_sample(kept,linear_sampler,resample.source_extent.xy,resample.options.w,q,lod,resample.options.y);}
-    return pyramid_sample(moved,linear_sampler,resample.source_extent.xy,resample.options.w,q,lod,resample.options.y);
+    if plane==1u {return pyramid_sample(kept,linear_sampler,resample.source_extent.xy,resample.options.w,q,lod,resample.options.y,resample.kept_origin);}
+    return pyramid_sample(moved,linear_sampler,resample.source_extent.xy,resample.options.w,q,lod,resample.options.y,resample.moved_origin);
 }
 fn bilinear(plane:u32,x:vec4<f32>,y:vec4<f32>,w:vec4<f32>,h:vec3<f32>,lod:f32)->vec4<f32> {
     let q=vec3(dot(x.xyz,h),dot(y.xyz,h),dot(w.xyz,h));

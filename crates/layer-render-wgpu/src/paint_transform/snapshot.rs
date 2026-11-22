@@ -554,16 +554,20 @@ pub(crate) struct DisplayInputs {
     pub pending: Option<std::collections::VecDeque<PixelRect>>,
 }
 impl DisplayInputs {
+    pub fn plans(extent: [u32; 2], phase: [u32; 2], level: u32, windows: [PixelRect; 2]) -> [Option<display_mips::Plan>; 2] {
+        windows.map(|window| (!window.is_empty())
+            .then(|| display_mips::Plan::window([extent[0] + phase[0], extent[1] + phase[1]], level, window)))
+    }
     pub fn new(
         r: &WgpuRasterizer,
         level: u32,
         extent: [u32; 2],
         phase: [u32; 2],
-        kept: bool,
+        windows: [PixelRect; 2],
     ) -> Self {
-        let plan = display_mips::Plan::at([extent[0] + phase[0], extent[1] + phase[1]], level);
-        let image = display_mips::Image::with_mips(r, plan, display_mips::MAX_LEVEL);
-        let kept = kept.then(|| display_mips::Image::with_mips(r, plan, display_mips::MAX_LEVEL));
+        let [image, kept] = Self::plans(extent, phase, level, windows)
+            .map(|plan| plan.map(|plan| display_mips::Image::with_mips(r, plan, display_mips::MAX_LEVEL)));
+        let image = image.unwrap();
         let sampling = [image.sampling_view(), kept.as_ref().unwrap_or(&image).sampling_view()];
         Self {
             level,
@@ -579,10 +583,10 @@ impl DisplayInputs {
             pending: None,
         }
     }
-    pub fn new_fine(r:&WgpuRasterizer,extent:[u32;2],phase:[u32;2],kept:bool,capacity:usize,pages:std::collections::VecDeque<PixelRect>)->Result<Self,GpuRasterError> {
-        let mut input=Self::new(r,1,extent,phase,kept);
+    pub fn new_fine(r:&WgpuRasterizer,extent:[u32;2],phase:[u32;2],windows:[PixelRect;2],capacity:usize,pages:std::collections::VecDeque<PixelRect>)->Result<Self,GpuRasterError> {
+        let mut input=Self::new(r,1,extent,phase,windows);
         input.level=0;
-        input.fine=Some(super::fine::FineInputs::new(r,capacity,kept,input.storage_bytes(),pages)?);
+        input.fine=Some(super::fine::FineInputs::new(r,capacity,input.kept.is_some(),input.storage_bytes(),pages)?);
         Ok(input)
     }
     pub fn storage_bytes(&self) -> u64 {

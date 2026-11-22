@@ -345,11 +345,12 @@ impl Image {
             + self.records.len() as u64 * std::mem::size_of::<([u32; 2], Vec<Record>)>() as u64
     }
     pub fn last_level(&self) -> u32 { self.plan.level + self.texture.mip_level_count() - 1 }
+    pub fn origin(&self) -> [u32; 2] { [self.plan.bounds.min_x() >> self.plan.level, self.plan.bounds.min_y() >> self.plan.level] }
     pub fn sampling_view(&self) -> wgpu::TextureView { self.texture.create_view(&Default::default()) }
     pub fn generate_mips(&self, device: &PipelineDevice, pipelines: &Pipelines, encoder: &mut crate::submission::CommandEncoder) {
         if self.reduced.is_empty() { return; }
         let views: Vec<_> = std::iter::once(&self.view).chain(&self.reduced).collect();
-        let plan = Plan::at(self.plan.extent, self.last_level());
+        let plan = Plan::at([self.plan.bounds.width(), self.plan.bounds.height()], self.last_level());
         let mut updates = CompleteUpdates::from_level(device, pipelines, plan, self.plan.level, &views);
         for coordinate in page_coordinates(PixelRect::full(plan.extent)) { updates.tile(encoder, coordinate); }
         updates.flush(encoder);
@@ -357,10 +358,11 @@ impl Image {
 
 
     fn tile_extent(&self, coordinate: [u32; 2]) -> Result<[u32; 2], GpuRasterError> {
-        if coordinate.into_iter().zip(self.plan.extent).any(|(c, n)| c >= n.div_ceil(PAGE_SIZE)) {
+        let tile = page_rect(coordinate).intersect(self.plan.bounds);
+        if tile.is_empty() {
             return Err(GpuRasterError::InvalidExtent);
         }
-        Ok(std::array::from_fn(|i| (self.plan.extent[i] - coordinate[i] * PAGE_SIZE).min(PAGE_SIZE)))
+        Ok([tile.width(), tile.height()])
     }
     pub fn clear_scratch(&self, encoder: &mut crate::submission::CommandEncoder) {
         let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -407,7 +409,7 @@ impl Image {
         coordinate: [u32; 2],
     ) -> Result<(), GpuRasterError> {
         let valid = self.tile_extent(coordinate)?;
-        let origin = coordinate.map(|v| v * PAGE_SIZE);
+        let origin = [coordinate[0] * PAGE_SIZE - self.plan.bounds.min_x(), coordinate[1] * PAGE_SIZE - self.plan.bounds.min_y()];
         Self::reduce_to_level(device, pipelines, encoder, &self.views, &mut self.records, valid, self.plan.level);
         let scale = 1 << self.plan.level;
         encoder.copy_texture_to_texture(

@@ -12,6 +12,7 @@ pub(crate) struct Request<'a> {
     pub display: pixel_transform::DisplayLevel,
     pub target: display_mips::Plan,
     pub source: display_mips::Plan,
+    pub origins: [[u32; 2]; 2],
     pub max_lod: u32,
     pub outside: f32,
     pub keep_source: bool,
@@ -107,7 +108,7 @@ impl Resample {
         Self { layout, mesh_layout, sampler, mesh, area }
     }
     pub fn values(request: Request<'_>) -> Result<[u8; UNIFORM_BYTES as usize], GpuRasterError> {
-        let Request { moved, kept, clip, extent, texels, display, target, source, max_lod, outside, keep_source, identity } = request;
+        let Request { moved, kept, clip, extent, texels, display, target, source, origins, max_lod, outside, keep_source, identity } = request;
         let origin = target.doc_bounds.min.map(|n| n as f32 / display.side as f32);
         let local = |[x, y, z]: [f32; 3]| [x, y, z + x * origin[0] + y * origin[1]];
         let rows = |transform: &layer_core::ImageTransform| pixel_transform::inverse_rows(transform)
@@ -133,8 +134,8 @@ impl Resample {
         }
         let sizes = [[source.bounds.width(), source.bounds.height()].map(|n| n as f32 / (1 << source.level) as f32),
             [target.bounds.width(), target.bounds.height()].map(|n| n as f32 / display.side as f32)];
-        for (row, size) in values[192..].as_chunks_mut::<16>().0.iter_mut().zip(sizes) {
-            for (dst, value) in row.as_chunks_mut::<4>().0.iter_mut().zip(size.into_iter().chain([0.; 2])) {
+        for (row, (size, origin)) in values[192..].as_chunks_mut::<16>().0.iter_mut().zip(sizes.into_iter().zip(origins)) {
+            for (dst, value) in row.as_chunks_mut::<4>().0.iter_mut().zip(size.into_iter().chain(origin.map(|v| v as f32))) {
                 dst.copy_from_slice(&value.to_le_bytes());
             }
         }

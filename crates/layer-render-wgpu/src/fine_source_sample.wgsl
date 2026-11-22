@@ -28,7 +28,7 @@ fn fine_sample(plane:u32,q:vec2<f32>,extent:vec2<f32>)->vec4<f32> {
     }
     return mix(mix(t0,t1,weight.x),mix(t2,t3,weight.x),weight.y);
 }
-fn fine_pyramid_sample(plane:u32,image:texture_2d<f32>,linear_sampler:sampler,extent:vec2<f32>,outside:f32,q:vec2<f32>,lod:f32,max_lod:f32)->vec4<f32> {
+fn fine_pyramid_sample(plane:u32,image:texture_2d<f32>,linear_sampler:sampler,extent:vec2<f32>,outside:f32,q:vec2<f32>,lod:f32,max_lod:f32,origin:vec2<f32>)->vec4<f32> {
     if any(q<vec2(0.)) || any(q>=extent) {return vec4(outside);}
     let level=clamp(lod,0.,max_lod);
     var low=vec4(0.);var weight=1.;
@@ -38,9 +38,9 @@ fn fine_pyramid_sample(plane:u32,image:texture_2d<f32>,linear_sampler:sampler,ex
         if level==0. || (!all(q<=(floor(extent/side)-.5)*side) && level<0.00001) {return low;}
         weight=level;
     }
-    return mix(low,pyramid_sample(image,linear_sampler,extent*.5,outside,q*.5,max(level-1.,0.),max_lod-1.),weight);
+    return mix(low,pyramid_sample(image,linear_sampler,extent*.5,outside,q*.5,max(level-1.,0.),max_lod-1.,origin),weight);
 }
 fn mapped_source(plane:u32,q:vec2<f32>,lod:f32)->vec4<f32> {
-    if plane==1u {return fine_pyramid_sample(plane,kept,linear_sampler,resample.source_extent.xy,resample.options.w,q,lod,resample.options.y);}
-    return fine_pyramid_sample(plane,moved,linear_sampler,resample.source_extent.xy,resample.options.w,q,lod,resample.options.y);
+    if plane==1u {return fine_pyramid_sample(plane,kept,linear_sampler,resample.source_extent.xy,resample.options.w,q,lod,resample.options.y,resample.kept_origin);}
+    return fine_pyramid_sample(plane,moved,linear_sampler,resample.source_extent.xy,resample.options.w,q,lod,resample.options.y,resample.moved_origin);
 }
