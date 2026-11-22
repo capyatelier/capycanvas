@@ -212,6 +212,34 @@ fn a_whole_layer_erase_settles_watercolor_pages_in_any_order() {
     assert!(differing.is_empty(), "{} pixels depend on page order, first {:?}", differing.len(), differing.first());
 }
 
+#[test]
+fn clearing_selected_dry_ink_does_not_wait_for_watercolor_composition() {
+    let reference = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut r = crate::test_support::staged_renderer(&reference, Default::default());
+    r.shader_idle(false, false);
+    let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+    let mut layer = paint_document(EXTENT, "cleared ink");
+    r.prepare_startup(&layer, &brush, false).unwrap();
+    crate::test_support::wait_startup(&mut r, std::time::Instant::now() + std::time::Duration::from_secs(60),
+        |progress| progress.brush_ready, format_args!("G-Pen startup"));
+    let mut stroke = batch(target(&layer));
+    stroke.style = preset_style(layer_core::DefaultBrushPreset::GPen);
+    paint_mut(&mut layer).raster = RasterRevision::pending();
+    frame(&mut r, layer.scene(), &[dab([0.1, 0.1, 0.1, 1.])], &[stroke], &[]);
+    paint_mut(&mut layer).raster.wait_data().unwrap();
+    let all = rectangle([0., 0., 600., 300.]);
+    layer.working.selection = Some(all.clone());
+    paint_mut(&mut layer).operations = Arc::new(vec![erase_operation(all, false)]);
+    paint_mut(&mut layer).raster = RasterRevision::pending();
+    layer.revision += 1;
+    assert!(r.startup_needs_update(&layer, &brush, false), "the first operation prepares selection coverage");
+    r.prepare_startup(&layer, &brush, false).unwrap();
+    let clear = DabBatch { kind: DabBatchKind::RasterOperation(0), dab_count: 0, damage: Rect::from_extent(EXTENT), ..batch(target(&layer)) };
+    frame(&mut r, layer.scene(), &[], &[clear], &[]);
+    assert!(!r.pipelines.watercolor_compute.1.ready(), "Clear on dry ink waited for the watercolor composition");
+    assert!(paint(&layer).raster.wait_data().unwrap().watercolor.is_none());
+}
+
 type Authored = (Option<layer_core::raster::RasterWatercolor>, BTreeMap<TileKey, Vec<u8>>);
 
 fn authored(document: &Document) -> Authored {
