@@ -1101,6 +1101,9 @@ impl Cache {
                 blocks.extend(exact.blocks.into_iter().map(|(key,input)|(key.plan().bounds,input)));
                 refusals.extend(exact.refusals.into_iter().map(|(region,refusal)|(region,refusal,None)));
             }
+            let holes=streamed.iter().copied().filter(|region|!blocks.iter().map(|(blocked,_)|blocked).chain(refusals.iter().map(|(refused,..)|refused))
+                .any(|waiting|!waiting.intersect(*region).is_empty())).collect();
+            composes.extend(self.reduced_holes(scene,r,packet,encoder,budget,holes,&class)?);
             let prepared = self.prepared_regions(scene, packet, &destination, budget);
             let halves:Vec<_>=self.graph.prepared.clone().into_iter().flatten().filter(|half|self.graph.caches(half)).collect();
             let preview=matches!(destination,Destination::Preview);

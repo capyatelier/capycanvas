@@ -287,15 +287,11 @@ impl Cache {
         id:SourceTarget,request:SourceRequest,class:Class,budget:&mut WorkBudget,
     )->Result<Prepared,GpuRasterError> {
         if !Arc::ptr_eq(&self.pages,&scene.scale_pages) {self.pages=scene.scale_pages.clone();}
-        let SourceRequest {plan,required,covered}=request;
         let limit=(budget.allowance(class)/object_cache::PASS_TAPS).max(1) as usize;
         let source=&scene.scale_sources.entries[&id];
-        let candidates=nearest_pages(required.bounds().intersect(plan.bounds),work_view(packet,0),limit,std::iter::empty(),|coordinate| {
-            let region=page_rect(*coordinate).intersect(PixelRect::full(source.valid_extent(plan.level)));
-            let key=source.key(r,id,plan.level,coordinate.map(|value|value>>plan.level));
-            required.intersects(region) && region.intersect(covered).is_empty()
-                && self.pages.lock().unwrap().get(&key,region,pages::Accuracy::Display,plan.level,class).is_none()
-        });
+        let candidates=nearest_pages(request.required.bounds().intersect(request.plan.bounds),work_view(packet,0),limit,std::iter::empty(),
+            |coordinate|self.source_page_missing(r,source,id,&request,class,*coordinate));
+        let plan=request.plan;
         let mut ready=Vec::new();let mut handles=Vec::new();let mut prepared=Prepared::default();
         for coordinate in candidates {
             if !budget.fits(class,!ready.is_empty(),object_cache::PASS_TAPS) {break;}
@@ -305,23 +301,13 @@ impl Cache {
             let region=page_rect(coordinate).intersect(PixelRect::full(valid));
             if region.is_empty() {continue;}
             let interest=source.interest(r,id,plan,region,self.evaluation);let key=interest.key.clone();
-            let derived=(0..plan.level).rev().find_map(|level| {
-                let input=source.key(r,id,level,coordinate.map(|value|value>>level));
-                self.pages.lock().unwrap().get(&input,region,pages::Accuracy::Display,plan.level,class).map(|image|(input,image))
-            });
+            let derived=self.finer_source(r,source,id,plan.level,coordinate,region,class);
             let material=source.watercolor.is_some() && source.raw_material;
             let scratch=if derived.is_some() {[0,0]}else if matches!(id,SourceTarget::Coverage(_)) {[0,usize::from(source.phase!=[0;2])]}
                 else {[usize::from(source.phase!=[0;2])*2+usize::from(source.watercolor.is_some())+usize::from(material)*12,0]};
-            let mut native=super::super::sources::Inputs::default();
-            native.source_placement(id,scene.reduced_placement(packet,id,source.phase))?;
-            if derived.is_none() {
-                let expected=scene.scale_pages.lock().unwrap().expected().cloned().ok_or(GpuRasterError::Invariant("signature frame is missing or inconsistent"))?;
-                let declaration=super::super::sources::Declaration::scene(expected,Some(encoder.submission()));
-                native=match scene.declare(r,native,declaration,|scene,r,accepted| {
-                    let output=scene.reserve(r)?;let output=scene.pool[output].view.clone();
-                    scene.reduce_source(r,packet,id,key.plan(),&output,coordinate,accepted)
-                }) {Err(GpuRasterError::NotReady)=>continue,Err(GpuRasterError::NotPublished)=>{prepared.unpublished=true;continue;},native=>native?};
-            }
+            let native=match Self::source_page_inputs(scene,r,packet,encoder,id,&key,coordinate,derived.is_some()) {
+                Err(GpuRasterError::NotReady)=>continue,Err(GpuRasterError::NotPublished)=>{prepared.unpublished=true;continue;},native=>native?,
+            };
             let mut areas=vec![(key.clone(),region)];
             if let Some((input,_))=&derived {areas.push((input.clone(),region));}
             let handle=match self.accept_working(scene,r,interest,areas,native,scratch,plan,true,class,Class::Prefetch,encoder)? {
@@ -378,6 +364,53 @@ impl Cache {
         let mut pages=self.pages.lock().unwrap();
         for handle in handles {pages.finish_inputs(&handle);}
         Ok(prepared)
+    }
+    pub(super) fn reducible_without_decode(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,
+        requests:&[(SourceTarget,SourceRequest)],class:Class,
+    )->Result<bool,GpuRasterError> {
+        if !Arc::ptr_eq(&self.pages,&scene.scale_pages) {self.pages=scene.scale_pages.clone();}
+        for (id,request) in requests {
+            let level=request.plan.level;
+            for coordinate in page_coordinates(request.required.bounds().intersect(request.plan.bounds)) {
+                let source=&scene.scale_sources.entries[id];
+                let region=page_rect(coordinate).intersect(PixelRect::full(source.valid_extent(level)));
+                if !self.source_page_missing(r,source,*id,request,class,coordinate) || self.finer_source(r,source,*id,level,coordinate,region,class).is_some() {continue;}
+                let key=source.key(r,*id,level,coordinate.map(|value|value>>level));
+                match Self::source_page_inputs(scene,r,packet,encoder,*id,&key,coordinate,false) {
+                    Ok(native) if native.additional_bytes(&r.source_tiles.borrow())==0=>{},
+                    Ok(_)|Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>return Ok(false),
+                    Err(error)=>return Err(error),
+                }
+            }
+        }
+        Ok(true)
+    }
+    fn source_page_missing(&self,r:&WgpuRasterizer,source:&Source,id:SourceTarget,request:&SourceRequest,class:Class,coordinate:[u32;2])->bool {
+        let region=page_rect(coordinate).intersect(PixelRect::full(source.valid_extent(request.plan.level)));
+        let key=source.key(r,id,request.plan.level,coordinate.map(|value|value>>request.plan.level));
+        request.required.intersects(region) && region.intersect(request.covered).is_empty()
+            && self.pages.lock().unwrap().get(&key,region,pages::Accuracy::Display,request.plan.level,class).is_none()
+    }
+    #[expect(clippy::too_many_arguments,reason="A finer source page is looked up at the same coordinate, region and class as the page it derives")]
+    fn finer_source(&self,r:&WgpuRasterizer,source:&Source,id:SourceTarget,level:u32,coordinate:[u32;2],region:PixelRect,class:Class)->Option<(pages::Key,pages::Held)> {
+        (0..level).rev().find_map(|finer| {
+            let input=source.key(r,id,finer,coordinate.map(|value|value>>finer));
+            self.pages.lock().unwrap().get(&input,region,pages::Accuracy::Display,level,class).map(|image|(input,image))
+        })
+    }
+    #[expect(clippy::too_many_arguments,reason="A source page's inputs are declared for the same reduction its preparation encodes")]
+    fn source_page_inputs(scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,
+        id:SourceTarget,key:&pages::Key,coordinate:[u32;2],derived:bool,
+    )->Result<super::super::sources::Inputs,GpuRasterError> {
+        let mut native=super::super::sources::Inputs::default();
+        native.source_placement(id,scene.reduced_placement(packet,id,scene.scale_sources.entries[&id].phase))?;
+        if derived {return Ok(native);}
+        let expected=scene.scale_pages.lock().unwrap().expected().cloned().ok_or(GpuRasterError::Invariant("signature frame is missing or inconsistent"))?;
+        let declaration=super::super::sources::Declaration::scene(expected,Some(encoder.submission()));
+        scene.declare(r,native,declaration,|scene,r,accepted| {
+            let output=scene.reserve(r)?;let output=scene.pool[output].view.clone();
+            scene.reduce_source(r,packet,id,key.plan(),&output,coordinate,accepted)
+        })
     }
 }
 

@@ -93,6 +93,10 @@ A coarse view of the current artwork publishes camera and artwork changes before
 canonical work continues. Approximate graph branches remain invalid for exact
 reuse until their canonical pixels arrive. `photo_navigation_presents_current_camera_within_two_submissions`
 covers displayed pixels across zoom, pan and artwork changes while detail remains pending.
+Cells the exact stream leaves missing in a frame show from their reduced source
+levels when those levels, or the native inputs they reduce, need no decode;
+idle refinement then makes them exact
+(`a_24mp_fit_reshow_shows_its_whole_current_picture_within_two_still_frames_and_settles_exact`).
 Required previews take priority over spare detail when several photos compete
 for the admitted memory. Admission reserves composition scratch and command
 capacity before retaining optional source levels, including images allocated

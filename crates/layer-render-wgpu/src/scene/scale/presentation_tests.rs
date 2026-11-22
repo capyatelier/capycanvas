@@ -972,7 +972,7 @@ fn published_preview_survives_a_gated_persistent_composite_handoff() {
 mod undo_integrity;
 
 #[test]
-fn a_24mp_fit_reshow_finishes_within_two_frames_once_its_real_inputs_are_resident() {
+fn a_24mp_fit_reshow_shows_its_whole_current_picture_within_two_still_frames_and_settles_exact() {
     let extent=[6000,4000];let area=PixelRect::full(extent);
     let mut doc=super::document_at(extent);
     composition_mut(&mut doc).color.depth=SampleDepth::F32;composition_mut(&mut doc).blend=layer_core::BlendSpace::Linear;
@@ -1022,18 +1022,22 @@ fn a_24mp_fit_reshow_finishes_within_two_frames_once_its_real_inputs_are_residen
         std::thread::yield_now();
     }
     let source_bytes=r.source_tiles.borrow().gpu_bytes();
-    let mut completed=None;let mut coverage=Vec::new();
+    let mut pictured=None;let mut coverage=Vec::new();
     for index in 1..=2 {
         assert!(coordinates.iter().all(|coordinate|r.source_tiles.borrow().prepared_view(&image,*coordinate).is_some()),"resident inputs cannot be assumed from elapsed time");
         let next=FramePacket {time_seconds:0.2+index as f32*0.1,..show};
         assert!(r.can_submit());assert!(r.raster_dependencies_ready(next,None));r.submit(next).unwrap();crate::test_support::complete(&r);
         let cache=r.scale_display.as_ref().unwrap();let current=cache.coverage_snapshot();
         coverage.push((index,current.matching.len(),pages::coordinates(cache.plan.bounds,cache.plan.level).count()));
-        if current.ready(area,pages::Accuracy::Display) && completed.is_none() {completed=Some(index);}
+        if pictured.is_none() && current.ready(area,pages::Accuracy::Display) {pictured=Some((index,present(&r,&mut presenter,v)));}
     }
+    let (index,picture)=pictured.unwrap_or_else(||panic!("24MP Fit re-show must show its whole current picture within two still frames after all 384 needed GPU inputs are actually resident: coverage={coverage:?}, source_physical={source_bytes}"));
+    let error=crate::test_support::max_error(&shown,&picture);
+    assert!(error<1./255.,"frame {index} must present the current image, not holes or stale pixels: largest channel error {error}");
     crate::test_support::submit_settled(&mut r,FramePacket {time_seconds:0.5,..show});
+    assert!(r.scale_display.as_ref().unwrap().coverage_snapshot().ready(area,pages::Accuracy::Exact),"the settled re-show covers every cell exactly");
+    assert_eq!(r.next_frame(),layer_render::FrameDemand::Wait,"the settled re-show waits");
     close(&shown,&present(&r,&mut presenter,v));
-    assert!(completed.is_some(),"24MP Fit re-show must finish within two still frames after all384 needed GPU inputs are actually resident: complete={completed:?}, coverage={coverage:?}, source_physical={source_bytes}");
 }
 
 #[test]

@@ -258,6 +258,29 @@ impl Cache {
         Ok(exact)
     }
 
+    #[expect(clippy::too_many_arguments, reason = "Reduced cells share the frame's scene, encoding and budget with the exact stream they precede")]
+    pub(super) fn reduced_holes(
+        &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
+        encoder: &mut crate::submission::CommandEncoder, budget: &mut WorkBudget, holes: Vec<PixelRect>, class: &dyn Fn(PixelRect)->Class,
+    ) -> Result<Vec<PixelRect>, GpuRasterError> {
+        let root=self.graph.root.clone().unwrap();
+        let open=holes.into_iter().filter(|region|(budget.required(class(*region)) || budget.remaining()>0)
+            && !self.pages.lock().unwrap().has(&self.refinement_interest(self.plan.level,*region).key,*region,pages::Accuracy::Exact,0)).collect::<Vec<_>>();
+        if open.is_empty() || root.native_capture(packet.scene,self.plan.level) {return Ok(Vec::new());}
+        let tiled=use_tiles(r,self.plan,packet,Some(scene)) && !(self.plan.level>0 && root.fused_transform(r));
+        let bounds=open.iter().fold(PixelRect::EMPTY,|bounds,region|bounds.union(*region));
+        let requests=self.region_sources(scene,r,packet,bounds,tiled);
+        if !self.reducible_without_decode(scene,r,packet,encoder,&requests,class(bounds))? {return Ok(Vec::new());}
+        let mut reduced=Vec::new();
+        for region in open {
+            if !budget.required(class(region)) && budget.remaining()==0 {break;}
+            let requests=self.region_sources(scene,r,packet,region,tiled);
+            for (id,request) in requests.iter().cloned() {self.prepare_source(scene,r,packet,encoder,id,request,class(region),budget)?;}
+            if requests.iter().all(|(id,request)|self.source_ready(scene,r,*id,request)) {reduced.push(region);}
+        }
+        Ok(reduced)
+    }
+
     fn cell_parts(&self,cell:&pages::Key)->Vec<pages::Key> {
         std::iter::once(cell.expression.clone()).chain(self.graph.parts.as_ref().filter(|_|self.graph.content.as_ref()==Some(&cell.expression))
             .map(|parts|[parts.nodes[0].clone(),parts.nodes[2].clone()]).into_iter().flatten().filter(|node|!graph::Expression::is_clear(node)))
