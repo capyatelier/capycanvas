@@ -1557,6 +1557,87 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
 
+    struct PresentedFrames { presenter: layer_render_wgpu::ViewportPresenter, target: wgpu::TextureView, navigators: scene::Navigators }
+    impl PresentedFrames {
+        fn new(host: &NativeHost) -> Self {
+            let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+            let gpu = host.session.engine().backend().0.as_ref().unwrap();
+            let presenter = layer_render_wgpu::ViewportPresenter::for_surface(gpu, format, layer_render_wgpu::SdrSurfaceColor::Srgb).unwrap();
+            let target = gpu.device().create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: 640, height: 480, depth_or_array_layers: 1 },
+                mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
+            Self { presenter, target: target.create_view(&Default::default()), navigators: scene::Navigators::new(scene::SlotUnits::Physical) }
+        }
+        fn frame(&mut self, host: &mut NativeHost, clock: &std::cell::Cell<u64>, deadline: std::time::Instant) {
+            frame_step(host, clock, deadline);
+            host.poll_canvas_presentation(&mut self.presenter).unwrap();
+            let composition = host.compose_scene(&mut self.presenter, &mut Default::default(), &self.navigators, &[], None,
+                scene::SceneDisplay { scale: 1., headroom: 1., blank_presented: true, compositor_hdr: false }).unwrap();
+            if host.withheld_frame(&composition).is_none() {
+                let gpu = host.session.engine().backend().0.as_ref().unwrap();
+                self.presenter.present(gpu, &self.target, host.session.state().camera.view(), [0.2; 4]).unwrap();
+                gpu.on_gpu_done({ let wake = host.wake_callback(); move || wake() });
+                host.session.renderer_mut().0.as_mut().unwrap().after_present();
+            }
+        }
+        fn serve(&mut self, host: &mut NativeHost, clock: &std::cell::Cell<u64>, deadline: std::time::Instant, window: std::time::Duration) -> usize {
+            let started = std::time::Instant::now();
+            let mut frames = 0;
+            while started.elapsed() < window {
+                if host.poll_preparation() == layer_render::FrameDemand::Wait { std::thread::sleep(std::time::Duration::from_millis(1)); }
+                else { frames += 1; self.frame(host, clock, deadline); }
+            }
+            frames
+        }
+    }
+
+    fn settled_stamp_host() -> (GpuReference, crate::test_storage::StoredHost, PresentedFrames, std::cell::Cell<u64>, std::time::Instant) {
+        let (reference, mut host) = gpu_host(layer_ui::Platform::Windows, [64; 2]);
+        host.set_wake(std::sync::Arc::new(|| {}));
+        host.session.renderer_mut().0.as_mut().unwrap().finish_startup_catalog();
+        let clock = std::cell::Cell::new(0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !host.startup.complete || host.session.frame_demand() != layer_render::FrameDemand::Wait {
+            frame_step(&mut host, &clock, deadline);
+        }
+        let presented = PresentedFrames::new(&host);
+        (reference, host, presented, clock, deadline)
+    }
+
+    #[test]
+    fn a_brush_stamp_that_finishes_while_its_preview_is_open_reaches_it_once_after_the_canvas_settles() {
+        let (_reference, mut host, mut presented, clock, deadline) = settled_stamp_host();
+        let stamp = loop {
+            if let Some(stamp) = host.toolbar_stamp(None, None).unwrap().filter(|stamp| !stamp.alpha.is_empty()) { break stamp; }
+            host.session.renderer_mut().0.as_mut().unwrap().wait_idle().unwrap();
+            let frames = presented.serve(&mut host, &clock, deadline, std::time::Duration::from_millis(300));
+            assert!(frames <= 4, "a finished stamp kept the canvas presenting until its preview read it: {frames} frames");
+            assert!(std::time::Instant::now() < deadline, "the stamp never reached its open preview");
+        };
+        assert!(!stamp.pending);
+        let again = host.toolbar_stamp(None, Some(stamp.request_id)).unwrap().unwrap();
+        assert!(!again.pending && again.alpha.is_empty() && again.request_id == stamp.request_id, "the open preview receives the stamp's pixels once");
+        assert_eq!(presented.serve(&mut host, &clock, deadline, std::time::Duration::from_millis(300)), 0);
+    }
+
+    #[test]
+    fn a_brush_stamp_whose_preview_closed_before_its_readback_lets_the_canvas_settle_and_reaches_the_reopened_preview() {
+        let (_reference, mut host, mut presented, clock, deadline) = settled_stamp_host();
+        let warm = loop {
+            if let Some(stamp) = host.toolbar_stamp(None, None).unwrap().filter(|stamp| !stamp.alpha.is_empty()) { break stamp; }
+            host.session.renderer_mut().0.as_mut().unwrap().wait_idle().unwrap();
+            presented.frame(&mut host, &clock, deadline);
+        };
+        host.dispatch(UiAction::SetBrushOpacity { value: 0.5 }).unwrap();
+        assert!(host.toolbar_stamp(None, None).unwrap().is_none_or(|stamp| stamp.pending && stamp.alpha.is_empty()));
+        host.session.renderer_mut().0.as_mut().unwrap().wait_idle().unwrap();
+        let settling = presented.serve(&mut host, &clock, deadline, std::time::Duration::from_millis(300));
+        assert!(settling <= 4, "a stamp whose preview closed kept the canvas presenting: {settling} frames");
+        assert_eq!(presented.serve(&mut host, &clock, deadline, std::time::Duration::from_millis(300)), 0, "presents continued after the canvas settled");
+        let reopened = host.toolbar_stamp(None, None).unwrap().expect("the reopened preview receives the stamp that finished while it was closed");
+        assert!(!reopened.pending && !reopened.alpha.is_empty());
+        assert_eq!(reopened.request_id, warm.request_id + 1);
+    }
+
     #[test]
     fn frames_served_before_a_held_layer_touch_deadline_do_not_wake_the_owner() {
         use std::time::{Duration, Instant};
@@ -1668,7 +1749,7 @@ mod tests {
 
     #[test]
     fn a_windows_host_whose_stroke_waits_on_memory_frames_only_when_its_renderer_asks() {
-        use layer_render::{CanvasRenderer, FrameDemand};
+        use layer_render::CanvasRenderer;
         use std::time::{Duration, Instant};
         const MIB: u64 = 1 << 20;
         let budget = layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts { host_default_bytes: Some(8 << 30), override_bytes: Some(8 << 30), ..Default::default() });
@@ -1686,33 +1767,9 @@ mod tests {
         let clock = std::cell::Cell::new(0);
         let deadline = Instant::now() + Duration::from_secs(240);
         while !host.startup.complete { frame_step(&mut host, &clock, deadline); }
-        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
-        let gpu = host.session.engine().backend().0.as_ref().unwrap();
-        let presenter = std::cell::RefCell::new(layer_render_wgpu::ViewportPresenter::for_surface(gpu, format, layer_render_wgpu::SdrSurfaceColor::Srgb).unwrap());
-        let target = gpu.device().create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: 640, height: 480, depth_or_array_layers: 1 },
-            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
-        let navigators = scene::Navigators::new(scene::SlotUnits::Physical);
-        let windows_frame = |host: &mut NativeHost| {
-            let presenter = &mut *presenter.borrow_mut();
-            frame_step(host, &clock, deadline);
-            host.poll_canvas_presentation(presenter).unwrap();
-            let composition = host.compose_scene(presenter, &mut Default::default(), &navigators, &[], None,
-                scene::SceneDisplay { scale: 1., headroom: 1., blank_presented: true, compositor_hdr: false }).unwrap();
-            if host.withheld_frame(&composition).is_none() {
-                let gpu = host.session.engine().backend().0.as_ref().unwrap();
-                presenter.present(gpu, &target.create_view(&Default::default()), host.session.state().camera.view(), [0.2; 4]).unwrap();
-                gpu.on_gpu_done({ let wake = host.wake_callback(); move || wake() });
-                host.session.renderer_mut().0.as_mut().unwrap().after_present();
-            }
-        };
-        let serve = |host: &mut NativeHost, window: Duration| {
-            let started = Instant::now();
-            let mut frames = 0;
-            while started.elapsed() < window {
-                if host.poll_preparation() == FrameDemand::Wait { std::thread::sleep(Duration::from_millis(1)); } else { frames += 1; windows_frame(host); }
-            }
-            frames
-        };
+        let presented = std::cell::RefCell::new(PresentedFrames::new(&host));
+        let windows_frame = |host: &mut NativeHost| presented.borrow_mut().frame(host, &clock, deadline);
+        let serve = |host: &mut NativeHost, window: Duration| presented.borrow_mut().serve(host, &clock, deadline, window);
         host.dispatch(UiAction::SelectBrush { id: layer_core::DefaultBrushPreset::GPen as u32 }).unwrap();
         host.dispatch(UiAction::SetBrushSize { value: 400. }).unwrap();
         serve(&mut host, Duration::from_secs(10));

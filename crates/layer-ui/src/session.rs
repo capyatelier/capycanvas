@@ -5255,6 +5255,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             return Err(error(cause));
         }
+        self.receive_brush_stamps();
         if self.drawing_switch_pending && !self.rendering_suspended && self.paint_ready() {
             self.drawing_switch_pending = false;
         }

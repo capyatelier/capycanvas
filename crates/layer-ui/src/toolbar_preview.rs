@@ -241,9 +241,10 @@ pub(crate) struct StampRequests {
     next: u64,
     flight: Option<(u64, ToolbarContext, PreviewKey, f32)>,
     ready: Option<(ToolbarContext, PreviewKey, BrushStamp)>,
+    failure: Option<String>,
 }
 impl StampRequests {
-    pub(crate) fn invalidate(&mut self) { self.flight=None; self.ready=None; }
+    pub(crate) fn invalidate(&mut self) { self.flight=None; self.ready=None; self.failure=None; }
 }
 type PreviewKey = (BrushSnapshot, Option<std::sync::Arc<layer_core::paper::PaperSurface>>);
 
@@ -293,27 +294,32 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok((BrushStampRequest { style, dabs, bounds, shape_strength }, 2.*radius/brush.diameter.max(0.01)))
     }
 
-    pub fn toolbar_stamp(&mut self, context: ToolbarContext, known_request: Option<u64>) -> Result<Option<BrushStamp>, String> {
-        if context != self.state().toolbar_context() { return Err("Obsolete brush preview".into()); }
-        let key = self.preview_key();
+    pub(crate) fn receive_brush_stamps(&mut self) {
+        let context = self.state().toolbar_context();
         if self.brush_stamps.ready.as_ref().is_some_and(|(owner, _, _)| *owner != context) {
             self.brush_stamps.ready = None;
         }
-        let mut delivered = None;
         while let Some(result) = self.renderer_mut().take_brush_stamp() {
-            let image = result.map_err(|e| { self.brush_stamps.flight=None; e.to_string() })?;
-            if self.brush_stamps.flight.as_ref().is_some_and(|(id,_,_,_)|*id==image.request_id) {
-                let (id,owner,request_key,extent)=self.brush_stamps.flight.take().unwrap();
-                if owner == context {
-                    let metadata = BrushStamp { request_id:id, pending:false,
-                        size:image.width, extent, alpha:Vec::new() };
-                    self.brush_stamps.ready = Some((owner, request_key, metadata.clone()));
-                    delivered = Some(BrushStamp { alpha:image.bytes, ..metadata });
-                }
+            let image = match result {
+                Ok(image) => image,
+                Err(error) => { self.brush_stamps.flight = None; self.brush_stamps.failure = Some(error.to_string()); return; }
+            };
+            if let Some((id, owner, key, extent)) = self.brush_stamps.flight.take_if(|(id, ..)| *id == image.request_id)
+                && owner == context {
+                self.brush_stamps.ready = Some((owner, key, BrushStamp { request_id: id, pending: false, size: image.width, extent, alpha: image.bytes }));
             }
         }
-        let current = self.brush_stamps.ready.as_ref().is_some_and(|(owner, k, stamp)|
-            *owner == context && *k == key &&
+    }
+
+    pub fn toolbar_stamp(&mut self, context: ToolbarContext, known_request: Option<u64>) -> Result<Option<BrushStamp>, String> {
+        if context != self.state().toolbar_context() { return Err("Obsolete brush preview".into()); }
+        self.receive_brush_stamps();
+        if let Some(failure) = self.brush_stamps.failure.take() { return Err(failure); }
+        let key = self.preview_key();
+        let delivered = self.brush_stamps.ready.as_mut().filter(|(_, _, stamp)| !stamp.alpha.is_empty())
+            .map(|(_, _, stamp)| { let alpha = std::mem::take(&mut stamp.alpha); BrushStamp { alpha, ..stamp.clone() } });
+        let current = self.brush_stamps.ready.as_ref().is_some_and(|(_, k, stamp)|
+            *k == key &&
             (known_request == Some(stamp.request_id) || delivered.as_ref().is_some_and(|d| d.request_id == stamp.request_id)));
         if self.brush_stamps.flight.is_none() && !current {
             let (request, extent) = self.stamp_request()?;
@@ -323,8 +329,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.brush_stamps.flight = Some((id, context, key, extent));
             }
         }
-        Ok(delivered.or_else(|| self.brush_stamps.ready.as_ref()
-            .filter(|(owner, _, _)| *owner == context).map(|(_, _, stamp)| stamp.clone()))
+        Ok(delivered.or_else(|| self.brush_stamps.ready.as_ref().map(|(_, _, stamp)| stamp.clone()))
             .map(|mut stamp| { stamp.pending = !current; stamp }))
     }
 }
