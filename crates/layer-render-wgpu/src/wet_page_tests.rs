@@ -39,7 +39,11 @@ struct Painted { engine: Engine, clock: u64, unpainted: Tiles, stroke: Stroke, c
 
 struct Ellipse { center: [f32; 2], radii: [f32; 2], samples: u64, samples_per_frame: u64 }
 
-fn paint(document: &Document, preset: DefaultBrushPreset, diameter: f32, zoom: f32, path: Ellipse) -> Painted {
+fn sized(preset: DefaultBrushPreset, diameter: f32) -> layer_core::BrushSnapshot {
+    layer_core::BrushSnapshot { diameter, ..layer_core::default_brush(preset) }
+}
+
+fn paint(document: &Document, brush: layer_core::BrushSnapshot, zoom: f32, path: Ellipse) -> Painted {
     let Ellipse { center, radii, samples, samples_per_frame } = path;
     let extent = document.composition().size;
     let view = layer_render::ViewState {
@@ -49,7 +53,7 @@ fn paint(document: &Document, preset: DefaultBrushPreset, diameter: f32, zoom: f
     let (mut input, consumer) = input_queue(1024);
     let mut engine = CanvasEngine::new(renderer(document), document.clone(), consumer, view,
         ViewTransform { revision: 1, surface_to_document: [1. / zoom, 0., 0., 1. / zoom, 0., 0.] }).unwrap();
-    engine.set_brush(layer_core::BrushSnapshot { diameter, ..layer_core::default_brush(preset) }).unwrap();
+    engine.set_brush(brush).unwrap();
     engine.set_instant_feedback(InstantFeedbackConfig { enabled: true, ..Default::default() }).unwrap();
     let mut clock = 1_000_000_000;
     settle(&mut engine, &mut clock);
@@ -68,7 +72,7 @@ fn paint(document: &Document, preset: DefaultBrushPreset, diameter: f32, zoom: f
                 engine.render_frame_at(clock).unwrap();
                 engine.backend_mut().wait_idle().unwrap();
                 if !engine.has_pending_input() && !engine.has_pending_document_edits() { break; }
-                assert!(std::time::Instant::now() < deadline, "{preset:?} sample {step} is consumed");
+                assert!(std::time::Instant::now() < deadline, "sample {step} is consumed");
                 std::thread::yield_now();
             }
         }
@@ -154,7 +158,7 @@ fn wet_strokes_commit_what_whole_pages_commit(diameter: f32, extent: [u32; 2], s
     for preset in presets {
         for zoom in [1., 0.25] {
             let context = format!("{preset:?} {diameter} px at {}%", zoom * 100.);
-            let mut painted = paint(&document, preset, diameter, zoom, Ellipse { center, radii, samples: 54, samples_per_frame });
+            let mut painted = paint(&document, sized(preset, diameter), zoom, Ellipse { center, radii, samples: 54, samples_per_frame });
             frames_of_several_batches += painted.stroke.iter().filter(|(_, batches)| batches.len() > 1).count();
             let (clipped, counts) = replay(&document, &painted.stroke, Replay::FramesAsSubmitted);
             let (whole, reference) = replay(&document, &painted.stroke, Replay::OneBatchWithoutSparePages);
@@ -215,7 +219,7 @@ fn jobs_damage_and_invocations_allowed(stroke: &Stroke, extent: [u32; 2]) -> [u6
 fn a_wide_wet_stroke_below_full_size_dispatches_its_damage_instead_of_whole_pages() {
     let extent = [4248, 2832];
     let document = crate::scene::scale::tests::document_at(extent);
-    let painted = paint(&document, DefaultBrushPreset::LoadedOil, 480., 0.25, Ellipse { center: [2124., 1416.], radii: [740., 360.], samples: 240, samples_per_frame: 8 });
+    let painted = paint(&document, sized(DefaultBrushPreset::LoadedOil, 480.), 0.25, Ellipse { center: [2124., 1416.], radii: [740., 360.], samples: 240, samples_per_frame: 8 });
     let [jobs, damage, allowed] = jobs_damage_and_invocations_allowed(&painted.stroke, extent);
     let (_, counts) = replay(&document, &painted.stroke, Replay::FramesAsSubmitted);
     let whole = counts.transport_pages * PAGE_TEXELS;
@@ -225,4 +229,23 @@ fn a_wide_wet_stroke_below_full_size_dispatches_its_damage_instead_of_whole_page
         counts.transport_invocations);
     assert!(painted.counts.transport_invocations < painted.counts.transport_pages * PAGE_TEXELS,
         "the live stroke with its prediction dispatched whole pages: {:?}", painted.counts);
+}
+
+#[test]
+fn a_wet_brush_with_a_scatter_blender_paints_what_it_paints_with_a_soft_one() {
+    let extent = [512, 512];
+    let document = crate::scene::scale::tests::document_at(extent);
+    let id = target(&document);
+    let oil = sized(DefaultBrushPreset::LoadedOil, 200.);
+    let scatter = layer_core::BrushBlender { kind: layer_core::BlenderKind::Scatter, cell_size: 3., ..oil.blender };
+    let painted = paint(&document, layer_core::BrushSnapshot { blender: scatter, ..oil }, 1., Ellipse { center: [256.; 2], radii: [120., 60.], samples: 24, samples_per_frame: 6 });
+    let soft: Stroke = painted.stroke.iter().map(|(dabs, batches)| (dabs.clone(), batches.iter().map(|batch| DabBatch {
+        style: layer_render::DabStyle { blender: layer_core::BrushBlender { kind: layer_core::BlenderKind::Soft, ..batch.style.blender }, ..batch.style.clone() },
+        ..batch.clone()
+    }).collect())).collect();
+    let (scattered, plain) = (canvas(&replay(&document, &painted.stroke, Replay::FramesAsSubmitted).0, id), canvas(&replay(&document, &soft, Replay::FramesAsSubmitted).0, id));
+    let context = "Loaded Oil with a Scatter blender";
+    assert_same_pages(&scattered.color, &plain.color, "colour", context);
+    assert_same_pages(&scattered.coverage, &plain.coverage, "stroke coverage", context);
+    assert!(scattered.reservoir == plain.reservoir, "{context}: the reservoir differs");
 }

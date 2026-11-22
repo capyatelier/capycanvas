@@ -400,7 +400,7 @@ impl ShaderBrushKey {
             erase,
             blend: style.rendering.blend_mode,
             dry_material: dry_material::contact_flags(style.contact) | if style.rendering.accumulation == BrushAccumulation::Uniform { 128 } else { 0 },
-            blender: if style.execution == BrushExecution::Smudge { destination_material::blender(&style) } else { destination_material::PLAIN },
+            blender: destination_material::kernel_blender(&style),
             reach: dry_material::Reach::of(brush),
         }
     }

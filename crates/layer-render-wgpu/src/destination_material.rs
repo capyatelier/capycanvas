@@ -99,6 +99,10 @@ pub(super) fn blender(style: &layer_render::DabStyle) -> Blender {
     }
 }
 
+pub(super) fn kernel_blender(style: &layer_render::DabStyle) -> Blender {
+    if style.execution == BrushExecution::Smudge { blender(style) } else { PLAIN }
+}
+
 pub(super) fn rewritten(style: &layer_render::DabStyle, coordinate: [u32; 2], local: PixelRect, extent: [u32; 2]) -> Option<PixelRect> {
     if !blender(style).cells { return Some(local); }
     let cell = style.blender.cell_size as u32;
@@ -175,7 +179,7 @@ impl Pipelines {
         let operation = BrushPassPlan::for_style(style).material;
         let slot = if blended(operation) { dry_material::material_slot(style) }
             else { dry_material::material_contact_slot(style) * MATERIAL_BLENDS.len() };
-        let blender = if operation == MaterialOperation::Smudge { blender(style) } else { PLAIN };
+        let blender = kernel_blender(style);
         &self.kernels[&(operation as u32, slot, entry, blender.kind as u8, blender.paper, blender.lift, blender.cells)]
     }
 
@@ -355,7 +359,7 @@ impl WgpuRasterizer {
             pass.set_bind_group(0, &dispatch.output, &[style_offset]);
             pass.set_bind_group(1, self.paint_target_binding(&batch.style), &[self.layer_target_offset(batch.target, dispatch.coordinate)]);
             pass.set_bind_group(2, &dispatch.sources, &[dispatch.record_offset]);
-            let extent = if blender(&batch.style).cells {
+            let extent = if kernel_blender(&batch.style).cells {
                 let cell = batch.style.blender.cell_size as u32;
                 if batch.style.blender.kind == layer_core::BlenderKind::Scatter { [PAGE_SIZE.div_ceil(cell) + 1; 2] }
                 else { dispatch.coordinate.map(|coordinate| ((coordinate * PAGE_SIZE) % cell + PAGE_SIZE).div_ceil(cell)) }
