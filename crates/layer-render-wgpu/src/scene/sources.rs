@@ -1955,8 +1955,9 @@ fn native_samples(p: vec2<i32>) -> vec4<u32> {
 }
 fn display_samples(p: vec2<i32>) -> vec4<f32> { let code=native_samples(p); return vec4(vec3<f32>(code.rgb)/settings.integer_max, select(f32(code.a)/settings.integer_max,1.,code.a==u32(settings.integer_max))); }
 "# };
-            let shader = Deferred::wgsl(device, "source normalization", format!("{}\n{}\n{}",
-                include_str!("../native_tiles/validity.wgsl"), include_str!("source_color.wgsl"), include_str!("source_decode.wgsl").replace("SOURCE_INPUT", input)));
+            let shader = Deferred::wgsl(device, "source normalization", format!("{}\n{}\n{}\n{}",
+                include_str!("../native_tiles/validity.wgsl"), include_str!("../native_tiles/decode.wgsl"), include_str!("source_color.wgsl"),
+                include_str!("source_decode.wgsl").replace("SOURCE_INPUT", input)));
             let device = device.for_recipe();
             Deferred::pipeline(move |mode| fullscreen_pipeline_recipe(mode, &device, &layout, &shader, "fragment_main", None,
                 wgpu::TextureFormat::Rgba32Float, "normalize source tile"))

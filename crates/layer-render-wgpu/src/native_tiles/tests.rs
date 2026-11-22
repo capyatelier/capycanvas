@@ -325,12 +325,9 @@ fn before_endpoint_encoder(r: &WgpuRasterizer, in_place: bool) -> NativeTileEnco
             for count in 1..=if format.is_some() {encoder.tiles_per_dispatch} else {encoder.gray_tiles_per_dispatch} {
                 let (_, source) = NativeTileEncoder::pipeline_source(in_place, tracked, count, format, name);
                 let source = source.replace("\r\n", "\n");
-                let decode = "fn decode_quantized(code:u32)->f32 {\n    if code==0u {return 0.;}\n    if code==65535u {return 1.;}\n    return transfer[code].x;\n}\n";
                 let endpoints = "    if value==0. {return 0u;}\n    if value==1. {return settings.maximum;}\n";
-                assert!(source.contains(decode) && source.contains(endpoints), "in_place={in_place} {name} tracked={tracked} count={count}");
-                let source = source.replace(decode, "").replace(endpoints, "")
-                    .replace("vec3(decode_quantized(code.r),decode_quantized(code.g),decode_quantized(code.b))",
-                        "vec3(transfer[code.r].x,transfer[code.g].x,transfer[code.b].x)");
+                assert!(source.contains(endpoints), "in_place={in_place} {name} tracked={tracked} count={count}");
+                let source = source.replace(endpoints, "");
                 let layout = r.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("native endpoint baseline"), bind_group_layouts: &[Some(&encoder.layouts[index])], immediate_size: 0,
                 });

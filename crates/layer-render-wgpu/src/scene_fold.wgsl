@@ -21,11 +21,7 @@ FOLD_SLOT_BINDINGS
 
 fn fold_native(value: vec4<f32>) -> vec4<f32> {
     let samples = vec4<u32>(round(clamp(value, vec4(0.), vec4(1.)) * 255.));
-    let alpha = select(f32(samples.a) / fold.integer_max, 1., samples.a == u32(fold.integer_max));
-    let code = samples.rgb * (65535u / u32(fold.integer_max));
-    let linear = vec3(transfer[code.r].x, transfer[code.g].x, transfer[code.b].x);
-    if alpha == 0. { return vec4(0.); }
-    return vec4(linear * alpha, alpha);
+    return native_associated(native_color(samples, u32(fold.integer_max), 65535u / u32(fold.integer_max)), true);
 }
 
 @compute @workgroup_size(32, 2)

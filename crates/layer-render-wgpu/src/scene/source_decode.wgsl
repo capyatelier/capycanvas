@@ -11,22 +11,10 @@ SOURCE_INPUT
     if settings.display != 0u { return display_decode(display_samples(vec2<i32>(position.xy)), settings); }
     let samples = native_samples(vec2<i32>(position.xy));
     if settings.scalar != 0u { return vec4(f32(samples.r) * settings.scalar_scale, 0., 0., 1.); }
-    if settings.integer_max==0. {
-        var decoded=vec4(half_value(samples.r),half_value(samples.g),half_value(samples.b),half_value(samples.a));
-        if settings.float_bits!=0u {decoded=bitcast<vec4<f32>>(samples);}
-        let alpha=decoded.a;
-        if alpha==0. {return vec4(0.);}
-        let linear=decoded.rgb;
-        if settings.identity!=0u {return vec4(linear*alpha,alpha); }
-        let rgb=vec3(dot(settings.red.xyz,linear),dot(settings.green.xyz,linear),dot(settings.blue.xyz,linear));
-        return vec4(rgb*alpha,alpha);
-    }
-    // Keep opaque coverage exactly one despite approximate GPU reciprocals.
-    let alpha = select(f32(samples.a) / settings.integer_max, 1., samples.a == u32(settings.integer_max));
-    let scale = 65535u / u32(settings.integer_max);
-    let code = samples.rgb * scale;
-    let linear = vec3(transfer[code.r].x, transfer[code.g].x, transfer[code.b].x);
-    let rgb = vec3<f32>(dot(settings.red.xyz,linear), dot(settings.green.xyz,linear), dot(settings.blue.xyz,linear));
-    if alpha == 0. { return vec4<f32>(0.); }
-    return vec4<f32>(select(rgb * alpha, rgb, settings.premultiplied != 0u), alpha);
+    let integer = settings.integer_max != 0.;
+    var color: vec4<f32>;
+    if integer { color = native_color(samples, u32(settings.integer_max), 65535u / u32(settings.integer_max)); }
+    else { color = native_float(samples, settings.float_bits != 0u); }
+    let rgb = vec3(dot(settings.red.xyz,color.rgb), dot(settings.green.xyz,color.rgb), dot(settings.blue.xyz,color.rgb));
+    return native_associated(vec4(select(rgb, color.rgb, settings.identity != 0u), color.a), !integer || settings.premultiplied == 0u);
 }

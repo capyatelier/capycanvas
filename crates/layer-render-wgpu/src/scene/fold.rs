@@ -125,7 +125,7 @@ impl Pipelines {
             label: Some("scene fold"), bind_group_layouts: &[Some(&records), Some(&inputs), Some(output)], immediate_size: 0,
         });
         let shader = Deferred::wgsl(device, "scene fold", compose_wgsl(&[&working_color::source(device.working_space()),
-            include_str!("../scene_convert.wgsl"), &source()]));
+            include_str!("../scene_convert.wgsl"), include_str!("../native_tiles/validity.wgsl"), include_str!("../native_tiles/decode.wgsl"), &source()]));
         let pipeline = Deferred::compute(device, "scene fold", &layout, &shader, "fold_layers");
         Self { records, inputs, pipeline }
     }

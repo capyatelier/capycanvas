@@ -12,17 +12,8 @@ fn store_outputs(tile:u32,pixel:vec2<u32>,result:vec4<u32>,linear:vec4<f32>) {
     mark_canonical(tile,pixel,linear);
     switch tile { STORES default: { return; } }
 }
-fn decode_quantized(code:u32)->f32 {
-    if code==0u {return 0.;}
-    if code==65535u {return 1.;}
-    return transfer[code].x;
-}
 fn store_result(tile:u32,pixel:vec2<u32>, result:vec4<u32>) {
-    let alpha=select(f32(result.a)/f32(settings.maximum),1.,result.a==settings.maximum);
-    let code=result.rgb*settings.scale;
-    var linear=vec3(decode_quantized(code.r),decode_quantized(code.g),decode_quantized(code.b));
-    if (settings.flags&1u)!=0u {linear*=alpha;}
-    store_outputs(tile,pixel,result,vec4(linear,alpha));
+    store_outputs(tile,pixel,result,native_associated(native_color(result,settings.maximum,settings.scale),(settings.flags&1u)!=0u));
 }
 fn boundary(code:u32)->f32 {
     return transfer[code*settings.scale+(settings.scale-1u)/2u].y;

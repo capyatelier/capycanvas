@@ -330,10 +330,11 @@ impl NativeTileEncoder {
             None => include_str!("native_tiles/gray_alpha.wgsl").replace("PACKED_STORES", &packed_stores),
         });
         let source = format!(
-            "{}\n{}\n{}\n{}\n{}",
+            "{}\n{}\n{}\n{}\n{}\n{}",
             include_str!("sdr_color.wgsl"),
             include_str!("native_tiles/color_mode.wgsl"),
             include_str!("native_tiles/validity.wgsl"),
+            include_str!("native_tiles/decode.wgsl"),
             include_str!("native_tiles/coverage.wgsl"),
             body
         );
