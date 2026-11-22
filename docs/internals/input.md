@@ -122,6 +122,13 @@ and [AppKit](https://developer.apple.com/documentation/appkit/nsevent) do not
 identify whether a pen tablet has a display; unclassified pens keep the configured
 lead. Adapters preserve pressure, tilt and eraser identity for indirect pens.
 
+A stroke asks for frames only while its picture can change. The engine does not
+submit a frame that repeats the one it last submitted; the stroke then waits for
+input, or until its prediction expires or its lift preview freezes. Brushes that
+paint while held, such as Airbrush, keep their frames.
+`a_held_contact_asks_for_no_frame_once_its_preview_repeats_and_plans_none_for_a_repeated_sample`
+covers this without a window.
+
 Predicted contacts affect a temporary preview, not saved artwork or undo history.
 When real samples arrive, the preview is replaced. For brushes that read existing
 paint, temporary feedback must also avoid changing committed wetness or carried

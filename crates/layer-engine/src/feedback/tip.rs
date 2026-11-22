@@ -1,4 +1,4 @@
-use super::{InstantFeedbackConfig, PredictionState, TipSource};
+use super::{InstantFeedbackConfig, PredictionState, TipSource, prediction_lifetime};
 use crate::brush::{
     CurvePreview, DabGenerator, LiftPreview, PositionField, has_completions, lock_dab_tail,
     taper_prediction,
@@ -12,6 +12,7 @@ pub(crate) struct PreviewTip {
     pub curve_preview: CurvePreview,
     pub preview_taper: bool,
     pub frame_lift: Option<LiftPreview>,
+    pub changes_in: Option<u32>,
 }
 
 pub(crate) struct TipInput<'a> {
@@ -42,7 +43,7 @@ impl PreviewTip {
             input.now
         };
         let lift = self.frame_lift.take();
-        generator.preview_lift(
+        let ((source, expires), freezes_at) = generator.preview_lift(
             input.brush,
             input.pending,
             input.ending.is_some(),
@@ -51,7 +52,9 @@ impl PreviewTip {
             start,
             output,
             |tip, output| self.build_main(generator, tip, &input, start, output),
-        )
+        );
+        self.changes_in = [expires, freezes_at].into_iter().flatten().filter(|at| *at > now).min().map(|at| at - now);
+        source
     }
 
     fn build_main(
@@ -61,15 +64,17 @@ impl PreviewTip {
         input: &TipInput<'_>,
         start: usize,
         output: &mut Vec<Dab>,
-    ) -> Option<TipSource> {
+    ) -> (Option<TipSource>, Option<u32>) {
         if !input.feedback.enabled {
             tip.flush_contact(input.brush, output);
-            return None;
+            return (None, None);
         }
-        let latest = *input.real.last()?;
+        let Some(&latest) = input.real.last() else { return (None, None); };
         let estimate = if input.ending.is_none() {
             self.prediction.estimate_for(input.real, input.platform, input.requested, input.now, input.transform, input.feedback)
         } else { None };
+        let expires = estimate.filter(|estimate| estimate.point.position != latest.position)
+            .map(|_| latest.elapsed_micros.saturating_add(prediction_lifetime(input.real, input.feedback)).saturating_add(1));
         let predicted: Vec<_> = if input.ending.is_none() {
             let points = estimate.filter(|_| input.feedback.enabled).map_or_else(Vec::new, |estimate| {
                 self.prediction.preview_points(latest, input.platform, estimate, input.transform).collect()
@@ -107,11 +112,11 @@ impl PreviewTip {
             if self.preview_taper {
                 taper_prediction(&mut output[extra_start..], taper_start, self.curve_preview.taper_amount());
             }
-            return estimate.filter(|_| input.ending.is_none()).map(|estimate| estimate.source);
+            return (estimate.filter(|_| input.ending.is_none()).map(|estimate| estimate.source), expires);
         }
         let Some(estimate) = estimate.filter(|_| input.feedback.enabled) else {
             tip.flush_contact(input.brush, output);
-            return None;
+            return (None, expires);
         };
         let predicted_dab_start = output.len();
         let taper_start = tip.modeled_position().unwrap_or(latest.position);
@@ -131,6 +136,6 @@ impl PreviewTip {
         if taper {
             taper_prediction(&mut output[predicted_dab_start..], taper_start, 1.);
         }
-        (output.len() > start).then_some(estimate.source)
+        ((output.len() > start).then_some(estimate.source), expires)
     }
 }

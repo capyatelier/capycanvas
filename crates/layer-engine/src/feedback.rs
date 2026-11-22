@@ -102,6 +102,30 @@ impl TipEstimate {
     }
 }
 
+pub(crate) fn prediction_lifetime(real: &[StrokePoint], config: InstantFeedbackConfig) -> u32 {
+    let mut intervals = [0; 8];
+    let mut count = 0;
+    for pair in real.windows(2).rev() {
+        if pair[1].elapsed_micros > pair[0].elapsed_micros {
+            intervals[count] = pair[1].elapsed_micros - pair[0].elapsed_micros;
+            count += 1;
+            if count == intervals.len() {
+                break;
+            }
+        }
+    }
+    intervals[..count].sort_unstable();
+    let period = if count > 0 {
+        intervals[count / 2]
+    } else {
+        config.prediction_horizon_micros
+    };
+    period
+        .saturating_mul(2)
+        .max(config.prediction_horizon_micros)
+        .min(MAX_PREDICTION_HORIZON_MICROS)
+}
+
 /// Per-contact, preview-only state. Never changes recorded stroke samples.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PredictionState {
@@ -371,27 +395,7 @@ impl PredictionState {
             self.last_motion = None;
             self.correction_field = None;
         }
-        let mut intervals = [0; 8];
-        let mut count = 0;
-        for pair in real.windows(2).rev() {
-            if pair[1].elapsed_micros > pair[0].elapsed_micros {
-                intervals[count] = pair[1].elapsed_micros - pair[0].elapsed_micros;
-                count += 1;
-                if count == intervals.len() {
-                    break;
-                }
-            }
-        }
-        intervals[..count].sort_unstable();
-        let period = if count > 0 {
-            intervals[count / 2]
-        } else {
-            config.prediction_horizon_micros
-        };
-        let lifetime = period
-            .saturating_mul(2)
-            .max(config.prediction_horizon_micros)
-            .min(MAX_PREDICTION_HORIZON_MICROS);
+        let lifetime = prediction_lifetime(real, config);
         if now.saturating_sub(latest.elapsed_micros) > lifetime {
             self.output = None;
             self.immediate = MotionState::default();

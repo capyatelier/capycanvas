@@ -250,6 +250,11 @@ impl DabGenerator {
         self.anchor.is_some() && self.rest.is_some()
     }
 
+    fn freezes_at(&self) -> Option<u32> {
+        self.stabilized_input.filter(|_| self.anchor.is_some() && !self.frozen())
+            .map(|point| point.elapsed_micros.saturating_add(REST_WINDOW_MICROS))
+    }
+
     fn opening(&self) -> bool {
         self.last.is_some_and(|last| last.stroke_distance == 0.)
     }
@@ -331,9 +336,9 @@ impl DabGenerator {
         start: usize,
         output: &mut Vec<Dab>,
         main: impl FnOnce(&mut Self, &mut Vec<Dab>) -> R,
-    ) -> R {
+    ) -> (R, Option<u32>) {
         if !has_completions(brush) {
-            return main(&mut self.preview(), output);
+            return (main(&mut self.preview(), output), None);
         }
         let LiftPreview {
             generator: mut tip,
@@ -344,12 +349,12 @@ impl DabGenerator {
             tip.append_points(&pending[accepted..], brush, ending, &mut lift);
             tip.freeze_at(now, brush);
         }
-        let frozen = tip.frozen();
+        let (frozen, freezes_at) = (tip.frozen(), tip.freezes_at());
         tip.finish_lift(brush, &mut lift);
         if frozen {
             output.truncate(start);
             output.extend(lift);
-            return R::default();
+            return (R::default(), None);
         }
         let mut main_tip = self.preview();
         if self.opening()
@@ -360,7 +365,7 @@ impl DabGenerator {
         }
         let source = main(&mut main_tip, output);
         Self::compose_preview(lift, output, start);
-        source
+        (source, freezes_at)
     }
 
     fn compose_preview(dabs: Vec<Dab>, main: &mut Vec<Dab>, start: usize) {

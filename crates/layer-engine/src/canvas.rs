@@ -113,6 +113,14 @@ struct ActiveStroke {
     clone_start: Option<CloneSource>,
     barrel_twist: bool,
     momentum: Option<(Vec<Dab>, usize)>,
+    rests: Option<layer_render::FrameDemand>,
+}
+
+struct ShownFrame {
+    view: ViewState,
+    scene: [u64; 3],
+    batches: Vec<DabBatch>,
+    dabs: Vec<Dab>,
 }
 
 #[derive(Clone)]
@@ -161,6 +169,7 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     pending_chunk_dabs: Vec<Dab>,
     dabs: Vec<Dab>,
     batches: Vec<DabBatch>,
+    shown: Option<ShownFrame>,
     liquify_preview: Option<DabBatch>,
     transform_preview: Option<layer_render::TransformPreview>,
     transform_selection: std::sync::OnceLock<Option<layer_core::Selection>>,
@@ -247,6 +256,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             pending_chunk_dabs: Vec::with_capacity(MAX_SMUDGE_DABS_PER_BATCH),
             dabs: Vec::with_capacity(DAB_CAPACITY),
             batches: Vec::with_capacity(BATCH_CAPACITY),
+            shown: None,
             liquify_preview: None,
             transform_preview: None,
             transform_selection: Default::default(),
@@ -291,7 +301,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             view:_,transforms:_,clone_stroke:_,retouch_points:_,prepared_retouch:_,builder:_,dab_generator:_,
             finalized_real_points:_,active_stroke:_,pending_up:_,frame_clock_ns:_,completed_stroke:_,completed_at:_,completed_publication:_,completed_before:_,
             completed_clone_start:_,restore_rasters:_,pending_frame:_,rebuild_completed:_,estimates:_,
-            pending_chunk_dabs:_,dabs:_,batches:_,liquify_preview:_,transform_preview:_,transform_selection:_,selection_display:_,
+            pending_chunk_dabs:_,dabs:_,batches:_,shown:_,liquify_preview:_,transform_preview:_,transform_selection:_,selection_display:_,
             scene_preview:_,rebuild_all:_,composite_all:_,raster_dirty:_,animation_origin_ns:_,animation_time:_,
             animation_seed:_,evaluation_context:_,metrics:_,admitted_pen:_}=self;
         editor.capture_session(self.capture_artwork(session_generation)?)
@@ -968,14 +978,18 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     pub fn frame_demand(&self) -> layer_render::FrameDemand {
         use layer_render::FrameDemand;
         if self.backend.waits_for_frame_slot() || self.pending_frame.is_some() && self.backend.stroke_waits_for_memory() { return self.backend.next_frame(); }
-        let engine = if self.has_pending_input() || self.has_active_stroke() || self.editor.document().has_animated_effects() {
+        let stroke = self.active_stroke.as_ref().map_or(FrameDemand::Wait, |active| match active.rests {
+            Some(rest) if active.brush.path.continuous_rate_hz <= 0. && self.builder.real_points().len() < MAX_CONTACT_POINTS => rest,
+            _ => FrameDemand::Animate,
+        });
+        let engine = if self.has_pending_input() || self.editor.document().has_animated_effects() {
             FrameDemand::Animate
         } else if self.document_edits_queued() || (self.can_park() && self.editor.memory_report_pending()) {
             FrameDemand::Work
         } else {
             FrameDemand::Wait
         };
-        engine.sooner(self.backend.next_frame())
+        engine.sooner(stroke).sooner(self.backend.next_frame())
     }
     pub fn has_pending_input(&self) -> bool {
         !self.input.is_empty()
@@ -1631,6 +1645,16 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if !awaiting_boundary {
             self.build_predicted_preview(timestamp_ns, presentation_timestamp_ns);
         }
+        let repeats = !rebuilt && self.repeats_shown_frame();
+        if let Some(active) = &mut self.active_stroke {
+            active.rests = repeats.then(|| active.tip.changes_in.map_or(layer_render::FrameDemand::Wait,
+                |micros| layer_render::FrameDemand::after(std::time::Duration::from_micros(micros.into()))));
+        }
+        if repeats {
+            self.dabs.clear();
+            self.batches.clear();
+            return Ok(());
+        }
         self.composite_all |= rebuilt;
 
         let time = timestamp_ns.filter(|now| *now != 0).map_or(self.animation_time, |now| {
@@ -1638,6 +1662,20 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         });
         let steps = frame_steps::FrameSteps::new(self.document(), &self.batches, &self.dabs);
         self.submit_prepared_frame(PreparedFrame { reset: rebuilt, time, steps })
+    }
+
+    fn shown_scene(&self) -> [u64; 3] {
+        let document = self.editor.document();
+        [document.scene().owner(), document.scene().revision(), document.working.generation]
+    }
+
+    fn repeats_shown_frame(&self) -> bool {
+        self.active_stroke.is_some() && !self.document_edits_queued() && self.restore_rasters.is_empty()
+            && self.scene_preview.is_none() && self.transform_preview.is_none() && self.selection_display.is_none()
+            && !self.editor.document().has_animated_effects() && self.batches.iter().all(|batch| batch.kind == DabBatchKind::Preview)
+            && self.shown.as_ref().is_some_and(|shown| shown.view == self.view() && shown.scene == self.shown_scene()
+                && shown.batches == self.batches && shown.dabs == self.dabs)
+            && self.backend.next_frame() == layer_render::FrameDemand::Wait
     }
 
     fn submit_prepared_frame(
@@ -1688,20 +1726,33 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             self.pending_frame = Some(PreparedFrame { reset: false, time: frame.time, steps: step.unwrap().1 });
             return Ok(());
         }
-        self.dabs.clear();
-        self.batches.clear();
         self.restore_rasters.clear();
         if result.is_err() {
             self.rebuild_all = true;
+            self.shown = None;
         } else {
             self.animation_time = frame.time;
             self.evaluation_context = self.backend.evaluation_context();
             self.composite_all = false;
             self.raster_dirty = false;
             self.editor.finish_raster_submission();
+            self.keep_shown_frame();
         }
+        self.dabs.clear();
+        self.batches.clear();
         self.begin_completed_correction_window();
         result
+    }
+
+    fn keep_shown_frame(&mut self) {
+        if self.active_stroke.is_none() {
+            self.shown = None;
+            return;
+        }
+        let (mut batches, mut dabs) = self.shown.take().map_or_default(|shown| (shown.batches, shown.dabs));
+        std::mem::swap(&mut batches, &mut self.batches);
+        std::mem::swap(&mut dabs, &mut self.dabs);
+        self.shown = Some(ShownFrame { view: self.view(), scene: self.shown_scene(), batches, dabs });
     }
 
     fn append_continuous(&mut self, timestamp_ns: u64) {
@@ -2055,6 +2106,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     clone_start: None,
                     barrel_twist: event.flags.contains(SampleFlags::BARREL_TWIST),
                     momentum: None,
+                    rests: None,
                 };
                 self.active_stroke = Some(active);
                 self.admitted_pen |= event.tool.is_pen() && !event.flags.contains(SampleFlags::UNCLASSIFIED);
@@ -7493,4 +7545,72 @@ mod tests {
         assert_authored_eq(&engine.document().artwork, &after.artwork);
     }
 
+    fn held_contact(preset: DefaultBrushPreset, repeated: bool) -> Result<[u64; 4], String> {
+        use layer_render::FrameDemand;
+        let (mut input, mut engine) = engine("Held contact", 2048, 512);
+        engine.set_brush(default_brush(preset)).unwrap();
+        let mut clock = 1_000_000_000;
+        let mut tick = |engine: &mut CanvasEngine<RecordingRenderer>, input: &mut InputProducer<PenEvent>, sample: Option<PenEvent>| {
+            clock += 1_000_000;
+            if let Some(sample) = sample { input.push(PenEvent { timestamp_ns: clock, ..sample }).unwrap(); }
+            let (frames, inked) = (engine.metrics().frames, engine.backend.persistent.len());
+            let requested = engine.frame_demand() != FrameDemand::Wait;
+            if requested { engine.render_frame_for(clock, clock + 8_000_000).unwrap(); }
+            [u64::from(requested), engine.metrics().frames - frames, (engine.backend.persistent.len() - inked) as u64]
+        };
+        let mut sample = event(1, PenPhase::Down, 100.);
+        for step in 0..160u64 {
+            let moved = (step % 4 == 0).then(|| {
+                sample = PenEvent { sequence: step / 4 + 1, phase: if step == 0 { PenPhase::Down } else { PenPhase::Move },
+                    surface_position: Point { x: 100. + step as f32, y: 100. }, ..sample };
+                sample
+            });
+            tick(&mut engine, &mut input, moved);
+        }
+        let mut held = [0; 4];
+        for step in 1..=400u64 {
+            let same = (repeated && step % 5 == 0).then(|| { sample.sequence += 1; sample });
+            let [requested, planned, inked] = tick(&mut engine, &mut input, same);
+            if step > 200 { held = [held[0] + requested, held[1] + planned, held[2] + inked, held[3] + u64::from(same.is_some())]; }
+        }
+        let resumed = [20., 40., 60.].map(|shift| {
+            sample = PenEvent { sequence: sample.sequence + 1, surface_position: Point { x: sample.surface_position.x + shift, y: 100. }, ..sample };
+            tick(&mut engine, &mut input, Some(sample))
+        });
+        if resumed.iter().any(|[requested, ..]| *requested == 0) || resumed.iter().all(|[_, planned, _]| *planned == 0) {
+            return Err(format!("{preset:?}: moving again after the hold asks for and plans frames {resumed:?}"));
+        }
+        sample = PenEvent { sequence: sample.sequence + 1, phase: PenPhase::Up, ..sample };
+        let mut lifted = Some(sample);
+        for _ in 0..3000 {
+            if !engine.has_active_stroke() && !engine.has_pending_input() && !engine.has_pending_document_edits() { break; }
+            tick(&mut engine, &mut input, lifted.take());
+        }
+        if engine.has_active_stroke() || engine.metrics().committed_strokes != 1 {
+            return Err(format!("{preset:?}: pen-up does not commit the stroke"));
+        }
+        Ok(held)
+    }
+
+    #[test]
+    fn a_held_contact_asks_for_no_frame_once_its_preview_repeats_and_plans_none_for_a_repeated_sample() {
+        use DefaultBrushPreset as P;
+        let mut failures = Vec::new();
+        for preset in [P::GPen, P::Pencil, P::Smudge, P::WetRound, P::WetWatercolor, P::LiquifyPush, P::Airbrush, P::LiquifyTwirl] {
+            for repeated in [false, true] {
+                match held_contact(preset, repeated) {
+                    Ok([requested, planned, inked, samples]) if default_brush(preset).path.continuous_rate_hz > 0. => {
+                        if requested != 200 || planned == 0 || inked == 0 {
+                            failures.push(format!("{preset:?} keeps painting while held: {requested} frames asked for, {planned} planned, {inked} dabs inked with {samples} repeated samples"));
+                        }
+                    }
+                    Ok([requested, planned, _, samples]) => if [requested, planned] != [samples, 0] {
+                        failures.push(format!("{preset:?} held still with {samples} repeated samples asks for {requested} frames and plans {planned}"));
+                    },
+                    Err(failure) => failures.push(failure),
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
 }
