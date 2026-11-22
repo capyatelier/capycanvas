@@ -207,7 +207,7 @@ impl Needs {
     }
     pub(super) fn fill(&mut self, r: &WgpuRasterizer, scene: Option<SceneView<'_>>) {
         if let Some(scene) = scene {
-            let required = Self::capture_scene(r, scene, true);
+            let required = Self::capture_scene(r, scene, has_watercolor(scene));
             self.render.extend(required.render);
             self.compute.extend(required.compute);
         }
@@ -1053,7 +1053,13 @@ mod tests {
     fn fill_request_requires_stored_dependencies_before_the_mask_is_ready() {
         use layer_render::{CanvasRenderer,RegionRequest,RegionSource,RegionTask};
         let mut reference=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-        let document=Document::new(layer_core::PortableId::random(),64,64,layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+        let mut document=Document::new(layer_core::PortableId::random(),64,64,layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+        let target=document.drawing_content().unwrap();
+        let stroke=crate::test_support::dab_batch(target,crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::GPen),layer_core::Rect::from_extent([64;2]));
+        *document.target_raster_mut(target).unwrap()=layer_core::raster::RasterRevision::pending();
+        crate::test_support::submit_ready(&mut reference,FramePacket {dabs:&[crate::layer_tests::dab([0.1,0.1,0.1,1.])],dab_batches:&[stroke],
+            ..crate::test_support::packet(document.scene(),[64;2])}).unwrap();
+        document.target_raster(target).unwrap().wait_data().unwrap();
         crate::test_support::submit_ready(&mut reference,crate::test_support::packet(document.scene(),[64;2])).unwrap();
         let mut renderer=crate::test_support::staged_renderer(&reference,Default::default());
         renderer.artwork_frame=reference.artwork_frame.clone();renderer.document_extent=[64;2];
@@ -1064,12 +1070,14 @@ mod tests {
         entry.recv_timeout(Duration::from_secs(5)).unwrap();
         let request=RegionRequest {fill_areas:None,colour_mode:Default::default(),fill:Some(Default::default()),reference_count:None,paper:None,
             enclosure:None,contiguous:true,selection:None,request_id:1,source:RegionSource::Composite,position:[0;2],tolerance:0.,refinement:Default::default(),limit:None};
-        let accepted=renderer.request_region(RegionTask::Fill {request,target:document.drawing_content().unwrap(),position:layer_core::Point{x:0.,y:0.}});
+        let accepted=renderer.request_region(RegionTask::Fill {request,target,position:layer_core::Point{x:0.,y:0.}});
         let [opaque,fill,scalar]=renderer.scene_pipelines.fill_pipelines(&renderer.device);
-        let pipelines=[opaque,fill,scalar,&renderer.pipelines.watercolor_composite,&renderer.layer_masks.initialize];
+        let pipelines=[opaque,fill,scalar,&renderer.layer_masks.initialize];
         let render_required=pipelines.into_iter().all(|pipeline|!pipeline.ready() && compile::tests::requested(&renderer.compilation,pipeline,DOCUMENT));
-        let compute_required=renderer.selection_clip.pipelines().into_iter().chain([&renderer.selection_clip.resample,&renderer.pipelines.watercolor_compute.1])
+        let compute_required=renderer.selection_clip.pipelines().into_iter().chain([&renderer.selection_clip.resample])
             .all(|pipeline|!pipeline.ready() && compile::tests::requested(&renderer.compilation,pipeline,DOCUMENT));
+        let watercolor=compile::tests::requested(&renderer.compilation,&renderer.pipelines.watercolor_composite,BACKGROUND)
+            || compile::tests::requested(&renderer.compilation,&renderer.pipelines.watercolor_compute.1,BACKGROUND);
         let regions=renderer.regions.as_ref().unwrap();
         let refinement=layer_render::RegionRefinement {close_gaps:true,..Default::default()};
         let request_required=regions.raw.pipelines().chain(regions.flood.request_pipelines(refinement,false,true,true))
@@ -1077,6 +1085,11 @@ mod tests {
         let mask=renderer.take_region();
         release.send(()).unwrap();
         assert!(accepted.unwrap());assert!(mask.is_none());assert!(render_required && compute_required && request_required);
+        assert!(!watercolor,"a fill on dry ink compiles the watercolor composition");
+        *document.target_raster_mut(target).unwrap()=layer_core::raster::RasterRevision::backed(layer_core::raster::RasterData {
+            watercolor:Some(layer_core::raster::RasterWatercolor {wet_edge:0.9,burnt_edge:0.6,edge_width:16.}),..Default::default()});
+        let mut wet=Needs::default();wet.fill(&renderer,Some(document.scene()));
+        assert!(wet.compute.iter().any(|pipeline|pipeline.identity()==renderer.pipelines.watercolor_compute.1.identity()));
         drop(renderer);
         drop(reference);
         finish_shader_compiler_shutdown();
