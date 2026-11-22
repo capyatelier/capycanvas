@@ -89,6 +89,8 @@ def step_metrics(step, frames, memory, first_use, shown_evidence="presented"):
     records = [response(record, frames.get(record.get("surface") or surface, []), shown_evidence)
                for record in step.get("latency") or [] if record.get("ready_ns") is not None]
     add("latency_ms", "median", [value for value, _ in records], evidence_of(evidence for _, evidence in records))
+    add("settle_ms", "median", [(record["settled_ns"] - record["input_ns"]) / 1e6 for record in step.get("latency") or []
+                                if record.get("settled_ns") is not None and record["settled_ns"] != record.get("ready_ns")], "completed")
     rows = [row for row in memory if step["begin_ns"] <= row["t_ns"] <= step["end_ns"]]
     for name, field, pick in MEMORY:
         values = [row[field] for row in rows if row.get(field) is not None]
@@ -134,7 +136,7 @@ def rule(step_id, name, base, few, rate, period):
         return False, budget, budget, max(.1 * base, period)
     if one_shot(step_id, name):
         return False, None, None, max(.2 * base, 200) if few else .1 * base
-    if metric in ("latency_ms", "catch_up_ms"):
+    if metric in ("latency_ms", "catch_up_ms", "settle_ms"):
         return False, 100, None, max(.15 * base, 20)
     if metric == "os_available_min_kib":
         return True, LOW_MEMORY_KIB, None, math.inf

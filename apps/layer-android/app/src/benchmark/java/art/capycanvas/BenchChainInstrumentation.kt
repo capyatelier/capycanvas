@@ -48,6 +48,7 @@ class BenchChainInstrumentation : Instrumentation() {
     private lateinit var host: CanvasHost
     private var record = JSONObject()
     private var alive = false
+    private var shownNs: Long? = null
     private var refreshHz = 60.0
     private var canvas: JSONArray? = null
     private var startWorkspace: String? = null
@@ -167,8 +168,11 @@ class BenchChainInstrumentation : Instrumentation() {
     private fun now() = SystemClock.elapsedRealtimeNanos()
     private fun extra(): JSONObject = record.getJSONObject("extra")
     private fun motion(window: LongArray) = record.getJSONArray("motion").put(obj("begin_ns" to window[0], "end_ns" to window[1]))
-    private fun latency(name: String, input: Long, ready: Long, surface: String) =
-        record.getJSONArray("latency").put(obj("name" to name, "input_ns" to input, "ready_ns" to ready, "surface" to surface))
+    private fun latency(name: String, input: Long, settled: Long, surface: String) {
+        record.getJSONArray("latency").put(obj("name" to name, "input_ns" to input, "ready_ns" to (shownNs ?: settled),
+            "settled_ns" to settled, "surface" to surface))
+        shownNs = null
+    }
     private fun motionMs(step: JSONObject) = if (step.has("duration_ms")) step.getDouble("duration_ms")
         else step.optInt("motion_frames", chain.optInt("motion_frames", 150)) * 1000.0 / refreshHz
 
@@ -191,12 +195,17 @@ class BenchChainInstrumentation : Instrumentation() {
     private fun phone() = host.snapshot!!.getJSONObject("layout").objectOrNull("phone") != null
     private fun failed() = host.failure ?: host.actionError
 
-    private fun await(label: String, timeoutMs: Long = 120_000, ready: () -> Boolean = { true }): Long {
+    private fun await(label: String, timeoutMs: Long = 120_000, ready: (() -> Boolean)? = null): Long {
         val deadline = SystemClock.uptimeMillis() + timeoutMs
+        shownNs = null
         while (true) {
             failed()?.let { error(it) }
-            if (main { host.snapshot != null && ready() } && !native { Native.renderingPending(it) }) return now()
-            check(SystemClock.uptimeMillis() < deadline) { "Timed out waiting for $label" }
+            val met = main { host.snapshot != null && ready?.invoke() != false }
+            if (met && ready != null && shownNs == null) shownNs = now()
+            if (met && !native { Native.renderingPending(it) }) return now()
+            check(SystemClock.uptimeMillis() < deadline) {
+                "Timed out waiting for $label" + (shownNs?.let { " (shown, not settled)" } ?: "")
+            }
             LockSupport.parkNanos(2_000_000)
         }
     }

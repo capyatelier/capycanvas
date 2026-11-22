@@ -82,6 +82,13 @@ class AnalyzeTests(unittest.TestCase):
         self.assertEqual(self.metric(summary, "draw.pencil", "pen_down_ms")["value"], 30)
         self.assertEqual(self.metric(summary, "draw.pencil", "catch_up_ms")["value"], 500)
 
+    def test_latency_counts_from_the_shown_result_and_settle_from_the_quiet_renderer(self):
+        frames = [{"t_ns": 1080 * MS, "surface": "canvas"}]
+        latency = [{"name": "magic_wand", "input_ns": 1000 * MS, "ready_ns": 1050 * MS, "settled_ns": 9000 * MS, "surface": "canvas"}]
+        summary = self.analyze({"a": [{"steps": [step("select.wand", latency=latency)], "frames": frames}]})
+        self.assertEqual(self.metric(summary, "select.wand", "latency_ms")["value"], 80)
+        self.assertEqual(self.metric(summary, "select.wand", "settle_ms")["value"], 8000)
+
     def test_latency_uses_presented_frame_else_completion(self):
         frames = [{"t_ns": 1060 * MS, "surface": "canvas"}, {"t_ns": 7100 * MS, "surface": "canvas"}]
         records = {"undo": (1000, 1050), "fill": (5000, 5040)}
