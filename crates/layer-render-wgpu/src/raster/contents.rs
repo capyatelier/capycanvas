@@ -29,6 +29,11 @@ pub(crate) struct Versions {
 
 impl Versions {
     pub fn authored(&self,plane:RasterPlane,coordinate:[u32;2])->bool {self.pages[index(plane)].tile_version(coordinate).is_some()}
+    pub fn authored_pages(&self,plane:RasterPlane)->BTreeSet<[u32;2]> {
+        let mut pages=BTreeSet::new();
+        self.pages[index(plane)].changes(&ContentTree::default(),|coordinate| {pages.insert(coordinate);});
+        pages
+    }
     pub fn tile(&self,plane:RasterPlane,coordinate:[u32;2])->ContentVersion {
         self.pages[index(plane)].tile_version(coordinate).unwrap_or_else(||fallback(&self.defaults[index(plane)],coordinate))
     }

@@ -289,10 +289,10 @@ impl PaintTransforms {
         let plan=r.accepted_transform_plan(layer,index)?;
         self.0[0].apply(r, encoder, layer, operation, r.target_extent(layer), plan)
     }
-    pub(crate) fn prepare_commit(&self,r:&WgpuRasterizer,packet:FramePacket<'_>)->Result<Option<PreparedTransformCommit>,GpuRasterError> {
+    pub(crate) fn prepare_commit(&self,r:&WgpuRasterizer,packet:FramePacket<'_>,plans:&[((SourceTarget,u32),Plan)])->Result<Option<PreparedTransformCommit>,GpuRasterError> {
         let states=self.0.iter().filter(|state|state.has_preview()).collect::<Vec<_>>();
         if states.is_empty() {return Ok(None);}
-        let Some(matches)=states.iter().map(|state|state.matching_commit(packet)).collect::<Option<Vec<_>>>() else {return Ok(None)};
+        let Some(matches)=states.iter().map(|state|state.matching_commit(packet).filter(|at|plans.contains(&(*at,state.plan)))).collect::<Option<Vec<_>>>() else {return Ok(None)};
         let mut result=PreparedTransformCommit {owner:packet.scene.owner(),revision:packet.scene.revision(),extent:packet.document_extent,
             colour:r.document_color(),requests:Vec::new(),sources:Vec::new(),pages:Vec::new()};
         for (state,(target,index)) in states.into_iter().zip(matches) {
@@ -617,6 +617,14 @@ impl Plan {
         let wetness=color.iter().copied().filter(|c|!self.source_bounds[1].is_empty()
             && (wet.contains(c) || support.iter().any(|region|!region.page_local(*c).is_empty()))).collect();
         [color,wetness]
+    }
+    fn sampled(&self,transform:&layer_core::ImageTransform,extent:[u32;2])->PixelRect {
+        let sampling=snapshot::sampling_support(transform);
+        pixel_rect(self.cut.outset((sampling+u32::from(sampling!=0)) as f32),extent)
+    }
+    pub(crate) fn reads(&self,transform:&layer_core::ImageTransform,extent:[u32;2])->impl Iterator<Item=[u32;2]> {
+        let sampled=if transform.affected_bounds(self.cut).is_empty() {PixelRect::EMPTY}else {self.sampled(transform,extent)};
+        self.source_bounds.into_iter().flat_map(move |bounds|page_coordinates(bounds.intersect(sampled)))
     }
     fn channel_regions(&self,transform:&layer_core::ImageTransform,extent:[u32;2])->[[PixelRect;2];2] {
         self.source_bounds.map(|b| {
@@ -1218,9 +1226,7 @@ impl ImageTransformState {
             }
         }
         let initialize=initializes[0].clone();
-        let sampling=snapshot::sampling_support(transform);
-        let reach = (sampling + u32::from(sampling!=0)) as f32;
-        let read = pixel_rect(self.plan.cut.outset(reach), r.target_extent(layer));
+        let read = self.plan.sampled(transform, r.target_extent(layer));
         let plans = channel_pages.iter().enumerate().map(|(channel, pages)| {
             if pages.is_empty() { return Ok(Vec::new()); }
             let targets = pages.iter().filter_map(|&c| {

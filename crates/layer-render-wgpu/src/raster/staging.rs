@@ -381,6 +381,9 @@ impl RestorePreflight {
     fn complete(&self)->bool {self.failure.is_some() || self.targets.iter().flatten().all(TargetRestore::complete)}
     fn waiting(&self)->bool {!self.complete() || self.failure.is_none() && self.refused.is_some()}
 }
+fn operation_transform<'a>(packet:FramePacket<'a>,target:SourceTarget,index:u32)->Option<&'a layer_core::ImageTransform> {
+    match &packet.scene.operations(target)?.get(index as usize)?.kind {layer_core::RasterOperationKind::Transform(transform)=>Some(transform),_=>None}
+}
 fn rectangular_preview_pages<'a>(outputs:&'a [(SourceTarget,Output)],batch:&'a DabBatch,extent:[u32;2])->impl Iterator<Item=[u32;2]>+'a {
     let damage=batch_pixel_rect(batch,extent);
     outputs.iter().filter_map(move |(target,output)|match output {
@@ -484,10 +487,11 @@ impl WgpuRasterizer {
             let coverage=target.is_coverage().then(||packet.scene.mask(packet.scene.source_owner(target).unwrap()).unwrap().1);
             if let DabBatchKind::RasterOperation(index)=batch.kind && let Some(operation)=packet.scene.operations(target).and_then(|operations|operations.get(index as usize))
                 && let layer_core::RasterOperationKind::Transform(transform)=&operation.kind {
-                let geometry=[if coverage.is_some() {RasterPlane::Mask}else {RasterPlane::Color},RasterPlane::WatercolorWetness].map(|plane|self.content_pages(packet,target,plane,&outputs));
+                let root=self.restored_root(packet,target);
+                let geometry=[if coverage.is_some() {RasterPlane::Mask}else {RasterPlane::Color},RasterPlane::WatercolorWetness].map(|plane|self.source_support(root.as_deref(),target,plane,&outputs));
                 let base=coverage.is_none().then(||transform.source_base.as_ref().or_else(||self.tiled_sources.get(&target))).flatten();
-                let plan=paint_transform::Plan::of(geometry.each_ref().map(|pages|pages.iter().copied()),base,operation.coverage.selection.as_ref(),packet.scene.target_extent(target));
-                let [color,wetness]=plan.writes(transform,packet.scene.target_extent(target),&geometry[1]);
+                let plan=paint_transform::Plan::of(geometry.map(BTreeSet::into_iter),base,operation.coverage.selection.as_ref(),packet.scene.target_extent(target));
+                let [color,wetness]=plan.writes(transform,packet.scene.target_extent(target),&self.content_pages(packet,target,RasterPlane::WatercolorWetness,&outputs));
                 outputs.extend(color.into_iter().map(|c|(target,coverage.map_or(Output::Color(c),|source|Output::Mask(c,source.default_coverage.to_bits())))));
                 outputs.extend(wetness.into_iter().map(|c|(target,Output::Wetness(c))));
                 transforms.push(((target,index),plan));continue;
@@ -563,21 +567,37 @@ impl WgpuRasterizer {
         }
         (outputs.into_iter().collect(),transforms)
     }
-    fn content_pages(&self,packet:FramePacket<'_>,target:SourceTarget,plane:RasterPlane,planned:&BTreeSet<(SourceTarget,Output)>)->BTreeSet<[u32;2]> {
-        let data=[packet.scene.raster(target),packet.restore_rasters.iter().find(|(id,_)|*id==target).map(|(_,root)|root)].into_iter().flatten()
-            .filter_map(|root|root.try_data().and_then(Result::ok))
-            .chain(self.raster.as_ref().and_then(|runtime|runtime.targets.get(&target)).map(|current|current.contents.data().clone()))
-            .chain(self.native_backing(target).cloned()).collect::<Vec<_>>();
-        let layer=self.paint_layers.iter().find(|layer|layer.id==target);
-        let resident=match (plane,layer) {
-            (RasterPlane::Mask,_)=>self.layer_masks.pages.keys().filter(|(id,_)|*id==target).map(|(_,c)|*c).collect(),
-            (RasterPlane::Color,Some(layer))=>layer.pages.iter().map(|page|page.coordinate).collect(),
-            (RasterPlane::WatercolorWetness,Some(layer))=>layer.watercolor_wetness_pages.iter().map(|page|page.coordinate).collect(),
-            _=>Vec::new(),
+    fn restored_root(&self,packet:FramePacket<'_>,target:SourceTarget)->Option<Arc<RasterData>> {
+        let root=packet.scene.raster(target)?;
+        let current=self.raster.as_ref().and_then(|runtime|runtime.targets.get(&target));
+        let explicit=packet.restore_rasters.iter().find(|(id,_)|*id==target).map(|(_,root)|root);
+        let wanted=[Some(root),explicit].into_iter().flatten().find_map(|root|root.try_data().and_then(Result::ok));
+        let reset=packet.reset_layers||packet.document_extent!=self.document_extent;
+        match current {
+            Some(current) if !reset && (wanted.is_none() || explicit.is_none() && current.revision==*root)=>None,
+            _=>Some(wanted.or_else(||current.map(|current|current.contents.data().clone())).unwrap_or_default()),
+        }
+    }
+    fn source_support(&self,root:Option<&RasterData>,target:SourceTarget,plane:RasterPlane,planned:&BTreeSet<(SourceTarget,Output)>)->BTreeSet<[u32;2]> {
+        let mut pages=match root {
+            Some(root)=>root.tiles.keys().filter(|key|key.plane==plane).map(|key|key.coordinate).collect(),
+            None=>self.current_raster_versions(target).map_or_else(|_|BTreeSet::new(),|versions|versions.authored_pages(plane)),
         };
-        resident.into_iter().chain(data.iter().flat_map(|data|data.tiles.keys()).filter(|key|key.plane==plane).map(|key|key.coordinate))
-            .chain(planned.iter().filter(|(id,_)|*id==target).filter_map(|(_,output)|output.native_key()).filter(|key|key.plane==plane).map(|key|key.coordinate))
-            .collect()
+        pages.extend(planned.iter().filter(|(id,_)|*id==target).filter_map(|(_,output)|output.native_key()).filter(|key|key.plane==plane).map(|key|key.coordinate));
+        pages
+    }
+    fn content_pages(&self,packet:FramePacket<'_>,target:SourceTarget,plane:RasterPlane,planned:&BTreeSet<(SourceTarget,Output)>)->BTreeSet<[u32;2]> {
+        let root=self.restored_root(packet,target);
+        let mut pages=self.source_support(root.as_deref(),target,plane,planned);
+        if root.is_none() {
+            match (plane,self.paint_layers.iter().find(|layer|layer.id==target)) {
+                (RasterPlane::Mask,_)=>pages.extend(self.layer_masks.pages.keys().filter(|(id,_)|*id==target).map(|(_,c)|*c)),
+                (RasterPlane::Color,Some(layer))=>pages.extend(layer.pages.iter().map(|page|page.coordinate)),
+                (RasterPlane::WatercolorWetness,Some(layer))=>pages.extend(layer.watercolor_wetness_pages.iter().map(|page|page.coordinate)),
+                _=>{},
+            }
+        }
+        pages
     }
     pub(crate) fn retire_restore(&mut self) {
         let bytes=self.staged_restore_bytes();
@@ -994,7 +1014,7 @@ impl WgpuRasterizer {
                     coordinates.extend(watercolor_update_damages(packet.dab_batches,index,packet.scene.target_extent(batch.target)).into_iter()
                         .flat_map(page_coordinates).flat_map(|coordinate|source_access::neighborhood(coordinate,[[0,0],[-1,0],[1,0],[0,-1],[0,1]].map(Some))));
                 }
-                if let DabBatchKind::RasterOperation(index)=batch.kind {
+                if let DabBatchKind::RasterOperation(index)=batch.kind && operation_transform(packet,batch.target,index).is_none() {
                     let extent=packet.scene.target_extent(batch.target);let bounds=batch_pixel_rect(batch,extent);
                     let bounds=packet.scene.operations(batch.target).and_then(|operations|operations.get(index as usize))
                         .map_or(bounds,|operation|scene::operation_read_bounds(operation,bounds,extent));
@@ -1002,7 +1022,8 @@ impl WgpuRasterizer {
                 }
             }
         }
-        for batch in packet.dab_batches.iter().filter(|batch|batch.target.is_coverage()) {
+        for batch in packet.dab_batches.iter().filter(|batch|batch.target.is_coverage()
+            && !matches!(batch.kind,DabBatchKind::RasterOperation(index) if operation_transform(packet,batch.target,index).is_some())) {
             required.entry(batch.target).or_default().extend(page_coordinates(batch_pixel_rect(batch,packet.scene.target_extent(batch.target))));
         }
         if let Some(fill)=&self.fill_preview {
@@ -1027,6 +1048,9 @@ impl WgpuRasterizer {
         let bases=retained.iter().filter_map(|(target,scene)|scene.paint_base(*target).map(|base|(*target,Arc::as_ptr(base.image.storage()) as usize,base.offset))).collect();
         let (outputs,transforms)=self.raster_outputs(packet,plans);
         for (target,output) in outputs.iter().filter(|(_,output)|!output.preview()) {required.entry(*target).or_default().insert(output.coordinate());}
+        for ((target,index),plan) in &transforms {
+            if let Some(transform)=operation_transform(packet,*target,*index) {required.entry(*target).or_default().extend(plan.reads(transform,packet.scene.target_extent(*target)));}
+        }
         if self.preview_from_persistent(packet.dab_batches) && !Self::sparse_preview(packet.dab_batches) {
             for batch in packet.dab_batches.iter().filter(|batch|batch.kind==DabBatchKind::Preview && matches!(batch.target,SourceTarget::Paint(_))) {
                 let offsets=self.material_offsets(batch);
@@ -1042,7 +1066,7 @@ impl WgpuRasterizer {
             if !self.prepare_native_admission_for_frame(packet) {return false;}
             self.refresh_memory_limits();return self.restore_ready();}
         self.retire_restore();
-        let commit=match self.transforms.as_ref().unwrap().prepare_commit(self,packet) {
+        let commit=match self.transforms.as_ref().unwrap().prepare_commit(self,packet,&transforms) {
             Ok(commit)=>commit,Err(error)=>{self.restore_preflight=Some(RestorePreflight {key,commit:None,native:None,targets:Vec::new(),failure:Some(error),consumed:false,starts:Vec::new(),transforms,preview:None,refused:None});return true;},
         };
         let mut requests=Vec::new();

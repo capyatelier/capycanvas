@@ -3,6 +3,7 @@ use super::placement::{paint_document, occurrence_id, occurrence_mut, paint_mut,
 use layer_core::{Document, RasterOperation, RasterOperationKind, authored::*};
 use crate::test_support::{preimage, receive_request};
 use layer_core::{Affine, ImageTransform, Interpolation, LayerPlacement};
+use layer_core::raster::{RasterData, RasterRevision, RasterTile, TileBlob, TileKey};
 
 fn operation(extent: [u32; 2], affine: Affine, selection: Option<Selection>) -> RasterOperation {
     let mut coverage = reveal_all(extent, [0, 0]);
@@ -33,6 +34,15 @@ fn frame(r: &mut WgpuRasterizer, scene: SceneView<'_>, extent: [u32; 2], dabs: &
         ..packet(scene, extent)
     })
     .unwrap();
+}
+fn written_read_and_held(r: &WgpuRasterizer, target: SourceTarget) -> [Vec<[u32; 2]>; 3] {
+    let restore = r.restore_preflight.as_ref().unwrap();
+    let written = restore.outputs().iter().filter(|(at, _)| *at == target).filter_map(|(_, output)| output.native_key())
+        .filter(|key| key.plane == RasterPlane::Color).map(|key| key.coordinate).collect();
+    let read = restore.dependencies().iter().filter(|(at, _)| *at == target).flat_map(|(_, pages)| pages.iter().copied()).collect();
+    let mut held: Vec<_> = r.paint_layers.iter().filter(|layer| layer.id == target).flat_map(|layer| &layer.pages).map(|page| page.coordinate).collect();
+    held.sort_unstable();
+    [written, read, held]
 }
 /// Words of `extent` pixels' coverage `value`, `count` pixels per word.
 pub(super) fn packed(extent: [u32; 2], count: u32, value: impl Fn(u32, u32) -> u32) -> Vec<u32> {
@@ -475,6 +485,7 @@ fn transform_selection_moves_to_new_tiles_preserves_unselected_and_layer_offset(
     };
     Arc::make_mut(&mut paint_mut(&mut layer).operations).push(op);
     submit(&mut r, &layer, &[], std::slice::from_ref(&op_batch), false);
+    let moved = written_read_and_held(&r, target(&layer));
     let incremental = r.readback_srgb_rgba8().unwrap();
     assert_ne!(incremental, before);
     let at =
@@ -494,17 +505,47 @@ fn transform_selection_moves_to_new_tiles_preserves_unselected_and_layer_offset(
         vec![255, 0, 0, 255],
         "placement crosses tiles"
     );
-    let reach = page_coordinates(crate::batch_pixel_rect(&op_batch, extent)).count();
     submit(&mut r, &layer, &[d], &[b, op_batch], true);
+    let replayed = written_read_and_held(&r, target(&layer));
     assert_eq!(
         r.readback_srgb_rgba8().unwrap(),
         incremental,
         "replay across tile boundary"
     );
-    assert!(
-        reach < page_coordinates(PixelRect::full(extent)).count() && r.paint_layers[0].pages.len() <= reach,
-        "only pages under the operation's bounds are allocated"
-    );
+    let cut_and_paste = vec![[0, 0], [1, 0], [1, 1], [2, 0], [2, 1]];
+    let pages = [cut_and_paste.clone(), cut_and_paste.clone(), cut_and_paste];
+    assert_eq!([moved, replayed], [pages.clone(), pages], "the move and its replay write, read and hold the cut page and four paste pages, not [0,1] under the cut");
+}
+
+#[test]
+fn a_selection_moved_pages_away_reads_and_holds_none_of_the_pages_between() {
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let extent = [2048, 512];
+    let mut layer = paint_document(extent, "far move");
+    let descriptor = layer.composition().color.paint_descriptor();
+    let tile = |rgba: [u8; 4]| RasterTile::backed(TileBlob::encode(descriptor, &rgba.repeat(256 * 256)).unwrap());
+    paint_mut(&mut layer).raster = RasterRevision::backed(RasterData {
+        tiles: [([0, 0], [255, 0, 0, 255]), ([3, 0], [0, 255, 0, 255])].into_iter()
+            .map(|(coordinate, rgba)| (TileKey { plane: RasterPlane::Color, coordinate }, tile(rgba))).collect(),
+        watercolor: None,
+    });
+    frame(&mut r, layer.scene(), extent, &[], &[], true);
+    let selection = Selection::polygon([[64., 64.], [192., 64.], [192., 192.], [64., 192.]].map(|[x, y]| Point { x, y }).to_vec()).unwrap();
+    let op = operation(extent, Affine::translation(Point { x: 1536., y: 0. }), Some(selection));
+    let op_batch = DabBatch { damage: op.bounds(extent), ..op_batch(target(&layer), 0, &op) };
+    Arc::make_mut(&mut paint_mut(&mut layer).operations).push(op);
+    frame(&mut r, layer.scene(), extent, &[], std::slice::from_ref(&op_batch), false);
+    let moved = written_read_and_held(&r, target(&layer));
+    let incremental = r.readback_srgb_rgba8().unwrap();
+    frame(&mut r, layer.scene(), extent, &[], std::slice::from_ref(&op_batch), true);
+    let replayed = written_read_and_held(&r, target(&layer));
+    assert_eq!(r.readback_srgb_rgba8().unwrap(), incremental, "replay matches the move");
+    let at = |[x, y]: [usize; 2]| incremental[(y * extent[0] as usize + x) * 4..][..4].to_vec();
+    assert_eq!([at([128, 128]), at([1664, 128]), at([896, 128])], [vec![0; 4], vec![255, 0, 0, 255], vec![0, 255, 0, 255]],
+        "the cut empties, the paste carries the ink and the ink between them stays");
+    let cut_and_paste = vec![[0, 0], [6, 0]];
+    let pages = [cut_and_paste.clone(), cut_and_paste.clone(), cut_and_paste];
+    assert_eq!([moved, replayed], [pages.clone(), pages], "the move and its replay write, read and hold neither [3,0] nor any page between the cut and the paste");
 }
 
 #[test]
