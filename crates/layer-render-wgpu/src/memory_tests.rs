@@ -401,7 +401,7 @@ fn a_stroke_lane_that_nothing_can_free_refuses_its_edit_once_and_ends_the_wait()
     edge.flush().unwrap();
     assert!(woken.try_recv().is_ok(), "the drained bytes wake the waiting lane");
     wait(&mut r, wanted).expect("the drained bytes make room for the lane");
-    drop(r.admit_raster_window(MIB, u64::MAX / 2, 0).expect("the window falls back to the room it can get"));
+    drop(r.admit_capture_window(MIB, u64::MAX / 2, 0));
     assert_eq!(r.take_lane_failure(), None, "a window that fits after its larger first try refuses nothing");
     for refusals in 1..3 {
         assert!(wait(&mut r, u64::MAX / 2).is_err());

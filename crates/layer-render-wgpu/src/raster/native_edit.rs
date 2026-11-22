@@ -426,8 +426,8 @@ impl WgpuRasterizer {
         let [readback,least]=if capacity==0 {[0;2]}else {[capture_readback(bytes,largest,u64::MAX),capture_readback(largest,largest,0)]};
         let status=if capacity==0 {0}else {crate::native_tiles::comparison::CanonicalComparisons::bytes(capacity)?};
         let total=bytes.checked_add(readback).and_then(|n|n.checked_add(status)).ok_or(GpuRasterError::SizeOverflow)?;
-        let allocation=self.admit_raster_window(least.saturating_add(status).saturating_add(largest),total,self.projected_restore_bytes());self.note_restore_admission(&allocation);
-        let mut allocation=allocation.map_err(|_|GpuRasterError::NotReady)?;
+        let mut allocation=self.admit_capture_window(least.saturating_add(status).saturating_add(largest),total,self.projected_restore_bytes());
+        self.note_restore_admission::<()>(&Ok(()));
         let comparisons=if capacity==0 {None}else {Some(crate::native_tiles::comparison::CanonicalComparisons::reserved(self,capacity,&mut allocation)?)};
         let readback=if capacity==0 {0}else {capture_readback(bytes,largest,allocation.bytes())};
         Ok(NativeAdmission {allocation,comparisons,capacity,bytes,readback})
@@ -573,7 +573,7 @@ impl WgpuRasterizer {
             worker.submit_batch(capture.take_window())?;
         }
         let (bytes,largest)=job.inputs[job.encoded..].iter().map(|(_,tile,_)|tile_output_bytes(tile)).fold((0u64,0u64),|(bytes,largest),size|(bytes.saturating_add(size),largest.max(size)));
-        let allocation=self.admit_raster_window(capture_readback(largest,largest,0).saturating_add(largest),capture_readback(bytes,largest,u64::MAX).saturating_add(bytes),0).map_err(|_|GpuRasterError::NotReady)?;
+        let allocation=self.admit_capture_window(capture_readback(largest,largest,0).saturating_add(largest),capture_readback(bytes,largest,u64::MAX).saturating_add(bytes),0);
         let readback=capture_readback(bytes,largest,allocation.bytes());
         let capture=job.frame.capture.as_mut().unwrap();
         capture.allocation=allocation;capture.prepare_readback(readback);

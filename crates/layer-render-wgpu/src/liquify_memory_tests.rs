@@ -350,3 +350,66 @@ fn a_finished_contact_leaves_every_original_for_other_edits_to_take() {
     assert!(atlases > 0 && r.idle_original_bytes() == atlases * ORIGINAL_ATLAS_BYTES,
         "after pen-up no frame reads the contact's {atlases} atlases, but only {} B of them can be taken", r.idle_original_bytes());
 }
+
+fn fill_lane(r: &mut WgpuRasterizer) -> Vec<crate::residency::Reservation> {
+    let mut held = Vec::new();
+    loop {
+        let before = held.len();
+        for bytes in [64 << 20, 4 << 20, 256 << 10, 16 << 10] {
+            while let Ok(taken) = r.admit_raster_working(bytes) { held.push(taken); }
+        }
+        r.wait_idle().unwrap();
+        if held.len() == before { return held; }
+    }
+}
+
+#[test]
+fn a_committed_edit_captures_its_pages_while_pinned_data_fills_the_lane() {
+    use crate::layer_tests::{dab, placement};
+    let paint = |full: bool| {
+        let extent = [2048, 1024];
+        let mut doc = placement::paint_document(extent, "Capture without room");
+        let mut r = crate::memory::memory_tests::renderer(doc.composition().color,
+            layer_core::DeviceMemoryFacts { budget_bytes: Some(512 << 20), ..Default::default() }).unwrap();
+        let target = placement::target(&doc);
+        crate::test_support::submit_settled(&mut r, crate::test_support::packet(doc.scene(), extent));
+        let style = crate::tests::test_style(BrushExecution::Dry);
+        let stroke = |step: usize| {
+            let mut stamp = dab([0.2, 0.4, 0.6, 0.8]);
+            stamp.center = layer_core::Point { x: 200. + 300. * step.min(5) as f32, y: 500. };stamp.radii = [120.; 2];
+            let mut batch = crate::test_support::dab_batch(target, style.clone(), stamp.bounds());
+            batch.stroke_id = StrokeId(77);batch.stroke_start = step == 0;batch.stroke_end = step == 6;
+            (stamp, batch)
+        };
+        for step in 0..6 {
+            let (stamp, batch) = stroke(step);
+            crate::test_support::submit_ready(&mut r, FramePacket { dabs: &[stamp], dab_batches: &[batch], composite_all: false, ..crate::test_support::packet(doc.scene(), extent) }).unwrap();
+        }
+        crate::test_support::submit_ready(&mut r, FramePacket { composite_all: false, ..crate::test_support::packet(doc.scene(), extent) }).unwrap();
+        let held = if full { fill_lane(&mut r) } else { Vec::new() };
+        placement::paint_mut(&mut doc).raster = layer_core::raster::RasterRevision::pending();
+        let revision = placement::paint(&doc).raster.clone();
+        let (stamp, batch) = stroke(6);
+        crate::test_support::submit_ready(&mut r, FramePacket { dabs: &[stamp], dab_batches: &[batch], composite_all: false, ..crate::test_support::packet(doc.scene(), extent) })
+            .expect("the committing frame submits");
+        let idle = FramePacket { composite_all: false, ..crate::test_support::packet(doc.scene(), extent) };
+        let captured = (0..SETTLE_FRAMES).any(|_| {
+            crate::test_support::submit_ready(&mut r, idle).unwrap();
+            r.wait_idle().unwrap();
+            revision.try_data().is_some()
+        });
+        assert!(captured, "the committed pages must be captured while pinned data fills the lane (full {full})");
+        drop(held);
+        crate::test_support::submit_settled(&mut r, idle);
+        let waits = (0..SETTLE_FRAMES).any(|_| {
+            if r.next_frame() == layer_render::FrameDemand::Wait { return true; }
+            crate::test_support::submit_ready(&mut r, idle).unwrap();
+            r.wait_idle().unwrap();
+            false
+        });
+        assert!(waits, "once the capture lands the renderer waits (full {full}), not on {:?}", r.outstanding_terms());
+        revision.wait_data().unwrap().tiles.iter().map(|(key, tile)| (*key, tile.wait_backing().unwrap().decode_on_worker().unwrap())).collect::<Contents>()
+    };
+    let (pressed, roomy) = (paint(true), paint(false));
+    assert!(!roomy.is_empty() && pressed == roomy, "an edit captured past a full lane stores the pixels of one captured with room");
+}
