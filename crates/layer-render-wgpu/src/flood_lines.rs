@@ -4,8 +4,10 @@ use wgpu::util::DeviceExt;
 const PIXELS_PER_END:u64=256;
 const MIN_END_CAPACITY:u64=16384;
 const END_WORDS:u64=20;
-const SEAL_SLOTS:u64=8192;
 const FRONTIER_NODES:u64=256;
+const VISIT_ENTRIES:u64=512;
+const SLOT_BYTES:u64=FRONTIER_NODES*8+VISIT_ENTRIES*2;
+const SEAL_SLOTS:u64=(16<<20)/SLOT_BYTES/64*64;
 const HEADER_WORDS:u32=5;
 const GAP_REACH:u32=64;
 pub(super) const WINDOW_HALO:u32=GAP_REACH+2*MAX_LINE_WIDTH;
@@ -151,8 +153,8 @@ impl Lines {
         }
         if self.frontier.is_none() {
             let limits=device.limits();
-            let slots=(limits.max_storage_buffer_binding_size.min(limits.max_buffer_size)/(FRONTIER_NODES*8)).clamp(64,SEAL_SLOTS)/64*64;
-            self.frontier=Some(device.create_buffer(&wgpu::BufferDescriptor {label:Some("region seal search frontier"),size:slots*FRONTIER_NODES*8,
+            let slots=(limits.max_storage_buffer_binding_size.min(limits.max_buffer_size)/SLOT_BYTES).clamp(64,SEAL_SLOTS)/64*64;
+            self.frontier=Some(device.create_buffer(&wgpu::BufferDescriptor {label:Some("region seal search frontier"),size:slots*SLOT_BYTES,
                 usage:wgpu::BufferUsages::STORAGE,mapped_at_creation:false}));
         }
         self.extent=extent;self.offsets=offsets;
@@ -289,9 +291,10 @@ impl Lines {
             let weight=match entry {"grain_bits"=>f64::from(radius*16+32),"jump_distance"=>9.,"store_distance"=>16.,"skeleton_ridges"=>32.,"skeleton_prune"=>if params[16]==0 {1.}else{8.},"line_ends"=>32.,"refine_ends"=>1024.,"seal_candidates"=>4096.,_=>1.};
             let sparse=entry=="skeleton_ridges" || entry=="jump_distance" && matches!(params[17],0|4);
             let weight=weight*if sparse {32.}else{1.};
-            let count=((((budget-spent)/weight) as u64).max(64)/64*64).min(remaining).min(if entry=="seal_candidates" {self.frontier.as_ref().unwrap().size()/(FRONTIER_NODES*8)}else{u64::MAX});
+            let count=((((budget-spent)/weight) as u64).max(64)/64*64).min(remaining).min(if entry=="seal_candidates" {self.frontier.as_ref().unwrap().size()/SLOT_BYTES}else{u64::MAX});
             steps.push((entry,count,params.clone()));spent+=count as f64*weight;
             if count<remaining {params[24]+=count as u32;work.steps.push_front((entry,remaining-count,params));}
+            if entry=="seal_candidates" {break;}
         }
         let mut encoded=!steps.is_empty();
         for run in steps.chunk_by(|a,b|(a.0=="seal_candidates")==(b.0=="seal_candidates")) {
@@ -498,6 +501,36 @@ mod tests {
         let functions=module.functions.iter().map(|(_,function)|function).chain(module.entry_points.iter().map(|entry|&entry.function));
         let largest=functions.flat_map(|function|function.local_variables.iter().map(|(_,local)|sizes[local.ty].size)).max().unwrap();
         assert!(largest<=512,"a {largest}-byte function array does not fit the A10 GPU stack");
+    }
+
+    #[cfg(not(target_arch="wasm32"))]
+    #[test]
+    fn seal_searches_submit_one_frontier_dispatch_at_a_time_at_61mp() {
+        let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let mut lines=Lines::new(&r.device);
+        pollster::block_on(r.device.compilation().unwrap().prepare_all(["refine_ends","seal_candidates"].map(|entry|&lines.pipelines[entry]))).unwrap();
+        lines.allocate(&r.device,[9504,6336],64,&[(0,[0,0,64,64])]).unwrap();
+        let slots=lines.frontier.as_ref().unwrap().size()/SLOT_BYTES;
+        assert!(slots*SLOT_BYTES<=16<<20);
+        let mask=r.device.create_buffer(&wgpu::BufferDescriptor {label:Some("open reference"),size:u64::from(lines.offsets[0])*4,
+            usage:wgpu::BufferUsages::STORAGE,mapped_at_creation:false});
+        let input=Input {device:&r.device,mask:&mask,paper:&r.empty_paper_view};
+        let pending=|lines:&Lines|lines.building.as_ref().map_or(0,|work|work.steps.iter().filter(|(entry,_,_)|*entry=="seal_candidates").map(|(_,count,_)|*count).sum::<u64>());
+        for ends in [26932,lines.offsets[3]] {
+            let (tx,rx)=mpsc::channel();tx.send(Ok([ends,0])).unwrap();
+            lines.building=Some(Build {steps:Default::default(),submission:None,in_flight:Default::default(),ends:Some(rx),ranked:false,incremental:false});
+            let mut left=u64::from(ends);
+            for _ in 0..=u64::from(ends).div_ceil(slots) {
+                let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+                let ready=lines.advance(&input,&mut encoder,1,f64::INFINITY,true).unwrap().0;
+                r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+                let searched=left-pending(&lines);
+                assert!(searched<=slots,"{searched} of {ends} seal searches share one submission; one frontier holds {slots}");
+                left-=searched;
+                if ready {break;}
+            }
+            assert_eq!((left,lines.building.is_none()),(0,true));
+        }
     }
 
     #[test]
