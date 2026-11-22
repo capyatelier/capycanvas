@@ -301,15 +301,20 @@ fn a_contact_ended_under_a_predicted_tip_draws_the_tip_away_like_a_twin_that_com
             for step in 1..3 {stroke_frame(&mut r,frame,target,&style,&[inked(step),sized_dab([tip,200.],4.5,&style)],true,step);}
             let (held,tipped)=(r.scale_display.as_ref().unwrap().contact_id(),display_pixels(&r)[at]);
             crate::test_support::upload_layer_page(&mut r,doc.scene(),other_target,[0,1],&bytes);
-            for step in 3..6 {stroke_frame(&mut r,frame,target,&style,&[inked(step)],true,step);}
+            let point=[(i64::from(tip as u32)+offset[0]) as u32,(200+offset[1]) as u32];
+            super::evict_composite_pages(r.scale_display.as_ref().unwrap(),&[PixelRect::new(point[0],point[1],point[0]+1,point[1]+1)]);
+            stroke_frame(&mut r,frame,target,&style,&[inked(3)],true,3);
+            let next=display_pixels(&r)[at];
+            for step in 4..6 {stroke_frame(&mut r,frame,target,&style,&[inked(step)],true,step);}
             let (ended,cleared)=(held.is_some() && r.scale_display.as_ref().unwrap().contact_id()!=held,display_pixels(&r)[at]);
             let last=inked(6);
             let lift=layer_render::DabBatch {stroke_start:false,stroke_end:true,..crate::test_support::dab_batch(target,style.clone(),last.bounds())};
             crate::test_support::submit_settled(&mut r,FramePacket {dabs:std::slice::from_ref(&last),dab_batches:std::slice::from_ref(&lift),time_seconds:1.,..frame});
             crate::test_support::submit_settled(&mut r,frame);
-            (ended,tipped,cleared,display_pixels(&r))
+            (ended,tipped,next,cleared,display_pixels(&r))
         };
-        let [(ended,tipped,cleared,settled),(_,_,twin_cleared,twin)]=[false,true].map(drawn);
+        let [(ended,tipped,next,cleared,settled),(_,_,twin_next,twin_cleared,twin)]=[false,true].map(drawn);
+        assert!(max_error(&[next],&[twin_next])<1e-4,"{case}: the first frame after the contact ended, with no stored composite for its cell, the tip shows {next:?}, a twin {twin_next:?}");
         assert!(ended,"{case}: the write to another layer ends a contact that holds a tip");
         assert!(max_error(&[tipped],&[twin_cleared])>0.05,"{case}: the tip was shown: {tipped:?} against {twin_cleared:?}");
         assert!(max_error(&[cleared],&[twin_cleared])<1e-4,"{case}: three frames after the contact ended the cell that held its tip shows {cleared:?}, a twin {twin_cleared:?}");

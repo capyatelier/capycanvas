@@ -1377,7 +1377,7 @@ pub(super) struct Projection {
     key: Key,
     versions:Vec<Recorded>,
 }
-struct Shown {recorded:Option<Recorded>,submission:submission::Submission,exact:bool,direct:bool}
+struct Shown {recorded:Option<Recorded>,submission:submission::Submission,exact:bool,direct:bool,predicted:bool}
 impl Shown {
     fn unnamed(&self)->bool {self.recorded.is_none() && !self.submission.discarded()}
 }
@@ -1685,7 +1685,7 @@ impl Cache {
         for (index,copy,exact) in copies {
             copy.image.clone().track(encoder);changed=changed.union(copy.region);
             let recorded=copy.versions.into_iter().next().expect("a copied page records its key");
-            let previous=std::mem::replace(&mut cells.cells[index],Cell {shown:Some(Shown {recorded:Some(recorded),submission:submission.clone(),exact,direct:false}),current:true,..Cell::default()}).shown;
+            let previous=std::mem::replace(&mut cells.cells[index],Cell {shown:Some(Shown {recorded:Some(recorded),submission:submission.clone(),exact,direct:false,predicted:false}),current:true,..Cell::default()}).shown;
             cells.unconfirmed.push((submission.clone(),index,previous));
         }
         drop(cells);
@@ -1697,7 +1697,7 @@ impl Cache {
         if write.key.level!=self.plan.level || write.accepted.is_none() && self.gesture.is_none() {return;}
         let mut cells=self.cells.lock().unwrap();
         let index=Cells::index(self.plan,write.key.coordinate);
-        let previous=std::mem::replace(&mut cells.cells[index],Cell {shown:Some(Shown {recorded:write.accepted.map(|accepted|accepted.recorded),submission:submission.clone(),exact:write.accuracy==Accuracy::Exact,direct:true}),
+        let previous=std::mem::replace(&mut cells.cells[index],Cell {shown:Some(Shown {recorded:write.accepted.map(|accepted|accepted.recorded),submission:submission.clone(),exact:write.accuracy==Accuracy::Exact,direct:true,predicted:false}),
             current:true,..Cell::default()}).shown;
         cells.unconfirmed.push((submission,index,previous));
     }
@@ -1869,9 +1869,11 @@ impl Cache {
     pub(super) fn waiting_cells(&self,r:&WgpuRasterizer)->bool {
         self.cells().is_some_and(|(cells,_,_)|cells.cells.iter().any(|cell|cell.naming(r)))
     }
-    pub(super) fn keyless(&self,region:PixelRect)->bool {
+    pub(super) fn keyless(&self,region:PixelRect)->bool {self.keyless_where(region,|_|true)}
+    pub(super) fn keyless_without_prediction(&self,region:PixelRect)->bool {self.keyless_where(region,|shown|!shown.predicted)}
+    fn keyless_where(&self,region:PixelRect,accept:impl Fn(&Shown)->bool)->bool {
         self.cells().is_some_and(|(cells,_,_)|coordinates(region,self.plan.level).all(|coordinate|
-            cells.cells.get(Cells::index(self.plan,coordinate)).is_some_and(|cell|cell.shown.as_ref().is_some_and(|shown|shown.recorded.is_none()))))
+            cells.cells.get(Cells::index(self.plan,coordinate)).is_some_and(|cell|cell.shown.as_ref().is_some_and(|shown|shown.recorded.is_none() && accept(shown)))))
     }
     pub(super) fn unnamed_writes(&self,regions:&[PixelRect])->Vec<Option<submission::Submission>> {
         let Some((cells,_store,_))=self.cells() else {return vec![None;regions.len()];};
@@ -1910,8 +1912,9 @@ impl Cache {
         for (cell,coordinate) in cells.cells.iter_mut().zip(coordinates(plan.bounds,plan.level)) {
             let Some(shown)=cell.shown.as_mut().filter(|shown|shown.unnamed()) else {continue;};
             let region=bounds(coordinate,plan.level,plan.extent);
-            shown.recorded=tips.iter().all(|tip|tip.intersect(region).is_empty())
-                .then(||materialize(frame,&Key {coordinate,..template.clone()},region,input_level).ok()).flatten();
+            let tipped=tips.iter().any(|tip|!tip.intersect(region).is_empty());
+            shown.predicted|=tipped;
+            shown.recorded=(!tipped).then(||materialize(frame,&Key {coordinate,..template.clone()},region,input_level).ok()).flatten();
             if shown.recorded.is_none() {cell.invalidate();}
         }
     }

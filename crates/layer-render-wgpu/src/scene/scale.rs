@@ -1109,7 +1109,7 @@ impl Cache {
             let preview=matches!(destination,Destination::Preview);
             let mut accepted=Vec::new();
             for region in composes {
-                if !own.is_empty() && if own.contains(&region) {self.pivot_missing(region)}else {self.keyless(region)} {continue;}
+                if !own.is_empty() && if own.contains(&region) {self.pivot_missing(region)}else {self.keyless_without_prediction(region)} {continue;}
                 if !budget.fits(class(region),!accepted.is_empty(),object_cache::PASS_TAPS) {break;}
                 let requests=self.region_sources(scene,r,packet,region,tiled);
                 let mut unpublished=false;
