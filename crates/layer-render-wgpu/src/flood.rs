@@ -9,6 +9,7 @@ mod lines;
 pub(super) use lines::{Input,ScopeProbe,UNDERFILL_HALF_PIXELS};
 const WINDOW: u32 = 2048;
 const UNLABELED: u32 = 4;
+const SCOPED_WINDOW: u32 = 512;
 const PARAMETER_BYTES: u64 = 96;
 
 pub(super) struct Flood {
@@ -57,9 +58,13 @@ pub(super) struct Areas {
 struct Labels { side: u32, grid: [u32; 2], slots: u64, flags: u64, marks: u64, seed: u64, words: u64 }
 impl Labels {
     fn new(extent: [u32; 2], limits: &wgpu::Limits) -> Option<Self> {
-        let [w, h] = extent;
         let limit = limits.max_storage_buffer_binding_size.min(limits.max_buffer_size);
         let side = (5..=WINDOW.ilog2()).rev().map(|n| 1u32 << n).find(|side| *side>2*lines::WINDOW_HALO && u64::from(*side).pow(2) * 32 <= limit)? - 2*lines::WINDOW_HALO;
+        Self::sized(extent, limits, side)
+    }
+    fn sized(extent: [u32; 2], limits: &wgpu::Limits, side: u32) -> Option<Self> {
+        let [w, h] = extent;
+        let limit = limits.max_storage_buffer_binding_size.min(limits.max_buffer_size);
         let grid = extent.map(|v| v.div_ceil(side));
         let plane = u64::from(w.div_ceil(32)) * u64::from(h);
         let slots = plane.max(u64::from(side).pow(2));
@@ -291,7 +296,9 @@ impl Flood {
             return Err(GpuRasterError::InvalidExtent);
         }
         let limit = device.limits();
-        let labels = Labels::new(extent, &limit).ok_or(GpuRasterError::SizeOverflow)?;
+        let area=reach.map(|blocks|blocks.iter().map(|&[x,y]|PixelRect::new(x.saturating_sub(1)*lines::SCOPE_BLOCK,y.saturating_sub(1)*lines::SCOPE_BLOCK,(x+2)*lines::SCOPE_BLOCK,(y+2)*lines::SCOPE_BLOCK))
+            .fold(PixelRect::EMPTY,PixelRect::union).intersect(PixelRect::full(extent)));
+        let labels = area.and_then(|_|Labels::sized(extent, &limit, SCOPED_WINDOW)).or_else(||Labels::new(extent, &limit)).ok_or(GpuRasterError::SizeOverflow)?;
         let mask_bytes = u64::from(w.div_ceil(32)) * u64::from(h) * 4;
         if let Some(trail)=trail {
             if self.trail.as_ref().is_none_or(|(id,size,_)|*id!=trail.transaction || *size!=extent) {
@@ -334,10 +341,7 @@ impl Flood {
         if band {encoder.copy_buffer_to_buffer(&summary,32,&region.coverage,region.bounds_offset+32,20);}
         let stride = PARAMETER_BYTES.next_multiple_of(u64::from(limit.min_uniform_buffer_offset_alignment));
         let windows: Vec<_> = labels.windows(extent).collect();
-        let included=reach.map(|blocks|windows.iter().map(|(_,[x,y,w,h])|blocks.iter().any(|&[bx,by]| {
-            let [x0,y0,x1,y1]=[bx.saturating_sub(1),by.saturating_sub(1),bx+2,by+2].map(|n|n*lines::SCOPE_BLOCK);
-            x0<x+w && *x<x1 && y0<y+h && *y<y1
-        })).collect::<Vec<_>>());
+        let included=area.map(|area|windows.iter().map(|(_,[x,y,w,h])|!area.intersect(PixelRect::new(*x,*y,x+w,y+h)).is_empty()).collect::<Vec<_>>());
         let modes:u32=if multiple {4}else{3};
         let mut data = vec![0u8;(stride*windows.len() as u64*u64::from(attempts)*u64::from(modes+1)) as usize];
         let offsets = [labels.slots, labels.flags, labels.marks, labels.seed].map(|v| v as u32);
@@ -459,7 +463,7 @@ impl Flood {
         if enclosed {run(encoder,if attempts>1 {2}else{0},0,0,&["restore_components"]);}
         if band {
             self.lines.barrier_plane(&input,encoder,&region.coverage,store,0,2);
-            self.lines.assign(&input,encoder,fill.is_some(),included.as_deref());
+            self.lines.assign(&input,encoder,fill.is_some(),area);
         }
         if let layer_render::RegionEdges::GrowShrink(value)=refinement.edges && value!=0 {self.lines.grow(&input,encoder,value);}
         if let Some((stop,clip))=stop && (clip || !band) {self.lines.intersect(&input,encoder,stop);}

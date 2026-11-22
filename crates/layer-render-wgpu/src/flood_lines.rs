@@ -448,10 +448,9 @@ impl Lines {
         self.encode(input,encoder,Some(parents),None,params(vec![("hold_barriers",u64::from(self.offsets[0]),self.params([0;4],[0;4],[0;4],[1.,1.,0.,0.]))]));
     }
 
-    pub fn assign(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,fill:bool,included:Option<&[bool]>) {
+    pub fn assign(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,fill:bool,area:Option<PixelRect>) {
         let mut steps=Vec::new();
-        for (at,&(core,window)) in self.windows.iter().enumerate() {
-            if included.is_some_and(|included|!included[at]) {continue;}
+        for (core,window) in area.map_or_else(||self.windows.clone(),|area|self.windows_in(&[area],WINDOW_HALO)) {
             steps.push(("reset_ends",1,self.params(core,window,[2,0,0,0],[1.,1.,0.,0.])));
             let words=(window[0]+window[2]).div_ceil(32)-window[0]/32;
             steps.push(("region_seeds",u64::from(words)*u64::from(window[3]),self.params(core,window,[0,5,0,0],[1.,1.,0.,0.])));
