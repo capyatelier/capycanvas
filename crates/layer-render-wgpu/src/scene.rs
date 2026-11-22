@@ -2415,7 +2415,9 @@ impl Scene {
             display.exit_contact();
         }
         let frame=SignatureFrame::prepare(r,packet)?;
-        self.scale_pages.lock().unwrap().set_expected(frame);
+        let mut store=self.scale_pages.lock().unwrap();
+        let bound=r.scale_display.as_ref().zip(store.expected()).and_then(|(display,previous)|display.stroke_bound(packet,&frame,previous));
+        store.set_expected_within(frame,bound);
         Ok(())
     }
 

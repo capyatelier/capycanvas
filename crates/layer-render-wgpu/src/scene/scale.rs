@@ -1078,7 +1078,7 @@ impl Cache {
         let output_bounds=self.output_plan().bounds;
         let texels=|region:PixelRect| {let [x,y,width,height]=paint_transform::texel_rect(region.window_local(output_bounds),side);PixelRect::new(x,y,x+width,y+height)};
         let mut written=PixelRect::EMPTY;
-        let mut shown=None;
+        let mut shown=PixelRect::EMPTY;
         let mut composed=Vec::new();
         if live {
             let (done,blocked)=self.compose_contact(scene,r,packet,encoder,std::mem::take(&mut composes),*retained)?;
@@ -1087,7 +1087,7 @@ impl Cache {
                 self.pixels.wrote(texels(*region));
                 written=written.union(texels(*region));
             }
-            shown=Some(done.iter().filter(|(_,changed)|!changed.is_empty()).fold(PixelRect::EMPTY,|shown,(_,changed)|shown.union(texels(*changed))));
+            shown=done.iter().filter(|(_,changed)|!changed.is_empty()).fold(PixelRect::EMPTY,|shown,(_,changed)|shown.union(texels(*changed)));
             if !written.is_empty() || self.pixels.committed_root().is_none() {self.commit_window(r,encoder)?;}
             for region in blocked {self.hide(region);self.block(arrivals,region,waiting_input(scene,r,false));}
             composed=done.into_iter().map(|(region,_)|region).collect();
@@ -1251,11 +1251,13 @@ impl Cache {
                 }
             }
             sleeping.extend(completed.iter_mut().filter(|ready|ready.publish).map(|ready|(ready.handle.region(),std::mem::take(&mut ready.unit.waits))));
+            let lags=self.shown_writes(&completed.iter().filter(|ready|ready.publish).map(|ready|ready.handle.region()).collect::<Vec<_>>());
             self.encode_units(scene, r, encoder, completed.iter_mut().map(|ready| std::mem::take(&mut ready.unit)))?;
             for ReadyUnit {handle,publish,..} in completed {
                 self.pages.lock().unwrap().finish_inputs(&handle);
                 if publish {composed.push(handle.region());}
             }
+            if target==Root::Window {shown=composed.iter().zip(lags).fold(shown,|shown,(region,(_,lag))|shown.union(texels(lag.map_or(*region,|lag|region.intersect(lag)))));}
             let held=target==Root::Store && {
                 let selection=self.select_cells(r,served,presented,&selected,arrivals)?;
                 let complete=!transition || selection.complete(served);
@@ -1269,6 +1271,7 @@ impl Cache {
                 self.pixels.wrote(texels(region));
                 written=written.union(texels(region));
             }
+            shown=shown.union(texels(copied));
             if !held && (!written.is_empty() || transition || self.pixels.committed_root().is_none()) {self.commit_window(r,encoder)?;}
             if presented==pages::Accuracy::Exact {blocks.extend(composed.iter().map(|region|(*region,waiting_input(scene,r,false))));}
             for (region,input) in blocks {self.block(arrivals,region,input);}
@@ -1296,11 +1299,11 @@ impl Cache {
         }
         if !matches!(destination, Destination::Navigator) {
             r.telemetry.phase_begin(11, &r.device, &r.queue, encoder);
-            if let Some((finer,changed))=finer {written=written.union(texels(self.derive(scene,r,encoder,commands,finer,changed)?));}
+            if let Some((finer,changed))=finer {shown=shown.union(texels(self.derive(scene,r,encoder,commands,finer,changed)?));}
             self.reduce_output(scene,r,encoder,commands)?;
             r.telemetry.phase_end(11, encoder);
         }
-        Ok(document(shown.unwrap_or(written)))
+        Ok(document(shown))
     }
     fn encode_units(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, encoder: &mut submission::CommandEncoder,
         units: impl IntoIterator<Item = Unit>,
