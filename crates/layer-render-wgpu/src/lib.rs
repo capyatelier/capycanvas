@@ -1260,6 +1260,7 @@ pub struct WgpuRasterizer {
     metrics: GpuRasterMetrics,
     telemetry: telemetry::Telemetry,
     frame_pace: frame_pace::FramePace,
+    material_work: layer_render::MaterialWork,
 }
 
 /// What tests switch and count in a renderer.
@@ -1487,6 +1488,7 @@ impl WgpuRasterizer {
             startup: None,
             telemetry,
             frame_pace: Default::default(),
+            material_work: Default::default(),
             adapter,
             device,
             queue,
@@ -3966,6 +3968,8 @@ impl CanvasRenderer for WgpuRasterizer {
     fn has_pending_submission(&self) -> bool { self.settling.is_some() }
     fn next_frame(&self) -> layer_render::FrameDemand { self.frame_demand() }
     fn waits_for_frame_slot(&self) -> bool { self.frame_slot_blocked() }
+    fn set_material_work(&mut self, work: layer_render::MaterialWork) { self.material_work = work; }
+    fn material_budget(&self) -> Option<u64> { self.frame_pace.material_budget() }
     fn stroke_waits_for_memory(&self) -> bool { self.lane_waits() }
     fn stroke_memory_refusals(&self) -> u64 { self.memory.stroke_memory_refusals() }
     fn poll_pending(&mut self, view: layer_render::ViewState) -> Result<(), Self::Error> {
@@ -5337,7 +5341,7 @@ impl WgpuRasterizer {
         let submitting = web_time::Instant::now();
         let submission = encoder.submit(&self.queue)
             .ok_or_else(|| GpuRasterError::WaitFailed("GPU device service retired".into()))?;
-        self.frame_pace.submitted(&self.device, &self.queue, submitting);
+        self.frame_pace.submitted(&self.device, &self.queue, submitting, std::mem::take(&mut self.material_work));
         #[cfg(test)]
         { self.test.frame_work = work.counts(); }
         if let Some(liquify)=&mut self.liquify {liquify.publish(packet.scene,packet.dab_batches,&publication);}

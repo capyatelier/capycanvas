@@ -161,6 +161,7 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     pending_chunk_dabs: Vec<Dab>,
     dabs: Vec<Dab>,
     batches: Vec<DabBatch>,
+    wet_pages: frame_steps::WetPages,
     liquify_preview: Option<DabBatch>,
     transform_preview: Option<layer_render::TransformPreview>,
     transform_selection: std::sync::OnceLock<Option<layer_core::Selection>>,
@@ -247,6 +248,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             pending_chunk_dabs: Vec::with_capacity(MAX_SMUDGE_DABS_PER_BATCH),
             dabs: Vec::with_capacity(DAB_CAPACITY),
             batches: Vec::with_capacity(BATCH_CAPACITY),
+            wet_pages: Default::default(),
             liquify_preview: None,
             transform_preview: None,
             transform_selection: Default::default(),
@@ -291,7 +293,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             view:_,transforms:_,clone_stroke:_,retouch_points:_,prepared_retouch:_,builder:_,dab_generator:_,
             finalized_real_points:_,active_stroke:_,pending_up:_,frame_clock_ns:_,completed_stroke:_,completed_at:_,completed_publication:_,completed_before:_,
             completed_clone_start:_,restore_rasters:_,pending_frame:_,rebuild_completed:_,estimates:_,
-            pending_chunk_dabs:_,dabs:_,batches:_,liquify_preview:_,transform_preview:_,transform_selection:_,selection_display:_,
+            pending_chunk_dabs:_,dabs:_,batches:_,wet_pages:_,liquify_preview:_,transform_preview:_,transform_selection:_,selection_display:_,
             scene_preview:_,rebuild_all:_,composite_all:_,raster_dirty:_,animation_origin_ns:_,animation_time:_,
             animation_seed:_,evaluation_context:_,metrics:_,admitted_pen:_}=self;
         editor.capture_session(self.capture_artwork(session_generation)?)
@@ -1663,6 +1665,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             composite_all: self.composite_all,
             blend_space: self.editor.document().composition().blend,
         };
+        let mut wet_pages = packet.dab_batches.iter().any(|batch| batch.style.execution == BrushExecution::Wet).then(|| self.wet_pages.clone());
+        self.backend.set_material_work(wet_pages.as_mut().map_or_else(Default::default, |pages| pages.work(document, packet.dab_batches)));
         let selection = self.display_selection().map(|s| s.into_owned());
         self.backend.set_vector_selection(self.editor.document().working.vector_items.as_ref());
         self.backend.set_working_layer(self.editor.document().working.occurrence);
@@ -1681,6 +1685,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             Poll::Pending => { self.pending_frame = Some(frame); return Ok(()); }
             Poll::Ready(result) => result.map_err(EngineError::Backend),
         };
+        if let Some(pages) = wet_pages { self.wet_pages = pages; }
 
         self.metrics.frames = self.metrics.frames.saturating_add(1);
         if result.is_ok() && !commit_rasters {
@@ -1906,9 +1911,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             if matches!(event.phase, PenPhase::Up | PenPhase::Cancel) {
                 break;
             }
-            if self.active_stroke.as_ref().is_some_and(|stroke| stroke.style.execution != BrushExecution::Dry && !stroke.style.execution.retouches()) {
+            if let Some(execution) = self.active_stroke.as_ref().map(|stroke| stroke.style.execution).filter(|execution| *execution != BrushExecution::Dry && !execution.retouches()) {
                 self.advance_finalized_prefix();
-                if frame_steps::material_page_jobs(&self.batches) >= frame_steps::MATERIAL_PAGE_JOBS_PER_FRAME {
+                if frame_steps::material_page_jobs(&self.batches) >= frame_steps::MATERIAL_PAGE_JOBS_PER_FRAME
+                    || execution == BrushExecution::Wet && self.backend.material_budget()
+                        .is_some_and(|budget| self.wet_pages.clone().work(self.editor.document(), &self.batches).committed >= budget.max(1)) {
                     break;
                 }
             }
@@ -3447,6 +3454,9 @@ mod tests {
         retouch_misses: Vec<StrokeId>,
         retouch_waiting: Option<StrokeId>,
         retired_sources: usize,
+        gpu: Option<(layer_render::MaterialPace, f64)>,
+        material_work: layer_render::MaterialWork,
+        material_frames: Vec<(Option<u64>, layer_render::MaterialWork, Vec<DabBatch>)>,
     }
 
     impl CanvasRenderer for RecordingRenderer {
@@ -3476,6 +3486,8 @@ mod tests {
         fn has_pending_submission(&self) -> bool { self.unrelated_submission }
         fn can_submit(&self) -> bool { !self.slot_full }
         fn waits_for_frame_slot(&self) -> bool { self.slot_full }
+        fn set_material_work(&mut self, work: layer_render::MaterialWork) { self.material_work = work; }
+        fn material_budget(&self) -> Option<u64> { self.gpu.as_ref().and_then(|(pace, _)| pace.budget()) }
         fn stroke_waits_for_memory(&self) -> bool { self.restore_blocked }
         fn raster_dependencies_ready(&mut self, _packet: FramePacket<'_>, _preview: Option<&layer_render::TransformPreview>) -> bool {
             !std::mem::take(&mut self.pending_preparation) && !self.restore_blocked
@@ -3523,6 +3535,11 @@ mod tests {
 
         fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
             if self.fail_submit { return Err(BackendError("submission failed")); }
+            let (budget, work) = (self.material_budget(), std::mem::take(&mut self.material_work));
+            if let Some((pace, lanes_per_ms)) = &mut self.gpu {
+                pace.observe(work, (work.committed + work.prediction) as f64 / *lanes_per_ms, MATERIAL_INTERVAL_MS);
+            }
+            self.material_frames.push((budget, work, packet.dab_batches.iter().filter(|batch| batch.kind == DabBatchKind::Persistent).cloned().collect()));
             self.restored_rasters = packet.restore_rasters.iter().map(|(target, raster)| (*target, raster.identity())).collect();
             self.time_seconds = packet.time_seconds;
             self.bake_members = packet.dab_batches.iter().filter_map(|batch| {
@@ -7237,6 +7254,72 @@ mod tests {
             }
             assert!(frames > 3, "{preset:?} drained in {frames} frames");
             assert_replays_completed_stroke(&engine, preset);
+        }
+    }
+
+    const MATERIAL_INTERVAL_MS: f64 = 1000. / 60.;
+
+    fn wide_wet_backlog(lanes_per_ms: Option<f64>) -> CanvasEngine<RecordingRenderer> {
+        let ([width, height], zoom, samples) = ([4248, 2832], 0.25, 1000_u64);
+        let document = Document::new(layer_core::authored::PortableId::random(), width, height,
+            layer_core::DocumentNames { paint: "Paint".into(), paper: "Paper".into() });
+        let view = ViewState { width_px: (width as f32 * zoom) as u32, height_px: (height as f32 * zoom) as u32, document_to_surface: [zoom, 0., 0., zoom, 0., 0.] };
+        let renderer = RecordingRenderer { gpu: lanes_per_ms.map(|rate| (Default::default(), rate)), ..Default::default() };
+        let (mut producer, mut engine) = engine_with(renderer, document, view,
+            ViewTransform { revision: 1, surface_to_document: [1. / zoom, 0., 0., 1. / zoom, 0., 0.] });
+        engine.set_brush(default_brush(DefaultBrushPreset::LoadedOil)).unwrap();
+        engine.set_instant_feedback(InstantFeedbackConfig { enabled: true, ..Default::default() }).unwrap();
+        let target = engine.document().working.target.unwrap();
+        let before = engine.document().scene().raster(target).unwrap().identity();
+        let (mut now, mut busy_until, mut pushed) = (0_u64, 0_u64, 0_u64);
+        while engine.completed_stroke.is_none() {
+            assert!(now < 120_000_000_000, "the stroke drains");
+            while pushed <= samples && pushed * 5_000_000 <= now {
+                let angle = pushed as f32 / samples as f32 * 5. * std::f32::consts::TAU;
+                let phase = if pushed == 0 { PenPhase::Down } else if pushed == samples { PenPhase::Up } else { PenPhase::Move };
+                producer.push(PenEvent { timestamp_ns: pushed * 5_000_000, surface_position: Point { x: zoom * (2124. + 740. * angle.cos()), y: zoom * (1416. + 360. * angle.sin()) },
+                    ..event(pushed + 1, phase, 0.) }).unwrap();
+                pushed += 1;
+            }
+            engine.backend_mut().slot_full = now < busy_until;
+            let (consumed, frames) = (engine.metrics.input_events, engine.backend().material_frames.len());
+            let eligible = now >= busy_until && engine.pending_frame.is_none() && engine.has_pending_input();
+            engine.render_frame_at(now).unwrap();
+            assert!(!eligible || engine.completed_stroke.is_some() || engine.metrics.input_events > consumed, "the update at {now} ns consumes input");
+            if let Some((_, work, _)) = engine.backend().material_frames.get(frames) {
+                busy_until = now + ((work.committed + work.prediction) as f64 / lanes_per_ms.unwrap_or(f64::INFINITY) * 1e6) as u64;
+            }
+            now += 16_666_667;
+        }
+        assert_replays_completed_stroke(&engine, DefaultBrushPreset::LoadedOil);
+        let stroked = engine.document().scene().raster(target).unwrap().identity();
+        assert!(stroked != before && engine.undo().unwrap(), "the stroke is one undo step");
+        assert!(engine.document().scene().raster(target).unwrap().identity() == before, "Undo restores the layer");
+        assert!(engine.redo().unwrap() && engine.document().scene().raster(target).unwrap().identity() == stroked, "Redo restores the stroke");
+        engine
+    }
+
+    fn admitted(engine: &CanvasEngine<RecordingRenderer>) -> Vec<Vec<(u32, u32, bool, bool)>> {
+        engine.backend().material_frames.iter().map(|(_, _, batches)| batches.iter().map(|batch| (batch.first_dab, batch.dab_count, batch.stroke_start, batch.stroke_end)).collect()).collect()
+    }
+
+    #[test]
+    fn a_wide_wet_backlog_admits_one_interval_of_work_each_frame_on_a_slow_gpu() {
+        let today = wide_wet_backlog(None);
+        assert_eq!(admitted(&wide_wet_backlog(Some(1e9))), admitted(&today), "a GPU that keeps its interval admits what it admits without a limit");
+        for lanes_per_ms in [8e4, 2e5] {
+            let engine = wide_wet_backlog(Some(lanes_per_ms));
+            assert_eq!(engine.backend().persistent, today.backend().persistent, "{lanes_per_ms} lanes a millisecond: every contact is drawn in order");
+            let (mut pages, mut limited) = (frame_steps::WetPages::default(), 0);
+            for (frame, (budget, work, batches)) in engine.backend().material_frames.iter().enumerate() {
+                if let Some(budget) = budget && let Some((_, earlier)) = batches.split_last() && !batches.iter().any(|batch| batch.stroke_end) {
+                    let before_last = pages.clone().work(engine.document(), earlier).committed;
+                    assert!(before_last < (*budget).max(1), "{lanes_per_ms} lanes a millisecond, frame {frame}: {before_last} lanes before its last batch against a limit of {budget}");
+                    limited += 1;
+                }
+                assert_eq!(pages.work(engine.document(), batches).committed, work.committed, "frame {frame} reports the work it admitted");
+            }
+            assert!(limited > 4, "{lanes_per_ms} lanes a millisecond: {limited} frames admitted against a limit");
         }
     }
 

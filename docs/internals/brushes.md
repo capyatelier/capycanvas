@@ -440,7 +440,12 @@ batches keep one pass each: sharing a pass across them added about 0.8 ms of
 GPU time per update on the MovinkPad 11. A frame's commands and bindings stay allocated until the GPU finishes it.
 A frame therefore consumes input only until its committed contacts reach 512
 page jobs; Dither charges its larger batches as equivalent six-contact groups.
-A slower device keeps the rest of the input queued
+Once a frame's GPU work outlasts the display interval, a wet stroke also stops
+at the work that GPU finished in one interval less the prediction it drew, but
+at no less than that prediction: a page job counts its dispatched lanes plus its
+damaged texels times its contacts, and a batch its reservoir update. The limit
+lifts when a frame keeps its interval without reaching it, so a GPU that keeps
+up admits as before. A slower device keeps the rest of the input queued
 for the next frame instead of building one frame from its whole backlog. Watercolor
 transport runs once per frame, so a device that falls behind now runs it as often
 as one that keeps up. A replay that repaints a whole stroke, after a late sensor

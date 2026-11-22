@@ -1,8 +1,10 @@
-use layer_core::{BrushExecution, Document, RasterOperationKind, Point, Rect};
-use layer_render::{Dab, DabBatch, DabBatchKind};
+use layer_core::{BrushExecution, Document, RasterOperationKind, Point, Rect, StrokeId, raster::TILE_SIZE};
+use layer_render::{Dab, DabBatch, DabBatchKind, MaterialWork};
 use std::borrow::Cow;
 
 pub(super) const MATERIAL_PAGE_JOBS_PER_FRAME: u32 = 512;
+const PAGE_LANES: u64 = TILE_SIZE as u64 * TILE_SIZE as u64;
+const RESERVOIR_LANES: u64 = 64 * 64;
 
 #[derive(Clone, Copy, Default)]
 pub(super) struct FrameSteps {
@@ -99,3 +101,51 @@ fn same_watercolor_update(earlier: &DabBatch, later: &DabBatch) -> bool {
         && earlier.target == later.target
         && earlier.material_update == later.material_update
 }
+
+#[derive(Clone, Default)]
+pub(super) struct WetPages {
+    stroke: Option<StrokeId>,
+    written: std::collections::HashMap<[u32; 2], (u8, [u32; 4])>,
+}
+
+impl WetPages {
+    pub fn work(&mut self, document: &Document, batches: &[DabBatch]) -> MaterialWork {
+        let mut work = MaterialWork::default();
+        for batch in batches.iter().filter(|batch| batch.style.execution == BrushExecution::Wet && batch.dab_count > 0) {
+            let dabs = u64::from(batch.dab_count);
+            let pages = pages(batch.damage, document.target_extent(batch.target));
+            match batch.kind {
+                DabBatchKind::Persistent => {
+                    if batch.stroke_start || self.stroke != Some(batch.stroke_id) {
+                        self.written.clear();
+                        self.stroke = Some(batch.stroke_id);
+                    }
+                    work.committed += RESERVOIR_LANES;
+                    for (page, local) in pages {
+                        let (visits, previous) = self.written.entry(page).or_insert((0, local));
+                        let lanes = if *visits < 2 { PAGE_LANES } else { area(union(local, *previous)) };
+                        work.committed += lanes + area(local) * dabs;
+                        (*visits, *previous) = (visits.saturating_add(1), local);
+                    }
+                }
+                DabBatchKind::Preview => work.prediction += pages.count() as u64 * PAGE_LANES * (1 + dabs),
+                DabBatchKind::RasterOperation(_) => {}
+            }
+        }
+        work
+    }
+}
+
+fn pages(damage: Rect, [width, height]: [u32; 2]) -> impl Iterator<Item = ([u32; 2], [u32; 4])> {
+    let clamp = |value: f32, side: u32| value.max(0.).min(side as f32) as u32;
+    let rect = [clamp(damage.min.x.floor(), width), clamp(damage.min.y.floor(), height),
+        clamp(damage.max.x.ceil(), width), clamp(damage.max.y.ceil(), height)];
+    let empty = damage.is_empty() || rect[0] >= rect[2] || rect[1] >= rect[3];
+    let (xs, ys) = if empty { (0..0, 0..0) } else { (rect[0] / TILE_SIZE..rect[2].div_ceil(TILE_SIZE), rect[1] / TILE_SIZE..rect[3].div_ceil(TILE_SIZE)) };
+    ys.flat_map(move |y| xs.clone().map(move |x| ([x, y], [rect[0].max(x * TILE_SIZE), rect[1].max(y * TILE_SIZE),
+        rect[2].min((x + 1) * TILE_SIZE), rect[3].min((y + 1) * TILE_SIZE)])))
+}
+
+fn area(rect: [u32; 4]) -> u64 { u64::from(rect[2] - rect[0]) * u64::from(rect[3] - rect[1]) }
+
+fn union(a: [u32; 4], b: [u32; 4]) -> [u32; 4] { [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])] }

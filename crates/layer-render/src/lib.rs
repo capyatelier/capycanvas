@@ -17,6 +17,8 @@ mod selection;
 mod cursor_icons;
 mod filter_preparation;
 pub use filter_preparation::{FilterPreparation, PreparationKey};
+mod material_pace;
+pub use material_pace::{MaterialPace, MaterialWork};
 pub mod panel_geometry;
 mod panel_mesh;
 pub use panel_mesh::{panel_mesh, panel_mesh_with_coverage};
@@ -959,6 +961,8 @@ pub trait CanvasRenderer {
     fn has_pending_submission(&self) -> bool { false }
     fn next_frame(&self) -> FrameDemand { FrameDemand::Wait }
     fn waits_for_frame_slot(&self) -> bool { false }
+    fn set_material_work(&mut self, _work: MaterialWork) {}
+    fn material_budget(&self) -> Option<u64> { None }
     fn stroke_waits_for_memory(&self) -> bool { false }
     fn stroke_memory_refusals(&self) -> u64 { 0 }
     /// Host frame-mailbox backpressure before consuming input.

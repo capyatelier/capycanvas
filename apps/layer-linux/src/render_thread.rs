@@ -352,6 +352,7 @@ struct Frame {
     selection_overlays: Arc<layer_core::authored::SelectionOverlays>,
     dabs: Vec<Dab>,
     batches: Vec<DabBatch>,
+    material_work: layer_render::MaterialWork,
     restore_rasters: Vec<(SourceTarget, layer_core::raster::RasterRevision)>,
     reset: bool,
     input_order: u64,
@@ -585,6 +586,7 @@ struct FrameReport {
     pending_work: AtomicBool,
     retouch_miss: std::sync::atomic::AtomicU64,
     retouch_waiting: std::sync::atomic::AtomicU64,
+    material_budget: std::sync::atomic::AtomicU64,
     paper_drawn: std::sync::atomic::AtomicU64,
     showing_drawing: AtomicBool,
     showing_navigator: AtomicBool,
@@ -698,6 +700,7 @@ pub struct RenderWorker {
     in_flight: Arc<AtomicUsize>,
     hidden: bool,
     report: Arc<FrameReport>,
+    material_work: layer_render::MaterialWork,
     retouch: Option<layer_render::RetouchPreparation>,
     regions:Option<layer_render::RegionPreparation>,
     thread: Option<JoinHandle<()>>,
@@ -996,6 +999,7 @@ impl RenderWorker {
             in_flight: Arc::default(),
             hidden: false,
             report: Arc::default(),
+            material_work: Default::default(),
             retouch: None,
             regions:None,
             thread: None,
@@ -1298,6 +1302,8 @@ impl CanvasRenderer for RenderWorker {
     fn next_frame(&self) -> FrameDemand {
         if self.has_pending_submission() || self.report.pending_work.load(Ordering::Acquire) { FrameDemand::Work } else { FrameDemand::Wait }
     }
+    fn set_material_work(&mut self, work: layer_render::MaterialWork) { self.material_work = work; }
+    fn material_budget(&self) -> Option<u64> { self.report.material_budget.load(Ordering::Acquire).checked_sub(1) }
     fn set_transform_preview(
         &mut self,
         preview: Option<&layer_render::TransformPreview>,
@@ -1629,6 +1635,7 @@ impl CanvasRenderer for RenderWorker {
                 .filter(|r| packet.commit_rasters && r.try_data().is_none()).cloned().collect(),
             dabs: packet.dabs.to_vec(),
             batches: packet.dab_batches.to_vec(),
+            material_work: std::mem::take(&mut self.material_work),
             restore_rasters: packet.restore_rasters.to_vec(),
             reset: packet.reset_layers,
             input_order,
@@ -2452,6 +2459,7 @@ impl Worker {
             report.retouch_miss.store(stroke.0, Ordering::Release);
         }
         report.retouch_waiting.store(self.renderer.retouch_waiting().map_or(0, |stroke| stroke.0), Ordering::Release);
+        report.material_budget.store(self.renderer.material_budget().map_or(0, |budget| budget.saturating_add(1)), Ordering::Release);
         if let Some(state) = &self.overlays && let Some(overlay) = &state.paper
             && self.renderer.paper_overlay_ready(&overlay.paper) {
             report.paper_drawn.store(state.paper_generation, Ordering::Release);
@@ -2618,6 +2626,7 @@ impl Worker {
         self.renderer.set_fill_preview(frame.fill_preview.clone());
         self.renderer.set_transform_preview(frame.transform_preview.as_ref()).map_err(error)?;
         self.renderer.set_fill_reveal(frame.fill_reveal);
+        self.renderer.set_material_work(frame.material_work);
         match submit_ready_frame(&mut self.renderer, frame.packet(), frame.transform_preview.as_ref(), &mut draw_start) {
             std::task::Poll::Pending => return Ok(false),
             std::task::Poll::Ready(result) => result.map_err(error)?,

@@ -69,6 +69,7 @@ impl Chunks {
 #[derive(Default)]
 pub(crate) struct FramePace {
     chunks: Arc<Mutex<Chunks>>,
+    material: Arc<Mutex<layer_render::MaterialPace>>,
     spacings: [VecDeque<f64>; 2],
     starts: [Option<Instant>; 2],
     begun: Option<(Instant, Arc<OnceLock<Instant>>)>,
@@ -89,16 +90,18 @@ impl FramePace {
         self.grant = Some(grant);
         grant.taps
     }
-    pub fn submitted(&mut self, device: &crate::PipelineDevice, queue: &wgpu::Queue, submitted: Instant) {
+    pub fn submitted(&mut self, device: &crate::PipelineDevice, queue: &wgpu::Queue, submitted: Instant, work: layer_render::MaterialWork) {
         let (Some(grant), Some((begun, earlier))) = (self.grant.take(), self.begun.clone()) else { return };
         let cpu_ms = milliseconds(submitted.saturating_duration_since(begun));
-        let (chunks, interval_ms) = (self.chunks.clone(), self.interval_ms(grant.kind));
+        let (chunks, material, interval_ms) = (self.chunks.clone(), self.material.clone(), self.interval_ms(grant.kind));
         chunks.lock().unwrap().submit(grant);
         device.on_queue_done(queue, move || {
             let gpu_ms = busy_ms(earlier.get().copied(), submitted, Instant::now());
             chunks.lock().unwrap().complete(grant, [cpu_ms, gpu_ms], interval_ms);
+            material.lock().unwrap().observe(work, gpu_ms, interval_ms);
         });
     }
+    pub fn material_budget(&self) -> Option<u64> { self.material.lock().unwrap().budget() }
     #[cfg(test)]
     pub(crate) fn pin(&mut self, interval_ms: f64, taps: [u64; 2]) {
         let mut chunks = Chunks::new(taps);
