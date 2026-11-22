@@ -1369,7 +1369,9 @@ Scene planning demand without raising retention ceilings. Pins and working floor
 remain protected under pressure, except that a stroke's lane (its restore outputs
 and their display inputs, admitted as one group above every display class) may
 borrow the display's idle working reservations beyond one unit; the display keeps what the lane
-drew from them until those raster bytes are released. While the lane waits,
+drew from them until those raster bytes are released. A lane that does not fit
+first trims the display by its shortfall and the decoded samples to their grant,
+all at once, since on shared memory they hold the RAM the lane needs. While the lane waits,
 display admissions stop and optional retention yields. The lane waits only for
 bytes something else can release: a retirement still draining, a raster capture
 still landing, evictable bytes of another owner, or reservations it has not yet

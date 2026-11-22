@@ -314,6 +314,7 @@ impl WgpuRasterizer {
         let deficit=|r:&Self|r.raster_tiers.raster.used().saturating_add(raster).saturating_sub(r.raster_tiers.raster.limit());
         let shown=&self.scene_tiers.display;
         self.trim_display_by(self.scene.as_deref(),deficit(self).max(shown.used().saturating_add(display).saturating_sub(shown.limit())));
+        self.fit_samples(usize::MAX);
         self.factory.memory_budget().flush_reports();
         self.memory.lend(self.raster_tiers.raster.used(),raster,if deficit(self)==0 {0}else {u64::MAX});
         self.publish_memory();self.factory.memory_budget().flush_reports();
@@ -396,14 +397,13 @@ impl WgpuRasterizer {
         let raster=self.raster_memory_report();self.memory.sync_report(Kind::RasterPool,raster);
         self.memory.sync_report(Kind::Staging,self.staging_memory_report());
         self.factory.memory_budget().flush_reports();
-        let grants=self.memory.grants();let [display,_,ram,uploads]=grants;
+        let grants=self.memory.grants();let [display,_,_,uploads]=grants;
         debug_assert!(self.memory.raster_grant()>=raster.pinned_gpu_bytes);
         self.memory.apply_limits(grants);
         self.scene_tiers.display.update_limit(self.memory.display_limit());
         self.scene_tiers.display.set_grant(display);
         self.device.resource_limit.store(self.memory.display_grant(),std::sync::atomic::Ordering::Release);
-        self.device.source_samples.set_limit(ram.min(usize::MAX as u64) as usize);
-        if self.device.source_samples.trim_unused(SOURCE_SLOTS)!=0 {self.publish_samples();}
+        self.fit_samples(SOURCE_SLOTS);
         self.source_tiles.get_mut().admit_limits(uploads);
         let upload_bytes=self.uploads.memory_bytes()[0];let restore_bytes=self.restore_uploads.memory_bytes()[0];
         let retained_uploads=upload_bytes.saturating_add(restore_bytes);
@@ -418,6 +418,10 @@ impl WgpuRasterizer {
         self.memory.sync_report(Kind::Scene,self.display_memory_report(scene.as_deref(),composition));
         self.memory.sync_report(Kind::RasterPool,self.raster_memory_report());
         if self.warm.is_none() {self.memory.carry_overdraft(self.scene_tiers.display.used());}
+    }
+    fn fit_samples(&self,entries:usize) {
+        self.device.source_samples.set_limit(self.memory.sample_grant().min(usize::MAX as u64) as usize);
+        if self.device.source_samples.trim_unused(entries)!=0 {self.publish_samples();}
     }
     fn memory_pass_due(&self)->bool {
         let display=&self.scene_tiers.display;

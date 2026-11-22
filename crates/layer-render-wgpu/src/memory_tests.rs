@@ -415,6 +415,28 @@ fn a_stroke_lane_that_nothing_can_free_refuses_its_edit_once_and_ends_the_wait()
 }
 
 #[test]
+fn a_stroke_lane_on_shared_memory_takes_back_decoded_samples_above_their_grant_before_it_refuses() {
+    let mut r = renderer(Default::default(), layer_core::DeviceMemoryFacts {unified: true, ..Default::default()}).unwrap();
+    let budget = r.factory.memory_budget().clone();
+    budget.set_ram_override(Some(384 * MIB));
+    r.publish_memory(); budget.flush_reports(); r.refresh_memory_limits();
+    r.device.source_samples.set_limit(usize::MAX);
+    let source = layer_core::color::source::rgba8_source([PAGE_SIZE * 16; 2], |x, y| [x as u8, y as u8, (x ^ y) as u8, 255]);
+    for tile in 0..256 { drop(crate::prepare_image_tile(&source, [tile % 16, tile / 16], r.document_color().space, &r.device.source_samples, None).unwrap()); }
+    let required = budget.register_owner(Kind::Other, MemoryClass::Pinned, None);
+    required.report(MemoryReport {demand_ram_bytes: 1 << 40, ..Default::default()});
+    r.publish_samples(); r.publish_memory(); budget.flush_reports(); r.sync_raster_report();
+    let decoded = r.device.source_samples.stats().physical_bytes as u64;
+    assert!(decoded >= r.memory.sample_grant() + 32 * MIB, "the decoded samples hold {} MiB above their {} MiB grant", decoded >> 20, r.memory.sample_grant() >> 20);
+    r.live_stroke = Some(layer_core::StrokeId(1));
+    let room = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used()) + lendable(&r);
+    let held = r.admit_raster_working(room + 32 * MIB).expect("the lane takes back the decoded samples above their grant before it decides nothing can free memory");
+    assert_eq!((r.take_lane_failure(), r.memory.stroke_memory_refusals()), (None, 0), "nothing is refused");
+    assert!(r.device.source_samples.stats().physical_bytes as u64 <= r.memory.sample_grant(), "the decoded samples fit their grant");
+    drop(held);
+}
+
+#[test]
 fn first_frame_preparation_publishes_demand_and_uses_the_next_grant() {
     let doc = layer_core::Document::new(layer_core::PortableId::random(), 8192, 8192,
         layer_core::DocumentNames {paint: "Large canvas".into(), paper: "Paper".into()});

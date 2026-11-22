@@ -60,15 +60,10 @@ impl DecodedTileCache {
             if state.stats.resident_bytes.saturating_add(held) <= state.stats.limit_bytes { break; }
             let Some(key) = state.entries.iter().filter(|(_,entry)|Arc::strong_count(&entry.samples)==1)
                 .min_by_key(|(_,entry)|(entry.tile.strong_count()!=0,entry.used)).map(|(&key,_)|key) else { break; };
-            let entry = state.remove(key);
-            state.track(&entry.samples);
-            released.push(entry.samples);
+            released.push(state.remove(key).samples);
         }
         drop(state);
-        released.into_iter().map(|samples| {
-            let bytes=samples.capacity();let weak=Arc::downgrade(&samples);drop(samples);
-            if weak.strong_count()==0 {bytes}else {0}
-        }).sum()
+        released.into_iter().map(|samples|samples.capacity()).sum()
     }
     pub fn stats(&self) -> DecodedTileCacheStats {
         let mut state = self.state.lock().unwrap();
