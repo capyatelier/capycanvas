@@ -446,7 +446,7 @@ impl ObjectSampler {
         data[88..92].copy_from_slice(&(row as u32*geometry.rows.max(1)).to_le_bytes());data[92..96].copy_from_slice(&geometry.rows.to_le_bytes());
         for (i,value) in work.into_iter().enumerate() {data[96+i*4..100+i*4].copy_from_slice(&value.to_le_bytes());}
         uploads.write_at(encoder,&acc.uniform,0,&data)?;
-        let binding=acc.binding.get(source.clone(),||crate::bindings::group(device,"image-object sampling",&self.layout,[acc.uniform.as_entire_binding(),wgpu::BindingResource::TextureView(source),acc.buffer.as_entire_binding(),wgpu::BindingResource::TextureView(&acc.output),acc.coordinates.as_ref().unwrap_or(&self.empty_coordinates).as_entire_binding()]));
+        let binding=acc.binding.get(source.clone(),|_|crate::bindings::group(device,"image-object sampling",&self.layout,[acc.uniform.as_entire_binding(),wgpu::BindingResource::TextureView(source),acc.buffer.as_entire_binding(),wgpu::BindingResource::TextureView(&acc.output),acc.coordinates.as_ref().unwrap_or(&self.empty_coordinates).as_entire_binding()]));
         let mut pass=encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {label:Some("image-object stretched tent"),timestamp_writes:None});
         pass.set_pipeline(pipeline);pass.set_bind_group(0,&binding,&[]);pass.dispatch_workgroups(work[2].div_ceil(8),work[3].div_ceil(8),1);
         Ok(Some(u64::from(work[2])*u64::from(work[3])*u64::from(geometry.taps)))

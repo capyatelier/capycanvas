@@ -548,8 +548,9 @@ impl PaintLayer {
             page.primary_needs_clear = false;
         }
         page.active_secondary = false;
+        page.primary.clear_bindings();
         let coordinate = page.coordinate;
-        for coverage in self.coverage_pages.iter().filter(|p| p.coordinate == coordinate) { coverage.release_color_bindings(); }
+        for coverage in self.coverage_pages.iter().filter(|p| p.coordinate == coordinate) { coverage.release_bindings(); }
         Some(spare)
     }
     fn take_coverage(&mut self, index: usize) -> StrokeCoveragePage {
@@ -774,7 +775,7 @@ impl StrokeCoveragePage {
             && (self.primary.format() == wgpu::TextureFormat::Rgba32Float) == stable_blender(style)
     }
 
-    fn release_color_bindings(&self) {
+    fn release_bindings(&self) {
         for surface in [&self.primary, &self.secondary] {
             surface.clear_bindings();
         }
@@ -900,7 +901,7 @@ struct PageSurface {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     texture_bind_group: wgpu::BindGroup,
-    material_output: bindings::MaterialOutput,
+    material: bindings::MaterialBindings,
     scene_output: std::cell::OnceCell<wgpu::BindGroup>,
     charge: Arc<residency::Charge>,
 }
@@ -935,7 +936,7 @@ impl PageSurface {
         Self {
             texture:self.texture.clone(),view:self.view.clone(),texture_bind_group:self.texture_bind_group.clone(),
             preview:Default::default(),
-            material_output:Default::default(),scene_output:Default::default(),
+            material:Default::default(),scene_output:Default::default(),
             charge:self.charge.clone(),
         }
     }
@@ -972,10 +973,11 @@ impl LayerPage {
             .for_each(resident::Resident::discharge);
     }
     fn clear_stroke_start(&mut self) {
-        if self.stroke_start.take().is_some() {
-            for surface in std::iter::once(&self.primary).chain(self.secondary.as_ref()) {
-                surface.clear_bindings();
-            }
+        if self.stroke_start.take().is_some() { self.release_bindings(); }
+    }
+    fn release_bindings(&self) {
+        for surface in std::iter::once(&self.primary).chain(self.secondary.as_ref()) {
+            surface.clear_bindings();
         }
     }
     fn surface(&self, secondary: bool) -> &resident::Resident<PageSurface> {
@@ -1232,7 +1234,6 @@ pub struct WgpuRasterizer {
     brush_inputs:Option<scene::sources::AcceptedInputs>,
     held_brush:Option<raster::staging::HeldBrush>,
     preview_working:Option<residency::Reservation>,
-    material_bindings: scene::RecentBindings<scene::MaterialBindingKey>,
     transport_bindings: scene::RecentBindings<scene::TransportBindingKey>,
     transport_records: material_sources::TileRecords,
     transport_regions: Vec<PixelRect>,
@@ -1667,7 +1668,6 @@ impl WgpuRasterizer {
             brush_inputs:None,
             held_brush:None,
             preview_working:None,
-            material_bindings: Default::default(),
             transport_bindings: Default::default(),
             transport_records: Default::default(),
             transport_regions: Vec::new(),
@@ -2372,6 +2372,15 @@ impl WgpuRasterizer {
                 .filter(|start|start.matches(batch.stroke_id,intent,declaration)).map(|start|(start,true)))
     }
 
+    fn release_preview_bindings(&self) {
+        for page in &self.preview_pages { page.release_bindings(); }
+        for page in &self.preview_coverage_pages { page.release_bindings(); }
+    }
+
+    fn material_key(&self,views:[&wgpu::TextureView;11])->bindings::MaterialKey {
+        ([self.dab_buffer.clone(),self.material_records.binding().buffer.clone()],views.map(Clone::clone))
+    }
+
     fn material_offsets(&self, batch: &DabBatch) -> [Option<[i32; 2]>; 9] {
         let stored = batch.style.execution == BrushExecution::Liquify || self.in_place_dry_material(batch) || self.compact_preview_contribution(batch);
         let center = pointwise(&batch.style);
@@ -2388,7 +2397,7 @@ impl WgpuRasterizer {
         inputs: MaterialInputs<'_>,
         display: Option<usize>,
         encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<(wgpu::BindGroup, Option<wgpu::BindGroup>), GpuRasterError> {
+    ) -> Result<bindings::MaterialSources, GpuRasterError> {
         let result=(|| {
             let reads_preview = target.material_source().is_preview();
             let declares_preview = target.is_preview();
@@ -2535,16 +2544,10 @@ impl WgpuRasterizer {
                     declaration.accept_inputs(batch.target,RasterPlane::WatercolorWetness,coordinate,stage,scene::PreviewPass::Wetness,history)?;
                 }
             }
-            let display = display.map(|slot| self.dry_display_inputs[slot].inputs(self, views));
-            let records=self.material_records.binding();let (offset,size)=(records.offset,records.size);
-            let query:([&wgpu::Buffer;2],[&wgpu::TextureView;11])=([&self.dab_buffer,records.buffer],std::array::from_fn(|i|match i {9=>coverage,10=>auxiliary,_=>views[i]}));
-            let (device,layout)=(&self.device,&self.material_layout);
-            let result=Ok((self.material_bindings.get_by(&query as &dyn scene::ResourceBinding<2,11>,||(query.0.map(Clone::clone),query.1.map(Clone::clone)),|key| {
-                let views:[&wgpu::TextureView;9]=std::array::from_fn(|i|&key.1[i]);
-                create_material_bind_group(device,layout,&views,&key.0[0],&key.1[9],&key.1[10],
-                    wgpu::BindingResource::Buffer(wgpu::BufferBinding {buffer:&key.0[1],offset,size}))
-            }).clone(),display));
-            self.brush_inputs=Some(neighborhood);result
+            let display = display.map(|slot| self.dry_display_inputs[slot].key(self, views));
+            let key=self.material_key(std::array::from_fn(|i|match i {9=>coverage,10=>auxiliary,_=>views[i]}));
+            let page_local=!retained && matches!(inputs,MaterialInputs::Neighborhood) && offsets.iter().enumerate().all(|(i,offset)|i==4 || offset.is_none());
+            self.brush_inputs=Some(neighborhood);Ok(bindings::MaterialSources {key,display,page_local})
         })();
         result.map_err(prepared_brush_error)
     }
@@ -2632,7 +2635,6 @@ impl WgpuRasterizer {
         }
         u32::try_from(dabs).map_err(|_|GpuRasterError::SizeOverflow)?;
         self.ensure_upload_capacity(dabs,records)?;
-        self.material_bindings.begin_frame();
         self.transport_bindings.begin_frame();
         self.material_records.restart();
         self.transport_records.restart();
@@ -4107,6 +4109,7 @@ impl CanvasRenderer for WgpuRasterizer {
             for page in &mut layer.pages { page.clear_stroke_start(); }
             layer.coverage_pages.retain(|p| p.primary.size().height == PAGE_SIZE);
             while layer.coverage_pages.len() > warm_coverage { layer.take_coverage(0); }
+            for page in &layer.coverage_pages { page.release_bindings(); }
             warm_coverage -= layer.coverage_pages.len();
             for index in (0..layer.pages.len()).rev() {
                 if layer.pages[index].secondary.is_none() { continue; }
@@ -4115,6 +4118,7 @@ impl CanvasRenderer for WgpuRasterizer {
         }
         for page in &mut self.preview_pages { page.clear_stroke_start(); }
         self.preview_coverage_pages.retain(|p| p.primary.size().height == PAGE_SIZE);
+        self.release_preview_bindings();
         self.live_stroke = None;
     }
     fn set_transform_preview(
@@ -5926,6 +5930,12 @@ fn create_advanced_texture_bind_group(
     bindings::group(device, "layer advanced brush textures", layout, resources.chain([wgpu::BindingResource::Sampler(sampler)]))
 }
 
+fn create_material_inputs(device:&PipelineDevice,layout:&wgpu::BindGroupLayout,size:Option<NonZeroU64>,key:&bindings::MaterialKey)->wgpu::BindGroup {
+    let views:[&wgpu::TextureView;9]=std::array::from_fn(|i|&key.1[i]);
+    create_material_bind_group(device,layout,&views,&key.0[0],&key.1[9],&key.1[10],
+        wgpu::BindingResource::Buffer(wgpu::BufferBinding {buffer:&key.0[1],offset:0,size}))
+}
+
 fn create_material_bind_group(
     device: &PipelineDevice,
     layout: &wgpu::BindGroupLayout,
@@ -6017,7 +6027,7 @@ fn create_page_surface(
         texture,
         view,
         texture_bind_group,
-        material_output: Default::default(),
+        material: Default::default(),
         scene_output: Default::default(),
         charge,
     }

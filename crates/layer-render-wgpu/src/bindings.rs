@@ -1,38 +1,65 @@
 //! Bindings live with the resources that bound their lifetime. Replacing a
-//! dependent buffer/view replaces the one retained binding, rather than growing
+//! dependent buffer/view replaces a retained binding, rather than growing
 //! a global cache that can keep retired tiles or stroke state alive.
 use std::cell::RefCell;
 
-pub(super) struct CachedBinding<K>(RefCell<Option<Box<(K, wgpu::BindGroup)>>>);
-impl<K> Default for CachedBinding<K> {
+pub(super) struct CachedBinding<K, const N: usize = 1>(RefCell<[Option<Box<(K, wgpu::BindGroup)>>; N]>);
+impl<K, const N: usize> Default for CachedBinding<K, N> {
     fn default() -> Self {
-        Self(RefCell::new(None))
+        Self(RefCell::new(std::array::from_fn(|_| None)))
     }
 }
-impl<K> CachedBinding<K> {
+impl<K, const N: usize> CachedBinding<K, N> {
     pub fn clear(&self) {
-        *self.0.borrow_mut() = None;
+        *self.0.borrow_mut() = std::array::from_fn(|_| None);
     }
 }
-impl<K: PartialEq> CachedBinding<K> {
-    pub fn get(&self, key: K, create: impl FnOnce() -> wgpu::BindGroup) -> wgpu::BindGroup {
-        let mut entry = self.0.borrow_mut();
-        if let Some((previous, binding)) = entry.as_deref()
-            && *previous == key
-        {
-            return binding.clone();
+impl<K: PartialEq, const N: usize> CachedBinding<K, N> {
+    pub fn get(&self, key: K, create: impl FnOnce(&K) -> wgpu::BindGroup) -> wgpu::BindGroup {
+        let mut entries = self.0.borrow_mut();
+        let found = entries.iter().position(|entry| entry.as_deref().is_some_and(|(previous, _)| *previous == key));
+        entries[..=found.unwrap_or(N - 1)].rotate_right(1);
+        if found.is_none() {
+            let binding = create(&key);
+            entries[0] = Some(Box::new((key, binding)));
         }
-        let binding = create();
-        *entry = Some(Box::new((key, binding.clone())));
-        binding
+        entries[0].as_deref().unwrap().1.clone()
     }
 }
 
-/// A pointwise page's material inputs: the buffers, then the nine
-/// neighborhood slots, stroke coverage and starting paint it binds.
-pub(super) type MaterialInput = CachedBinding<([wgpu::Buffer; 2], [wgpu::TextureView; 11])>;
+/// A material job's inputs: the buffers, then the nine neighborhood slots,
+/// stroke coverage and starting paint it binds.
+pub(super) type MaterialKey = ([wgpu::Buffer; 2], [wgpu::TextureView; 11]);
 pub(super) type MaterialOutput =
     CachedBinding<(wgpu::Buffer, wgpu::TextureView, [Option<wgpu::TextureView>; 2], Option<wgpu::Buffer>)>;
+
+pub(super) struct MaterialSources {
+    pub key: MaterialKey,
+    pub display: Option<MaterialKey>,
+    pub page_local: bool,
+}
+
+#[derive(Default)]
+pub(super) struct MaterialBindings {
+    pub input: CachedBinding<MaterialKey, 2>,
+    pub display: CachedBinding<MaterialKey>,
+    pub gather: CachedBinding<(wgpu::Buffer, [wgpu::TextureView; 3])>,
+    pub output: MaterialOutput,
+}
+impl MaterialBindings {
+    pub fn inputs(&self, sources: MaterialSources, create: impl Fn(&MaterialKey) -> wgpu::BindGroup) -> (wgpu::BindGroup, Option<wgpu::BindGroup>) {
+        if !sources.page_local {
+            return (create(&sources.key), sources.display.as_ref().map(&create));
+        }
+        (self.input.get(sources.key, &create), sources.display.map(|key| self.display.get(key, &create)))
+    }
+    pub fn clear(&self) {
+        self.input.clear();
+        self.display.clear();
+        self.gather.clear();
+        self.output.clear();
+    }
+}
 
 pub(super) fn texture(binding: u32, visibility: wgpu::ShaderStages, filterable: bool) -> wgpu::BindGroupLayoutEntry {
     texture_of(binding, visibility, wgpu::TextureSampleType::Float { filterable }, wgpu::TextureViewDimension::D2)

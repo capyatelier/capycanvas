@@ -442,7 +442,7 @@ impl PixelTransform {
     }
     pub(super) fn placement_draw(&self, device: &wgpu::Device, target: &wgpu::TextureView,
         source: TransformSource, offset: u32) -> PlacementDraw {
-        let output = self.display_target.get(target.clone(), || device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let output = self.display_target.get(target.clone(), |_| device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("placed pixels destination"), layout: &self.kernels.display_layout,
             entries: &[wgpu::BindGroupEntry { binding: u32::from(self.kernels.scalar), resource: wgpu::BindingResource::TextureView(target) }],
         }));
@@ -485,7 +485,7 @@ impl PixelTransform {
         offset: u32,
         draws: &[BatchDraw<'_>],
     ) {
-        let target = self.display_target.get(level.clone(), || {
+        let target = self.display_target.get(level.clone(), |_| {
             crate::bindings::group(device, "transform display level", &self.kernels.display_layout, [
                 wgpu::BindingResource::TextureView(level),
             ])

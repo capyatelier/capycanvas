@@ -143,7 +143,7 @@ impl WgpuRasterizer {
             }
             let display_slot = gathers.then_some(compute_jobs.len());
             let intent=self.raster_intent(batch.target,RasterPlane::Color,job.coordinate)?;
-            let (source_bind_group, display) = if retouches {
+            let sources = if retouches {
                 self.clone_source_binding(batch,batch_index, job.coordinate, &mappings[record_index], context.target, &intent, display_slot, encoder)?
             } else {
                 self.material_source_binding(batch,batch_index, job.coordinate, context.target, &intent, display_slot, encoder)?
@@ -170,15 +170,17 @@ impl WgpuRasterizer {
                 destination.overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))
             }).transpose()?;
             let output=pipelines.output(&self.device,&self.style_buffer,&write,coverage.as_ref(),changed);
+            let held=&coverage.as_ref().unwrap_or(&write).value().material;
+            let (source,display)=held.inputs(sources,|key|create_material_inputs(&self.device,&self.material_layout,self.material_records.binding().size,key));
             let display=display_slot.zip(display).map(|(slot,inputs)|dry_material::DisplayJob {
-                gather:self.dry_display_inputs[slot].gather(&self.device,&self.style_buffer,pipelines.in_place(),pipelines.gather_layout(),&write),inputs,
+                gather:self.dry_display_inputs[slot].gather(&self.device,&self.style_buffer,pipelines.in_place(),pipelines.gather_layout(),&write,held),inputs,
             });
             write.value().preview.set(None);
             publications.push(MaterialPublication {kind:MaterialOutputKind::Color,coordinate:job.coordinate,preview:color_ticket.clone(),input:intent.clone(),
                 encoding:write.encoded(color_ticket.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|ticket|ticket.version().clone())).certified(delta)});
             if let Some(coverage)=coverage {publications.push(MaterialPublication {kind:MaterialOutputKind::Coverage,coordinate:job.coordinate,preview:coverage_ticket.clone(),
                 input:intent,encoding:coverage.encoded(coverage_ticket.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|ticket|ticket.version().clone()))});}
-            compute_jobs.push(dry_material::Job {output,source:source_bind_group,display,coordinate:job.coordinate,
+            compute_jobs.push(dry_material::Job {output,source,display,coordinate:job.coordinate,
                 coverage:job.coverage_index.is_some(),record_offset:self.material_records.offset(first_record+record_index),
                 dabs:job.dabs.clone(),dirty:job.local});
 

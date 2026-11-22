@@ -259,7 +259,7 @@ impl Resident<crate::PageSurface> {
         Self {value:self.value.sharing(),names:self.names.clone()}
     }
     pub(crate) fn clear_bindings(&self) {
-        self.value.material_output.clear();
+        self.value.material.clear();
     }
     pub(crate) fn discharge(&mut self) {self.value.discharge();}
     pub(crate) fn set_preview(&self,preview:Option<(crate::SourceTarget,[u32;2])>) {self.value.preview.set(preview);}
