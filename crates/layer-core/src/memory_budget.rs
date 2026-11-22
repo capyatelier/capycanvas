@@ -154,6 +154,13 @@ pub struct MemoryBudget(Arc<Manager>);
 impl Default for MemoryBudget { fn default() -> Self { Self::new() } }
 #[derive(Clone)]
 pub struct MemoryOwner(Arc<Owner>);
+#[derive(Clone)]
+pub struct MemoryRoom { budget: MemoryBudget, grants: Arc<Grants> }
+impl MemoryRoom {
+    pub fn flush(&self) {self.budget.flush_reports();}
+    pub fn published_gpu_working_limit(&self)->u64 {self.grants.working_limit.load(Ordering::Acquire)}
+    pub fn gpu_grant(&self)->u64 {self.grants.gpu.load(Ordering::Acquire)}
+}
 struct Owner { budget: MemoryBudget, id: u64, grants: Arc<Grants>, pending: Arc<PendingReport> }
 impl Drop for Owner {
     fn drop(&mut self) {
@@ -231,7 +238,7 @@ impl MemoryOwner {
         MemoryGrant { ram_bytes: self.0.grants.ram.load(Ordering::Acquire), gpu_bytes: self.0.grants.gpu.load(Ordering::Acquire) }
     }
     pub fn working(&self)->MemoryGrant {self.0.budget.0.state.lock().unwrap().owners[&self.0.id].working}
-    pub fn published_gpu_working_limit(&self)->u64 {self.0.grants.working_limit.load(Ordering::Acquire)}
+    pub fn room(&self)->MemoryRoom {MemoryRoom {budget:self.0.budget.clone(),grants:self.0.grants.clone()}}
     pub fn flush(&self) {self.0.budget.flush_reports();}
     pub fn gpu_working_limit(&self)->u64 {
         let budget=&self.0.budget;
@@ -686,7 +693,10 @@ impl State {
             let gpu_changed=owner.grants.gpu.swap(unified[i],Ordering::AcqRel)!=unified[i];
             if (changed || gpu_changed) && let Some(wake)=owner.grants.wake.get() {wakes.push(wake.clone());}
         }
-        for (id,owner) in &self.owners {owner.grants.working_limit.store(self.gpu_working_limit(*id),Ordering::Release);}
+        for (id,owner) in &self.owners {
+            let limit=self.gpu_working_limit(*id);
+            if owner.grants.working_limit.swap(limit,Ordering::AcqRel)<limit && let Some(wake)=owner.grants.wake.get() && !wakes.iter().any(|woken|Arc::ptr_eq(woken,wake)) {wakes.push(wake.clone());}
+        }
         wakes
     }
 }
@@ -859,6 +869,20 @@ mod tests {
         assert_eq!([display.grant(),reads.grant()],grants,"the pin stays inside both grants");
         assert_ne!(budget.import_headroom_bytes(),headroom,"a unified pin moves the import headroom");
         assert_eq!(woken.load(Ordering::SeqCst),0,"a headroom change woke owners whose grants did not change");
+    }
+    #[test]
+    fn a_release_that_raises_an_owners_grant_and_working_limit_wakes_it_once() {
+        let budget=MemoryBudget::with_facts(MemoryFacts {override_bytes:Some(GIB),..facts()});
+        let device=budget.register_device(DeviceMemoryFacts {budget_bytes:Some(GIB),..Default::default()});
+        let display=owner(&budget,MemoryClass::Visible,Some(device),0,GIB);
+        let raster=owner(&budget,MemoryClass::Visible,Some(device),0,0);
+        raster.report(MemoryReport {gpu_bytes:640*MIB,pinned_gpu_bytes:640*MIB,demand_gpu_bytes:640*MIB,..Default::default()});
+        let woken=Arc::new(AtomicU64::new(0));
+        {let woken=woken.clone();display.set_wake(Arc::new(move||{woken.fetch_add(1,Ordering::SeqCst);}));}
+        let (grant,limit)=(display.grant().gpu_bytes,display.room().published_gpu_working_limit());
+        raster.report(MemoryReport::default());
+        assert!(display.grant().gpu_bytes>grant && display.room().published_gpu_working_limit()>limit,"the release raises the display's grant and working limit");
+        assert_eq!(woken.load(Ordering::SeqCst),1,"one release wakes the display once");
     }
     #[test]
     fn a_refused_working_admission_wakes_once_when_another_owner_releases() {

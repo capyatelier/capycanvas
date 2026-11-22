@@ -20,7 +20,7 @@ pub(crate) struct Tier {
     refusals: std::sync::Mutex<Vec<(std::sync::Weak<AtomicU64>, u64)>>,
     retiring: Option<Arc<Tier>>,
     parent: Option<Arc<Tier>>,
-    ledger: Option<layer_core::MemoryOwner>,
+    ledger: Option<layer_core::MemoryRoom>,
     heap: Arc<super::Heap>,
     #[cfg(not(target_arch = "wasm32"))]
     edge: std::sync::OnceLock<RetirementHandle>,
@@ -32,8 +32,11 @@ impl Default for Tier {
     }
 }
 impl Tier {
+    #[cfg(test)]
     pub(crate) fn retiring_into(retiring: &Arc<Self>) -> Arc<Self> { Arc::new(Self { retiring: Some(retiring.clone()), ..Default::default() }) }
-    pub(crate) fn limited_by(ledger: layer_core::MemoryOwner) -> Arc<Self> { Arc::new(Self { ledger: Some(ledger), ..Default::default() }) }
+    pub(crate) fn granted_by(ledger: layer_core::MemoryOwner, retiring: &Arc<Self>) -> Arc<Self> { Arc::new(Self { retiring: Some(retiring.clone()), ..Self::by_ledger(ledger) }) }
+    pub(crate) fn limited_by(ledger: layer_core::MemoryOwner) -> Arc<Self> { Arc::new(Self::by_ledger(ledger)) }
+    fn by_ledger(ledger: layer_core::MemoryOwner) -> Self { Self { ledger: Some(ledger.room()), limit: AtomicU64::new(u64::MAX), ..Default::default() } }
     pub(crate) fn within(parent: &Arc<Self>) -> Arc<Self> { Arc::new(Self { parent: Some(parent.clone()), limit: AtomicU64::new(u64::MAX), heap: parent.heap.clone(), ..Default::default() }) }
     pub(crate) fn heap(&self) -> &Arc<super::Heap> { &self.heap }
     fn root_used(&self) -> u64 { self.parent.as_ref().map_or_else(|| self.used(), |parent| parent.root_used()) }
@@ -81,9 +84,10 @@ impl Tier {
         Blocked { tier: self.clone(), class, bytes, ahead, ledger, with: None, drain: None }
     }
     pub(crate) fn is_root(&self) -> bool { self.parent.is_none() }
-    pub(crate) fn limit(&self) -> u64 { self.ledger.as_ref().map_or_else(|| self.limit.load(SeqCst), layer_core::MemoryOwner::published_gpu_working_limit) }
-    fn root_ledger(&self) -> Option<&layer_core::MemoryOwner> { self.parent.as_ref().map_or(self.ledger.as_ref(), |parent| parent.root_ledger()) }
+    pub(crate) fn limit(&self) -> u64 { let limit = self.limit.load(SeqCst); self.ledger.as_ref().map_or(limit, |ledger| limit.min(ledger.published_gpu_working_limit())) }
+    fn root_ledger(&self) -> Option<&layer_core::MemoryRoom> { self.parent.as_ref().map_or(self.ledger.as_ref(), |parent| parent.root_ledger()) }
     pub(crate) fn floor(&self) -> u64 { self.floor.load(SeqCst) }
+    pub(crate) fn set_floor(&self, floor: u64) { if self.floor.swap(floor, SeqCst) > floor { self.release_edge(); } }
     pub(crate) fn set_limit(&self, limit: u64, floor: u64) {
         if (self.limit.swap(limit, SeqCst) < limit) | (self.floor.swap(floor, SeqCst) > floor) { self.release_edge(); }
     }
@@ -92,10 +96,11 @@ impl Tier {
         let own = self.available(class).saturating_sub(self.used());
         self.parent.as_ref().map_or(own, |parent| own.min(parent.headroom(class)))
     }
+    #[cfg(test)]
     pub(crate) fn update_limit(&self,limit:u64) {
         if self.limit.swap(limit,SeqCst)<limit {self.release_edge();}
     }
-    pub(crate) fn grant(&self) -> u64 { self.grant.load(SeqCst) }
+    pub(crate) fn grant(&self) -> u64 { let grant = self.grant.load(SeqCst); self.ledger.as_ref().map_or(grant, |ledger| grant.min(ledger.gpu_grant())) }
     pub(crate) fn set_grant(&self, grant: u64) {
         if self.grant.swap(grant, SeqCst) < grant { self.release_edge(); }
     }
