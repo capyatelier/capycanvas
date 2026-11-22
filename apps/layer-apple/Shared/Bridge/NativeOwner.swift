@@ -1124,7 +1124,11 @@ final class NativeOwner: @unchecked Sendable {
     func observeWorkload(_ event: FrameTraceEvent) {
         if let trace, trace.isRecording { trace.record(event) }
     }
-    func finishTrace() { perform { [self] in trace?.finish() } }
+    func finishTrace(exported: (@Sendable ([FrameTraceEvent], UInt64) -> Void)? = nil) {
+        perform { [self] in
+            if let trace { trace.finish(exported: exported) } else { exported?([], 0) }
+        }
+    }
     func observeActivity(active: Bool) {
         if let trace, trace.isRecording { trace.record(FrameTraceEvent(kind: .activity, a: FrameTrace.now(), b: active ? 1 : 0)) }
     }

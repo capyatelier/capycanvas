@@ -1,6 +1,63 @@
 import Foundation
 import Combine
 
+extension EditorStore {
+    var workloadReady: Bool {
+        canvasSubmitted && snapshot["shaders_ready"].bool && (workspaces == nil || workspaces?.ready == true)
+    }
+    func workloadEdit(_ value: [String: Any]) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            edit(value) { error in
+                if let error { continuation.resume(throwing: HostFailure(message: error)) }
+                else { continuation.resume() }
+            }
+        }
+    }
+    func workloadCheckpoint() async throws {
+        let saved = await withCheckedContinuation { continuation in
+            flushPersistence { continuation.resume(returning: $0) }
+        }
+        guard saved else { throw HostFailure(message: "The workload checkpoint did not complete") }
+    }
+    func applyWorkloadAppearance(theme: String?) async throws {
+        if let theme { try await workloadEdit(["type": "set_theme", "theme": theme]) }
+        if let level = ProcessInfo.processInfo.environment["CAPY_WORKLOAD_TRANSPARENCY"] {
+            guard let index = ["off", "low", "medium", "high"].firstIndex(of: level) else {
+                throw HostFailure(message: "CAPY_WORKLOAD_TRANSPARENCY must be off, low, medium or high")
+            }
+            try await workloadEdit(["type": "preferences", "action": ["type": "edit", "id": "transparency", "value": index]])
+        }
+        if let theme, state["theme"].string != theme { throw HostFailure(message: "The workload theme was not applied") }
+    }
+    func workloadProject(_ kind: NativeProjectTask.Kind, url: URL, title: String) async throws {
+        guard let native else { throw CancellationError() }
+        let job: NativeProjectTask = try await withCheckedThrowingContinuation { continuation in
+            native.projectTask(kind: kind) { task, error in
+                if let task { continuation.resume(returning: task) }
+                else { continuation.resume(throwing: HostFailure(message: error ?? "The document task is unavailable")) }
+            }
+        }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            NativeProjectTask.io.async {
+                do { if kind == .open { try job.read(from: url) } else { try job.write(to: url) }; continuation.resume() }
+                catch { continuation.resume(throwing: error) }
+            }
+        }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            native.finishProject(job, opening: kind == .open, title: title, url: kind == .open ? nil : url) { error in
+                if let error { continuation.resume(throwing: HostFailure(message: error)) }
+                else { continuation.resume() }
+            }
+        }
+    }
+    static func workloadSample(x: Double, y: Double, pressure: Double, time: UInt64, phase: Double) -> [Double] {
+        [x, y, pressure, 0.2, 0.1, 0.3, 0, Double(time), phase]
+    }
+    func workloadPointer(_ contact: UInt64, tool: UInt32 = 0, records: [Double], predicted: Bool = false) {
+        native?.pointer(id: contact, tool: tool, button: 0, records: records, predicted: predicted, revision: cameraRevision)
+    }
+}
+
 /// Opt-in benchmark in an isolated editor. Uses the ordinary input owner,
 /// display link, renderer, panels, history and recovery writer on both hosts.
 @MainActor final class DrawingWorkload {
@@ -41,19 +98,11 @@ import Combine
     }
     private func action(_ value: [String: Any]) async throws {
         guard let store else { throw CancellationError() }
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            store.edit(value) { error in
-                if let error { continuation.resume(throwing: HostFailure(message: error)) }
-                else { continuation.resume() }
-            }
-        }
+        try await store.workloadEdit(value)
     }
     private func checkpoint() async throws {
         guard let store else { throw CancellationError() }
-        let saved = await withCheckedContinuation { continuation in
-            store.flushPersistence { continuation.resume(returning: $0) }
-        }
-        guard saved else { throw HostFailure(message: "The workload checkpoint did not complete") }
+        try await store.workloadCheckpoint()
     }
     private var layerRevisions: String {
         JSON(store?.state["layers"].array.map {
@@ -77,7 +126,7 @@ import Combine
         restoringPrime = false
     }
     private func prepare() async throws {
-        guard let store, let native = store.native else { throw CancellationError() }
+        guard let store else { throw CancellationError() }
         let extent = plan.documentExtent
         let source = plan.document.map { URL(fileURLWithPath: $0) }
         if source == nil {
@@ -106,25 +155,8 @@ import Combine
                 store.state["document_file"]["epoch"].uint != epoch else {
                 throw HostFailure(message: files.error ?? "Workload document preparation failed")
             }
-        } else {
-            let job: NativeProjectTask = try await withCheckedThrowingContinuation { continuation in
-                native.projectTask(kind: .open) { task, error in
-                    if let task { continuation.resume(returning: task) }
-                    else { continuation.resume(throwing: HostFailure(message: error ?? "Workload document preparation failed")) }
-                }
-            }
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                NativeProjectTask.io.async {
-                    do { try job.read(from: source); continuation.resume() }
-                    catch { continuation.resume(throwing: error) }
-                }
-            }
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                native.finishProject(job, opening: true, title: "Performance workload", url: nil) { error in
-                    if let error { continuation.resume(throwing: HostFailure(message: error)) }
-                    else { continuation.resume() }
-                }
-            }
+        } else if let source {
+            try await store.workloadProject(.open, url: source, title: "Performance workload")
         }
         // Seven translucent underpaint layers plus the active paint layer in
         // the 4K cases. These remain visible and participate in composition.
@@ -139,18 +171,9 @@ import Combine
         try await action(["type": "set_brush_size", "value": plan.diameter])
         try await action(["type": "set_color", "rgba": [0.08, 0.2, 0.55, 1.0]])
         try await action(["type": "invoke", "command": "fit_canvas"])
-        if let theme = plan.theme { try await action(["type": "set_theme", "theme": theme]) }
-        if let level = ProcessInfo.processInfo.environment["CAPY_WORKLOAD_TRANSPARENCY"] {
-            guard let index = ["off", "low", "medium", "high"].firstIndex(of: level) else {
-                throw HostFailure(message: "CAPY_WORKLOAD_TRANSPARENCY must be off, low, medium or high")
-            }
-            try await action(["type": "preferences", "action": ["type": "edit", "id": "transparency", "value": index]])
-        }
+        try await store.applyWorkloadAppearance(theme: plan.theme)
         guard store.state["layers"].array.count == plan.paintLayers + 1 else {
             throw HostFailure(message: "The workload layer count does not match its specification")
-        }
-        if let theme = plan.theme, store.state["theme"].string != theme {
-            throw HostFailure(message: "The workload theme was not applied")
         }
         if source != nil {
             let tab = store.state["tabs"].array.first { $0["active"].bool }
@@ -175,8 +198,7 @@ import Combine
         let now = FrameTrace.now()
         if started == 0 {
             if now - created > 120_000_000_000 { finish(failed: true); return }
-            if !preparing && store.canvasSubmitted && store.snapshot["shaders_ready"].bool
-                && (store.workspaces == nil || store.workspaces?.ready == true) {
+            if !preparing && store.workloadReady {
                 preparing = true
                 Task { [weak self] in
                     do { try await self?.prepare() }
@@ -203,7 +225,7 @@ import Combine
             due = min(due, measurementStarted == 0 ? plan.contactSamples - 1 : Int(plan.seconds) * DrawingWorkloadPlan.samplesPerSecond - 1)
         }
         guard due >= nextSample else { return }
-        let camera = store.state["camera"], revision = store.cameraRevision
+        let camera = store.state["camera"]
         let zoom = camera["zoom"].number
         let translation = camera["translation"].array.map(\.number)
         guard translation.count == 2, zoom > 0 else { finish(failed: true); return }
@@ -211,7 +233,7 @@ import Combine
         var batch: [Double] = [], contact: UInt64?
         func deliver() {
             guard let contact, !batch.isEmpty else { return }
-            store.native?.pointer(id: contact, tool: 0, button: 0, records: batch, predicted: false, revision: revision)
+            store.workloadPointer(contact, records: batch)
             deliveredBatches += 1; deliveredSamples += UInt64(batch.count / 9)
             if plan.document != nil && measurementStarted != 0 {
                 if batch[8] == 1 { record(9, d: contact, e: FrameTrace.timestamp(batch[7])) }
@@ -227,8 +249,8 @@ import Combine
             if contact != sample.contact { deliver(); contact = sample.contact }
             let timestamp = started + UInt64(Double(index) / Double(DrawingWorkloadPlan.samplesPerSecond) * 1e9)
             maximumLateness = max(maximumLateness, now - min(now, timestamp))
-            batch += [translation[0] + sample.x * zoom, translation[1] + sample.y * zoom,
-                sample.pressure, 0.2, 0.1, 0.3, 0, Double(timestamp), sample.phase]
+            batch += EditorStore.workloadSample(x: translation[0] + sample.x * zoom, y: translation[1] + sample.y * zoom,
+                pressure: sample.pressure, time: timestamp, phase: sample.phase)
         }
         deliver()
         if plan.predicts, let contact = lastContact {
@@ -236,12 +258,10 @@ import Combine
             for index in nextSample..<(nextSample + 2) {
                 guard let sample = plan.sample(index), sample.contact == contact, sample.phase == 2 else { break }
                 let time = started + UInt64(Double(index) / Double(DrawingWorkloadPlan.samplesPerSecond) * 1e9)
-                predicted += [translation[0] + sample.x * zoom, translation[1] + sample.y * zoom,
-                    sample.pressure, 0.2, 0.1, 0.3, 0, Double(time), 2]
+                predicted += EditorStore.workloadSample(x: translation[0] + sample.x * zoom, y: translation[1] + sample.y * zoom,
+                    pressure: sample.pressure, time: time, phase: 2)
             }
-            if !predicted.isEmpty {
-                store.native?.pointer(id: contact, tool: 0, button: 0, records: predicted, predicted: true, revision: revision)
-            }
+            if !predicted.isEmpty { store.workloadPointer(contact, records: predicted, predicted: true) }
         }
         if deliveredBatches != previousBatches { store.wake?() }
         if now - lastReport >= 1_000_000_000 {
@@ -265,7 +285,7 @@ import Combine
         finished = true; timer?.invalidate(); timer = nil
         if let contact = lastContact, lastRecord.count == 9, let store {
             lastRecord[7] = Double(FrameTrace.now()); lastRecord[8] = 3
-            store.native?.pointer(id: contact, tool: 0, button: 0, records: lastRecord, predicted: false, revision: store.cameraRevision)
+            store.workloadPointer(contact, records: lastRecord)
             deliveredSamples += 1; deliveredBatches += 1
             store.wake?()
         }

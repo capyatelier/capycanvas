@@ -31,6 +31,7 @@ estimated-input Shared/Bridge/EstimatedInput.swift
 pen-response-input Shared/Bridge/JSON.swift Shared/Bridge/StylusTilt.swift
 frame-trace Shared/Bridge/FrameTrace.swift
 drawing-workload-plan Shared/Bridge/DrawingWorkloadPlan.swift
+chain-plan Shared/Bridge/ChainPlan.swift Shared/Bridge/JSON.swift
 native-input-gate Shared/Bridge/NativeInputGate.swift
 frame-driver Shared/Bridge/CanvasFrameDriver.swift
 process-termination Shared/Bridge/ProcessTermination.swift

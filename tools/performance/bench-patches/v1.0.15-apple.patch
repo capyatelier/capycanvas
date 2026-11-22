@@ -1,0 +1,1594 @@
+Subject: Apple chain benchmark instrumentation for v1.0.15
+Base-commit: 1eb7d6d16975cb08f72da1df3fc6fb5d8b08f519
+
+Instrumentation only. The rendering-pending bridge uses the Android v1.0.15
+Native_renderingPending engine predicate exactly:
+engine.has_pending_document_edits() ||
+layer_render::CanvasRenderer::has_pending_work(engine.backend()).
+The Apple surface in this release tracks no submitted-but-not-completed frame
+count. Canvas cadence and presentation trace rings are not such a counter.
+The runner includes mechanical release API adapters and the benchmark photo,
+save, transform and resume fixes from bench-apple-codex.
+
+Capped stroke metrics remain null while the existing settle barrier drains work
+before subsequent steps.
+
+Unnamed strokes restore the opened document paint layer before selecting the
+brush, matching the Android chain target mapping.
+
+diff --git a/apps/layer-apple/PERFORMANCE.md b/apps/layer-apple/PERFORMANCE.md
+index e4773f326..ad43c9bcd 100644
+--- a/apps/layer-apple/PERFORMANCE.md
++++ b/apps/layer-apple/PERFORMANCE.md
+@@ -102,6 +102,10 @@ DerivedData directory, and run one workload per device.
+   use fresh preferences, so staging settings under `CAPY_STORAGE_DIR` does not
+   select their theme.
+ 
++`CAPY_WORKLOAD=chain` runs the shared bench chain (`tools/performance/bench-chain.json`)
++through the same input owner and ordinary actions and writes the bench pass files;
++`tools/performance/bench_apple.py --help` lists its variables and the Mac and iPad commands.
++
+ The `photo` profile uses an owned current-format package named by the absolute
+ `CAPY_WORKLOAD_DOCUMENT` path inside the private app container. Prepare the
+ 9504 × 6336 reference photo as the bottom visible layer, one empty active paint
+@@ -357,7 +361,7 @@ python3 -m unittest discover -s tools/performance -v
+ 
+ The Swift recorder, workload plan and frame driver have standalone fixtures
+ (`tests/frame-trace.swift`, `tests/drawing-workload-plan.swift`,
+-`tests/frame-driver.swift`), compiled with their `Shared/Bridge` sources as shown
++`tests/chain-plan.swift`, `tests/frame-driver.swift`), compiled with their `Shared/Bridge` sources as shown
+ in the [development guide](../../docs/development/apple.md#swift-fixtures).
+ 
+ ## HDR color bubble motion
+diff --git a/apps/layer-apple/Shared/Bridge/DrawingWorkload.swift b/apps/layer-apple/Shared/Bridge/DrawingWorkload.swift
+index c12e2192f..51b902da2 100644
+--- a/apps/layer-apple/Shared/Bridge/DrawingWorkload.swift
++++ b/apps/layer-apple/Shared/Bridge/DrawingWorkload.swift
+@@ -1,6 +1,63 @@
+ import Foundation
+ import Combine
+ 
++extension EditorStore {
++    var workloadReady: Bool {
++        canvasSubmitted && snapshot["shaders_ready"].bool && (workspaces == nil || workspaces?.ready == true)
++    }
++    func workloadEdit(_ value: [String: Any]) async throws {
++        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
++            edit(value) { error in
++                if let error { continuation.resume(throwing: HostFailure(message: error)) }
++                else { continuation.resume() }
++            }
++        }
++    }
++    func workloadCheckpoint() async throws {
++        let saved = await withCheckedContinuation { continuation in
++            flushPersistence { continuation.resume(returning: $0) }
++        }
++        guard saved else { throw HostFailure(message: "The workload checkpoint did not complete") }
++    }
++    func applyWorkloadAppearance(theme: String?) async throws {
++        if let theme { try await workloadEdit(["type": "set_theme", "theme": theme]) }
++        if let level = ProcessInfo.processInfo.environment["CAPY_WORKLOAD_TRANSPARENCY"] {
++            guard let index = ["off", "low", "medium", "high"].firstIndex(of: level) else {
++                throw HostFailure(message: "CAPY_WORKLOAD_TRANSPARENCY must be off, low, medium or high")
++            }
++            try await workloadEdit(["type": "preferences", "action": ["type": "edit", "id": "transparency", "value": index]])
++        }
++        if let theme, state["theme"].string != theme { throw HostFailure(message: "The workload theme was not applied") }
++    }
++    func workloadProject(_ kind: NativeProjectTask.Kind, url: URL, title: String) async throws {
++        guard let native else { throw CancellationError() }
++        let job: NativeProjectTask = try await withCheckedThrowingContinuation { continuation in
++            native.projectTask(kind: kind) { task, error in
++                if let task { continuation.resume(returning: task) }
++                else { continuation.resume(throwing: HostFailure(message: error ?? "The document task is unavailable")) }
++            }
++        }
++        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
++            NativeProjectTask.io.async {
++                do { if kind == .open { try job.read(from: url) } else { try job.write(to: url) }; continuation.resume() }
++                catch { continuation.resume(throwing: error) }
++            }
++        }
++        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
++            native.finishProject(job, opening: kind == .open, title: title, url: kind == .open ? nil : url) { error in
++                if let error { continuation.resume(throwing: HostFailure(message: error)) }
++                else { continuation.resume() }
++            }
++        }
++    }
++    static func workloadSample(x: Double, y: Double, pressure: Double, time: UInt64, phase: Double) -> [Double] {
++        [x, y, pressure, 0.2, 0.1, 0.3, 0, Double(time), phase]
++    }
++    func workloadPointer(_ contact: UInt64, tool: UInt32 = 0, records: [Double], predicted: Bool = false) {
++        native?.pointer(id: contact, tool: tool, button: 0, records: records, predicted: predicted, revision: cameraRevision)
++    }
++}
++
+ /// Opt-in benchmark in an isolated editor. Uses the ordinary input owner,
+ /// display link, renderer, panels, history and recovery writer on both hosts.
+ @MainActor final class DrawingWorkload {
+@@ -41,19 +98,11 @@ import Combine
+     }
+     private func action(_ value: [String: Any]) async throws {
+         guard let store else { throw CancellationError() }
+-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+-            store.edit(value) { error in
+-                if let error { continuation.resume(throwing: HostFailure(message: error)) }
+-                else { continuation.resume() }
+-            }
+-        }
++        try await store.workloadEdit(value)
+     }
+     private func checkpoint() async throws {
+         guard let store else { throw CancellationError() }
+-        let saved = await withCheckedContinuation { continuation in
+-            store.flushPersistence { continuation.resume(returning: $0) }
+-        }
+-        guard saved else { throw HostFailure(message: "The workload checkpoint did not complete") }
++        try await store.workloadCheckpoint()
+     }
+     private var layerRevisions: String {
+         JSON(store?.state["layers"].array.map {
+@@ -77,7 +126,7 @@ import Combine
+         restoringPrime = false
+     }
+     private func prepare() async throws {
+-        guard let store, let native = store.native else { throw CancellationError() }
++        guard let store else { throw CancellationError() }
+         let extent = plan.documentExtent
+         let source = plan.document.map { URL(fileURLWithPath: $0) }
+         if source == nil {
+@@ -106,25 +155,8 @@ import Combine
+                 store.state["document_file"]["epoch"].uint != epoch else {
+                 throw HostFailure(message: files.error ?? "Workload document preparation failed")
+             }
+-        } else {
+-            let job: NativeProjectTask = try await withCheckedThrowingContinuation { continuation in
+-                native.projectTask(kind: .open) { task, error in
+-                    if let task { continuation.resume(returning: task) }
+-                    else { continuation.resume(throwing: HostFailure(message: error ?? "Workload document preparation failed")) }
+-                }
+-            }
+-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+-                NativeProjectTask.io.async {
+-                    do { try job.read(from: source); continuation.resume() }
+-                    catch { continuation.resume(throwing: error) }
+-                }
+-            }
+-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+-                native.finishProject(job, opening: true, title: "Performance workload", url: nil) { error in
+-                    if let error { continuation.resume(throwing: HostFailure(message: error)) }
+-                    else { continuation.resume() }
+-                }
+-            }
++        } else if let source {
++            try await store.workloadProject(.open, url: source, title: "Performance workload")
+         }
+         // Seven translucent underpaint layers plus the active paint layer in
+         // the 4K cases. These remain visible and participate in composition.
+@@ -139,19 +171,10 @@ import Combine
+         try await action(["type": "set_brush_size", "value": plan.diameter])
+         try await action(["type": "set_color", "rgba": [0.08, 0.2, 0.55, 1.0]])
+         try await action(["type": "invoke", "command": "fit_canvas"])
+-        if let theme = plan.theme { try await action(["type": "set_theme", "theme": theme]) }
+-        if let level = ProcessInfo.processInfo.environment["CAPY_WORKLOAD_TRANSPARENCY"] {
+-            guard let index = ["off", "low", "medium", "high"].firstIndex(of: level) else {
+-                throw HostFailure(message: "CAPY_WORKLOAD_TRANSPARENCY must be off, low, medium or high")
+-            }
+-            try await action(["type": "preferences", "action": ["type": "edit", "id": "transparency", "value": index]])
+-        }
++        try await store.applyWorkloadAppearance(theme: plan.theme)
+         guard store.state["layers"].array.count == plan.paintLayers + 1 else {
+             throw HostFailure(message: "The workload layer count does not match its specification")
+         }
+-        if let theme = plan.theme, store.state["theme"].string != theme {
+-            throw HostFailure(message: "The workload theme was not applied")
+-        }
+         if source != nil {
+             let tab = store.state["tabs"].array.first { $0["active"].bool }
+             let paint = store.state["layers"].array.first
+@@ -175,8 +198,7 @@ import Combine
+         let now = FrameTrace.now()
+         if started == 0 {
+             if now - created > 120_000_000_000 { finish(failed: true); return }
+-            if !preparing && store.canvasSubmitted && store.snapshot["shaders_ready"].bool
+-                && (store.workspaces == nil || store.workspaces?.ready == true) {
++            if !preparing && store.workloadReady {
+                 preparing = true
+                 Task { [weak self] in
+                     do { try await self?.prepare() }
+@@ -203,7 +225,7 @@ import Combine
+             due = min(due, measurementStarted == 0 ? plan.contactSamples - 1 : Int(plan.seconds) * DrawingWorkloadPlan.samplesPerSecond - 1)
+         }
+         guard due >= nextSample else { return }
+-        let camera = store.state["camera"], revision = store.cameraRevision
++        let camera = store.state["camera"]
+         let zoom = camera["zoom"].number
+         let translation = camera["translation"].array.map(\.number)
+         guard translation.count == 2, zoom > 0 else { finish(failed: true); return }
+@@ -211,7 +233,7 @@ import Combine
+         var batch: [Double] = [], contact: UInt64?
+         func deliver() {
+             guard let contact, !batch.isEmpty else { return }
+-            store.native?.pointer(id: contact, tool: 0, button: 0, records: batch, predicted: false, revision: revision)
++            store.workloadPointer(contact, records: batch)
+             deliveredBatches += 1; deliveredSamples += UInt64(batch.count / 9)
+             if plan.document != nil && measurementStarted != 0 {
+                 if batch[8] == 1 { record(9, d: contact, e: FrameTrace.timestamp(batch[7])) }
+@@ -227,8 +249,8 @@ import Combine
+             if contact != sample.contact { deliver(); contact = sample.contact }
+             let timestamp = started + UInt64(Double(index) / Double(DrawingWorkloadPlan.samplesPerSecond) * 1e9)
+             maximumLateness = max(maximumLateness, now - min(now, timestamp))
+-            batch += [translation[0] + sample.x * zoom, translation[1] + sample.y * zoom,
+-                sample.pressure, 0.2, 0.1, 0.3, 0, Double(timestamp), sample.phase]
++            batch += EditorStore.workloadSample(x: translation[0] + sample.x * zoom, y: translation[1] + sample.y * zoom,
++                pressure: sample.pressure, time: timestamp, phase: sample.phase)
+         }
+         deliver()
+         if plan.predicts, let contact = lastContact {
+@@ -236,12 +258,10 @@ import Combine
+             for index in nextSample..<(nextSample + 2) {
+                 guard let sample = plan.sample(index), sample.contact == contact, sample.phase == 2 else { break }
+                 let time = started + UInt64(Double(index) / Double(DrawingWorkloadPlan.samplesPerSecond) * 1e9)
+-                predicted += [translation[0] + sample.x * zoom, translation[1] + sample.y * zoom,
+-                    sample.pressure, 0.2, 0.1, 0.3, 0, Double(time), 2]
+-            }
+-            if !predicted.isEmpty {
+-                store.native?.pointer(id: contact, tool: 0, button: 0, records: predicted, predicted: true, revision: revision)
++                predicted += EditorStore.workloadSample(x: translation[0] + sample.x * zoom, y: translation[1] + sample.y * zoom,
++                    pressure: sample.pressure, time: time, phase: 2)
+             }
++            if !predicted.isEmpty { store.workloadPointer(contact, records: predicted, predicted: true) }
+         }
+         if deliveredBatches != previousBatches { store.wake?() }
+         if now - lastReport >= 1_000_000_000 {
+@@ -265,7 +285,7 @@ import Combine
+         finished = true; timer?.invalidate(); timer = nil
+         if let contact = lastContact, lastRecord.count == 9, let store {
+             lastRecord[7] = Double(FrameTrace.now()); lastRecord[8] = 3
+-            store.native?.pointer(id: contact, tool: 0, button: 0, records: lastRecord, predicted: false, revision: store.cameraRevision)
++            store.workloadPointer(contact, records: lastRecord)
+             deliveredSamples += 1; deliveredBatches += 1
+             store.wake?()
+         }
+diff --git a/apps/layer-apple/Shared/Bridge/DrawingWorkloadPlan.swift b/apps/layer-apple/Shared/Bridge/DrawingWorkloadPlan.swift
+index eaeb4c7ca..71bf3f056 100644
+--- a/apps/layer-apple/Shared/Bridge/DrawingWorkloadPlan.swift
++++ b/apps/layer-apple/Shared/Bridge/DrawingWorkloadPlan.swift
+@@ -18,16 +18,18 @@ struct DrawingWorkloadPlan {
+     let color: [String: String]
+     let document: String?
+     let theme: String?
++    let chain: Chain?
+     var documentExtent: [UInt32] { name == "photo" ? [9504, 6336] : [extent, extent] }
+     var contactSamples: Int { name == "photo" ? 6 * Self.samplesPerSecond : Self.strokeSamples }
+     var contactCycleSamples: Int { name == "photo" ? 7 * Self.samplesPerSecond : Self.cycleSamples }
+ 
+     init(name: String, seconds: Double, color: [String: String] = ["space": "Srgb", "depth": "U8"],
+-        document: String? = nil, brush photoBrush: UInt32? = nil, diameter photoDiameter: Double? = nil, theme: String? = nil) throws {
++        document: String? = nil, brush photoBrush: UInt32? = nil, diameter photoDiameter: Double? = nil, theme: String? = nil,
++        chain: Chain? = nil) throws {
+         guard seconds.isFinite, seconds >= 1, seconds <= 1800 else {
+             throw PlanError(errorDescription: "CAPY_WORKLOAD_SECONDS must be between 1 and 1800")
+         }
+-        self.name = name; self.seconds = seconds; self.color = color
++        self.name = name; self.seconds = seconds; self.color = color; self.chain = name == "chain" ? chain : nil
+         self.document = name == "photo" ? document : nil
+         guard theme == nil || theme == "light" || theme == "dark" else {
+             throw PlanError(errorDescription: "CAPY_WORKLOAD_THEME must be light or dark")
+@@ -47,26 +49,69 @@ struct DrawingWorkloadPlan {
+             }
+             identifier = 6; extent = 9504; paintLayers = 2
+             self.brush = brush; self.diameter = diameter; predicts = false
++        case "chain":
++            guard chain != nil else { throw PlanError(errorDescription: "The chain workload needs its chain settings") }
++            identifier = 7; extent = 0; paintLayers = 0; brush = 0; diameter = 0; predicts = false
+         default: throw PlanError(errorDescription: "Unknown CAPY_WORKLOAD profile: \(name)")
+         }
+     }
+     static func configured(environment: [String: String] = ProcessInfo.processInfo.environment) throws -> DrawingWorkloadPlan? {
+         guard let name = environment["CAPY_WORKLOAD"] else { return nil }
+-        guard let seconds = Double(environment["CAPY_WORKLOAD_SECONDS"] ?? (name == "photo" ? "20" : "600")) else {
++        guard let seconds = Double(environment["CAPY_WORKLOAD_SECONDS"] ?? ["photo": "20", "chain": "1200"][name] ?? "600") else {
+             throw PlanError(errorDescription: "CAPY_WORKLOAD_SECONDS must be a number")
+         }
+-        if name == "photo" && (environment["CAPY_WORKLOAD_SPACE"] != nil || environment["CAPY_WORKLOAD_DEPTH"] != nil) {
+-            throw PlanError(errorDescription: "The photo workload uses the package document color")
++        if ["photo", "chain"].contains(name) && (environment["CAPY_WORKLOAD_SPACE"] != nil || environment["CAPY_WORKLOAD_DEPTH"] != nil) {
++            throw PlanError(errorDescription: "The \(name) workload uses the color of the documents it opens")
+         }
+         return try DrawingWorkloadPlan(name: name, seconds: seconds, color: [
+             "space": environment["CAPY_WORKLOAD_SPACE"] ?? "Srgb",
+             "depth": environment["CAPY_WORKLOAD_DEPTH"] ?? "U8"],
+             document: environment["CAPY_WORKLOAD_DOCUMENT"],
+             brush: environment["CAPY_WORKLOAD_BRUSH"].flatMap(UInt32.init),
+-            diameter: environment["CAPY_WORKLOAD_DIAMETER"].flatMap(Double.init), theme: environment["CAPY_WORKLOAD_THEME"])
++            diameter: environment["CAPY_WORKLOAD_DIAMETER"].flatMap(Double.init), theme: environment["CAPY_WORKLOAD_THEME"],
++            chain: name == "chain" ? try Chain(environment) : nil)
+     }
+     private struct PlanError: LocalizedError { let errorDescription: String? }
++    struct Chain {
++        let file: URL, output: URL, pass: Int, cold: Bool, root: String, steps: Set<String>?
++        let environment: [String: String]
++        init(_ environment: [String: String]) throws {
++            guard let file = environment["CAPY_WORKLOAD_CHAIN"], let output = environment["CAPY_WORKLOAD_OUTPUT"] else {
++                throw PlanError(errorDescription: "The chain workload needs CAPY_WORKLOAD_CHAIN and CAPY_WORKLOAD_OUTPUT")
++            }
++            guard let pass = Int(environment["CAPY_WORKLOAD_PASS"] ?? "1"), pass > 0 else {
++                throw PlanError(errorDescription: "CAPY_WORKLOAD_PASS must be a positive integer")
++            }
++            guard let cold = ["1": true, "0": false][environment["CAPY_WORKLOAD_COLD"] ?? "1"] else {
++                throw PlanError(errorDescription: "CAPY_WORKLOAD_COLD must be 1 or 0")
++            }
++            guard let root = cold ? UUID().uuidString : environment["CAPY_WORKLOAD_ROOT"], !root.isEmpty else {
++                throw PlanError(errorDescription: "A warm chain pass (CAPY_WORKLOAD_COLD=0) needs CAPY_WORKLOAD_ROOT")
++            }
++            self.file = Self.container(file); self.output = Self.container(output)
++            self.pass = pass; self.cold = cold; self.root = root
++            steps = environment["CAPY_WORKLOAD_STEPS"].map { Set($0.split(separator: ",").map(String.init)) }
++            self.environment = environment
++        }
++        static func container(_ path: String) -> URL {
++            path.hasPrefix("/") ? URL(fileURLWithPath: path) : URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(path)
++        }
++        func document(_ key: String) -> URL? { environment["CAPY_WORKLOAD_" + key.uppercased()].map(Self.container) }
++        func label(_ key: String) -> String? { environment["CAPY_WORKLOAD_" + key] }
++    }
++    var persistenceRoot: URL {
++        let name = chain?.root ?? UUID().uuidString
++        return name.hasPrefix("/") ? URL(fileURLWithPath: name, isDirectory: true)
++            : FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
++                .appendingPathComponent("CapyPerformanceSessions/\(name)", isDirectory: true)
++    }
+     var metadata: [String: Any] {
++        if let chain {
++            var result: [String: Any] = ["version": 1, "name": name, "input_source": "synthetic", "pass": chain.pass,
++                "cold": chain.cold, "measurement_seconds": seconds]
++            if let theme { result["theme"] = theme }
++            return result
++        }
+         var result: [String: Any] = ["version": 1, "name": name, "document_pixels": [extent, extent], "paint_layers": paintLayers,
+          "document_color": color,
+          "brush_id": brush, "diameter": diameter, "prediction": predicts, "sample_hz": Self.samplesPerSecond,
+diff --git a/apps/layer-apple/Shared/Bridge/EditorStore.swift b/apps/layer-apple/Shared/Bridge/EditorStore.swift
+index c5c4bd76c..7c122b098 100644
+--- a/apps/layer-apple/Shared/Bridge/EditorStore.swift
++++ b/apps/layer-apple/Shared/Bridge/EditorStore.swift
+@@ -75,7 +75,7 @@ import Darwin
+     private var launch: ((JSON?) -> Void)?
+     private(set) var native: NativeOwner?
+     private(set) var workspaces: WorkspaceController?
+-    private var drawingWorkload: DrawingWorkload?
++    private var drawingWorkload: AnyObject?
+     lazy var layerThumbnails = LayerThumbnails(store: self)
+     let layerSwipe = LayerSwipe()
+     lazy var filterPreviews = FilterPreviews(store: self)
+@@ -122,11 +122,10 @@ import Darwin
+         sessionIdentity = UUID(uuidString: scene)?.uuidString ?? UUID().uuidString
+         do {
+             let workload = try DrawingWorkloadPlan.configured()
+-            let storage = workload == nil ? persistence : EditorPersistence(root:
+-                FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+-                    .appendingPathComponent("CapyPerformanceSessions/\(UUID().uuidString)", isDirectory: true))
++            let storage = workload.map { EditorPersistence(root: $0.persistenceRoot) } ?? persistence
+             paperDirectory = storage.locations?.papers
+             colorPreferences = ColorPreferencesStore(locations: storage.locations)
++            if workload?.chain != nil { projectFiles = ProjectFiles(store: self, dialogs: ChainWorkload.dialogs) }
+             launch = { [weak self] screen in
+                 self?.initialize(platform: platform, scene: scene, storage: storage,
+                     usesWorkspaceLibrary: managedWorkspaces && storage.locations != nil, workload: workload, screen: screen)
+@@ -160,7 +159,8 @@ import Darwin
+             native?.setCanvasBarHoldChanged { [weak self] hold in
+                 DispatchQueue.main.async { self?.canvasBar.hold(hold) }
+             }
+-            if let workload { drawingWorkload = DrawingWorkload(store: self, plan: workload) }
++            if let workload, workload.chain != nil { drawingWorkload = ChainWorkload(store: self, plan: workload) }
++            else if let workload { drawingWorkload = DrawingWorkload(store: self, plan: workload) }
+         } catch { failure = error.localizedDescription }
+     }
+     private func receive(_ next: JSON?, _ error: String?) {
+diff --git a/apps/layer-apple/Shared/Bridge/FrameTrace.swift b/apps/layer-apple/Shared/Bridge/FrameTrace.swift
+index a105b32ef..e584b53f8 100644
+--- a/apps/layer-apple/Shared/Bridge/FrameTrace.swift
++++ b/apps/layer-apple/Shared/Bridge/FrameTrace.swift
+@@ -30,6 +30,7 @@ final class FrameTrace: @unchecked Sendable {
+     private var frozen = false
+     private var finishing = false
+     private var timer: DispatchSourceTimer?
++    private var exported: [@Sendable ([FrameTraceEvent], UInt64) -> Void] = []
+     private let output: URL?
+     private let platform: UInt32
+     private let workload: [String: Any]?
+@@ -75,8 +76,12 @@ final class FrameTrace: @unchecked Sendable {
+         let result = events; events = []
+         return (result, dropped)
+     }
+-    func finish() {
++    func finish(exported: (@Sendable ([FrameTraceEvent], UInt64) -> Void)? = nil) {
+         lock.lock()
++        if let exported {
++            if frozen { let count = dropped; lock.unlock(); exported([], count); return }
++            self.exported.append(exported)
++        }
+         guard !finishing && !frozen else { lock.unlock(); return }
+         finishing = true
+         lock.unlock()
+@@ -96,7 +101,7 @@ final class FrameTrace: @unchecked Sendable {
+         }
+         timer.resume()
+     }
+-    private func sampleMemory() {
++    static func taskMemory() -> (footprint: UInt64, resident: UInt64, status: kern_return_t) {
+         var info = task_vm_info_data_t()
+         var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+         let status = withUnsafeMutablePointer(to: &info) { pointer in
+@@ -104,12 +109,19 @@ final class FrameTrace: @unchecked Sendable {
+                 task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+             }
+         }
+-        record(FrameTraceEvent(kind: .memory, a: Self.now(), b: status == KERN_SUCCESS ? info.phys_footprint : 0,
+-            c: status == KERN_SUCCESS ? info.resident_size : 0,
+-            d: UInt64(ProcessInfo.processInfo.thermalState.rawValue), e: UInt64(UInt32(bitPattern: status))))
++        return status == KERN_SUCCESS ? (info.phys_footprint, info.resident_size, status) : (0, 0, status)
++    }
++    private func sampleMemory() {
++        let memory = Self.taskMemory()
++        record(FrameTraceEvent(kind: .memory, a: Self.now(), b: memory.footprint, c: memory.resident,
++            d: UInt64(ProcessInfo.processInfo.thermalState.rawValue), e: UInt64(UInt32(bitPattern: memory.status))))
+     }
+     private func export() {
+         let snapshot = freeze()
++        defer {
++            lock.lock(); let callbacks = exported; exported = []; lock.unlock()
++            for callback in callbacks { callback(snapshot.events, snapshot.dropped) }
++        }
+         guard let output else { return }
+         do {
+             try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
+diff --git a/apps/layer-apple/Shared/Bridge/NativeOwner.swift b/apps/layer-apple/Shared/Bridge/NativeOwner.swift
+index 8c9ab7b06..74df03d32 100644
+--- a/apps/layer-apple/Shared/Bridge/NativeOwner.swift
++++ b/apps/layer-apple/Shared/Bridge/NativeOwner.swift
+@@ -1010,7 +1010,14 @@ final class NativeOwner: @unchecked Sendable {
+     func observeWorkload(_ event: FrameTraceEvent) {
+         if let trace, trace.isRecording { trace.record(event) }
+     }
+-    func finishTrace() { perform { [self] in trace?.finish() } }
++    func renderingPending(_ completion: @escaping @Sendable (Bool) -> Void) {
++        queue.async { [self] in completion(capy_apple_rendering_pending(nativeValue(handle))) }
++    }
++    func finishTrace(exported: (@Sendable ([FrameTraceEvent], UInt64) -> Void)? = nil) {
++        perform { [self] in
++            if let trace { trace.finish(exported: exported) } else { exported?([], 0) }
++        }
++    }
+     func observeActivity(active: Bool) {
+         if let trace, trace.isRecording { trace.record(FrameTraceEvent(kind: .activity, a: FrameTrace.now(), b: active ? 1 : 0)) }
+     }
+diff --git a/apps/layer-apple/native/include/CapyApple.h b/apps/layer-apple/native/include/CapyApple.h
+index b576ba716..7f63e5d3e 100644
+--- a/apps/layer-apple/native/include/CapyApple.h
++++ b/apps/layer-apple/native/include/CapyApple.h
+@@ -81,6 +81,7 @@ int32_t capy_apple_project_prepare_adopt(CapyApple app, CapyProjectTask task, ui
+ /* kind: 0 save, 1 open, 3 Place/Paste, 4 color/history, 5 properties, 6 source, 7 histogram. */
+ CapyProjectTask capy_apple_project_task(CapyApple app, uint32_t kind, const char *placement);
+ int32_t capy_apple_project_ready(CapyApple app); /* 0 ready, 1 preparing filters, -1 interaction/error */
++bool capy_apple_rendering_pending(CapyApple app);
+ int32_t capy_project_matches(CapyProjectTask task, uint64_t epoch, uint64_t revision);
+ int32_t capy_project_destination_matches(CapyProjectTask task, int32_t descriptor, const char *uri);
+ int32_t capy_project_write(CapyProjectTask task, int32_t fd);
+diff --git a/apps/layer-apple/native/src/lib.rs b/apps/layer-apple/native/src/lib.rs
+index 545122447..d4baae83a 100644
+--- a/apps/layer-apple/native/src/lib.rs
++++ b/apps/layer-apple/native/src/lib.rs
+@@ -994,3 +994,13 @@ pub unsafe extern "C" fn capy_apple_take_gpu_timing(
+     })
+     .unwrap_or(-1)
+ }
++
++/// # Safety
++/// Call on the serial editor owner.
++#[unsafe(no_mangle)]
++pub unsafe extern "C" fn capy_apple_rendering_pending(app: u64) -> bool {
++    let Some(app) = handles::app(app) else { return true; };
++    let engine = app.host.session.engine();
++    engine.has_pending_document_edits()
++        || layer_render::CanvasRenderer::has_pending_work(engine.backend())
++}
+diff --git a/apps/layer-apple/scripts/test-without-gpu.sh b/apps/layer-apple/scripts/test-without-gpu.sh
+index 04dca2cf8..2c1a5322e 100755
+--- a/apps/layer-apple/scripts/test-without-gpu.sh
++++ b/apps/layer-apple/scripts/test-without-gpu.sh
+@@ -31,6 +31,7 @@ estimated-input Shared/Bridge/EstimatedInput.swift
+ pen-response-input Shared/Bridge/JSON.swift Shared/Bridge/StylusTilt.swift
+ frame-trace Shared/Bridge/FrameTrace.swift
+ drawing-workload-plan Shared/Bridge/DrawingWorkloadPlan.swift
++chain-plan Shared/Bridge/ChainPlan.swift Shared/Bridge/JSON.swift
+ native-input-gate Shared/Bridge/NativeInputGate.swift
+ frame-driver Shared/Bridge/CanvasFrameDriver.swift
+ numeric-edit Shared/Editor/NumericEditState.swift
+diff --git a/apps/layer-apple/tests/drawing-workload-plan.swift b/apps/layer-apple/tests/drawing-workload-plan.swift
+index 86ca92b7c..b0bf19160 100644
+--- a/apps/layer-apple/tests/drawing-workload-plan.swift
++++ b/apps/layer-apple/tests/drawing-workload-plan.swift
+@@ -71,6 +71,35 @@ import Foundation
+         }
+         do { _ = try DrawingWorkloadPlan(name: "unknown", seconds: 600); preconditionFailure("Unknown workload accepted") }
+         catch {}
+-        print("PASS: workload contact termination, lift gaps, bounds, pressure, and configuration validation")
++        let chainEnvironment = ["CAPY_WORKLOAD": "chain", "CAPY_WORKLOAD_CHAIN": "Documents/capy-bench/chain.json",
++            "CAPY_WORKLOAD_OUTPUT": "/owned/pass-2", "CAPY_WORKLOAD_PASS": "2", "CAPY_WORKLOAD_COLD": "0",
++            "CAPY_WORKLOAD_ROOT": "bench-main", "CAPY_WORKLOAD_HEAVY": "Documents/capy-bench/heavy.capy",
++            "CAPY_WORKLOAD_STEPS": "launch,open.heavy", "CAPY_WORKLOAD_DEVICE": "macmini"]
++        let warm = try DrawingWorkloadPlan.configured(environment: chainEnvironment)!
++        let chain = warm.chain!
++        precondition(warm.seconds == 1200 && warm.document == nil && chain.pass == 2 && !chain.cold && chain.root == "bench-main")
++        precondition(chain.file.path == NSHomeDirectory() + "/Documents/capy-bench/chain.json" && chain.output.path == "/owned/pass-2")
++        precondition(chain.document("heavy")?.path == NSHomeDirectory() + "/Documents/capy-bench/heavy.capy" && chain.document("photo") == nil)
++        precondition(chain.steps == ["launch", "open.heavy"] && chain.label("DEVICE") == "macmini" && chain.label("COMMIT") == nil)
++        precondition(warm.persistenceRoot.path.hasSuffix("/CapyPerformanceSessions/bench-main"))
++        precondition(!String(describing: warm.metadata).contains("capy-bench") && !String(describing: warm.metadata).contains("owned"))
++        var coldEnvironment = chainEnvironment; coldEnvironment["CAPY_WORKLOAD_COLD"] = "1"
++        let cold = try DrawingWorkloadPlan.configured(environment: coldEnvironment)!.chain!
++        precondition(cold.cold && cold.root != "bench-main" && UUID(uuidString: cold.root) != nil)
++        var absolute = chainEnvironment; absolute["CAPY_WORKLOAD_ROOT"] = "/owned/root"
++        let owned = try DrawingWorkloadPlan.configured(environment: absolute)!
++        precondition(owned.persistenceRoot.path == "/owned/root")
++        let fresh = try DrawingWorkloadPlan(name: "ink", seconds: 600)
++        precondition(fresh.chain == nil && fresh.persistenceRoot != fresh.persistenceRoot)
++        for (key, value) in [("CAPY_WORKLOAD_CHAIN", nil), ("CAPY_WORKLOAD_OUTPUT", nil), ("CAPY_WORKLOAD_ROOT", nil),
++            ("CAPY_WORKLOAD_ROOT", ""), ("CAPY_WORKLOAD_PASS", "0"), ("CAPY_WORKLOAD_PASS", "x"), ("CAPY_WORKLOAD_COLD", "yes"),
++            ("CAPY_WORKLOAD_SPACE", "Srgb"), ("CAPY_WORKLOAD_SECONDS", "1801")] as [(String, String?)] {
++            var invalid = chainEnvironment; invalid[key] = value
++            do { _ = try DrawingWorkloadPlan.configured(environment: invalid); preconditionFailure("Invalid chain configuration accepted: \(key)") }
++            catch {}
++        }
++        do { _ = try DrawingWorkloadPlan(name: "chain", seconds: 600); preconditionFailure("Chain without settings accepted") }
++        catch {}
++        print("PASS: workload contact termination, lift gaps, bounds, pressure, chain settings, persistence roots and configuration validation")
+     }
+ }
+diff --git a/apps/layer-apple/Shared/Bridge/ChainPlan.swift b/apps/layer-apple/Shared/Bridge/ChainPlan.swift
+new file mode 100644
+index 000000000..98875eea0
+--- /dev/null
++++ b/apps/layer-apple/Shared/Bridge/ChainPlan.swift
+@@ -0,0 +1,106 @@
++import Foundation
++
++struct ChainPlan {
++    struct RenderingTimeout: LocalizedError {
++        var errorDescription: String? { "Rendering was still pending after 60 s" }
++    }
++    @MainActor func run(perform: @MainActor (JSON) async -> String?, notRun: @MainActor (JSON, String) -> Void) async -> String? {
++        var stopped: String?
++        for step in steps {
++            if let reason = stopped { notRun(step, "not run: \(reason)") }
++            else { stopped = await perform(step) }
++        }
++        return stopped
++    }
++
++    static let penHz = 200.0
++    static let touchHz = 240.0
++    let steps: [JSON]
++    let documents: JSON
++    let motionFrames: Double
++
++    init(data: Data, only: Set<String>? = nil) throws {
++        let value = try JSON.decode(String(decoding: data, as: UTF8.self))
++        guard value["schema"].uint == 1, !value["steps"].array.isEmpty else {
++            throw HostFailure(message: "The chain file needs schema 1 and at least one step")
++        }
++        motionFrames = value["motion_frames"].isNull ? 150 : value["motion_frames"].number
++        documents = value["documents"]
++        steps = value["steps"].array.filter { only?.contains($0["id"].string) ?? true }
++        if let missing = only?.subtracting(steps.map { $0["id"].string }).sorted().first {
++            throw HostFailure(message: "CAPY_WORKLOAD_STEPS names \(missing), which the chain does not contain")
++        }
++    }
++    func seconds(_ step: JSON, refreshHz: Double) -> Double {
++        if !step["duration_ms"].isNull { return step["duration_ms"].number / 1000 }
++        return (step["frames"].isNull ? motionFrames : step["frames"].number) / refreshHz
++    }
++    static func brushSize(_ value: JSON, pixels: Double) -> Double {
++        value.string == "guarantee" ? (pixels < 20e6 ? 1024 : pixels < 40e6 ? 1536 : 2048) : value.number
++    }
++    static func command(_ name: String) -> String {
++        ["magic_wand": "auto_select", "transform": "scale_rotate"][name] ?? name
++    }
++    static func triangle(_ progress: Double) -> Double { 1 - abs(2 * progress - 1) }
++
++    struct Point: Equatable {
++        var x: Double, y: Double, pressure = 1.0
++    }
++    static func stroke(_ path: String, seconds t: Double, progress p: Double) -> Point {
++        let pressure = 0.25 + 0.75 * sin(.pi * p)
++        if path == "zigzag" {
++            return Point(x: 0.5 + 0.3 * (1 - 4 * abs(t.truncatingRemainder(dividingBy: 1) - 0.5)), y: 0.5 + 0.2 * (2 * p - 1), pressure: pressure)
++        }
++        return Point(x: 0.5 + 0.3 * cos(2 * .pi * t), y: 0.5 + 0.2 * sin(2 * .pi * t), pressure: pressure)
++    }
++    static func drag(_ path: String, from start: Point, progress p: Double) -> Point {
++        if path == "loop" { return Point(x: 0.5 + 0.3 * cos(2 * .pi * p), y: 0.5 + 0.2 * sin(2 * .pi * p)) }
++        return Point(x: start.x + 0.15 * p, y: start.y - 0.075 * sin(.pi * p))
++    }
++
++    struct Pose: Equatable {
++        var scale = 1.0, rotation = 0.0, pan = 0.0
++    }
++    static func gesture(_ kind: String, progress p: Double) -> Pose {
++        let amount = triangle(p)
++        switch kind {
++        case "pinch": return Pose(scale: 1 + 1.5 * amount)
++        case "rotate": return Pose(rotation: .pi / 3 * amount)
++        default: return Pose(pan: 0.3 * amount)
++        }
++    }
++    static func fingers(_ pose: Pose, area: [Double]) -> [Point] {
++        let x = area[0] + area[2] * (0.5 + pose.pan), y = area[1] + area[3] * 0.5
++        let radius = 0.1 * min(area[2], area[3]) * pose.scale
++        return [1.0, -1.0].map { Point(x: x + $0 * radius * cos(pose.rotation), y: y + $0 * radius * sin(pose.rotation)) }
++    }
++    static func floatAndReturn(from start: Point, center: Point, radius: Double, progress p: Double) -> Point {
++        func line(_ a: Point, _ b: Point, _ q: Double) -> Point { Point(x: a.x + (b.x - a.x) * q, y: a.y + (b.y - a.y) * q) }
++        if p < 1.0 / 3 { return line(start, center, 3 * p) }
++        if p > 2.0 / 3 { return line(center, start, 3 * p - 2) }
++        let angle = 2 * .pi * (3 * p - 1)
++        return Point(x: center.x + radius * sin(angle), y: center.y + radius * (1 - cos(angle)))
++    }
++
++    static func unsupported(_ step: JSON, iPad: Bool) -> String? {
++        let target = step["target"].string
++        switch step["do"].string {
++        case "launch", "open", "stroke", "repeat", "tap", "save", "close": return nil
++        case "gesture":
++            return ["pan", "pinch", "rotate"].contains(step["gesture"].string) ? nil : "No Apple mapping for gesture \(step["gesture"].string)"
++        case "scrub":
++            return step["effect"].isNull || step["effect"].string == "curves" ? nil : "No Apple scrub mapping for effect \(step["effect"].string)"
++        case "drag":
++            if target.hasPrefix("list:") { return "Native SwiftUI lists scroll without a shared action, so the runner cannot fling \(target)" }
++            if ["canvas", "slider:size", "grip:layers", "edge:right-column"].contains(target) || target.hasPrefix("object:") { return nil }
++            return "No Apple mapping for drag target \(target)"
++        case "resume": return iPad ? "An iPadOS app cannot send itself to the background and return" : nil
++        default: return "Unknown step kind \(step["do"].string)"
++        }
++    }
++    static func unsupported(item: String, iPad: Bool) -> String? {
++        guard item == "menu:main" else { return nil }
++        return iPad ? "The iPad main menu is a SwiftUI menu that only a real tap opens"
++            : "The Mac main menu is the system menu bar, outside the app's window"
++    }
++}
+diff --git a/apps/layer-apple/Shared/Bridge/ChainWorkload.swift b/apps/layer-apple/Shared/Bridge/ChainWorkload.swift
+new file mode 100644
+index 000000000..fa7ee59d6
+--- /dev/null
++++ b/apps/layer-apple/Shared/Bridge/ChainWorkload.swift
+@@ -0,0 +1,726 @@
++import Foundation
++import Metal
++import CryptoKit
++#if os(macOS)
++import AppKit
++#else
++import UIKit
++import os
++#endif
++
++@MainActor final class ChainWorkload {
++    private final class Step {
++        let id: String, surface: String
++        var status = "ok", reason: String?, stroke = false
++        var begin: UInt64 = 0, end: UInt64 = 0, settled: UInt64?
++        var motion: [[String: UInt64]] = [], contacts: [[String: UInt64]] = [], completions: [[String: UInt64]] = []
++        var latency: [[String: Any]] = [], extra: [String: Any] = [:]
++        init(id: String, surface: String) { self.id = id; self.surface = surface }
++        var json: [String: Any] {
++            ["id": id, "status": status, "reason": reason as Any? ?? NSNull(), "input": "dispatch", "begin_ns": begin, "end_ns": end,
++             "surface": surface, "motion": motion, "contacts": contacts, "completions": completions,
++             "settled_ns": settled as Any? ?? NSNull(), "latency": latency, "extra": extra]
++        }
++    }
++    private struct Skip: Error { let reason: String }
++    #if os(macOS)
++    private let iPad = false
++    #else
++    private let iPad = true
++    #endif
++    private weak var store: EditorStore?
++    private let plan: DrawingWorkloadPlan
++    private let chain: DrawingWorkloadPlan.Chain
++    private let created = FrameTrace.now()
++    private let device = MTLCreateSystemDefaultDevice()
++    private var records: [Step] = []
++    private var memory: [[String: Any]] = []
++    private var memoryTimer: Timer?
++    private var launched: (input: UInt64?, ready: UInt64)?
++    private var tabs: [String: UInt64] = [:]
++    private var paintLayers: [UInt64: UInt64] = [:]
++    private var canvas: [UInt64]?
++    private var refreshHz = 60.0
++    private var nextContact: UInt64 = 1 << 32
++
++    static var saveURL: URL { FileManager.default.temporaryDirectory.appendingPathComponent("capy-bench-save.capy") }
++    static var dialogs: ProjectFiles.Dialogs {
++        .init(open: { _, done in done([]) }, save: { _, _, done in done(saveURL) }, export: { staging, done in
++            let destination = saveURL
++            NativeProjectTask.io.async {
++                do {
++                    try FileManager.default.copyItem(at: staging, to: destination)
++                    DispatchQueue.main.async { done(destination) }
++                } catch { DispatchQueue.main.async { done(nil) } }
++            }
++        })
++    }
++
++    init(store: EditorStore, plan: DrawingWorkloadPlan) {
++        self.store = store; self.plan = plan; chain = plan.chain!
++        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.sampleMemory() } }
++        memoryTimer = timer
++        RunLoop.main.add(timer, forMode: .common)
++        sampleMemory()
++        Task { await self.run() }
++    }
++    private var editor: EditorStore {
++        get throws {
++            guard let store else { throw HostFailure(message: "The editor window closed") }
++            return store
++        }
++    }
++
++    private func run() async {
++        var failure: String?, digest = ""
++        do {
++            let data = try Data(contentsOf: chain.file)
++            digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
++            let steps = try ChainPlan(data: data, only: chain.steps)
++            failure = await steps.run(perform: { await self.perform($0, steps) }, notRun: { self.notRun($0, reason: $1) })
++        } catch { failure = error.localizedDescription }
++        await finish(failure: failure, digest: digest)
++    }
++    private func record(_ step: JSON) -> Step {
++        let target = step["target"].string
++        let record = Step(id: step["id"].string, surface: !step["surface"].isNull ? step["surface"].string
++            : target.contains(":") && !target.hasPrefix("object:") ? "window" : "canvas")
++        records.append(record)
++        record.begin = FrameTrace.now()
++        return record
++    }
++    private func notRun(_ step: JSON, reason: String) {
++        let record = record(step)
++        record.status = "error"; record.reason = reason; record.end = record.begin
++    }
++    private func perform(_ step: JSON, _ steps: ChainPlan) async -> String? {
++        let record = record(step), revision = store?.state["document_file"]["revision"].uint ?? 0
++        var stopped: String?
++        do {
++            if launched == nil { launched = try await launch() }
++            if let reason = ChainPlan.unsupported(step, iPad: iPad) { throw Skip(reason: reason) }
++            guard Double(FrameTrace.now() - created) < plan.seconds * 1e9 else {
++                throw HostFailure(message: "The pass ran past CAPY_WORKLOAD_SECONDS (\(Int(plan.seconds)) s)")
++            }
++            try await execute(step, steps, record)
++        } catch let skip as Skip {
++            record.status = "skipped"; record.reason = skip.reason
++        } catch {
++            record.status = "failed"; record.reason = error.localizedDescription
++            if launched == nil || error is ChainPlan.RenderingTimeout { stopped = error.localizedDescription }
++            store?.failure = nil
++        }
++        if record.end == 0 { record.end = FrameTrace.now() }
++        record.extra["document_revision"] = [revision, store?.state["document_file"]["revision"].uint ?? 0]
++        NSLog("Capy chain %@ %@ %@", record.id, record.status, record.reason ?? "")
++        return stopped
++    }
++    private func execute(_ step: JSON, _ steps: ChainPlan, _ record: Step) async throws {
++        switch step["do"].string {
++        case "launch":
++            guard let launched, let input = launched.input else { throw HostFailure(message: "The process start time is unavailable") }
++            record.begin = input; record.end = launched.ready
++            record.latency.append(["name": "launch", "input_ns": input, "ready_ns": launched.ready, "surface": "canvas"])
++        case "open": try await open(step["document"].string, steps, record)
++        case "stroke": try await stroke(step, steps, record)
++        case "gesture": try await gesture(step, steps, record)
++        case "drag": try await drag(step, steps, record)
++        case "tap": try await tap(step, record)
++        case "repeat": try await repeatItems(step, record)
++        case "scrub": try await scrub(step, steps, record)
++        case "save": try await save(step["document"].string, record)
++        case "resume": try await resume(record)
++        default: try await close(record)
++        }
++    }
++
++    private func poll(_ seconds: Double, _ condition: () async -> Bool) async throws -> Bool {
++        let deadline = FrameTrace.now() + UInt64(seconds * 1e9)
++        while true {
++            if let failure = try editor.failure { throw HostFailure(message: failure) }
++            if await condition() { return true }
++            if FrameTrace.now() >= deadline { return false }
++            try await Task.sleep(for: .milliseconds(4))
++        }
++    }
++    private func wait(_ what: String, seconds: Double = 60, _ condition: () async -> Bool) async throws {
++        guard try await poll(seconds, condition) else { throw HostFailure(message: "Timed out after \(Int(seconds)) s waiting for \(what)") }
++    }
++    private func pending() async -> Bool {
++        guard let native = store?.native else { return true }
++        return await withCheckedContinuation { continuation in native.renderingPending { continuation.resume(returning: $0) } }
++    }
++    private func settled(within seconds: Double) async throws -> UInt64? {
++        let idle = try await poll(seconds) { await !pending() }
++        return idle ? FrameTrace.now() : nil
++    }
++    @discardableResult private func settle() async throws -> UInt64 {
++        guard let time = try await settled(within: 60) else { throw ChainPlan.RenderingTimeout() }
++        return time
++    }
++    private func measure(_ record: Step, _ name: String, since input: UInt64) async throws {
++        let ready = try await settle()
++        record.latency.append(["name": name, "input_ns": input, "ready_ns": ready, "surface": record.surface])
++    }
++    private func edit(_ value: [String: Any]) async throws { try await editor.workloadEdit(value) }
++    private func invoke(_ command: String) async throws {
++        let state = try editor.command(command)
++        if !state["enabled"].isNull && !state["enabled"].bool { throw HostFailure(message: "Command \(command) is disabled") }
++        try await edit(["type": "invoke", "command": command])
++    }
++    private func selectLayer(_ label: String?) async throws {
++        let store = try editor, id: UInt64
++        if let label {
++            let layers = store.state["layers"].array
++            guard let layer = layers.first(where: { $0["label"].string == label }) else {
++                throw HostFailure(message: "No layer is labelled \(label); layers: \(layers.map { $0["label"].string }.joined(separator: ", "))")
++            }
++            id = layer["id"].uint
++        } else {
++            guard let paint = paintLayers[store.snapshot["document_tabs"]["selected"].uint] else { return }
++            id = paint
++        }
++        try await edit(["type": "select_layer", "id": id])
++    }
++    private func area() throws -> [Double] {
++        let area = try editor.state["camera"]["work_area"].array.map(\.number)
++        guard area.count == 4, area[2] > 0, area[3] > 0 else { throw HostFailure(message: "The canvas has no work area") }
++        return area
++    }
++    private func pixel(_ point: ChainPlan.Point, _ area: [Double]) -> ChainPlan.Point {
++        ChainPlan.Point(x: area[0] + point.x * area[2], y: area[1] + point.y * area[3], pressure: point.pressure)
++    }
++
++    private func paced(_ count: Int, hz: Double, _ deliver: (Range<Int>, UInt64) throws -> Void) async throws -> (down: UInt64, up: UInt64) {
++        let start = FrameTrace.now()
++        var next = 0
++        while next <= count {
++            let store = try editor
++            if let failure = store.failure { throw HostFailure(message: failure) }
++            let due = min(count, Int(Double(FrameTrace.now() - start) / 1e9 * hz))
++            if due >= next { try deliver(next..<(due + 1), start); next = due + 1; store.wake?() }
++            if next <= count { try await Task.sleep(for: .milliseconds(2)) }
++        }
++        return (start, start + UInt64(Double(count) / hz * 1e9))
++    }
++    private func contact(tool: UInt32 = 0, fingers: Int = 1, hz: Double, seconds: Double,
++        _ points: (Double, Double) -> [ChainPlan.Point]) async throws -> (down: UInt64, up: UInt64) {
++        var ids: [UInt64] = []
++        for _ in 0..<fingers { nextContact += 1; ids.append(nextContact) }
++        let count = max(1, Int((seconds * hz).rounded()))
++        return try await paced(count, hz: hz) { range, start in
++            var batches = [[Double]](repeating: [], count: fingers)
++            for index in range {
++                let time = start + UInt64(Double(index) / hz * 1e9)
++                for (finger, point) in points(Double(index) / hz, Double(index) / Double(count)).enumerated() {
++                    batches[finger] += EditorStore.workloadSample(x: point.x, y: point.y, pressure: point.pressure, time: time,
++                        phase: index == 0 ? 1 : index == count ? 3 : 2)
++                }
++            }
++            for (finger, batch) in batches.enumerated() { store?.workloadPointer(ids[finger], tool: tool, records: batch) }
++        }
++    }
++
++    private func launch() async throws -> (input: UInt64?, ready: UInt64) {
++        try await wait("the editor, brush and shaders to become ready", seconds: 180) {
++            guard let store = self.store else { return false }
++            return store.workloadReady && store.snapshot["brush_ready"].bool
++                && !store.recovery.restoring && !store.projectFiles.busy
++        }
++        let ready = try await settle()
++        let store = try editor
++        try await store.applyWorkloadAppearance(theme: plan.theme)
++        #if os(macOS)
++        let screen = store.projectFiles.presentationWindow?.screen ?? NSScreen.main
++        #else
++        let screen = store.projectFiles.presentationScreen
++        #endif
++        refreshHz = Double(screen?.maximumFramesPerSecond ?? 60)
++        return (Self.processStart(), ready)
++    }
++    private static func processStart() -> UInt64? {
++        var info = kinfo_proc(), size = MemoryLayout<kinfo_proc>.stride
++        var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
++        guard sysctl(&name, 4, &info, &size, nil, 0) == 0 else { return nil }
++        let start = info.kp_proc.p_un.__p_starttime
++        let age = Date().timeIntervalSince1970 - (Double(start.tv_sec) + Double(start.tv_usec) / 1e6)
++        let now = FrameTrace.now()
++        guard age > 0, age < 3600, UInt64(age * 1e9) < now else { return nil }
++        return now - UInt64(age * 1e9)
++    }
++
++    private func open(_ name: String, _ steps: ChainPlan, _ record: Step) async throws {
++        let store = try editor, files = store.projectFiles
++        guard let url = chain.document(name) else { throw Skip(reason: "CAPY_WORKLOAD_\(name.uppercased()) names no \(name) document") }
++        guard FileManager.default.fileExists(atPath: url.path) else { throw HostFailure(message: "The \(name) document is missing at \(url.path)") }
++        let epoch = store.state["document_file"]["epoch"].uint, tab = store.snapshot["document_tabs"]["selected"].uint
++        let input = FrameTrace.now()
++        files.openURL(url)
++        try await wait("the \(name) document to open", seconds: 180) {
++            files.error != nil || files.pendingProfile != nil || files.packageSummary != nil || (!files.busy
++                && (store.state["document_file"]["epoch"].uint != epoch || store.snapshot["document_tabs"]["selected"].uint != tab))
++        }
++        if let error = files.error { files.error = nil; throw HostFailure(message: error) }
++        if files.pendingProfile != nil { files.cancel(); throw HostFailure(message: "Opening \(name) asks for a color profile choice") }
++        if files.packageSummary != nil { files.closePackage(); throw HostFailure(message: "The \(name) file opened as a package summary") }
++        if steps.documents[name]["kind"].string == "photo" {
++            guard let layer = store.state["layer_tools"]["editing_layer"]["id"].optionalUInt else {
++                throw HostFailure(message: "The imported photo has no editable layer")
++            }
++            try await edit(["type": "layer", "action": ["op": "rename", "id": layer, "name": "Photo"]])
++            try await invoke("add_layer"); try await settle()
++        }
++        try await measure(record, "open." + name, since: input)
++        let selected = store.snapshot["document_tabs"]["selected"].uint
++        tabs[name] = selected
++        paintLayers[selected] = store.state["layer_tools"]["editing_layer"]["id"].optionalUInt
++        let active = store.state["tabs"].array.first { $0["active"].bool } ?? JSON()
++        record.extra["canvas"] = [active["width"].uint, active["height"].uint]
++        if canvas == nil { canvas = [active["width"].uint, active["height"].uint] }
++    }
++    private func stroke(_ step: JSON, _ steps: ChainPlan, _ record: Step) async throws {
++        let store = try editor, preset = step["preset"].uint
++        record.stroke = true
++        try await selectLayer(step["layer"].isNull ? nil : step["layer"].string)
++        try await edit(["type": "select_brush", "id": preset])
++        guard store.state["brush"]["preset"].uint == preset else { throw HostFailure(message: "Brush preset \(preset) is unavailable") }
++        let active = store.state["tabs"].array.first { $0["active"].bool } ?? JSON()
++        try await edit(["type": "set_brush_size", "value": ChainPlan.brushSize(step["size"], pixels: active["width"].number * active["height"].number)])
++        if step["zoom"].string == "fit" { try await invoke("fit_canvas") }
++        else if !step["zoom"].isNull { try await edit(["type": "set_zoom", "zoom": step["zoom"].number]) }
++        if ["clone", "heal", "spot_heal"].contains(store.state["brush"]["tool"].string) {
++            let reference = store.command("use_reference_below")["enabled"].bool
++            record.extra["reference_below"] = reference
++            if reference { try await invoke("use_reference_below") }
++        }
++        try await wait("brush \(preset) to be ready", seconds: 120) { store.snapshot["brush_ready"].bool }
++        try await settle()
++        record.extra["brush"] = ["preset": preset, "diameter": store.state["brush"]["diameter"].number, "zoom": store.state["camera"]["zoom"].number]
++        let area = try area(), path = step["path"].string
++        let point = { [self] (t: Double, p: Double) in [pixel(ChainPlan.stroke(path, seconds: t, progress: p), area)] }
++        _ = try await contact(hz: ChainPlan.penHz, seconds: 0.1, point)
++        try await settle()
++        let contacts = max(1, Int(step["contacts"].number))
++        let seconds = steps.seconds(step, refreshHz: refreshHz) / Double(contacts)
++        for index in 0..<contacts {
++            if index > 0 { try await Task.sleep(for: .milliseconds(100)) }
++            let window = try await contact(hz: ChainPlan.penHz, seconds: seconds, point)
++            record.contacts.append(["down_ns": window.down, "up_ns": window.up])
++            record.motion.append(["begin_ns": window.down, "end_ns": window.up])
++        }
++        let cap = step["catch_up_cap_ms"].isNull ? 3.0 : step["catch_up_cap_ms"].number / 1000
++        record.settled = try await settled(within: cap)
++        if record.settled == nil { record.extra["catch_up_capped"] = true; try await settle() }
++    }
++    private func gesture(_ step: JSON, _ steps: ChainPlan, _ record: Step) async throws {
++        let store = try editor, kind = step["gesture"].string, area = try area()
++        let seconds = steps.seconds(step, refreshHz: refreshHz), quick = step["release"].string == "quick"
++        let camera = store.cameraRevision
++        #if os(macOS)
++        let scale = Double(store.projectFiles.presentationWindow?.backingScaleFactor ?? 2)
++        let count = max(1, Int(((seconds + (quick ? 0.1 : 0)) * ChainPlan.touchHz).rounded()))
++        var last = ChainPlan.gesture(kind, progress: 0)
++        let window = try await paced(count, hz: ChainPlan.touchHz) { range, _ in
++            for index in range {
++                let pose = ChainPlan.gesture(kind, progress: Double(index) / ChainPlan.touchHz / seconds)
++                let x = Float(area[0] + area[2] * (0.5 + pose.pan)), y = Float(area[1] + area[3] / 2)
++                if kind == "pan" {
++                    store.native?.scroll(x: x, y: y, dx: Float((last.pan - pose.pan) * area[2] / scale), dy: 0,
++                        scale: Float(scale), zoom: false, horizontal: false)
++                } else {
++                    store.native?.gesture(x: x, y: y, scale: Float(pose.scale / last.scale), rotation: Float(pose.rotation - last.rotation),
++                        began: index == 0)
++                }
++                last = pose
++            }
++        }
++        record.extra["apple_input"] = kind == "pan" ? "trackpad scroll" : "trackpad gesture"
++        #else
++        let window = try await contact(tool: 3, fingers: 2, hz: ChainPlan.touchHz, seconds: seconds + (quick ? 0.1 : 0)) { t, _ in
++            ChainPlan.fingers(ChainPlan.gesture(kind, progress: t / seconds), area: area)
++        }
++        record.extra["apple_input"] = "touch"
++        #endif
++        record.motion.append(["begin_ns": window.down, "end_ns": window.up])
++        if quick { record.settled = try await cameraSettled() } else { try await settle() }
++        let revisions = store.cameraRevision &- camera
++        record.extra["camera_revisions"] = revisions
++        if revisions == 0 { throw HostFailure(message: "The camera did not move during the \(kind) gesture") }
++    }
++    private func cameraSettled() async throws -> UInt64 {
++        var revision = try editor.cameraRevision, stable = FrameTrace.now()
++        try await wait("the camera to stop", seconds: 10) { [self] in
++            let current = store?.cameraRevision ?? 0
++            if current != revision { revision = current; stable = FrameTrace.now(); return false }
++            guard FrameTrace.now() - stable > 50_000_000 else { return false }
++            return await !pending()
++        }
++        return stable
++    }
++    private func drag(_ step: JSON, _ steps: ChainPlan, _ record: Step) async throws {
++        let target = step["target"].string, seconds = steps.seconds(step, refreshHz: refreshHz)
++        if step["select"].string == "all" { try await invoke("select_all") }
++        for key in ["tool", "command"] where !step[key].isNull { try await invoke(ChainPlan.command(step[key].string)) }
++        if step["command"].string == "transform" {
++            try await wait("the transform controls to become ready") {
++                guard let store = self.store else { return false }
++                return store.state["tool_settings"].array.contains { $0["id"].string == "transform_x" }
++                    && store.snapshot["brush_ready"].bool
++            }
++        }
++        let window: (down: UInt64, up: UInt64)
++        switch target {
++        case "slider:size": window = try await slider(seconds)
++        case "grip:layers": window = try await panelDrag(seconds, record)
++        case "edge:right-column": window = try await dividerDrag(seconds, record)
++        default:
++            if target.hasPrefix("object:") { try await selectLayer(String(target.dropFirst(7))); try await invoke("fit_canvas") }
++            try await settle()
++            let area = try area(), path = step["path"].string
++            window = try await contact(hz: ChainPlan.penHz, seconds: seconds) { [self] _, p in
++                [pixel(ChainPlan.drag(path, from: ChainPlan.Point(x: 0.5, y: 0.5), progress: p), area)]
++            }
++            record.contacts.append(["down_ns": window.down, "up_ns": window.up])
++        }
++        record.motion.append(["begin_ns": window.down, "end_ns": window.up])
++        try await settle()
++        if step["then"].string == "apply" { try await invoke("apply_transform"); try await settle() }
++    }
++    private func slider(_ seconds: Double) async throws -> (down: UInt64, up: UInt64) {
++        let store = try editor
++        let controls = store.workspace.sourceInstances.values.filter { $0.surface == .control && !$0.bounds.isEmpty }
++            .sorted { ($0.bounds.minY, $0.bounds.minX, $0.item) < ($1.bounds.minY, $1.bounds.minX, $1.item) }
++        let component = controls.lazy.compactMap { source -> JSON? in
++            guard let item = try? JSON.decode(source.item), item["kind"].string == "tile",
++                let tile = store.panel(item["panel"].string)["tiles"].array.first(where: { $0["id"].uint == item["tile"].uint }),
++                tile["control"]["kind"].string == "brush_size_slider" else { return nil }
++            let center = CGPoint(x: source.bounds.midX, y: source.bounds.midY)
++            let model = tile["component"]
++            guard store.workspace.hitSource(at: center)?.1 == source,
++                !model["context"].isNull, !model["numeric"].isNull else { return nil }
++            return model
++        }.first
++        guard let component else { throw Skip(reason: "No enabled brush size slider is visible in this workspace") }
++        let field = component["numeric"], spec = field["numeric"]
++        let size = field["value"].number, maximum = spec["soft_max"].number
++        let peak = size < maximum ? min(size + 120, maximum) : min(maximum, max(spec["soft_min"].number, size - 120))
++        var moveFailure: String?
++        let count = max(1, Int((seconds * refreshHz).rounded()))
++        let window = try await paced(count, hz: refreshHz) { range, _ in
++            for index in range {
++                let progress = ChainPlan.triangle(Double(index) / Double(count))
++                let value = size + (peak - size) * progress
++                store.toolbarEdit(component, ["type": "set_tool_setting", "id": field["id"].string, "value": value]) { error in
++                    if let error, moveFailure == nil { moveFailure = error }
++                }
++            }
++        }
++        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
++            store.toolbarEdit(component, ["type": "set_tool_setting", "id": field["id"].string, "value": size]) { error in
++                if let failure = moveFailure ?? error { continuation.resume(throwing: HostFailure(message: failure)) }
++                else { continuation.resume() }
++            }
++        }
++        return window
++    }
++    private func panelDrag(_ seconds: Double, _ record: Step) async throws -> (down: UInt64, up: UInt64) {
++        let store = try editor
++        func layersItem() -> JSON? {
++            let layout = store.snapshot["layout"]
++            if let group = layout["groups"].array.first(where: { $0["panels"].array.contains { $0.string == "layers" } }) {
++                return JSON(["kind": "group", "group": group["id"].uint])
++            }
++            if let column = layout["collapsed"].array.first(where: { column in
++                column["groups"].array.contains { $0["icons"].array.contains { $0["panel"].string == "layers" } }
++            }) {
++                return JSON(["kind": "column", "column": column["id"].uint])
++            }
++            return nil
++        }
++        let temporary = layersItem() == nil
++        let window: (down: UInt64, up: UInt64)
++        do {
++            if temporary { try await edit(["type": "customize", "action": ["type": "set_panel_visible", "panel": "layers", "visible": true]]) }
++            var grip: (target: ReorderTarget, origin: CGPoint)?
++            var item: JSON?
++            try await wait("a visible Layers grip", seconds: 5) {
++                item = layersItem()
++                grip = item.flatMap { self.workspaceGrip($0, store: store) }
++                return grip != nil
++            }
++            guard let grip, let item else { throw HostFailure(message: "The Layers grip is unavailable") }
++            let area = store.snapshot["layout"]["work_area"].rect
++            let start = ChainPlan.Point(x: grip.origin.x, y: grip.origin.y)
++            let center = ChainPlan.Point(x: area.midX, y: area.midY), radius = 0.1 * min(area.width, area.height)
++            let kind = item["kind"].string
++            record.extra[kind] = item[kind].uint
++            window = try await workspaceDrag(grip.target, from: grip.origin, seconds, record) {
++                ChainPlan.floatAndReturn(from: start, center: center, radius: radius, progress: $0)
++            }
++        } catch {
++            if temporary { try? await showPanel("layers", false) }
++            throw error
++        }
++        if temporary { try await showPanel("layers", false) }
++        return window
++    }
++    private func dividerDrag(_ seconds: Double, _ record: Step) async throws -> (down: UInt64, up: UInt64) {
++        let store = try editor
++        guard let divider = store.snapshot["layout"]["dividers"].array
++            .filter({ !$0["fixed"].bool && $0["bounds"].rect.height > $0["bounds"].rect.width })
++            .max(by: { $0["bounds"].rect.minX < $1["bounds"].rect.minX }),
++            let grip = workspaceGrip(JSON(["type": "drag_divider", "id": divider["id"].uint]), store: store) else {
++            throw HostFailure(message: "No resizable column edge is visible")
++        }
++        record.extra["divider"] = divider["id"].uint
++        return try await workspaceDrag(grip.target, from: grip.origin, seconds, record) {
++            ChainPlan.Point(x: grip.origin.x - 120 * ChainPlan.triangle($0), y: grip.origin.y)
++        }
++    }
++    private func workspaceGrip(_ item: JSON, store: EditorStore) -> (target: ReorderTarget, origin: CGPoint)? {
++        let key = item.stableKey, workspace = store.workspace
++        let handles = workspace.sourceInstances.filter { _, source in
++            source.item == key && source.surface == .handle && source.canDrag && !source.bounds.isEmpty
++        }.sorted { $0.value.bounds.width * $0.value.bounds.height < $1.value.bounds.width * $1.value.bounds.height }
++        for (id, source) in handles {
++            let point = CGPoint(x: source.bounds.midX, y: source.bounds.midY)
++            if workspace.hitSource(at: point)?.0 == id, let target = workspace.input.source(at: point), target.id == id, target.valid(false) {
++                return (target, point)
++            }
++        }
++        return nil
++    }
++    private func workspaceDrag(_ target: ReorderTarget, from origin: CGPoint, _ seconds: Double, _ record: Step,
++        _ path: (Double) -> ChainPlan.Point) async throws -> (down: UInt64, up: UInt64) {
++        let store = try editor, layout = store.state["workspace"].stableKey
++        func acknowledge() async throws {
++            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
++                store.query(["type": "renderer_stats"]) { _ in continuation.resume() }
++            }
++            if let failure = store.failure { throw HostFailure(message: failure) }
++        }
++        guard target.valid(false) else { throw HostFailure(message: "The workspace grip is no longer available") }
++        target.begin(origin)
++        var released = false
++        defer { if !released { target.cancel() } }
++        try await acknowledge()
++        let count = max(1, Int((seconds * ChainPlan.touchHz).rounded()))
++        let window = try await paced(count, hz: ChainPlan.touchHz) { range, _ in
++            guard target.valid(true) else { throw HostFailure(message: "The workspace drag was interrupted") }
++            for index in range where index < count {
++                let point = path(Double(index) / Double(count))
++                target.move(CGPoint(x: point.x, y: point.y))
++            }
++        }
++        try await acknowledge()
++        guard target.valid(true) else { throw HostFailure(message: "The workspace drag was interrupted") }
++        let finish = path(1), up = FrameTrace.now()
++        target.finish(CGPoint(x: finish.x, y: finish.y))
++        released = true
++        try await acknowledge()
++        try await settle()
++        if store.state["workspace"].stableKey != layout {
++            try await invoke("undo_workspace"); try await settle()
++            record.extra["layout_restored"] = store.state["workspace"].stableKey == layout
++        }
++        return (window.down, up)
++    }
++    private func tap(_ step: JSON, _ record: Step) async throws {
++        try await invoke(ChainPlan.command(step["tool"].string))
++        try await settle()
++        let area = try area()
++        for value in step["points"].array {
++            let point = pixel(ChainPlan.Point(x: value[0].number, y: value[1].number), area)
++            let window = try await contact(hz: ChainPlan.penHz, seconds: 1 / ChainPlan.penHz) { _, _ in [point] }
++            record.contacts.append(["down_ns": window.down, "up_ns": window.up])
++            try await measure(record, step["tool"].string, since: window.down)
++        }
++    }
++    private func repeatItems(_ step: JSON, _ record: Step) async throws {
++        let store = try editor
++        guard let kind = ["commands", "open", "workspaces", "tabs"].first(where: { !step[$0].isNull }) else {
++            throw HostFailure(message: "The repeat step lists no commands, open, workspaces or tabs")
++        }
++        let start = store.workspaces?.view["id"].string ?? ""
++        var skipped: [String: String] = [:], shown: [String: Bool] = [:]
++        for _ in 0..<max(1, Int(step["count"].number)) {
++            for item in step[kind].array.map(\.string) {
++                if let reason = ChainPlan.unsupported(item: item, iPad: iPad) { skipped[item] = reason; continue }
++                let panel = item.hasPrefix("panel:") ? String(item.dropFirst(6)) : nil
++                if let panel {
++                    if shown[panel] == nil { shown[panel] = panelVisible(panel) }
++                    try await showPanel(panel, false); try await settle()
++                }
++                let input = FrameTrace.now()
++                switch kind {
++                case "commands": try await invoke(item)
++                case "workspaces": try await switchWorkspace(item, start: start)
++                case "tabs": try await switchTab(item)
++                default:
++                    guard let panel else { throw HostFailure(message: "No Apple mapping opens \(item)") }
++                    try await showPanel(panel, true)
++                }
++                try await measure(record, item, since: input)
++            }
++        }
++        for (panel, visible) in shown { try await showPanel(panel, visible) }
++        if !skipped.isEmpty { record.extra["skipped_items"] = skipped }
++        if record.latency.isEmpty, let reason = skipped.values.first { throw Skip(reason: reason) }
++    }
++    private func panelVisible(_ panel: String) -> Bool {
++        store?.snapshot["layout"]["groups"].array.contains { $0["panels"].array.contains { $0.string == panel } } == true
++    }
++    private func showPanel(_ panel: String, _ visible: Bool) async throws {
++        try await edit(["type": "customize", "action": ["type": "set_panel_visible", "panel": panel, "visible": visible]])
++        try await wait("the \(panel) panel to \(visible ? "show" : "hide")") { panelVisible(panel) == visible }
++    }
++    private func switchWorkspace(_ name: String, start: String) async throws {
++        guard let workspaces = try editor.workspaces else { throw Skip(reason: "This editor has no workspace library") }
++        let ids = (workspaces.view["order"].array + workspaces.view["switcher_display"].array.map { $0["id"] }).map(\.string)
++        guard let id = name == "start" ? start : ids.first(where: { $0.split(separator: ":").last?.hasPrefix(name) == true }) else {
++            throw HostFailure(message: "No workspace matches \(name); workspaces: \(ids.joined(separator: ", "))")
++        }
++        workspaces.switchTo(id)
++        try await wait("workspace \(id)") { workspaces.view["id"].string == id && !workspaces.busy && !workspaces.switcherBusy }
++    }
++    private func switchTab(_ name: String) async throws {
++        let store = try editor
++        guard let id = tabs[name] else { throw HostFailure(message: "The \(name) drawing was not opened in this pass") }
++        let switched = await withCheckedContinuation { continuation in store.drawingTabs.select(id) { continuation.resume(returning: $0) } }
++        guard switched else { throw HostFailure(message: store.projectFiles.error ?? "Switching to the \(name) drawing failed") }
++        try await wait("the \(name) drawing to show") { store.snapshot["document_tabs"]["selected"].uint == id }
++    }
++    private func scrub(_ step: JSON, _ steps: ChainPlan, _ record: Step) async throws {
++        let store = try editor
++        let count = max(1, Int((steps.seconds(step, refreshHz: refreshHz) * refreshHz).rounded()))
++        var layer: UInt64 = 0, epoch: UInt64 = 0
++        if !step["effect"].isNull {
++            try await selectLayer("Photo")
++            try await edit(["type": "effect", "action": ["op": "insert", "effect": step["effect"].string]])
++            layer = store.state["layer_tools"]["editing_layer"]["id"].uint; epoch = store.state["document_file"]["epoch"].uint
++            try await settle()
++        }
++        let ramp = step["layer_opacity"].array.map(\.number)
++        let window = try await paced(count, hz: refreshHz) { range, _ in
++            for index in range {
++                let progress = Double(index) / Double(count)
++                if ramp.count == 2 {
++                    store.dispatch(["type": "set_layer_opacity", "opacity": ramp[0] + (ramp[1] - ramp[0]) * progress])
++                } else {
++                    store.effect(layer, epoch: epoch, key: "rgb", action: ["op": "set", "value": ["kind": "curve",
++                        "value": [[0.0, 0.0], [0.5, 0.5 + 0.25 * ChainPlan.triangle(progress)], [1.0, 1.0]]]],
++                        phase: index == 0 ? "down" : index == count ? "up" : "move")
++                }
++            }
++        }
++        record.motion.append(["begin_ns": window.down, "end_ns": window.up])
++        record.settled = try await settle()
++        if !step["effect"].isNull { try await invoke("delete_layer"); try await settle() }
++    }
++    private func save(_ name: String, _ record: Step) async throws {
++        let store = try editor, files = store.projectFiles
++        guard let id = tabs[name] else { throw HostFailure(message: "The \(name) drawing was not opened in this pass") }
++        if store.snapshot["document_tabs"]["selected"].uint != id { try await switchTab(name); try await settle() }
++        let url = Self.saveURL
++        try? FileManager.default.removeItem(at: url)
++        defer { try? FileManager.default.removeItem(at: url) }
++        let input = FrameTrace.now()
++        try await invoke("save_document_as")
++        try await wait("the save to finish") {
++            !files.busy && !store.state["requests"].array.contains { $0["kind"]["type"].string == "document" }
++        }
++        if let error = files.error { throw HostFailure(message: error) }
++        try await measure(record, "save", since: input)
++        record.extra["bytes"] = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.uint64Value ?? 0
++    }
++    private func resume(_ record: Step) async throws {
++        #if os(macOS)
++        let store = try editor
++        NSApp.hide(nil)
++        try await wait("the app to hide", seconds: 5) { NSApp.isHidden }
++        try await Task.sleep(for: .seconds(1))
++        let input = FrameTrace.now()
++        NSApp.unhide(nil); store.focusWindow?()
++        try await wait("the window to show", seconds: 10) { store.projectFiles.presentationWindow?.occlusionState.contains(.visible) == true }
++        try await measure(record, "resume", since: input)
++        #endif
++    }
++    private func close(_ record: Step) async throws {
++        for id in try editor.drawingTabs.rows.map({ $0["id"].uint }).dropLast() {
++            let input = FrameTrace.now()
++            try await closeTab(id)
++            try await measure(record, "close", since: input)
++        }
++        record.extra["last_drawing"] = "closed after the pass files are written, because closing it closes the window"
++    }
++    private func closeTab(_ id: UInt64) async throws {
++        let store = try editor, files = store.projectFiles
++        let last = store.drawingTabs.rows.count == 1
++        store.drawingTabs.close(id)
++        try await wait("drawing \(id) to close") {
++            if files.confirming { files.choose("discard") }
++            return !store.drawingTabs.busy && !files.busy
++                && (last || !store.drawingTabs.rows.contains { $0["id"].uint == id })
++        }
++    }
++
++    private func sampleMemory() {
++        var sample: [String: Any] = ["t_ns": FrameTrace.now(), "thermal": ProcessInfo.processInfo.thermalState.rawValue]
++        let task = FrameTrace.taskMemory()
++        if task.status == KERN_SUCCESS { sample["app_rss_kib"] = task.footprint / 1024 }
++        if let device { sample["gpu_kib"] = device.currentAllocatedSize / 1024 }
++        #if os(iOS)
++        sample["os_available_kib"] = os_proc_available_memory() / 1024
++        #endif
++        memory.append(sample)
++    }
++    private func finish(failure: String?, digest: String) async {
++        memoryTimer?.invalidate(); memoryTimer = nil
++        sampleMemory()
++        let trace: ([FrameTraceEvent], UInt64) = await withCheckedContinuation { continuation in
++            guard let native = store?.native else { continuation.resume(returning: ([], 0)); return }
++            native.finishTrace { continuation.resume(returning: ($0, $1)) }
++        }
++        var presented: [UInt64: UInt64] = [:]
++        for event in trace.0 where event.kind == .presented && event.b > 0 { presented[event.a] = min(presented[event.a] ?? .max, event.b) }
++        let consumed = trace.0.filter { $0.kind == .consumedPaint }
++        for record in records where record.stroke {
++            guard let first = record.contacts.first?["down_ns"] else { continue }
++            var input: UInt64 = 0, counter: UInt64 = 0
++            for event in consumed where event.a <= (record.settled ?? record.end) {
++                if event.a >= first && event.b > input && event.c > counter, let time = presented[event.a] {
++                    record.completions.append(["complete_ns": time, "input_ns": event.b])
++                }
++                input = event.a < first ? event.b : max(input, event.b); counter = event.c
++            }
++        }
++        let frames = Set(presented.values).sorted()
++        let last = memory.last ?? [:]
++        var end: [String: Any] = ["app_rss_kib": last["app_rss_kib"] ?? NSNull(),
++            "gpu_allocated_bytes": device.map { $0.currentAllocatedSize as Any } ?? NSNull(),
++            "gpu_peak_bytes": memory.compactMap { $0["gpu_kib"] as? Int }.max().map { $0 * 1024 as Any } ?? NSNull()]
++        if let available = last["os_available_kib"] { end["os_available_kib"] = available }
++        let pass: [String: Any] = ["schema": 1, "host": "apple", "platform": iPad ? "ipados" : "macos",
++            "device": chain.label("DEVICE") ?? (iPad ? "ipad" : "mac"),
++            "version": chain.label("VERSION") ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
++            "commit": chain.label("COMMIT") as Any? ?? NSNull(), "app_id": Bundle.main.bundleIdentifier ?? "",
++            "pass": chain.pass, "cold": chain.cold, "root": chain.root, "pid": Int(getpid()), "clock": "mach",
++            "refresh_hz": refreshHz, "canvas": canvas as Any? ?? NSNull(), "chain_sha256": digest,
++            "steps": records.map(\.json), "memory_end": end, "error": failure as Any? ?? NSNull(),
++            "trace": ["events": trace.0.count, "dropped_records": trace.1, "presented_frames": frames.count]]
++        do {
++            try FileManager.default.createDirectory(at: chain.output, withIntermediateDirectories: true)
++            try Data(frames.map { "{\"t_ns\":\($0),\"surface\":\"canvas\"}\n" }.joined().utf8)
++                .write(to: chain.output.appendingPathComponent("frames.jsonl"), options: .atomic)
++            try Data(try memory.map { String(decoding: try JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys]), as: UTF8.self) + "\n" }
++                .joined().utf8).write(to: chain.output.appendingPathComponent("memory.jsonl"), options: .atomic)
++            try JSONSerialization.data(withJSONObject: pass, options: [.prettyPrinted, .sortedKeys])
++                .write(to: chain.output.appendingPathComponent("pass.json"), options: .atomic)
++        } catch { NSLog("Capy chain could not write its pass files: %@", error.localizedDescription) }
++        NSLog("Capy chain pass %ld finished: %@", chain.pass, failure ?? "ok")
++        if failure == nil, launched != nil, let drawing = store?.drawingTabs.rows.last?["id"].uint { try? await closeTab(drawing) }
++        #if os(macOS)
++        NSApp.terminate(nil)
++        #endif
++    }
++}
+diff --git a/apps/layer-apple/tests/chain-plan.swift b/apps/layer-apple/tests/chain-plan.swift
+new file mode 100644
+index 000000000..b9cc9ecd3
+--- /dev/null
++++ b/apps/layer-apple/tests/chain-plan.swift
+@@ -0,0 +1,113 @@
++import Foundation
++
++@main struct ChainPlanChecks {
++    static func close(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 1e-9 }
++    @MainActor static func main() async throws {
++        let source = #"""
++        {"schema": 1, "motion_frames": 150, "documents": {"photo": {"kind": "photo"}, "heavy": {"kind": "capy"}},
++         "steps": [{"id": "launch", "do": "launch"}, {"id": "draw.wet", "do": "stroke", "duration_ms": 1000},
++          {"id": "filter.scrub", "do": "scrub", "effect": "curves", "frames": 90}, {"id": "nav.pan", "do": "gesture", "gesture": "pan"}]}
++        """#
++        let plan = try ChainPlan(data: Data(source.utf8))
++        precondition(plan.steps.map { $0["id"].string } == ["launch", "draw.wet", "filter.scrub", "nav.pan"])
++        precondition(plan.documents["photo"]["kind"].string == "photo")
++        var performed: [String] = [], blocked: [(String, String)] = []
++        let timeout = ChainPlan.RenderingTimeout().localizedDescription
++        let stopped = await plan.run(perform: { step in
++            let id = step["id"].string; performed.append(id)
++            return id == "draw.wet" ? timeout : nil
++        }, notRun: { blocked.append(($0["id"].string, $1)) })
++        precondition(stopped == timeout && performed == ["launch", "draw.wet"])
++        precondition(blocked.map(\.0) == ["filter.scrub", "nav.pan"])
++        precondition(blocked.allSatisfy { $0.1 == "not run: " + timeout })
++        performed = []; blocked = []
++        let completed = await plan.run(perform: { performed.append($0["id"].string); return nil },
++            notRun: { blocked.append(($0["id"].string, $1)) })
++        precondition(completed == nil && performed == plan.steps.map { $0["id"].string } && blocked.isEmpty)
++        performed = []; blocked = []
++        let startup = await plan.run(perform: { performed.append($0["id"].string); return timeout },
++            notRun: { blocked.append(($0["id"].string, $1)) })
++        precondition(startup == timeout && performed == ["launch"])
++        precondition(blocked.map(\.0) == ["draw.wet", "filter.scrub", "nav.pan"])
++        precondition(blocked.allSatisfy { $0.1 == "not run: " + timeout })
++
++        precondition(close(plan.seconds(plan.steps[1], refreshHz: 120), 1))
++        precondition(close(plan.seconds(plan.steps[2], refreshHz: 120), 0.75))
++        precondition(close(plan.seconds(plan.steps[3], refreshHz: 60), 2.5))
++        let only = try ChainPlan(data: Data(source.utf8), only: ["launch", "nav.pan"])
++        precondition(only.steps.map { $0["id"].string } == ["launch", "nav.pan"])
++        for invalid in [#"{"schema": 2, "steps": [{"id": "a"}]}"#, #"{"schema": 1, "steps": []}"#, "[]"] {
++            do { _ = try ChainPlan(data: Data(invalid.utf8)); preconditionFailure("Invalid chain accepted: \(invalid)") } catch {}
++        }
++        do { _ = try ChainPlan(data: Data(source.utf8), only: ["launch", "missing"]); preconditionFailure("Unknown step accepted") } catch {}
++
++        precondition(ChainPlan.brushSize(JSON("guarantee"), pixels: 12e6) == 1024)
++        precondition(ChainPlan.brushSize(JSON("guarantee"), pixels: 24e6) == 1536)
++        precondition(ChainPlan.brushSize(JSON("guarantee"), pixels: 61e6) == 2048)
++        precondition(ChainPlan.brushSize(JSON(512), pixels: 61e6) == 512)
++        precondition(ChainPlan.command("magic_wand") == "auto_select" && ChainPlan.command("transform") == "scale_rotate")
++        precondition(ChainPlan.command("lasso") == "lasso")
++
++        for path in ["ellipse", "zigzag"] {
++            for index in 0...200 {
++                let progress = Double(index) / 200, point = ChainPlan.stroke(path, seconds: progress * 1.25, progress: progress)
++                precondition(point.x >= 0.2 - 1e-9 && point.x <= 0.8 + 1e-9 && point.y >= 0.3 - 1e-9 && point.y <= 0.7 + 1e-9)
++                precondition(point.pressure >= 0.25 - 1e-9 && point.pressure <= 1)
++            }
++            precondition(close(ChainPlan.stroke(path, seconds: 0, progress: 0).pressure, 0.25))
++            precondition(close(ChainPlan.stroke(path, seconds: 0.5, progress: 0.5).pressure, 1))
++        }
++        precondition(ChainPlan.stroke("ellipse", seconds: 0, progress: 0) == ChainPlan.Point(x: 0.8, y: 0.5, pressure: 0.25))
++        let zigzag = ChainPlan.stroke("zigzag", seconds: 0, progress: 0)
++        precondition(close(zigzag.x, 0.2) && close(zigzag.y, 0.3))
++
++        let target = ChainPlan.Point(x: 0.5, y: 0.5)
++        precondition(ChainPlan.drag("arc", from: target, progress: 0) == target)
++        let arc = ChainPlan.drag("arc", from: target, progress: 1)
++        precondition(close(arc.x, 0.65) && close(arc.y, 0.5) && ChainPlan.drag("arc", from: target, progress: 0.5).y < 0.5)
++        let loopStart = ChainPlan.drag("loop", from: target, progress: 0), loopEnd = ChainPlan.drag("loop", from: target, progress: 1)
++        precondition(close(loopStart.x, loopEnd.x) && close(loopStart.y, loopEnd.y))
++
++        precondition(ChainPlan.gesture("pinch", progress: 0) == ChainPlan.Pose())
++        precondition(close(ChainPlan.gesture("pinch", progress: 0.5).scale, 2.5) && close(ChainPlan.gesture("pinch", progress: 1).scale, 1))
++        precondition(ChainPlan.gesture("pinch", progress: 1.05).scale < 1)
++        precondition(close(ChainPlan.gesture("rotate", progress: 0.5).rotation, .pi / 3))
++        precondition(close(ChainPlan.gesture("pan", progress: 0.5).pan, 0.3) && close(ChainPlan.gesture("pan", progress: 1).pan, 0))
++        let area = [100.0, 50, 2000, 1000]
++        let resting = ChainPlan.fingers(ChainPlan.Pose(), area: area), pinched = ChainPlan.fingers(ChainPlan.Pose(scale: 2.5), area: area)
++        precondition(resting.count == 2 && close((resting[0].x + resting[1].x) / 2, 1100) && close(resting[0].y, 550))
++        precondition(close(resting[0].x - resting[1].x, 200) && close(pinched[0].x - pinched[1].x, 500))
++        let turned = ChainPlan.fingers(ChainPlan.Pose(rotation: .pi / 2), area: area)
++        precondition(close(turned[0].x, 1100) && close(turned[0].y - turned[1].y, 200))
++        let panned = ChainPlan.fingers(ChainPlan.Pose(pan: 0.3), area: area)
++        precondition(close((panned[0].x + panned[1].x) / 2, 1700))
++
++        let start = ChainPlan.Point(x: 900, y: 40), center = ChainPlan.Point(x: 400, y: 300)
++        precondition(ChainPlan.floatAndReturn(from: start, center: center, radius: 50, progress: 0) == start)
++        precondition(ChainPlan.floatAndReturn(from: start, center: center, radius: 50, progress: 1) == start)
++        for progress in [1.0 / 3, 2.0 / 3] {
++            let point = ChainPlan.floatAndReturn(from: start, center: center, radius: 50, progress: progress)
++            precondition(abs(point.x - center.x) < 1e-6 && abs(point.y - center.y) < 1e-6)
++        }
++        precondition(close(ChainPlan.floatAndReturn(from: start, center: center, radius: 50, progress: 0.5).y, 400))
++        precondition(close(ChainPlan.triangle(0), 0) && close(ChainPlan.triangle(0.5), 1) && close(ChainPlan.triangle(1), 0))
++
++        func step(_ text: String) -> JSON { try! JSON.decode(text) }
++        for text in [#"{"do": "launch"}"#, #"{"do": "drag", "target": "canvas"}"#, #"{"do": "drag", "target": "object:Image"}"#,
++            #"{"do": "drag", "target": "grip:layers"}"#, #"{"do": "drag", "target": "edge:right-column"}"#,
++            #"{"do": "drag", "target": "slider:size"}"#, #"{"do": "scrub", "effect": "curves"}"#,
++            #"{"do": "scrub", "layer_opacity": [1, 0.2]}"#, #"{"do": "gesture", "gesture": "rotate"}"#] {
++            precondition(ChainPlan.unsupported(step(text), iPad: true) == nil, text)
++        }
++        precondition(ChainPlan.unsupported(step(#"{"do": "drag", "target": "list:brushes"}"#), iPad: false) != nil)
++        precondition(ChainPlan.unsupported(step(#"{"do": "drag", "target": "pane:x"}"#), iPad: false) != nil)
++        precondition(ChainPlan.unsupported(step(#"{"do": "scrub", "effect": "levels"}"#), iPad: false) != nil)
++        precondition(ChainPlan.unsupported(step(#"{"do": "gesture", "gesture": "swipe"}"#), iPad: false) != nil)
++        precondition(ChainPlan.unsupported(step(#"{"do": "teleport"}"#), iPad: false) != nil)
++        precondition(ChainPlan.unsupported(step(#"{"do": "resume"}"#), iPad: false) == nil)
++        precondition(ChainPlan.unsupported(step(#"{"do": "resume"}"#), iPad: true) != nil)
++        precondition(ChainPlan.unsupported(item: "menu:main", iPad: false) != nil && ChainPlan.unsupported(item: "menu:main", iPad: true) != nil)
++        precondition(ChainPlan.unsupported(item: "panel:brushes", iPad: true) == nil)
++        print("PASS: chain parsing, durations, brush sizes, stroke, drag, gesture and panel paths, and Apple step mapping")
++    }
++}
+diff --git a/apps/layer-apple/CapyCanvas.xcodeproj/project.pbxproj b/apps/layer-apple/CapyCanvas.xcodeproj/project.pbxproj
+index 56477b468..fc29e6ab3 100644
+--- a/apps/layer-apple/CapyCanvas.xcodeproj/project.pbxproj
++++ b/apps/layer-apple/CapyCanvas.xcodeproj/project.pbxproj
+@@ -53,6 +53,18 @@
+ 			"path" = "Shared/Bridge/CanvasFrameDriver.swift";
+ 			"sourceTree" = "<group>";
+ 		};
++		"6D040EB63B8A644D27EA6790" = {
++			"isa" = "PBXFileReference";
++			"lastKnownFileType" = "sourcecode.swift";
++			"path" = "Shared/Bridge/ChainPlan.swift";
++			"sourceTree" = "<group>";
++		};
++		"D7BDEE712343CE4263D6E946" = {
++			"isa" = "PBXFileReference";
++			"lastKnownFileType" = "sourcecode.swift";
++			"path" = "Shared/Bridge/ChainWorkload.swift";
++			"sourceTree" = "<group>";
++		};
+ 		"4D375D7962D45503726F9E92" = {
+ 			"isa" = "PBXFileReference";
+ 			"lastKnownFileType" = "sourcecode.swift";
+@@ -1574,6 +1586,14 @@
+ 			"isa" = "PBXBuildFile";
+ 			"fileRef" = "DC26C6467362BAF0FAA01475";
+ 		};
++		"8067E3DBCE374E22B100D1C9" = {
++			"isa" = "PBXBuildFile";
++			"fileRef" = "6D040EB63B8A644D27EA6790";
++		};
++		"4782FFAFF1C24D0DDC2CF48E" = {
++			"isa" = "PBXBuildFile";
++			"fileRef" = "D7BDEE712343CE4263D6E946";
++		};
+ 		"E8001A2B75557B071D008B7F" = {
+ 			"isa" = "PBXBuildFile";
+ 			"fileRef" = "4D375D7962D45503726F9E92";
+@@ -2217,6 +2237,8 @@
+ 				"138E32EECCC47EC704EB586C",
+ 				"3167C579A100E370BABBB064",
+ 				"0416A4C0867A741D4CF30CDD",
++				"8067E3DBCE374E22B100D1C9",
++				"4782FFAFF1C24D0DDC2CF48E",
+ 				"E8001A2B75557B071D008B7F",
+ 				"451B7EB5F6B0210AEED39C19",
+ 				"811A1B4D3DAF8841B092439B",
+@@ -2943,6 +2965,14 @@
+ 			"isa" = "PBXBuildFile";
+ 			"fileRef" = "DC26C6467362BAF0FAA01475";
+ 		};
++		"FB6270CA5792E27BB0C5D7D0" = {
++			"isa" = "PBXBuildFile";
++			"fileRef" = "6D040EB63B8A644D27EA6790";
++		};
++		"8207DEE682437274AB5E93DD" = {
++			"isa" = "PBXBuildFile";
++			"fileRef" = "D7BDEE712343CE4263D6E946";
++		};
+ 		"A8A5CF5672234A43A4841291" = {
+ 			"isa" = "PBXBuildFile";
+ 			"fileRef" = "4D375D7962D45503726F9E92";
+@@ -3590,6 +3620,8 @@
+ 				"EDF550E0DECFFC11E5F4D9EF",
+ 				"9EECBD09F74D19049E7BA879",
+ 				"86A718BEF3D3234494D05E79",
++				"FB6270CA5792E27BB0C5D7D0",
++				"8207DEE682437274AB5E93DD",
+ 				"A8A5CF5672234A43A4841291",
+ 				"11274D0FC20CF07073943687",
+ 				"217B3C4ABDC3C177132A5E0C",
+@@ -4295,6 +4327,8 @@
+ 				"83E4C8C02FB3B7FFE08D4EF8",
+ 				"0B3CCD156B2CAEA17789967B",
+ 				"DC26C6467362BAF0FAA01475",
++				"6D040EB63B8A644D27EA6790",
++				"D7BDEE712343CE4263D6E946",
+ 				"4D375D7962D45503726F9E92",
+ 				"FCF106D83608379CD2B0BE8A",
+ 				"EBFA9F169FA5D6073EF97F7A",

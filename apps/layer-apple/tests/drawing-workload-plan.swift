@@ -71,6 +71,35 @@ import Foundation
         }
         do { _ = try DrawingWorkloadPlan(name: "unknown", seconds: 600); preconditionFailure("Unknown workload accepted") }
         catch {}
-        print("PASS: workload contact termination, lift gaps, bounds, pressure, and configuration validation")
+        let chainEnvironment = ["CAPY_WORKLOAD": "chain", "CAPY_WORKLOAD_CHAIN": "Documents/capy-bench/chain.json",
+            "CAPY_WORKLOAD_OUTPUT": "/owned/pass-2", "CAPY_WORKLOAD_PASS": "2", "CAPY_WORKLOAD_COLD": "0",
+            "CAPY_WORKLOAD_ROOT": "bench-main", "CAPY_WORKLOAD_HEAVY": "Documents/capy-bench/heavy.capy",
+            "CAPY_WORKLOAD_STEPS": "launch,open.heavy", "CAPY_WORKLOAD_DEVICE": "macmini"]
+        let warm = try DrawingWorkloadPlan.configured(environment: chainEnvironment)!
+        let chain = warm.chain!
+        precondition(warm.seconds == 1200 && warm.document == nil && chain.pass == 2 && !chain.cold && chain.root == "bench-main")
+        precondition(chain.file.path == NSHomeDirectory() + "/Documents/capy-bench/chain.json" && chain.output.path == "/owned/pass-2")
+        precondition(chain.document("heavy")?.path == NSHomeDirectory() + "/Documents/capy-bench/heavy.capy" && chain.document("photo") == nil)
+        precondition(chain.steps == ["launch", "open.heavy"] && chain.label("DEVICE") == "macmini" && chain.label("COMMIT") == nil)
+        precondition(warm.persistenceRoot.path.hasSuffix("/CapyPerformanceSessions/bench-main"))
+        precondition(!String(describing: warm.metadata).contains("capy-bench") && !String(describing: warm.metadata).contains("owned"))
+        var coldEnvironment = chainEnvironment; coldEnvironment["CAPY_WORKLOAD_COLD"] = "1"
+        let cold = try DrawingWorkloadPlan.configured(environment: coldEnvironment)!.chain!
+        precondition(cold.cold && cold.root != "bench-main" && UUID(uuidString: cold.root) != nil)
+        var absolute = chainEnvironment; absolute["CAPY_WORKLOAD_ROOT"] = "/owned/root"
+        let owned = try DrawingWorkloadPlan.configured(environment: absolute)!
+        precondition(owned.persistenceRoot.path == "/owned/root")
+        let fresh = try DrawingWorkloadPlan(name: "ink", seconds: 600)
+        precondition(fresh.chain == nil && fresh.persistenceRoot != fresh.persistenceRoot)
+        for (key, value) in [("CAPY_WORKLOAD_CHAIN", nil), ("CAPY_WORKLOAD_OUTPUT", nil), ("CAPY_WORKLOAD_ROOT", nil),
+            ("CAPY_WORKLOAD_ROOT", ""), ("CAPY_WORKLOAD_PASS", "0"), ("CAPY_WORKLOAD_PASS", "x"), ("CAPY_WORKLOAD_COLD", "yes"),
+            ("CAPY_WORKLOAD_SPACE", "Srgb"), ("CAPY_WORKLOAD_SECONDS", "1801")] as [(String, String?)] {
+            var invalid = chainEnvironment; invalid[key] = value
+            do { _ = try DrawingWorkloadPlan.configured(environment: invalid); preconditionFailure("Invalid chain configuration accepted: \(key)") }
+            catch {}
+        }
+        do { _ = try DrawingWorkloadPlan(name: "chain", seconds: 600); preconditionFailure("Chain without settings accepted") }
+        catch {}
+        print("PASS: workload contact termination, lift gaps, bounds, pressure, chain settings, persistence roots and configuration validation")
     }
 }

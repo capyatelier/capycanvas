@@ -30,6 +30,7 @@ final class FrameTrace: @unchecked Sendable {
     private var frozen = false
     private var finishing = false
     private var timer: DispatchSourceTimer?
+    private var exported: [@Sendable ([FrameTraceEvent], UInt64) -> Void] = []
     private let output: URL?
     private let platform: UInt32
     private let workload: [String: Any]?
@@ -75,8 +76,12 @@ final class FrameTrace: @unchecked Sendable {
         let result = events; events = []
         return (result, dropped)
     }
-    func finish() {
+    func finish(exported: (@Sendable ([FrameTraceEvent], UInt64) -> Void)? = nil) {
         lock.lock()
+        if let exported {
+            if frozen { let count = dropped; lock.unlock(); exported([], count); return }
+            self.exported.append(exported)
+        }
         guard !finishing && !frozen else { lock.unlock(); return }
         finishing = true
         lock.unlock()
@@ -96,7 +101,7 @@ final class FrameTrace: @unchecked Sendable {
         }
         timer.resume()
     }
-    private func sampleMemory() {
+    static func taskMemory() -> (footprint: UInt64, resident: UInt64, status: kern_return_t) {
         var info = task_vm_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
         let status = withUnsafeMutablePointer(to: &info) { pointer in
@@ -104,12 +109,19 @@ final class FrameTrace: @unchecked Sendable {
                 task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
             }
         }
-        record(FrameTraceEvent(kind: .memory, a: Self.now(), b: status == KERN_SUCCESS ? info.phys_footprint : 0,
-            c: status == KERN_SUCCESS ? info.resident_size : 0,
-            d: UInt64(ProcessInfo.processInfo.thermalState.rawValue), e: UInt64(UInt32(bitPattern: status))))
+        return status == KERN_SUCCESS ? (info.phys_footprint, info.resident_size, status) : (0, 0, status)
+    }
+    private func sampleMemory() {
+        let memory = Self.taskMemory()
+        record(FrameTraceEvent(kind: .memory, a: Self.now(), b: memory.footprint, c: memory.resident,
+            d: UInt64(ProcessInfo.processInfo.thermalState.rawValue), e: UInt64(UInt32(bitPattern: memory.status))))
     }
     private func export() {
         let snapshot = freeze()
+        defer {
+            lock.lock(); let callbacks = exported; exported = []; lock.unlock()
+            for callback in callbacks { callback(snapshot.events, snapshot.dropped) }
+        }
         guard let output else { return }
         do {
             try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)

@@ -103,7 +103,7 @@ import UIKit
     private var phoneMetricsContext: String?
     private(set) var native: NativeOwner?
     private(set) var workspaces: WorkspaceController?
-    private var drawingWorkload: DrawingWorkload?
+    private var drawingWorkload: AnyObject?
     lazy var layerThumbnails = LayerThumbnails(store: self)
     let layerSwipe = LayerSwipe()
     lazy var filterPreviews = FilterPreviews(store: self)
@@ -150,11 +150,10 @@ import UIKit
         sessionIdentity = UUID(uuidString: scene)?.uuidString ?? UUID().uuidString
         do {
             let workload = try DrawingWorkloadPlan.configured()
-            let storage = workload == nil ? persistence : EditorPersistence(root:
-                FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-                    .appendingPathComponent("CapyPerformanceSessions/\(UUID().uuidString)", isDirectory: true))
+            let storage = workload.map { EditorPersistence(root: $0.persistenceRoot) } ?? persistence
             paperDirectory = storage.locations?.papers
             colorPreferences = ColorPreferencesStore(locations: storage.locations)
+            if workload?.chain != nil { projectFiles = ProjectFiles(store: self, dialogs: ChainWorkload.dialogs) }
             launch = { [weak self] screen in
                 self?.initialize(platform: platform, scene: scene, storage: storage,
                     usesWorkspaceLibrary: managedWorkspaces && storage.locations != nil, workload: workload, screen: screen)
@@ -196,7 +195,8 @@ import UIKit
             native?.setCanvasBarHoldChanged { [weak self] hold in
                 DispatchQueue.main.async { self?.canvasBar.hold(hold) }
             }
-            if let workload { drawingWorkload = DrawingWorkload(store: self, plan: workload) }
+            if let workload, workload.chain != nil { drawingWorkload = ChainWorkload(store: self, plan: workload) }
+            else if let workload { drawingWorkload = DrawingWorkload(store: self, plan: workload) }
         } catch { failure = error.localizedDescription }
     }
     private func receive(_ next: JSON?, _ error: String?) {

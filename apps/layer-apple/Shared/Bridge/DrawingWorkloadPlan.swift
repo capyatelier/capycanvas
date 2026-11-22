@@ -18,16 +18,18 @@ struct DrawingWorkloadPlan {
     let color: [String: String]
     let document: String?
     let theme: String?
+    let chain: Chain?
     var documentExtent: [UInt32] { name == "photo" ? [9504, 6336] : [extent, extent] }
     var contactSamples: Int { name == "photo" ? 6 * Self.samplesPerSecond : Self.strokeSamples }
     var contactCycleSamples: Int { name == "photo" ? 7 * Self.samplesPerSecond : Self.cycleSamples }
 
     init(name: String, seconds: Double, color: [String: String] = ["space": "Srgb", "depth": "U8"],
-        document: String? = nil, brush photoBrush: UInt32? = nil, diameter photoDiameter: Double? = nil, theme: String? = nil) throws {
+        document: String? = nil, brush photoBrush: UInt32? = nil, diameter photoDiameter: Double? = nil, theme: String? = nil,
+        chain: Chain? = nil) throws {
         guard seconds.isFinite, seconds >= 1, seconds <= 1800 else {
             throw PlanError(errorDescription: "CAPY_WORKLOAD_SECONDS must be between 1 and 1800")
         }
-        self.name = name; self.seconds = seconds; self.color = color
+        self.name = name; self.seconds = seconds; self.color = color; self.chain = name == "chain" ? chain : nil
         self.document = name == "photo" ? document : nil
         guard theme == nil || theme == "light" || theme == "dark" else {
             throw PlanError(errorDescription: "CAPY_WORKLOAD_THEME must be light or dark")
@@ -47,26 +49,69 @@ struct DrawingWorkloadPlan {
             }
             identifier = 6; extent = 9504; paintLayers = 2
             self.brush = brush; self.diameter = diameter; predicts = false
+        case "chain":
+            guard chain != nil else { throw PlanError(errorDescription: "The chain workload needs its chain settings") }
+            identifier = 7; extent = 0; paintLayers = 0; brush = 0; diameter = 0; predicts = false
         default: throw PlanError(errorDescription: "Unknown CAPY_WORKLOAD profile: \(name)")
         }
     }
     static func configured(environment: [String: String] = ProcessInfo.processInfo.environment) throws -> DrawingWorkloadPlan? {
         guard let name = environment["CAPY_WORKLOAD"] else { return nil }
-        guard let seconds = Double(environment["CAPY_WORKLOAD_SECONDS"] ?? (name == "photo" ? "20" : "600")) else {
+        guard let seconds = Double(environment["CAPY_WORKLOAD_SECONDS"] ?? ["photo": "20", "chain": "1200"][name] ?? "600") else {
             throw PlanError(errorDescription: "CAPY_WORKLOAD_SECONDS must be a number")
         }
-        if name == "photo" && (environment["CAPY_WORKLOAD_SPACE"] != nil || environment["CAPY_WORKLOAD_DEPTH"] != nil) {
-            throw PlanError(errorDescription: "The photo workload uses the package document color")
+        if ["photo", "chain"].contains(name) && (environment["CAPY_WORKLOAD_SPACE"] != nil || environment["CAPY_WORKLOAD_DEPTH"] != nil) {
+            throw PlanError(errorDescription: "The \(name) workload uses the color of the documents it opens")
         }
         return try DrawingWorkloadPlan(name: name, seconds: seconds, color: [
             "space": environment["CAPY_WORKLOAD_SPACE"] ?? "Srgb",
             "depth": environment["CAPY_WORKLOAD_DEPTH"] ?? "U8"],
             document: environment["CAPY_WORKLOAD_DOCUMENT"],
             brush: environment["CAPY_WORKLOAD_BRUSH"].flatMap(UInt32.init),
-            diameter: environment["CAPY_WORKLOAD_DIAMETER"].flatMap(Double.init), theme: environment["CAPY_WORKLOAD_THEME"])
+            diameter: environment["CAPY_WORKLOAD_DIAMETER"].flatMap(Double.init), theme: environment["CAPY_WORKLOAD_THEME"],
+            chain: name == "chain" ? try Chain(environment) : nil)
     }
     private struct PlanError: LocalizedError { let errorDescription: String? }
+    struct Chain {
+        let file: URL, output: URL, pass: Int, cold: Bool, root: String, steps: Set<String>?
+        let environment: [String: String]
+        init(_ environment: [String: String]) throws {
+            guard let file = environment["CAPY_WORKLOAD_CHAIN"], let output = environment["CAPY_WORKLOAD_OUTPUT"] else {
+                throw PlanError(errorDescription: "The chain workload needs CAPY_WORKLOAD_CHAIN and CAPY_WORKLOAD_OUTPUT")
+            }
+            guard let pass = Int(environment["CAPY_WORKLOAD_PASS"] ?? "1"), pass > 0 else {
+                throw PlanError(errorDescription: "CAPY_WORKLOAD_PASS must be a positive integer")
+            }
+            guard let cold = ["1": true, "0": false][environment["CAPY_WORKLOAD_COLD"] ?? "1"] else {
+                throw PlanError(errorDescription: "CAPY_WORKLOAD_COLD must be 1 or 0")
+            }
+            guard let root = cold ? UUID().uuidString : environment["CAPY_WORKLOAD_ROOT"], !root.isEmpty else {
+                throw PlanError(errorDescription: "A warm chain pass (CAPY_WORKLOAD_COLD=0) needs CAPY_WORKLOAD_ROOT")
+            }
+            self.file = Self.container(file); self.output = Self.container(output)
+            self.pass = pass; self.cold = cold; self.root = root
+            steps = environment["CAPY_WORKLOAD_STEPS"].map { Set($0.split(separator: ",").map(String.init)) }
+            self.environment = environment
+        }
+        static func container(_ path: String) -> URL {
+            path.hasPrefix("/") ? URL(fileURLWithPath: path) : URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(path)
+        }
+        func document(_ key: String) -> URL? { environment["CAPY_WORKLOAD_" + key.uppercased()].map(Self.container) }
+        func label(_ key: String) -> String? { environment["CAPY_WORKLOAD_" + key] }
+    }
+    var persistenceRoot: URL {
+        let name = chain?.root ?? UUID().uuidString
+        return name.hasPrefix("/") ? URL(fileURLWithPath: name, isDirectory: true)
+            : FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("CapyPerformanceSessions/\(name)", isDirectory: true)
+    }
     var metadata: [String: Any] {
+        if let chain {
+            var result: [String: Any] = ["version": 1, "name": name, "input_source": "synthetic", "pass": chain.pass,
+                "cold": chain.cold, "measurement_seconds": seconds]
+            if let theme { result["theme"] = theme }
+            return result
+        }
         var result: [String: Any] = ["version": 1, "name": name, "document_pixels": [extent, extent], "paint_layers": paintLayers,
          "document_color": color,
          "brush_id": brush, "diameter": diameter, "prediction": predicts, "sample_hz": Self.samplesPerSecond,

@@ -102,6 +102,10 @@ DerivedData directory, and run one workload per device.
   use fresh preferences, so staging settings under `CAPY_STORAGE_DIR` does not
   select their theme.
 
+`CAPY_WORKLOAD=chain` runs the shared bench chain (`tools/performance/bench-chain.json`)
+through the same input owner and ordinary actions and writes the bench pass files;
+`tools/performance/bench_apple.py --help` lists its variables and the Mac and iPad commands.
+
 The `photo` profile uses an owned current-format package named by the absolute
 `CAPY_WORKLOAD_DOCUMENT` path inside the private app container. Prepare the
 9504 × 6336 reference photo as the bottom visible layer, one empty active paint
@@ -357,7 +361,7 @@ python3 -m unittest discover -s tools/performance -v
 
 The Swift recorder, workload plan and frame driver have standalone fixtures
 (`tests/frame-trace.swift`, `tests/drawing-workload-plan.swift`,
-`tests/frame-driver.swift`), compiled with their `Shared/Bridge` sources as shown
+`tests/chain-plan.swift`, `tests/frame-driver.swift`), compiled with their `Shared/Bridge` sources as shown
 in the [development guide](../../docs/development/apple.md#swift-fixtures).
 
 ## HDR color bubble motion
