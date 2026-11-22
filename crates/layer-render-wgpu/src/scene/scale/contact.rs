@@ -285,15 +285,13 @@ impl Cache {
         let near=PixelRect::new((x-span).max(0.) as u32,(y-span).max(0.) as u32,(x+span).max(0.) as u32+1,(y+span).max(0.) as u32+1).intersect(self.plan.bounds);
         let tiled=self.tiled(r,packet,scene,&root);
         let inside:BTreeSet<SourceTarget>=self.pivot_halves().iter().flat_map(|node|node.reads().0).collect();
-        let mut prepared=false;
         for coordinate in pages::coordinates(near,self.plan.level) {
             let cell=pages::bounds(coordinate,self.plan.level,self.plan.extent);
             if self.pivot_missing(cell) {continue;}
             for (id,request) in self.region_sources(scene,r,packet,cell,tiled) {
+                if budget.source_pages(Class::Refinement)==0 {return Ok(());}
                 if inside.contains(&id) || self.source_ready(scene,r,id,&request) {continue;}
-                if prepared && budget.remaining()<object_cache::PASS_TAPS {return Ok(());}
                 self.prepare_source(scene,r,packet,encoder,id,request,Class::Refinement,budget)?;
-                prepared=true;
             }
         }
         Ok(())
