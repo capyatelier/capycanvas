@@ -111,6 +111,7 @@ fn retained_scene_viewport_preserves_pixels_outside_local_paint_and_preview_dama
         stroke.kind = if preview { DabBatchKind::Preview } else { DabBatchKind::Persistent };
         stroke.style = preset_style(layer_core::DefaultBrushPreset::Pencil);
         stroke.damage = ink.bounds();
+        let revision = r.composite_revision;
         crate::test_support::submit_ready(&mut r, FramePacket {
             view: camera,
             dabs: &[ink],
@@ -119,7 +120,7 @@ fn retained_scene_viewport_preserves_pixels_outside_local_paint_and_preview_dama
             composite_all: i == 0,
             ..packet(document.scene(), [1024; 2])
         }).unwrap();
-        if i > 0 { assert!(r.composite_damage.area() < 1024 * 1024); }
+        if i > 0 { assert!(r.composite_damage_since(revision).unwrap().area() < 1024 * 1024); }
         let cursor = [layer_render::CursorSegment { from: [x + 24., y - 24.],
             to: [x + 140., y + 24.], distance: 0., marker: 2., scale: 1. }];
         retained.set_cursor(r.device(), &cursor, 1.);

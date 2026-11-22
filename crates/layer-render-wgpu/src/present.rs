@@ -1474,7 +1474,8 @@ impl ViewportPresenter {
             let outline = (previous.outline_revision != renderer.display_selection_revision)
                 .then_some(renderer.display_selection_damage)
                 .filter(|_| previous.outline_revision.wrapping_add(1) == renderer.display_selection_revision);
-            let content = !previous.valid
+            let artwork = renderer.composite_damage_since(previous.revision);
+            let content = !previous.valid || artwork.is_none()
                 || self.held_alpha != self.transition_alpha(renderer)
                 || self.held_alpha != layer_render::CanvasFade::default() && self.held.is_none()
                 || self.presented_drawing != Some(renderer.presentation)
@@ -1482,18 +1483,14 @@ impl ViewportPresenter {
                 || previous.proof != self.proof_options
                 || previous.screen != self.screen_options
                 || (previous.selection_revision != renderer.selection_paint_revision
-                    && previous.selection_revision.wrapping_add(1) != renderer.selection_paint_revision)
-                || (previous.revision != renderer.composite_revision
-                    && previous.revision.wrapping_add(1) != renderer.composite_revision);
+                    && previous.selection_revision.wrapping_add(1) != renderer.selection_paint_revision);
             let full = content || (self.fill_reveal!=renderer.fill_reveal && reveal_damage.is_none()) || bindings_changed || camera_changed || self.panel_surfaces_changed || self.panels.as_ref().is_some_and(|p|p.needs_refresh()) || (selection_changed && outline.is_none()) || self.presented_paper != Some(lit);
             let cursor =
                 crate::present_damage::cursor_bounds(&self.cursor_vertices, view, self.quarter_turns);
             let repaint = if full {
                 crate::pixel_rect::PixelRect::full(extent)
-            } else if previous.revision != renderer.composite_revision {
-                crate::present_damage::damage(renderer.composite_damage, view, self.quarter_turns)
             } else {
-                crate::pixel_rect::PixelRect::EMPTY
+                crate::present_damage::damage(artwork.unwrap_or(crate::pixel_rect::PixelRect::EMPTY), view, self.quarter_turns)
             };
             if crate::performance_trace::enabled() {
                 crate::performance_trace::counter(c"Capy viewport full redraw", u64::from(full));

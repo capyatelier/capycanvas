@@ -173,6 +173,7 @@ pub use present_screen::ScreenCheck;
 // premultiplied values. Alpha is ordinary, unencoded UNORM8 coverage.
 const EXPORT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const WARM_COVERAGE_PAGES: usize = 16;
+const PUBLISHED_REVISIONS: usize = 16;
 const WARM_SPARE_PAGES: usize = 8;
 const INITIAL_DAB_BYTES: u64 = 4 * 1024 * 1024;
 const INITIAL_STYLE_RECORDS: usize = 128;
@@ -1186,7 +1187,7 @@ pub struct WgpuRasterizer {
     canvas_transition: layer_render::CanvasFade,
     warm: Option<warm::Warm>,
     artwork_revision: u64,
-    composite_damage: PixelRect,
+    composite_damage: [PixelRect; PUBLISHED_REVISIONS],
     /// The composite's blend space, from the latest frame.
     blend_space: layer_core::BlendSpace,
     filter_previews: Option<Box<scene::FilterPreviews>>,
@@ -1624,7 +1625,7 @@ impl WgpuRasterizer {
             canvas_transition: Default::default(),
             warm: None,
             artwork_revision: 0,
-            composite_damage: PixelRect::EMPTY,
+            composite_damage: [PixelRect::EMPTY; PUBLISHED_REVISIONS],
             thumbnails: thumbnails::Thumbnails::new(),
             brush_stamps: None,
             ui_preview_space: layer_core::color::RgbSpace::Srgb,
@@ -3902,6 +3903,7 @@ impl CanvasRenderer for WgpuRasterizer {
         self.document_extent=previous.document_extent;
         self.artwork_revision=previous.artwork_revision;
         self.composite_revision=previous.composite_revision;
+        self.composite_damage=previous.composite_damage;
         self.presentable_revision=previous.presentable_revision;
         self.presentation_released=previous.presentation_released;
         self.presentation=previous.presentation;
@@ -4467,6 +4469,15 @@ impl WgpuRasterizer {
         if self.background_frame && recent && preparation_pending(self) { return; }
         self.presentable_revision = self.composite_revision;
         self.presentation_released = Some(now);
+    }
+    fn publish(&mut self, damage: PixelRect) {
+        self.composite_revision = self.composite_revision.wrapping_add(1);
+        self.composite_damage[(self.composite_revision % PUBLISHED_REVISIONS as u64) as usize] = damage;
+    }
+    pub(crate) fn composite_damage_since(&self, revision: u64) -> Option<PixelRect> {
+        let count = self.composite_revision.wrapping_sub(revision);
+        (count <= PUBLISHED_REVISIONS as u64).then(|| (0..count).fold(PixelRect::EMPTY, |damage, back|
+            damage.union(self.composite_damage[(self.composite_revision.wrapping_sub(back) % PUBLISHED_REVISIONS as u64) as usize])))
     }
     pub(crate) fn presentation_due(&self) -> Option<web_time::Instant> {
         (self.presentable_revision != self.composite_revision)
@@ -5290,7 +5301,6 @@ impl WgpuRasterizer {
 
         self.drain_image_decodes(&mut encoder)?;
         let animated = packet.scene.order().iter().any(|&h| packet.scene.visible(h) && packet.scene.effect(h).is_some_and(|e| e.animated()));
-        let mut published=PixelRect::EMPTY;
         // Newly populated display pages change visible pixels too, even when
         // the document itself did not change (for example after navigation).
         if !dirty.is_empty() || animated || display_rebuilt || !unchanged || self.objects_outstanding()
@@ -5313,11 +5323,11 @@ impl WgpuRasterizer {
                 Err(GpuRasterError::NotReady)
             } else {scene.compose(self, packet, &mut encoder, &mut work)};
             self.scene = Some(scene);
-            published=match result {
+            let published=match result {
                 Err(error) if error.is_preparation_pending()=>PixelRect::EMPTY,
                 result=>result?,
             };
-            if !published.is_empty() {self.composite_revision=self.composite_revision.wrapping_add(1);self.composite_damage=published;}
+            if !published.is_empty() {self.publish(published);}
         }
         let mut navigator = std::mem::take(&mut self.navigator);
         let navigator_revision = navigator.revision;
@@ -5339,9 +5349,7 @@ impl WgpuRasterizer {
             let changed=match result {Err(error) if error.is_preparation_pending()=>PixelRect::EMPTY,result=>result?};
             if !changed.is_empty() {
                 refined = true;
-                published = published.union(changed);
-                self.composite_damage = published;
-                self.composite_revision = self.composite_revision.wrapping_add(1);
+                self.publish(changed);
             }
         }
         if self.transform_preview.is_none() && !reset && packet.dabs.is_empty()
