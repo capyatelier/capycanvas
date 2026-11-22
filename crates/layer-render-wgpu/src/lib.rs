@@ -1490,7 +1490,7 @@ impl WgpuRasterizer {
         let uploads = Uploads::new(&device, 64 * 1024);
         let restore_uploads = Uploads::new(&device, 64 * 1024);
         let layer_masks =
-            layer_masks::MaskRenderer::from_pipelines(recipes.masks.clone());
+            layer_masks::MaskRenderer::from_pipelines(recipes.masks.clone(), &raster_tiers.paint);
         let papers = paper::Papers::from_recipes(recipes.paper.clone());
         let telemetry = telemetry::Telemetry::new(&device, &queue);
         let selection_clip = selection_clip::SelectionClip::from_pipelines(recipes.selection.clone(), &raster_tiers.paint);

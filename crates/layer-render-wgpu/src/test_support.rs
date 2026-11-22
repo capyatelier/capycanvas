@@ -311,7 +311,7 @@ pub(crate) fn mask_page_bytes(r:&WgpuRasterizer,target:layer_core::SourceTarget,
         capture.restore_mask_page(&blob,expected.clone()).unwrap()
     } else {
         assert_eq!(crate::raster::contents::mask_default(source.domain,source.default_coverage,coordinate).matches(&expected),Some(true));
-        let mut page=crate::layer_masks::MaskPage::new(&capture.device);
+        let mut page=crate::layer_masks::MaskPage::new(&capture.device,&capture.raster_tiers.paint);
         let mut encoder=crate::submission::CommandEncoder::new(&capture.device,&Default::default());
         page.clear(&mut encoder,f64::from(source.default_coverage),expected.clone()).unwrap();
         encoder.submit(&capture.queue);page

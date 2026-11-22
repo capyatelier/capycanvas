@@ -627,7 +627,7 @@ mod tests {
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
         let receipt=encoder.submission();
         let original=layer_core::raster::ContentName::fresh();
-        let mut page=crate::layer_masks::MaskPage::new(&r.device);
+        let mut page=crate::layer_masks::MaskPage::new(&r.device,&r.raster_tiers.paint);
         page.clear(&mut encoder,0.25,original).unwrap();
         let other=super::super::snapshot_page(&r.device,r.device.scalar_format());
         assert!(page.read(original,Some(&receipt)).unwrap().alias(SnapshotPixels {texture:other.texture,view:other.view}).is_none());

@@ -1302,7 +1302,7 @@ impl ImageTransformState {
                     if let Some(previous)=r.layer_masks.previews.get(&(layer,coordinate)).filter(|entry|entry.matches(intent.version())
                         && self.preview.as_ref().zip(self.capture.as_ref()).is_some_and(|(previous,capture)|self.native_version(capture,&previous.drawn(),r.target_extent(layer),RasterPlane::Mask,coordinate,preview_taps(previous)).is_ok_and(|expected|entry.version.matches(&expected)==Some(true)))).cloned() {(previous.page,previous.version)}
                     else {
-                        let mut page=layer_masks::MaskPage::new(&r.device);
+                        let mut page=layer_masks::MaskPage::new(&r.device,&r.raster_tiers.paint);
                         let mut version=intent.version().clone();
                         if let Some(base)=current {
                             let read=base.read(intent.version(),Some(&receipt))?;
@@ -1334,7 +1334,7 @@ impl ImageTransformState {
                         let default=crate::raster::contents::mask_default(source.domain,background,coordinate);
                         if !initialize.contains(&coordinate) && default.matches(intent.version())!=Some(true) {return Err(GpuRasterError::Invariant("prepared draw mask source state is inconsistent"));}
                         let version:layer_core::raster::ContentVersion=layer_core::raster::ContentName::fresh().into();
-                        let mut page=layer_masks::MaskPage::new(&r.device);page.clear(encoder,f64::from(background),version.clone())?;(page,version)
+                        let mut page=layer_masks::MaskPage::new(&r.device,&r.raster_tiers.paint);page.clear(encoder,f64::from(background),version.clone())?;(page,version)
                     }
                 };
                 page.read(&version,Some(&receipt))?;

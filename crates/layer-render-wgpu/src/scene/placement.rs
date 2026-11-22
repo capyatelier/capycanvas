@@ -446,7 +446,7 @@ mod tests {
                 layer_core::raster::RasterPlane::Mask.descriptor(color),&code.to_le_bytes().repeat((PAGE_SIZE*PAGE_SIZE) as usize)).unwrap());
             let data=layer_core::raster::RasterRevision::backed(layer_core::raster::RasterData {
                 tiles:[(layer_core::raster::TileKey {plane:layer_core::raster::RasterPlane::Mask,coordinate:[0;2]},tile.clone())].into(),..Default::default()});
-            let mut page = layer_masks::MaskPage::new(&r.device);
+            let mut page = layer_masks::MaskPage::new(&r.device, &r.raster_tiers.paint);
             let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
             page.clear(&mut encoder,value,tile.content_version()).unwrap();r.last_submission=encoder.submit(&r.queue);
             r.layer_masks.command_pages.insert((command, [0; 2]), page.clone());

@@ -61,6 +61,7 @@ impl PreparedPages {
         for page in &mut self.coverage {page.primary.discharge();page.secondary.discharge();}
         for (_,page) in &mut self.companions {page.discharge();}
         for (_,_,_,page) in &mut self.starts {page.discharge();}
+        for (_,page) in &mut self.masks {page.discharge();}
     }
 }
 struct TargetRestore {
@@ -236,7 +237,7 @@ impl TargetRestore {
             Output::Companion(c)=>self.pages.companions.push((c,resident::Resident::unwritten(r.create_page_surface(&r.raster_tiers.paint,"prepared destination companion")))),
             Output::StrokeStart(c,id,preview)=>self.pages.starts.push((c,id,preview,resident::Resident::unwritten(r.create_page_surface(&r.raster_tiers.paint,"prepared stroke start")))),
             Output::Mask(c,default)=> {
-                let mut page=layer_masks::MaskPage::new(&r.device);let value=f64::from(f32::from_bits(default));
+                let mut page=layer_masks::MaskPage::new(&r.device,&r.raster_tiers.paint);let value=f64::from(f32::from_bits(default));
                 if matches!(source,SourcePage::Output(_)) {
                     let receipt=encoder.submission();let write=page.initialize(&receipt)?;
                     {let _clear=encoder.color_pass("prepared default mask",&write.value().view,wgpu::LoadOp::Clear(wgpu::Color {r:value,g:value,b:value,a:value}));}
@@ -672,9 +673,6 @@ impl WgpuRasterizer {
     pub(crate) fn staged_restore_bytes(&self)->u64 {
         self.restore_preflight.as_ref().map_or(0,|restore|restore.targets.iter().flatten().map(|target|target.pages.storage_bytes()).sum::<u64>()
             +restore.starts.iter().map(|(_,_,_,_,page)|page.storage_bytes()).sum::<u64>())
-    }
-    pub(crate) fn staged_restore_mask_bytes(&self)->u64 {
-        self.restore_preflight.as_ref().map_or(0,|restore|restore.targets.iter().flatten().flat_map(|target|&target.pages.masks).map(|(_,page)|page.storage_bytes()).sum())
     }
     pub(crate) fn projected_restore_bytes(&self)->u64 {self.restore_preflight.as_ref().map_or(0,|restore|restore.targets.iter().flatten()
         .try_fold(self.unreserved_preview_bytes(restore),|bytes,target|bytes.checked_add(target.projected_bytes(self)?).ok_or(GpuRasterError::SizeOverflow)).unwrap_or(u64::MAX))}

@@ -114,7 +114,7 @@ impl SnapshotGpu {
                     let page=r.restore_mask_page(&blob,tile.content_version()).map_err(|e|e.to_string())?;
                     #[cfg(target_arch="wasm32")]
                     let page={
-                        let mut page=crate::layer_masks::MaskPage::new(&r.device);
+                        let mut page=crate::layer_masks::MaskPage::new(&r.device,&r.raster_tiers.paint);
                         let space = r.document_color().space;
                         let pixels = r.browser_raster_decoder.as_ref().ok_or("Raster preparation worker unavailable")?(blob.clone(),space,space,false).await?;
                         let scene::sources::PreparedSourcePixels::NativeSamples(samples) = pixels else {return Err("Coverage requires native samples".into());};
@@ -129,6 +129,7 @@ impl SnapshotGpu {
                 }
             }
             masks.pages = std::mem::take(&mut r.layer_masks.pages);
+            masks.pages.values_mut().for_each(crate::layer_masks::MaskPage::discharge);
         }
         control.check().map_err(|e| e.to_string())?;
         Ok(crate::effect_analysis::Candidate {masks: (!regions.is_empty()).then(|| Arc::new(masks)), entries: std::mem::take(&mut snapshot.renderer.effect_analyses).into_iter()

@@ -585,14 +585,11 @@ impl WgpuRasterizer {
             .into_iter().map(|tier|tier.used()).sum::<u64>().saturating_add(self.uncharged_bytes())
     }
     fn uncharged_bytes(&self)->u64 {
-        let masks=&self.layer_masks;
         self.portable_blend.byte_len()+self.material_records.storage_bytes()+self.transport_records.storage_bytes()
             +self.dry_display_inputs.len() as u64*dry_material::DisplayInputs::storage_bytes()
             +self.thumbnails.storage_bytes()+self.retouch.as_ref().map_or(0,|retouch|retouch.storage_bytes())
             +self.native_edit.as_ref().map_or(0,|native|native.storage_bytes())
             +self.filter_previews.as_ref().map_or(0,|previews|previews.storage_bytes())
-            +masks.pages.values().chain(masks.previews.values().map(|preview|&preview.page)).chain(masks.command_pages.values())
-                .chain(masks.snapshots.values().flat_map(|snapshot|snapshot.pages.values())).map(layer_masks::MaskPage::storage_bytes).sum::<u64>()
     }
     pub(super) fn composition_storage_bytes(&self)->u64 {
         self.scale_display.as_ref().map_or_else(||self.scene.as_ref().map_or(0,|scene|scene.retained_scale_bytes()[0]),|cache|cache.storage_bytes())
@@ -631,16 +628,15 @@ impl WgpuRasterizer {
             demand_ram_bytes: ram, demand_gpu_bytes: required, optional_gpu_bytes: u64::MAX, ..Default::default() }, gpu)
     }
     fn raster_pins(&self)->u64 {
-        let held=self.staged_restore_mask_bytes().saturating_add(self.raster_tiers.admitted.used());
-        self.raster_buffers.transfer.used().saturating_add(self.pinned_paint_bytes()).saturating_add(held)
+        self.raster_buffers.transfer.used().saturating_add(self.pinned_paint_bytes()).saturating_add(self.raster_tiers.admitted.used())
     }
     pub(crate) fn raster_excess(&self)->u64 {
         let floor=WORKING_BYTES.saturating_sub(self.raster_pins());
-        self.raster_tiers.raster.used().saturating_add(self.staged_restore_mask_bytes()).saturating_add(floor).saturating_sub(self.memory.raster_grant())
+        self.raster_tiers.raster.used().saturating_add(floor).saturating_sub(self.memory.raster_grant())
     }
     pub(super) fn raster_memory_report(&self)->MemoryReport {
         let [ram, _] = self.raster_buffers.memory_bytes();
-        let gpu = self.raster_tiers.raster.used().saturating_add(self.staged_restore_mask_bytes());
+        let gpu = self.raster_tiers.raster.used();
         let raster_pins = self.raster_pins();
         let raster_floor = raster_pins.max(WORKING_BYTES);
         self.warm_report(MemoryReport {ram_bytes:ram,gpu_bytes:gpu,
