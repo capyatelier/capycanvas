@@ -703,6 +703,8 @@ fn a_stroke_frame_refused_raster_room_waits_for_a_release() {
     r.submit(FramePacket { dabs: &[dab], dab_batches: std::slice::from_ref(&batch), ..packet(&document, false) }).unwrap();
     complete(&r);
     paint(&document).raster.wait_data().unwrap();
+    settle(&mut r, packet(&document, false));
+    assert_eq!(r.presentation_due(), None, "the first stroke is presented before the second asks for room");
     r.preparation_wake = Some(Arc::new(|| {}));
     r.retire_stroke_sources();
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
@@ -712,19 +714,21 @@ fn a_stroke_frame_refused_raster_room_waits_for_a_release() {
     let (dab, batch) = stroke(2, 2860.);
     paint_mut(&mut document).raster = RasterRevision::pending();
     let frame = FramePacket { dabs: &[dab], dab_batches: std::slice::from_ref(&batch), ..packet(&document, false) };
-    let mut held = Vec::new();
+    let mut retiring = Vec::new();
     loop {
         r.begin_frame_memory(frame);
-        held.push(r.admit_raster_working(0).expect("an empty claim refreshes the raster's limit"));
-        let room = r.raster_tiers.raster.limit() - r.raster_tiers.raster.used();
-        if room == 0 { break; }
-        held.push(r.admit_raster_working(room).expect("the test holds the raster's room and the room display retention yields to it"));
+        let room = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used()).max(1 << 20);
+        let Ok(found) = r.admit_raster_working(room).or_else(|_| r.admit_raster_working(1 << 20)) else { break; };
+        retiring.push(r.raster_buffers.transfer.charge(found.bytes()));
+        r.commit_raster_working(found);
     }
-    assert!(!r.raster_dependencies_ready(frame, None), "the held room refuses the stroke frame");
+    assert!(!r.raster_dependencies_ready(frame, None), "memory still retiring holds the room the stroke frame needs");
+    assert_eq!(r.restore_preparation(), Some(crate::frame_demand::Outstanding::Blocked(crate::frame_demand::Input::Residency)),
+        "the stroke frame's restore records its refusal");
     complete(&r);
     let _ = r.frame_demand();
     assert_eq!(r.frame_demand(), layer_render::FrameDemand::Wait, "a refused stroke frame waits for a release instead of spinning");
-    for reservation in held { r.commit_raster_working(reservation); }
+    drop(retiring);
     assert_eq!(r.frame_demand(), layer_render::FrameDemand::Work, "the released room makes the refused frame runnable");
     assert!((0..64).any(|_| { let ready = r.raster_dependencies_ready(frame, None); complete(&r); ready }), "the released room admits the stroke frame");
 }
