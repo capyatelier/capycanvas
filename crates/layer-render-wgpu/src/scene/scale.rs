@@ -1022,8 +1022,9 @@ impl Cache {
             let result=overview.render_graph(scene,r,packet,encoding,Destination::Overview(self,view));
             stand_in=stand_in.union(rendered(scene,result)?);
         }
-        Ok(if self.complete && self.pixels.committed_root().is_some() {view} else {view.union(stand_in)})
+        Ok(self.presented(view,stand_in))
     }
+    fn presented(&self,view:PixelRect,stand_in:PixelRect)->PixelRect {if self.complete && self.pixels.committed_root().is_some() {view} else {view.union(stand_in)}}
 
     fn render_graph(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>, encoding: &mut Encoding<'_>, destination: Destination<'_>) -> Result<PixelRect, GpuRasterError> {
         let arrivals=r.arrival_token();
