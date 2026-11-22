@@ -663,10 +663,10 @@ index 000000000..98875eea0
 +}
 diff --git a/apps/layer-apple/Shared/Bridge/ChainWorkload.swift b/apps/layer-apple/Shared/Bridge/ChainWorkload.swift
 new file mode 100644
-index 000000000..fa7ee59d6
+index 000000000..8a25cac2b
 --- /dev/null
 +++ b/apps/layer-apple/Shared/Bridge/ChainWorkload.swift
-@@ -0,0 +1,726 @@
+@@ -0,0 +1,729 @@
 +import Foundation
 +import Metal
 +import CryptoKit
@@ -727,6 +727,9 @@ index 000000000..fa7ee59d6
 +
 +    init(store: EditorStore, plan: DrawingWorkloadPlan) {
 +        self.store = store; self.plan = plan; chain = plan.chain!
++        #if os(iOS)
++        UIApplication.shared.isIdleTimerDisabled = true
++        #endif
 +        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.sampleMemory() } }
 +        memoryTimer = timer
 +        RunLoop.main.add(timer, forMode: .common)

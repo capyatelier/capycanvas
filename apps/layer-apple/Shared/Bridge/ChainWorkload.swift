@@ -58,6 +58,9 @@ import os
 
     init(store: EditorStore, plan: DrawingWorkloadPlan) {
         self.store = store; self.plan = plan; chain = plan.chain!
+        #if os(iOS)
+        UIApplication.shared.isIdleTimerDisabled = true
+        #endif
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.sampleMemory() } }
         memoryTimer = timer
         RunLoop.main.add(timer, forMode: .common)
