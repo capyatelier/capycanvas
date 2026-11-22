@@ -300,6 +300,7 @@ pub struct UiSession<R: CanvasRenderer> {
     storage_activity:layer_core::package::session_store::CompactionActivity,
     drawing_switch_pending: bool,
     launch_finished: bool,
+    launch_revealing: bool,
     workspace_attention: bool,
     host_attention: bool,
     touch: TouchGesture,
@@ -589,6 +590,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             storage_activity:Default::default(),
             drawing_switch_pending: false,
             launch_finished: false,
+            launch_revealing: false,
             workspace_attention: false,
             host_attention: false,
             touch: TouchGesture::default(),
@@ -1232,6 +1234,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn input(&mut self, input: UiInput) -> Result<InputReply, String> {
         self.storage_activity.touch();
         self.release_switch_contacts();
+        if matches!(input, UiInput::Pointer { phase: ContactPhase::Down, .. }) { self.finish_launch_reveal(); }
         let mut reply = match self.hold_switch_input(&input) {
             Some(reply) => reply,
             None => self.route_input(input)?,
@@ -4693,7 +4696,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.hold_switch_pen(event) { return; }
         if event.tool == layer_engine::ToolKind::Finger && self.finger.withdrawn { return; }
         let Some(event)=self.filter_pen(event) else {return;};
-        if event.phase==PenPhase::Down && !event.flags.contains(layer_engine::SampleFlags::PREDICTED){self.finish_fill_reveal();}
+        if event.phase==PenPhase::Down && !event.flags.contains(layer_engine::SampleFlags::PREDICTED){self.finish_fill_reveal();self.finish_launch_reveal();}
         if event.tool == layer_engine::ToolKind::Finger {
             self.finger.raw = (!matches!(event.phase, PenPhase::Up | PenPhase::Cancel)).then_some(event.device_id);
         }
