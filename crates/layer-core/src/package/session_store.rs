@@ -902,6 +902,7 @@ impl StoreLocation {
         Self {range:Mutex::new(Arc::new(StoreRange {pack,source,offset})),length,crc,descriptor}
     }
     fn range(&self)->Arc<StoreRange> {self.range.lock().unwrap().clone()}
+    pub(crate) fn read_source(&self)->ReadSource {self.range().source.clone()}
     async fn read_all(&self)->Result<Arc<[u8]>,String> {
         let range=self.range();
         let length=usize::try_from(self.length).map_err(|_|"Stored resource exceeds address space")?;

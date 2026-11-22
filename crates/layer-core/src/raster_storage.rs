@@ -114,6 +114,9 @@ impl Bytes {
         self.healthy()?;
         match self.snapshot()? {Value::Memory(_)=>Ok(None),Value::Store(location)=>location.read_interest().map(Some),Value::Package(range)=>range.read_interest().map(Some)}
     }
+    pub(crate) fn read_source(&self)->Option<crate::tile_io::ReadSource> {
+        match self.snapshot().ok()? {Value::Memory(_)=>None,Value::Store(location)=>Some(location.read_source()),Value::Package(range)=>Some(range.read_source().clone())}
+    }
     pub(crate) fn location(&self)->Result<Option<Arc<crate::package::session_store::StoreLocation>>,String> {
         Ok(match self.snapshot()? {Value::Store(location)=>Some(location),_=>None})
     }
@@ -275,6 +278,15 @@ impl RetainedTiles {
     }
     pub fn set_parked(&self, parked: bool) {
         if let Some(owner) = self.owner.as_ref().and_then(std::sync::Weak::upgrade) { owner.parked(parked); }
+        if parked { self.release_reads(); }
+    }
+    fn release_reads(&self) {
+        let mut blobs = self.sources.clone();
+        for data in self.rasters.iter().filter_map(|raster| raster.try_data()?.ok()) {
+            blobs.extend(data.tiles.values().filter_map(|tile| tile.try_backing()?.ok()));
+        }
+        let sources = blobs.iter().filter_map(|blob| blob.compressed.read_source()).chain(self.backings.iter().filter_map(|backing| backing.read_source()));
+        for source in sources { source.release(); }
     }
     /// Poll every current/undo/redo root without blocking the host event loop.
     /// Hosts await completion before normal parking; pending readbacks may need

@@ -338,6 +338,35 @@
         assert_eq!(budget.snapshot().ram_physical_bytes,physical);assert!(control.lock().unwrap().reads.is_empty());drop(drain);
     }
     #[test]
+    fn parking_a_drawing_releases_its_cached_ranges_once_its_held_reads_finish() {
+        use std::{future::Future,task::{Context,Poll,Waker}};
+        let directory=Directory::new();let cancel=AtomicBool::new(false);
+        let budget=crate::MemoryBudget::with_facts(crate::MemoryFacts {total_bytes:Some(1<<30),available_bytes:Some(1<<30),override_bytes:Some(1<<30),..Default::default()});
+        let cache=ReadCache::new(budget.clone());cache.set_scheduler(Arc::new(|_|{}));
+        let tiles=(0..3).map(|value|Arc::new(TileBlob::encode(RasterPlane::Color.descriptor(Default::default()),&vec![value;256*256*4]).unwrap())).collect::<Vec<_>>();
+        let expected=tiles.iter().map(|tile|tile.compressed_on_worker().unwrap().into_arc()).collect::<Vec<_>>();
+        let mut store=open_store(&directory.0).wait().unwrap();store.reads=cache.clone();
+        let parked=crate::raster_storage::RetainedTiles {sources:tiles.clone(),..Default::default()};
+        store.make_durable(&parked,&cancel).wait().unwrap();
+        let physical=||{cache.drive();budget.flush_reports();budget.snapshot().ram_physical_bytes};let idle=physical();
+        let cached=tiles[0].compressed_on_worker().unwrap().retained_bytes() as u64;
+        let held=tiles[1].compressed_on_worker().unwrap();let held_bytes=held.retained_bytes() as u64;
+        let control=control(&store);control.lock().unwrap().hold_reads=true;
+        let mut running=Box::pin(tiles[2].read_compressed());let mut context=Context::from_waker(Waker::noop());
+        assert!(running.as_mut().poll(&mut context).is_pending());cache.drive();
+        let (file,offset,length,crc,completion)=control.lock().unwrap().reads.pop_front().expect("one running tile read");
+        let reading=file.allocation_bytes(offset,length) as u64;
+        assert_eq!(physical(),idle+cached+held_bytes+reading);
+        parked.set_parked(true);
+        assert_eq!(physical(),idle+held_bytes+reading,"parking keeps only held and running reads");
+        file.read(offset,length,crc,completion);
+        let Poll::Ready(Ok(bytes))=running.as_mut().poll(&mut context) else {panic!("the running read completes after parking")};drop(running);
+        assert_eq!(&*held,&*expected[1]);assert_eq!(&*bytes,&*expected[2]);drop((held,bytes));
+        assert_eq!(physical(),idle,"a parked drawing holds no cached ranges");
+        control.lock().unwrap().hold_reads=false;drop(tiles[0].compressed_on_worker().unwrap());
+        assert_eq!(physical(),idle+cached,"reading a parked drawing again caches its ranges");
+    }
+    #[test]
     fn a_session_open_reads_its_resources_only_into_room_another_owner_has_released() {
         let directory=Directory::new();let cancel=AtomicBool::new(false);
         let mut document=Document::new(PortableId::random(),64,64,DocumentNames {paint:"Paint".into(),paper:"Paper".into()});

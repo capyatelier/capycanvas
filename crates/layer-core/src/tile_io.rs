@@ -2,7 +2,7 @@ use crate::{MemoryBudget, MemoryClass, MemoryOwner, MemoryOwnerKind, MemoryRepor
 use crate::package::{ByteRange, RangeState, MAX_RANGE_BYTES};
 use std::{collections::{BTreeSet,HashMap}, sync::{Arc, Mutex, OnceLock, Weak, atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}}, task::{Context, Poll, Waker}};
 
-pub const HOT_SET_BYTES: u64 = 256 * 1024 * 1024;
+const REUSE_ALLOWANCE_BYTES: u64 = 32 * 1024 * 1024;
 pub(crate) const QUEUED_READS: usize = 18;
 const ACTIVE_READS: usize = QUEUED_READS;
 const BUFFER_BYTES:u64=64*1024*1024;
@@ -76,6 +76,7 @@ struct Cache {
     scheduled: AtomicBool,
     pending_reads: AtomicUsize,
     physical: AtomicU64,
+    pinned: AtomicU64,
     expired: AtomicBool,
 }
 #[derive(Default)]
@@ -125,6 +126,7 @@ struct Entry {
     bounds:std::ops::RangeInclusive<usize>,
     reservation:usize,
     cold:Option<(u64,u64)>,
+    released:Arc<AtomicBool>,
 }
 impl Entry {
     fn bytes(&self)->usize {match &self.phase {Phase::Ready(bytes)=>bytes.retained_bytes(),Phase::Reading=>self.reservation,_=>0}}
@@ -135,7 +137,7 @@ impl Entry {
     fn working(&self)->bool {self.waiters.iter().any(|waiter|waiter.wake.is_some())}
 }
 enum Phase { Cold, Queued, Reading, Ready(ByteRange), Failed(String) }
-struct Source { id: u64, length: AtomicU64, reader: Arc<dyn RangeReader>, cache: ReadCache }
+struct Source { id: u64, length: AtomicU64, reader: Arc<dyn RangeReader>, cache: ReadCache, released: Arc<AtomicBool> }
 type ReadTask=(Arc<Source>,Key,Option<u32>,Option<Arc<[u8]>>);
 impl Drop for Source { fn drop(&mut self) { self.cache.0.expired.store(true,Ordering::Release);self.cache.schedule(); } }
 #[derive(Clone)]
@@ -151,12 +153,12 @@ impl std::fmt::Debug for Lease {
 impl Drop for Lease {
     fn drop(&mut self) {
         let cache=&self.source.cache;
-        let mut state=cache.0.state.lock().unwrap();
+        let mut state=cache.0.state.lock().unwrap();let mut released=false;
         if let Some(entry)=state.entries.get_mut(&self.key) {
             entry.leases-=1;
-            if entry.leases==0 && entry.waiters.is_empty() { state.pinned-=entry.bytes() as u64; }
+            if entry.leases==0 && entry.waiters.is_empty() { released=cache.expire_released(entry);state.pinned-=entry.bytes() as u64; }
         }
-        let drive=state.physical>cache.limit_bytes() || !state.queued.is_empty() || !state.cold.is_empty();cache.publish(&state);drop(state);if drive {cache.schedule();}
+        let drive=released || state.physical>cache.limit(state.pinned) || !state.queued.is_empty() || !state.cold.is_empty();cache.publish(&state);drop(state);if drive {cache.schedule();}
     }
 }
 
@@ -192,8 +194,8 @@ impl Drop for ReadCompletion {
 impl ReadCache {
     pub fn new(budget: MemoryBudget) -> Self {
         let owner=budget.register_owner(MemoryOwnerKind::Other,MemoryClass::Warm,None);
-        owner.report(MemoryReport {demand_ram_bytes:HOT_SET_BYTES,..Default::default()});
-        let cache=Self(Arc::new(Cache {owner,state:Default::default(),scheduler:Default::default(),scheduled:AtomicBool::new(false),pending_reads:AtomicUsize::new(0),physical:AtomicU64::new(0),expired:AtomicBool::new(false),
+        owner.report(Self::report(&State::default()));
+        let cache=Self(Arc::new(Cache {owner,state:Default::default(),scheduler:Default::default(),scheduled:AtomicBool::new(false),pending_reads:AtomicUsize::new(0),physical:AtomicU64::new(0),pinned:AtomicU64::new(0),expired:AtomicBool::new(false),
             #[cfg(not(target_arch="wasm32"))] changed:Default::default()}));
         let weak=Arc::downgrade(&cache.0);
         cache.0.owner.set_wake(Arc::new(move || {if let Some(cache)=weak.upgrade() {let cache=ReadCache(cache);if cache.has_pending_reads() || cache.0.physical.load(Ordering::Acquire)>cache.limit_bytes() {cache.schedule();}}}));
@@ -205,15 +207,17 @@ impl ReadCache {
     }
     pub fn source(&self, length: u64, reader: Arc<dyn RangeReader>) -> ReadSource {
         static NEXT: AtomicU64=AtomicU64::new(1);
-        ReadSource(Arc::new(Source {id:NEXT.fetch_add(1,Ordering::Relaxed),length:AtomicU64::new(length),reader,cache:self.clone()}))
+        ReadSource(Arc::new(Source {id:NEXT.fetch_add(1,Ordering::Relaxed),length:AtomicU64::new(length),reader,cache:self.clone(),released:Default::default()}))
     }
     pub fn set_scheduler(&self, scheduler: Arc<dyn Fn(ReadCache) + Send + Sync>) {let _=self.0.scheduler.set(scheduler);self.0.scheduled.store(false,Ordering::Release);self.schedule();}
     pub fn has_pending_reads(&self)->bool {self.0.pending_reads.load(Ordering::Acquire)!=0}
-    pub fn limit_bytes(&self) -> u64 {self.0.owner.grant().ram_bytes.min(HOT_SET_BYTES)}
+    pub fn limit_bytes(&self) -> u64 {self.limit(self.0.pinned.load(Ordering::Acquire))}
+    fn limit(&self,pinned:u64)->u64 {self.0.owner.grant().ram_bytes.min(pinned.saturating_add(REUSE_ALLOWANCE_BYTES))}
+    fn expire_released(&self,entry:&Entry)->bool {let released=entry.released.load(Ordering::Acquire);if released {self.0.expired.store(true,Ordering::Release);}released}
     fn report(state: &State) -> MemoryReport {
-        MemoryReport {ram_bytes:state.physical,pinned_ram_bytes:state.pinned,demand_ram_bytes:HOT_SET_BYTES,..Default::default()}
+        MemoryReport {ram_bytes:state.physical,pinned_ram_bytes:state.pinned,demand_ram_bytes:state.pinned.saturating_add(REUSE_ALLOWANCE_BYTES),..Default::default()}
     }
-    fn publish(&self, state: &State) {self.0.pending_reads.store(state.queued.len()+state.running.len(),Ordering::Release);self.0.physical.store(state.physical,Ordering::Release);self.0.owner.publish(Self::report(state));}
+    fn publish(&self, state: &State) {self.0.pending_reads.store(state.queued.len()+state.running.len(),Ordering::Release);self.0.physical.store(state.physical,Ordering::Release);self.0.pinned.store(state.pinned,Ordering::Release);self.0.owner.publish(Self::report(state));}
     fn schedule(&self) {
         if self.0.scheduled.swap(true,Ordering::AcqRel) {return;}
         if let Some(schedule)=self.0.scheduler.get() {schedule(self.clone());return;}
@@ -228,14 +232,14 @@ impl ReadCache {
             retired.push(ByteRange::whole(bytes));
         }
         if expired {
-            let dead=state.entries.iter().filter(|(_,entry)|entry.source.strong_count()==0 && entry.leases==0 && entry.waiters.is_empty() && !matches!(entry.phase,Phase::Reading))
-                .map(|(&key,_)|key).collect::<Vec<_>>();
+            let dead=state.entries.iter().filter(|(_,entry)|entry.leases==0 && entry.waiters.is_empty() && if entry.source.strong_count()==0 {!matches!(entry.phase,Phase::Reading)}
+                else {entry.released.load(Ordering::Acquire) && matches!(entry.phase,Phase::Ready(_))}).map(|(&key,_)|key).collect::<Vec<_>>();
             for key in dead {
                 state.retire(&key,&mut retired);
             }
         }
         if state.physical<=limit {return retired;}
-        let target=limit-limit/8;
+        let target=limit-limit.saturating_sub(state.pinned)/8;
         let mut candidates=state.entries.iter().filter(|(_,entry)|entry.leases==0 && entry.waiters.is_empty() && matches!(entry.phase,Phase::Ready(_)))
             .map(|(&key,entry)|(entry.used,key)).collect::<Vec<_>>();
         candidates.sort_unstable_by_key(|(used,_)|*used);
@@ -253,7 +257,7 @@ impl ReadCache {
         let room=Self::pool_room(&state);
         for bytes in retired {
             let bytes=bytes.allocation();let length=bytes.len() as u64;
-            if Arc::strong_count(&bytes)==1 && Arc::weak_count(&bytes)==0 && bytes.len()==buffer_class(bytes.len()) && state.pooled+length<=room && state.physical+length<=self.limit_bytes() {
+            if Arc::strong_count(&bytes)==1 && Arc::weak_count(&bytes)==0 && bytes.len()==buffer_class(bytes.len()) && state.pooled+length<=room && state.physical+length<=self.limit(state.pinned) {
                 state.pooled+=length;state.physical+=length;state.buffers.entry(bytes.len()).or_default().push(bytes);
             }else{discarded.push(bytes);}
         }
@@ -265,7 +269,7 @@ impl ReadCache {
     fn ready(&self, state: &mut State, key: Key, source: &Arc<Source>, crc:Option<u32>) -> Result<RangeState,String> {
         state.clock=state.clock.saturating_add(1);
         let queued=state.queued.len();
-        let entry=state.entries.entry(key).or_insert_with(||Entry {source:Arc::downgrade(source),phase:Phase::Cold,used:state.clock,leases:0,waiters:Vec::new(),crc,bounds:source.reader.result_bounds(key.1,key.2),reservation:source.reader.allocation_bytes(key.1,key.2),cold:None});
+        let entry=state.entries.entry(key).or_insert_with(||Entry {source:Arc::downgrade(source),phase:Phase::Cold,used:state.clock,leases:0,waiters:Vec::new(),crc,bounds:source.reader.result_bounds(key.1,key.2),reservation:source.reader.allocation_bytes(key.1,key.2),cold:None,released:source.released.clone()});
         if crc.is_some() && entry.crc!=crc {return Err("Conflicting immutable range checksum".into());}
         match &entry.phase {
             Phase::Ready(bytes)=>{
@@ -290,10 +294,12 @@ impl ReadCache {
     }
     fn complete(&self, key: Key, result: Result<ByteRange,String>) {
         let mut state=self.0.state.lock().unwrap();
-        let entry=state.entries.get_mut(&key).unwrap();
+        state.clock=state.clock.saturating_add(1);let used=state.clock;
+        let entry=state.entries.get_mut(&key).unwrap();entry.used=used;
         let result=result.and_then(|bytes|if entry.bounds.contains(&bytes.len()) && bytes.len()<=MAX_RANGE_BYTES {Ok(bytes)}else{Err("Incomplete tile read".into())});
         let reserved=entry.bytes() as u64;
         let pinned=entry.leases>0 || !entry.waiters.is_empty();
+        let released=!pinned && self.expire_released(entry);
         let wakers=entry.waiters.iter().filter_map(|waiter|waiter.wake.clone()).collect::<Vec<_>>();
         entry.phase=match result {Ok(bytes)=>Phase::Ready(bytes),Err(error)=>Phase::Failed(error)};
         let actual=entry.bytes() as u64;
@@ -302,14 +308,14 @@ impl ReadCache {
         state.pinned=state.pinned-reserved+if pinned {actual}else {0};
         self.publish(&state);
         #[cfg(not(target_arch="wasm32"))] self.0.changed.notify_all();
-        let drive=!state.queued.is_empty() || state.physical>self.limit_bytes();
+        let drive=released || !state.queued.is_empty() || state.physical>self.limit(state.pinned);
         drop(state);
         for wake in wakers {wake.wake();}
         if drive {self.schedule();}
     }
     fn take_read(&self,state:&mut State)->(Option<ReadTask>,Vec<ByteRange>) {
         let expired=self.0.expired.swap(false,Ordering::AcqRel);
-        let mut retired=if expired || state.physical>self.limit_bytes() {self.trim(state,self.limit_bytes(),expired)}else{Vec::new()};
+        let mut retired=if expired || state.physical>self.limit(state.pinned) {self.trim(state,self.limit(state.pinned),expired)}else{Vec::new()};
         let task=loop {
             while state.queued.len()<QUEUED_READS {
                 let Some((_,_,key))=state.cold.pop_first() else {break;};
@@ -324,7 +330,7 @@ impl ReadCache {
             let key=state.queued[index];
             let Some(source)=state.entries[&key].source.upgrade() else {state.retire(&key,&mut retired);continue;};
             let bytes=state.entries[&key].reservation as u64;
-            let limit=if state.entries[&key].working() {self.limit_bytes().max(state.pinned.saturating_add(bytes))}else{self.limit_bytes()};
+            let limit=if state.entries[&key].working() {self.limit(state.pinned).max(state.pinned.saturating_add(bytes))}else{self.limit(state.pinned)};
             retired.extend(self.trim(state,limit.saturating_sub(bytes),false));
             if state.physical.saturating_add(bytes)>limit {break None;}
             state.queued.swap_remove(index);
@@ -380,7 +386,7 @@ impl ReadSource {
     pub fn poll_checked(&self,offset:u64,length:usize,crc:u32)->Result<RangeState,String> {self.poll_range(offset,length,Some(crc))}
     fn poll_range(&self,offset:u64,length:usize,crc:Option<u32>)->Result<RangeState,String> {
         if length==0 {self.key(offset,length)?;return Ok(RangeState::Ready(ByteRange::new(Arc::from([]),0..0)?));}
-        let key=self.key(offset,length)?;
+        let key=self.key(offset,length)?;self.0.released.store(false,Ordering::Release);
         let mut state=self.0.cache.0.state.lock().unwrap();let queued=state.queued.len();
         let result=self.0.cache.ready(&mut state,key,&self.0,crc);
         let changed=state.queued.len()>queued;
@@ -394,17 +400,20 @@ impl ReadSource {
         self.0.cache.publish(&state);
         drop(state);self.0.cache.recycle(retired);
     }
+    pub(crate) fn release(&self) {
+        if !self.0.released.swap(true,Ordering::AcqRel) {self.0.cache.0.expired.store(true,Ordering::Release);self.0.cache.schedule();}
+    }
     pub fn wait(&self,offset:u64,length:usize)->Result<ReadWait,String> {self.wait_range(offset,length,None)}
     pub(crate) fn wait_checked(&self,offset:u64,length:usize,crc:u32)->Result<ReadWait,String> {self.wait_range(offset,length,Some(crc))}
     fn wait_range(&self,offset:u64,length:usize,crc:Option<u32>)->Result<ReadWait,String> {
-        let key=self.key(offset,length)?;
+        let key=self.key(offset,length)?;self.0.released.store(false,Ordering::Release);
         static NEXT:AtomicU64=AtomicU64::new(1);
         let id=NEXT.fetch_add(1,Ordering::Relaxed);
         let mut state=self.0.cache.0.state.lock().unwrap();
         let existed=state.entries.get(&key).is_some_and(|entry|entry.leases>0 || !entry.waiters.is_empty());
         let ready=state.entries.get(&key).is_some_and(|entry|matches!(entry.phase,Phase::Ready(_)));
         state.clock+=1;let used=state.clock;
-        let entry=state.entries.entry(key).or_insert_with(||Entry {source:Arc::downgrade(&self.0),phase:Phase::Cold,used,leases:0,waiters:Vec::new(),crc,bounds:self.0.reader.result_bounds(offset,length),reservation:self.0.reader.allocation_bytes(offset,length),cold:None});
+        let entry=state.entries.entry(key).or_insert_with(||Entry {source:Arc::downgrade(&self.0),phase:Phase::Cold,used,leases:0,waiters:Vec::new(),crc,bounds:self.0.reader.result_bounds(offset,length),reservation:self.0.reader.allocation_bytes(offset,length),cold:None,released:self.0.released.clone()});
         entry.waiters.push(Waiter {id,wake:None,distance_squared:0});let bytes=entry.bytes() as u64;
         state.rank(key);
         if ready && !existed {state.pinned+=bytes;}
@@ -489,15 +498,16 @@ impl std::future::Future for ReadWait {
 impl Drop for ReadWait {
     fn drop(&mut self) {
         let cache=&self.source.0.cache;
-        let mut state=cache.0.state.lock().unwrap();
+        let mut state=cache.0.state.lock().unwrap();let mut released=false;
         if let Some(entry)=state.entries.get_mut(&self.key) {
             entry.waiters.retain(|waiter|waiter.id!=self.id);
             let unpinned=if entry.leases==0 && entry.waiters.is_empty() && matches!(entry.phase,Phase::Ready(_)) {entry.bytes() as u64}else{0};
             let refused=entry.waiters.is_empty() && matches!(&entry.phase,Phase::Failed(error) if error==crate::MEMORY_BUDGET_EXCEEDED);
+            released=unpinned>0 && cache.expire_released(entry);
             state.pinned-=unpinned;state.rank(self.key);
             if refused {state.remove(&self.key);}
         }
-        let drive=state.physical>cache.limit_bytes() || !state.queued.is_empty() || !state.cold.is_empty();cache.publish(&state);drop(state);if drive {cache.schedule();}
+        let drive=released || state.physical>cache.limit(state.pinned) || !state.queued.is_empty() || !state.cold.is_empty();cache.publish(&state);drop(state);if drive {cache.schedule();}
     }
 }
 
@@ -549,7 +559,7 @@ mod tests {
     fn setup()->(MemoryBudget,ReadCache,Arc<Controlled>,ReadSource) {
         let budget=MemoryBudget::with_facts(crate::MemoryFacts {total_bytes:Some(1<<40),available_bytes:Some(1<<40),override_bytes:Some(1<<40),..Default::default()});
         let cache=ReadCache::new(budget.clone());cache.set_scheduler(Arc::new(|_|{}));
-        let reader=Arc::new(Controlled::default());let source=cache.source(2*HOT_SET_BYTES,reader.clone());
+        let reader=Arc::new(Controlled::default());let source=cache.source(1<<40,reader.clone());
         (budget,cache,reader,source)
     }
     #[test]
@@ -970,21 +980,61 @@ mod tests {
         assert!(pending);assert!(registered>0 && registered<=QUEUED_READS,"registered {registered} tile ranges");
     }
     #[test]
-    fn a_terabyte_budget_keeps_the_hot_set_demand_at_256_mib() {
+    fn a_drained_open_keeps_only_its_held_reads_and_the_reuse_allowance() {
+        const RANGE:usize=1<<20;
         let (budget,cache,reader,source)=setup();
-        assert_eq!(cache.limit_bytes(),HOT_SET_BYTES);
-        for index in 0..32 {
-            let offset=index*1024;
-            assert!(matches!(source.poll(offset,1024).unwrap(),RangeState::Pending));
+        let opened=(2*REUSE_ALLOWANCE_BYTES) as usize/RANGE+8;
+        let mut context=Context::from_waker(Waker::noop());
+        let mut leases=(0..opened).map(|index| {
+            let mut wait=Box::pin(source.wait((index*RANGE) as u64,RANGE).unwrap());
+            assert!(std::future::Future::poll(wait.as_mut(),&mut context).is_pending());
             cache.drive_inner();reader.finish(index as u8);
-            let RangeState::Ready(bytes)=source.poll(offset,1024).unwrap() else {panic!("completed range")};
-            assert!(bytes.iter().all(|byte|*byte==index as u8));drop(bytes);
-            budget.flush_reports();
-            assert_eq!(cache.limit_bytes(),HOT_SET_BYTES);
-            assert_eq!(cache.0.owner.reported().demand_ram_bytes,HOT_SET_BYTES);
-        }
-        assert_eq!(cache.0.owner.reported().pinned_ram_bytes,0);
-        assert_eq!(reader.calls.load(Ordering::Relaxed),32);
+            let Poll::Ready(Ok(bytes))=std::future::Future::poll(wait.as_mut(),&mut context) else {panic!("opened range")};bytes
+        }).collect::<Vec<_>>();
+        let mut running=Box::pin(source.wait((opened*RANGE) as u64,RANGE).unwrap());
+        assert!(std::future::Future::poll(running.as_mut(),&mut context).is_pending());cache.drive_inner();
+        budget.flush_reports();cache.drive_inner();
+        let held=leases.pop().unwrap();drop(leases);
+        assert!(cache.0.scheduled.load(Ordering::Acquire),"draining the open's leases schedules a trim");
+        cache.drive_inner();
+        let (physical,pinned)={let state=cache.0.state.lock().unwrap();(state.physical,state.pinned)};
+        assert_eq!(pinned,2*RANGE as u64,"the held lease and the running read stay pinned");
+        assert!(physical<=pinned+REUSE_ALLOWANCE_BYTES,"{physical} bytes stay after the open drained");
+        assert!(held.iter().all(|byte|*byte==(opened-1) as u8));
+        reader.finish(opened as u8);
+        let Poll::Ready(Ok(bytes))=std::future::Future::poll(running.as_mut(),&mut context) else {panic!("the running read survives the trim")};
+        assert!(bytes.iter().all(|byte|*byte==opened as u8));
+        drop((running,bytes,held));cache.drive_inner();budget.flush_reports();
+        let reported=cache.0.owner.reported();
+        assert!(!cache.has_pending_reads());assert_eq!(reported.pinned_ram_bytes,0);
+        assert!(reported.ram_bytes<=REUSE_ALLOWANCE_BYTES);assert_eq!(reported.demand_ram_bytes,REUSE_ALLOWANCE_BYTES);
+    }
+    #[test]
+    fn a_trim_under_held_reads_keeps_the_allowance_and_prefers_just_completed_ranges() {
+        const RANGE:usize=1<<20;
+        let (budget,cache,reader,source)=setup();
+        let complete=|offset:u64| {
+            let (_,length,done)={let mut requests=reader.requests.lock().unwrap();let index=requests.iter().position(|(at,_,_)|*at==offset).unwrap();requests.remove(index).unwrap()};
+            done.complete(Ok(read_buffer(length)));
+        };
+        let read=|index:usize| {
+            let offset=(index*RANGE) as u64;let mut context=Context::from_waker(Waker::noop());
+            let mut wait=Box::pin(source.wait(offset,RANGE).unwrap());
+            assert!(std::future::Future::poll(wait.as_mut(),&mut context).is_pending());cache.drive_inner();complete(offset);
+            let Poll::Ready(Ok(bytes))=std::future::Future::poll(wait.as_mut(),&mut context) else {panic!("completed range")};bytes
+        };
+        let held=(1..=192).map(read).collect::<Vec<_>>();
+        budget.flush_reports();
+        for index in 193..233 {drop(read(index));}
+        let (pinned,unleased)={let state=cache.0.state.lock().unwrap();(state.pinned,state.physical-state.pinned)};
+        drop(held);source.evict();budget.flush_reports();
+        assert!(matches!(source.poll(0,RANGE).unwrap(),RangeState::Pending));cache.drive_inner();
+        for index in 233..263 {drop(read(index));}
+        complete(0);
+        for index in 263..269 {drop(read(index));}
+        let cached=source.cached(0,RANGE as u64);
+        let margin=REUSE_ALLOWANCE_BYTES-REUSE_ALLOWANCE_BYTES/8-RANGE as u64..=REUSE_ALLOWANCE_BYTES;
+        assert!(margin.contains(&unleased) && cached,"{} MiB pinned keep {unleased} unleased bytes; a just-completed range survives a later trim: {cached}",pinned>>20);
     }
     #[test]
     fn transformed_ranges_charge_the_result_size_and_keep_it_pinned_until_consumed() {

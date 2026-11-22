@@ -49,7 +49,6 @@ impl WeakPackageLease {pub(crate) fn upgrade(&self)->Option<PackageLease> {self.
 struct Lease {generation:crate::PortableId,backing:ImmutableBacking,reads:ReadSource,ranges:Arc<Mutex<BTreeMap<(u64,usize),Arc<PackageIdentity>>>>}
 impl PackageLease {
     pub fn new(backing:ImmutableBacking)->Self {backing.package_lease()}
-    #[cfg(test)]
     pub(crate) fn read_source(&self)->&ReadSource {&self.0.reads}
     pub(crate) fn downgrade(&self)->WeakPackageLease {WeakPackageLease(Arc::downgrade(&self.0))}
     pub(crate) fn create(backing:ImmutableBacking,generation:crate::PortableId)->Self {
@@ -90,6 +89,7 @@ impl PackageRange {
         if self.identity.canonical.get_or_init(||integrity)!=&integrity {return Err("Conflicting package normalization integrity".into());}Ok(())
     }
     pub(crate) fn backing_owner(&self)->(u64,usize) {self.identity.backing_owner()}
+    pub(crate) fn read_source(&self)->&ReadSource {self.lease.read_source()}
     pub(crate) fn healthy(&self)->Result<(),String> {self.lease.0.backing.healthy()}
     pub(crate) fn fail(&self,error:String)->String {self.lease.0.backing.fail(error)}
     pub(crate) fn poll(&self)->Result<RangeState,String> {
