@@ -24,5 +24,5 @@ fn project(@builtin(global_invocation_id) id: vec3<u32>) {
     if projection.source_perceptual != 0u {color = sdr_decode(color, projection.source_space);}
     color = vec3(dot(projection.row0.xyz, color), dot(projection.row1.xyz, color), dot(projection.row2.xyz, color));
     if projection.output_perceptual != 0u {color = sdr_encode(color, WORKING_SPACE);}
-    textureStore(output, vec2<i32>(projection.origin + id.xy), vec4(color * value.a, value.a));
+    textureStore(output, vec2<i32>(projection.origin + id.xy), display_value(vec4(color * value.a, value.a)));
 }

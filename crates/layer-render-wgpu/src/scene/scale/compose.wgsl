@@ -25,15 +25,15 @@ fn compose(@builtin(global_invocation_id) id: vec3<u32>) {
     if (region.flags & 1024u) != 0u { color = working_encode(color); }
     if region.opacity.x!=1. {color *= region.opacity.x;}
     if (region.flags & 4096u) != 0u {
-        textureStore(output, p, working_decode(color));
+        textureStore(output, p, display_value(working_decode(color)));
         return;
     }
     if (region.flags & 128u) != 0u {
-        textureStore(output, p, color + below);
+        textureStore(output, p, display_value(color + below));
         return;
     }
     if (region.flags & 32u) != 0u {
-        textureStore(output, p, color * below.a);
+        textureStore(output, p, display_value(color * below.a));
         return;
     }
     if (region.flags & 64u) != 0u {
@@ -43,8 +43,8 @@ fn compose(@builtin(global_invocation_id) id: vec3<u32>) {
     let mode = u32(region.opacity.y);
     let clipped = (region.flags & 16u) != 0u;
     if mode == 0u && !clipped {
-        textureStore(output, p, color + below * (1. - color.a));
+        textureStore(output, p, display_value(color + below * (1. - color.a)));
         return;
     }
-    textureStore(output, p, blend_layer(color, below, mode, clipped));
+    textureStore(output, p, display_value(blend_layer(color, below, mode, clipped)));
 }

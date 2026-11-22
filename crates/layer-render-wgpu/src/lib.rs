@@ -128,6 +128,8 @@ mod layer_masks;
 #[cfg(test)]
 mod layer_tests;
 #[cfg(test)]
+mod delivered_pixel_tests;
+#[cfg(test)]
 mod cold_camera_storm;
 mod frame_demand;
 mod schedule;

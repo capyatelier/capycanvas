@@ -93,9 +93,14 @@ pub(crate) struct OutputPipelines {
     pub compose: Deferred<wgpu::ComputePipeline>,
     pub project: Deferred<wgpu::ComputePipeline>,
 }
+fn half_output(source:std::borrow::Cow<'static,str>,format:wgpu::TextureFormat)->String {
+    if format!=wgpu::TextureFormat::Rgba16Float {return source.into_owned();}
+    source.replace("texture_storage_2d<rgba32float","texture_storage_2d<rgba16float")
+        .replace("fn display_value(value: vec4<f32>) -> vec4<f32> { return value; }","fn display_value(value: vec4<f32>) -> vec4<f32> { return half_nearest(value); }")
+}
 fn shader_source(space:layer_core::color::RgbSpace,sampling:&str)->std::borrow::Cow<'static,str> {
     compose_wgsl(&[&working_color::source(space),sampling,include_str!("../blend_codes.wgsl"),
-        include_str!("../blend_modes.wgsl"),include_str!("scale.wgsl"),include_str!("scale/compose.wgsl")])
+        include_str!("../blend_modes.wgsl"),include_str!("../display_mips/half.wgsl"),include_str!("scale.wgsl"),include_str!("scale/compose.wgsl")])
 }
 impl Pipelines {
     pub fn new(device:&PipelineDevice)->Self {
@@ -115,11 +120,10 @@ impl Pipelines {
                 label:Some("display resolution composition"),bind_group_layouts:&[Some(&records),Some(&inputs)],immediate_size:0,
             });
             let source=shader_source(device.working_space(),device.float_sampling_wgsl());
-            let source=match format {wgpu::TextureFormat::Rgba16Float=>source.replace("texture_storage_2d<rgba32float","texture_storage_2d<rgba16float"),_=>source.into_owned()};
+            let source=half_output(source,format);
             let shader=Deferred::wgsl(device,"display resolution composition",source);
             let kernel=|entry|Deferred::compute(device,"display resolution composition",&layout,&shader,entry);
-            let source=compose_wgsl(&[&working_color::source(device.working_space()),include_str!("scale/project.wgsl")]);
-            let source=match format {wgpu::TextureFormat::Rgba16Float=>source.replace("texture_storage_2d<rgba32float","texture_storage_2d<rgba16float"),_=>source.into_owned()};
+            let source=half_output(compose_wgsl(&[&working_color::source(device.working_space()),include_str!("../display_mips/half.wgsl"),include_str!("scale/project.wgsl")]),format);
             let projection=Deferred::wgsl(device,"retained page projection",source);
             let project=Deferred::compute(device,"retained page projection",&layout,&projection,"project");
             OutputPipelines {inputs,reduce:kernel("reduce"),reduce_phased:kernel("reduce_phased"),reduce_pair:kernel("reduce_pair"),compose:kernel("compose"),project}

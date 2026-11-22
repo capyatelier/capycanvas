@@ -23,7 +23,7 @@ struct Region {
 fn reduce(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id.xy >= region.size) { return; }
     if (region.flags & 4u) != 0u {
-        textureStore(output, vec2<i32>(region.origin + id.xy), region.paper);
+        textureStore(output, vec2<i32>(region.origin + id.xy), display_value(region.paper));
         return;
     }
     let start = vec2<u32>(vec2<i32>((id.xy + select(vec2<u32>(0u), region.origin, (region.flags & 8u) != 0u)) * region.side) - vec2<i32>(region.opacity.zw));
@@ -46,7 +46,7 @@ fn reduce(@builtin(global_invocation_id) id: vec3<u32>) {
                 sum += value;
             }
         }
-        textureStore(output, vec2<i32>(region.origin + id.xy), sum * (4. / f32(region.side * region.side)));
+        textureStore(output, vec2<i32>(region.origin + id.xy), display_value(sum * (4. / f32(region.side * region.side))));
         return;
     }
     var sum = vec4<f32>(0.);
@@ -77,7 +77,7 @@ fn reduce(@builtin(global_invocation_id) id: vec3<u32>) {
             weight += count;
         }
     }
-    textureStore(output, vec2<i32>(region.origin + id.xy), sum / f32(weight));
+    textureStore(output, vec2<i32>(region.origin + id.xy), display_value(sum / f32(weight)));
 }
 
 fn phased_load(page: u32, texel: vec2<i32>) -> vec4<f32> {
@@ -141,7 +141,7 @@ fn reduce_phased(@builtin(global_invocation_id) id: vec3<u32>) {
         }
         count = f32(units.x * units.y);
     }
-    textureStore(output, vec2<i32>(region.origin + texel), sum / count);
+    textureStore(output, vec2<i32>(region.origin + texel), display_value(sum / count));
 }
 
 @compute @workgroup_size(8, 8)
@@ -159,5 +159,5 @@ fn reduce_pair(@builtin(global_invocation_id) id: vec3<u32>) {
         + textureLoad(source, p + vec2(1, 0), 0) * weight.y
         + textureLoad(source, p + vec2(0, 1), 0) * weight.z
         + textureLoad(source, p + vec2(1, 1), 0) * weight.w;
-    textureStore(output, vec2<i32>(dst), sum / f32(footprint.x * footprint.y));
+    textureStore(output, vec2<i32>(dst), display_value(sum / f32(footprint.x * footprint.y)));
 }
