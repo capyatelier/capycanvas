@@ -353,12 +353,13 @@ impl WgpuRasterizer {
         self.memory.invalidate_limits();self.publish_memory();
         if let Some(wake)=&self.preparation_wake {wake();}
     }
-    pub(crate) fn admit_raster_window(&mut self,least:u64,most:u64,reserve:u64)->Result<crate::residency::Reservation,crate::residency::Blocked> {
+    pub(crate) fn admit_capture_window(&mut self,least:u64,most:u64,reserve:u64)->crate::residency::Reservation {
         let (wanted,raster)=(most.saturating_add(reserve),&self.raster_tiers.raster);
         let room=raster.limit().saturating_sub(raster.used());
-        let mut reservation=self.admit_raster_working(if wanted<=room {wanted}else {room.max(least.saturating_add(reserve))})?;
-        drop(reservation.split(reserve));
-        Ok(reservation)
+        match self.admit_raster_working(if wanted<=room {wanted}else {room.max(least.saturating_add(reserve))}) {
+            Ok(mut reservation)=>{drop(reservation.split(reserve));reservation},
+            Err(_)=>{self.end_lane_wait();self.raster_tiers.admitted.wanting(crate::residency::Class::Authored,least).overcommit()},
+        }
     }
     pub(crate) fn commit_raster_working(&mut self,reservation:crate::residency::Reservation) {
         drop(reservation);self.sync_raster_report();

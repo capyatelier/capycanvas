@@ -1385,7 +1385,10 @@ the drawing keeps its last submitted pixels, the person is told once, and the
 input queued behind the frame is consumed in order. GTK's render thread drops
 the refused frame and the frames queued behind it, counts the refusal in its
 frame report, and the engine handles it at its next poll like a refused
-submission. Requested mips pin their roots and in-flight work.
+submission. The capture of committed pages never waits for room: when the lane
+cannot admit even its smallest window, one tile with the comparison status of
+the capture, it takes that window past the limit, because only the capture can
+unpin those pages and each window returns its bytes when it lands. Requested mips pin their roots and in-flight work.
 Idle after-present trims release unused storage against the grants.
 Each memory sample charges the allocator's reserved block capacity beyond the
 owners' bytes to the device, so free space kept in allocator blocks counts as
