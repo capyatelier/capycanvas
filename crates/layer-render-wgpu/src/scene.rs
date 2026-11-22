@@ -1029,7 +1029,7 @@ impl Scene {
                 Self::submit_source_uploads(r, encoder, Class::Authored)?;
             }
             let samples = request.blob.decode_on_worker().map_err(GpuRasterError::Color)?;
-            crate::native_tiles::scalar::upload_coverage(r, encoder, request.working, request.blob.descriptor.depth(), &samples, 1, Class::Authored)?;
+            crate::native_tiles::scalar::upload_coverage(r, encoder, request.working, request.blob.descriptor.depth(), &samples, Class::Authored)?;
         }
         Ok(())
     }

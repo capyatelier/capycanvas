@@ -318,12 +318,12 @@ impl TargetRestore {
             if key.plane==RasterPlane::Mask {
                 let page=&mut self.pages.masks.iter_mut().find(|(c,_)|*c==key.coordinate).unwrap().1;
                 let receipt=encoder.submission();let write=page.initialize(&receipt)?;
-                native_tiles::scalar::upload_coverage(r,encoder,&write.value().texture,blob.descriptor.depth(),&samples,4,crate::residency::Class::Authored)?;
+                native_tiles::scalar::upload_coverage(r,encoder,&write.value().texture,blob.descriptor.depth(),&samples,crate::residency::Class::Authored)?;
                 write.publish(tile.content_version());
             } else {
                 let page=self.pages.wetness.iter_mut().find(|page|page.coordinate==key.coordinate).unwrap();
                 let receipt=encoder.submission();let write=page.primary.initialize(&receipt).ok_or(GpuRasterError::Invariant("prepared output was already initialized"))?;
-                native_tiles::scalar::upload_coverage(r,encoder,&write.value().texture,blob.descriptor.depth(),&samples,4,crate::residency::Class::Authored)?;
+                native_tiles::scalar::upload_coverage(r,encoder,&write.value().texture,blob.descriptor.depth(),&samples,crate::residency::Class::Authored)?;
                 write.publish(tile.content_version());page.primary_needs_clear=false;
             }
             self.next+=1;

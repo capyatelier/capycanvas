@@ -26,6 +26,9 @@ impl AcceptedInputs {
 }
 impl DecodedTiles {
     pub(crate) fn allocated_slots(&self)->usize {self.slots.len()}
+    pub(crate) fn valid_slot_formats(&self)->Vec<wgpu::TextureFormat> {
+        self.slots.iter().filter(|slot|slot.valid.load(Ordering::Acquire)).map(|slot|slot.layer.format()).collect()
+    }
     pub(crate) fn leased_bytes(&self)->u64 {self.leased.used()}
     pub(in crate::scene) fn plan(
         &mut self,

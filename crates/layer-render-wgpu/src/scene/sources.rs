@@ -316,9 +316,8 @@ impl Inputs {
         self.raster_for(blob,space,destination,SourceUse::Exact);
     }
     pub(crate) fn raster_for(&mut self,blob:Arc<TileBlob>,space:RgbSpace,destination:RgbSpace,use_:SourceUse) {
-        let mut color=rgb_settings(space,destination,blob.descriptor.depth(),[PAGE_SIZE;2],blob.descriptor.alpha);
-        color.scalar=u32::from(blob.descriptor.channels==1);color.scalar_scale=if color.scalar!=0 {1./blob.descriptor.depth().maximum() as f32}else {0.};
-        let use_=if folds_natively(blob.descriptor,space,destination) {use_}else {SourceUse::Exact};
+        let color=raster_settings(blob.descriptor,space,destination);
+        let use_=if folds_natively(blob.descriptor,space,destination) || crate::object_image_mips::native_scalar(blob.descriptor) {use_}else {SourceUse::Exact};
         self.insert_for(Key::raster(&blob,space,destination),Some(color),Some(Pixels::Raster(blob,space,destination)),use_);
     }
     fn require_exact(&mut self,address:Address) {
@@ -420,7 +419,7 @@ impl Inputs {
             if let Some(tile)=data.tiles.get(&layer_core::raster::TileKey {plane:RasterPlane::Mask,coordinate}) {
                 if tile.content_version().matches(&r.mask_version(id,source,coordinate)?)!=Some(true) {return Err(GpuRasterError::NotReady);}
                 let blob=tile.try_backing().ok_or(GpuRasterError::NotPublished)?.map_err(GpuRasterError::Effect)?;
-                let space=r.document_color().space;let key=Key::raster(&blob,space,space);self.raster(blob,space,space);Some(Selected::Decoded(key))
+                let space=r.document_color().space;let key=Key::raster(&blob,space,space);self.raster_for(blob,space,space,SourceUse::Native);Some(Selected::Decoded(key))
             }else {None}
         };
         self.decisions.insert((id,RasterPlane::Mask,coordinate),false,[input,None])
@@ -433,7 +432,7 @@ impl Inputs {
             .and_then(|layer|layer.watercolor_wetness_pages.iter().find(|page|page.coordinate==coordinate)));
         let resident=page.map(|page|r.read_scene_wetness_input(scene,id,page,predicted.is_some(),wanted,consumer))
             .transpose()?.flatten().map(Selected::resident);
-        let input=match resident {Some(read)=>Some(read),None=>self.fallback(r,scene,id,plane,coordinate,SourceUse::Exact)?};
+        let input=match resident {Some(read)=>Some(read),None=>self.fallback(r,scene,id,plane,coordinate,SourceUse::Native)?};
         self.decisions.insert((id,plane,coordinate),false,[input,None])
     }
     pub(crate) fn stored(&self)->usize {self.tiles.iter().filter(|(_,_,pixels,_)|pixels.is_some()).count()}
@@ -582,8 +581,9 @@ impl Key {
                 if source.interpretation.channels == SourceChannels::Cmyk || source.interpretation.depth.is_float() { return None; }
                 Some(Samples { data: builtin_settings(&source, *coordinate, destination)?, space })
             }
-            Self::Raster(_, space, destination, descriptor) if descriptor.channels > 1 && !descriptor.depth().is_float() => {
-                Some(Samples { data: rgb_settings(*space, *destination, descriptor.depth(), [PAGE_SIZE; 2], descriptor.alpha), space: *space })
+            Self::Raster(_, space, destination, descriptor) if descriptor.channels > 1 && !descriptor.depth().is_float()
+                || crate::object_image_mips::native_scalar(*descriptor) => {
+                Some(Samples { data: raster_settings(*descriptor, *space, *destination), space: *space })
             }
             _ => None,
         }
@@ -591,13 +591,14 @@ impl Key {
 }
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Representation { Unpacked, Unorm8, Packed16, Srgb8 }
+enum Representation { Unpacked, Unorm8, Packed16, Srgb8, Scalar8 }
 impl Representation {
     fn for_format(format:wgpu::TextureFormat)->Self {
-        match format {wgpu::TextureFormat::Rgba8Unorm=>Self::Unorm8,wgpu::TextureFormat::Rg32Uint=>Self::Packed16,_=>Self::Unpacked}
+        match format {wgpu::TextureFormat::Rgba8Unorm=>Self::Unorm8,wgpu::TextureFormat::Rg32Uint=>Self::Packed16,wgpu::TextureFormat::R8Unorm=>Self::Scalar8,_=>Self::Unpacked}
     }
     fn format(self)->wgpu::TextureFormat {
-        match self {Self::Unorm8|Self::Srgb8=>wgpu::TextureFormat::Rgba8Unorm,Self::Packed16=>wgpu::TextureFormat::Rg32Uint,Self::Unpacked=>wgpu::TextureFormat::Rgba32Float}
+        match self {Self::Unorm8|Self::Srgb8=>wgpu::TextureFormat::Rgba8Unorm,Self::Packed16=>wgpu::TextureFormat::Rg32Uint,
+            Self::Scalar8=>wgpu::TextureFormat::R8Unorm,Self::Unpacked=>wgpu::TextureFormat::Rgba32Float}
     }
 }
 #[repr(u32)]
@@ -616,8 +617,10 @@ pub(crate) struct SourceColor {
 }
 impl SourceColor {
     fn space(self)->RgbSpace {match self.transfer {TransferCurve::AdobeRgb=>RgbSpace::AdobeRgb,TransferCurve::ProPhoto=>RgbSpace::ProPhoto,_=>RgbSpace::Srgb}}
+    pub(crate) fn prepared_channels(self)->usize {if self.representation==Representation::Scalar8 {1}else {4}}
     fn input_format(self)->wgpu::TextureFormat {
         match self.representation {
+            Representation::Scalar8=>wgpu::TextureFormat::R8Unorm,
             Representation::Unorm8 if self.scalar==0=>wgpu::TextureFormat::Rgba8Unorm,
             Representation::Unorm8=>wgpu::TextureFormat::Rgba8Uint,
             Representation::Packed16 if self.scalar==0=>wgpu::TextureFormat::Rg32Uint,
@@ -1119,7 +1122,7 @@ impl PendingTile {
             let samples=self.pixels.native()?;
             if samples.tile.descriptor!=samples.descriptor {return Err(GpuRasterError::Color("Source tile has the wrong sample representation".into()));}
             match self.prepared() {
-                Some(PreparedSourcePixels::NativeSamples(bytes)) if bytes.len()!=(PAGE_SIZE*PAGE_SIZE) as usize*4*samples.depth.bytes()=>
+                Some(PreparedSourcePixels::NativeSamples(bytes)) if bytes.len()!=(PAGE_SIZE*PAGE_SIZE) as usize*self.data.map_or(4,SourceColor::prepared_channels)*samples.depth.bytes()=>
                     return Err(GpuRasterError::Color("Prepared source samples have the wrong size".into())),
                 Some(PreparedSourcePixels::PremultipliedWorkingPixels(_))=>return Err(GpuRasterError::Color("Working source pixels have native decode settings".into())),
                 _=>{},
@@ -1486,11 +1489,7 @@ impl DecodedTiles {
         use_: SourceUse,
     ) -> Result<(RawTile, Option<Arc<PendingTile>>), GpuRasterError> {
         validate_raster(blob, space)?;
-        let d = blob.descriptor;
-        let depth = d.depth();
-        let mut data = rgb_settings(space, destination, depth, [PAGE_SIZE; 2], d.alpha);
-        data.scalar = u32::from(d.channels == 1);
-        data.scalar_scale = if d.channels == 1 { 1. / depth.maximum() as f32 } else { 0. };
+        let data = raster_settings(blob.descriptor, space, destination);
         let (tile, write) =
             self.plan_key_for(r,Key::raster(blob,space,destination),use_)?;
         let pending = write.map(|write| PendingTile {
@@ -1696,13 +1695,14 @@ impl DecodedTiles {
             };
             let step = samples.depth.bytes();
             let prepared = prepared_pixels.is_some();
-            let channels = if prepared { 4 } else { samples.channels.count() };
+            let output = pending.data.map_or(4, SourceColor::prepared_channels);
+            let channels = if prepared { output } else { samples.channels.count() };
             if !prepared && decoded.len() != (PAGE_SIZE * PAGE_SIZE) as usize * channels * step {
                 return Err(GpuRasterError::Color("Prepared source samples have the wrong size".into()));
             }
-            let bytes = (PAGE_SIZE * PAGE_SIZE) as usize * 4 * step;
-            uploads.write_tile(encoder, &target, PAGE_SIZE * 4 * step as u32, |mapped| {
-                if prepared || samples.channels == SourceChannels::Rgba {
+            let bytes = (PAGE_SIZE * PAGE_SIZE) as usize * output * step;
+            uploads.write_tile(encoder, &target, PAGE_SIZE * (output * step) as u32, |mapped| {
+                if channels == output {
                     mapped.copy_from_slice(&decoded);
                 } else {
                     // Expand channels in one row of scratch. Alpha is coverage;
@@ -1905,6 +1905,15 @@ fn builtin_settings(
         AlphaAssociation::Straight,
     ))
 }
+fn raster_settings(descriptor:PixelDescriptor,space:RgbSpace,destination:RgbSpace)->SourceColor {
+    let depth=descriptor.depth();
+    let mut color=rgb_settings(space,destination,depth,[PAGE_SIZE;2],descriptor.alpha);
+    if descriptor.channels==1 {
+        color.scalar=1;color.scalar_scale=1./depth.maximum() as f32;
+        if crate::object_image_mips::native_scalar(descriptor) {color.representation=Representation::Scalar8;}
+    }
+    color
+}
 pub(super) fn folds_natively(descriptor:PixelDescriptor,space:RgbSpace,destination:RgbSpace)->bool {
     space==destination && descriptor.channels==4 && descriptor.depth()==SampleDepth::U8 && descriptor.alpha==AlphaAssociation::Straight
 }
@@ -1955,8 +1964,8 @@ fn native_samples(p: vec2<i32>) -> vec4<u32> {
 }
 fn display_samples(p: vec2<i32>) -> vec4<f32> { let code=native_samples(p); return vec4(vec3<f32>(code.rgb)/settings.integer_max, select(f32(code.a)/settings.integer_max,1.,code.a==u32(settings.integer_max))); }
 "# };
-            let shader = Deferred::wgsl(device, "source normalization", format!("{}\n{}\n{}\n{}",
-                include_str!("../native_tiles/validity.wgsl"), include_str!("../native_tiles/decode.wgsl"), include_str!("source_color.wgsl"),
+            let shader = Deferred::wgsl(device, "source normalization", format!("{}\n{}\n{}\n{}\n{}",
+                include_str!("../native_tiles/validity.wgsl"), include_str!("../native_tiles/coverage.wgsl"), include_str!("../native_tiles/decode.wgsl"), include_str!("source_color.wgsl"),
                 include_str!("source_decode.wgsl").replace("SOURCE_INPUT", input)));
             let device = device.for_recipe();
             Deferred::pipeline(move |mode| fullscreen_pipeline_recipe(mode, &device, &layout, &shader, "fragment_main", None,

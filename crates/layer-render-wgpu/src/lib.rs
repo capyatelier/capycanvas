@@ -3706,8 +3706,9 @@ impl WgpuRasterizer {
                     let callback = self.browser_raster_decoder.clone();
                     if callback.is_none() && !self.snapshot_worker {return Err(GpuRasterError::Color("Raster preparation worker unavailable".into()));}
                     let cache=self.device.source_samples.clone();
+                    let native_channels=object_image_mips::native_scalar(request.blob.descriptor);
                     Box::pin(async move {
-                        let pixels = if let Some(callback)=callback {callback(request.blob.clone(), request.space, request.destination,false).await}
+                        let pixels = if let Some(callback)=callback {callback(request.blob.clone(), request.space, request.destination,native_channels).await}
                             else {object_image_mips::prepare_raster_tile(&request.blob,request.space,&cache)};
                         object_image_mips::PreparedImageWork::Raster(object_image_mips::PreparedRasterTile {class:request.class,blob:request.blob,space:request.space,destination:request.destination,scalar:request.scalar,pixels})
                     })

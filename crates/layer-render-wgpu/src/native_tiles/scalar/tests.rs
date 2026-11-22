@@ -134,7 +134,7 @@ fn scalar_corpus(in_place: bool) {
                     let actual =
                         f32::from_le_bytes(canonical_bytes[i * 4..i * 4 + 4].try_into().unwrap());
                     if inside {
-                        assert_eq!(actual, expected as f32 * reciprocal(depth), "in_place={in_place}: canonical pixel {i}");
+                        assert_eq!(actual.to_bits(), (expected as f32 / maximum as f32).to_bits(), "in_place={in_place}: canonical pixel {i}");
                     } else {
                         assert_eq!(actual, if in_place { *value } else { -7. },
                             "in_place={in_place}: untouched canonical pixel {i}");
@@ -160,4 +160,54 @@ fn invalid_coverage_stores_its_nearest_defined_value() {
     let batch = encoder.prepare(&r.device, &[request], &mut Default::default()).unwrap();
     submit(&r, &encoder, &batch);
     assert_eq!(capture(&r, &encoded, descriptor)[..values.len()], [0, 0, 0, 0, 255, 255, 0, 128]);
+}
+
+#[test]
+fn native_u8_scalar_reads_equal_every_float_decode_of_their_codes() {
+    use layer_core::color::RgbSpace;
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let codes: Vec<u8> = (0..65536u32).map(|i| i as u8).collect();
+    let descriptor = PixelDescriptor { sample: layer_core::color::SampleType::Unsigned, channels: 1, bits_per_channel: 8,
+        encoding: TransferEncoding::Linear, alpha: AlphaAssociation::None };
+    let blob = std::sync::Arc::new(layer_core::raster::TileBlob::encode(descriptor, &codes).unwrap());
+    let native = r.device.create_texture(&wgpu::TextureDescriptor { label: Some("native scalar oracle"),
+        size: wgpu::Extent3d { width: 256, height: 256, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
+        dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::R8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[] });
+    crate::test_support::upload_page(&r, &native, &codes);
+    let hardware = texture(&r);
+    let module = r.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("native scalar oracle"), source: wgpu::ShaderSource::Wgsl(
+        "@group(0) @binding(0) var input:texture_2d<f32>;\n@group(0) @binding(1) var output:texture_storage_2d<r32float,write>;\n\
+        @compute @workgroup_size(8,8) fn main(@builtin(global_invocation_id) id:vec3<u32>) {textureStore(output,id.xy,textureLoad(input,id.xy,0));}".into()) });
+    let pipeline = r.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor { label: None, layout: None, module: &module,
+        entry_point: Some("main"), compilation_options: Default::default(), cache: None });
+    let views = [native.create_view(&Default::default()), hardware.create_view(&Default::default())];
+    let bind = r.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &pipeline.get_bind_group_layout(0),
+        entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&views[0]) },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&views[1]) }] });
+    let mut commands = r.device.create_command_encoder(&Default::default());
+    {
+        let mut pass = commands.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&pipeline); pass.set_bind_group(0, &bind, &[]); pass.dispatch_workgroups(32, 32, 1);
+    }
+    r.queue.submit([commands.finish()]);
+    let resident = texture(&r);
+    crate::test_support::submit_encoded(&mut r, |r, encoder| upload_coverage(r, encoder, &resident, SampleDepth::U8, &codes, crate::residency::Class::Authored)).unwrap();
+    let encoder = NativeScalarEncoder::with_device(&r.device);
+    pollster::block_on(r.compilation.prepare_all(&encoder.pipelines)).unwrap();
+    let (working, canonical, encoded) = (texture(&r), texture(&r), buffer(&r, SampleDepth::U8));
+    upload(&r, &working, &codes.iter().map(|code| f32::from(*code) / 255.).collect::<Vec<_>>());
+    let request = NativeScalarRequest { working: &working, encoded: &encoded, canonical: &canonical, depth: SampleDepth::U8, region: [0, 0, 256, 256] };
+    let batch = encoder.prepare(&r.device, &[request], &mut Default::default()).unwrap();
+    submit(&r, &encoder, &batch);
+    let decoded = crate::test_support::submit_encoded(&mut r, |r, encoder| crate::test_support::query_ready(r, encoder,
+        |r, encoder| r.backed_raster_tile(&blob, RgbSpace::Srgb, encoder)));
+    let values = |bytes: Vec<u8>, stride: usize| bytes.chunks_exact(stride).map(|pixel| f32::from_le_bytes(pixel[..4].try_into().unwrap())).collect::<Vec<_>>();
+    let reads = [("hardware R8Unorm", values(page_bytes(&r, &hardware), 4)), ("resident restore", values(page_bytes(&r, &resident), 4)),
+        ("canonical write-back", values(page_bytes(&r, &canonical), 4)), ("source decode", values(page_bytes(&r, &decoded.texture), 16))];
+    let differences: Vec<_> = reads.iter().map(|(name, read)| {
+        let differing: Vec<_> = (0..256).filter(|&code| read[code].to_bits() != (code as f32 / 255.).to_bits()).collect();
+        format!("{name}: {} codes, first {:?}", differing.len(), differing.first().map(|&code| (code, read[code].to_bits(), (code as f32 / 255.).to_bits())))
+    }).collect();
+    assert!(reads.iter().all(|(_, read)| (0..256).all(|code| read[code].to_bits() == (code as f32 / 255.).to_bits())), "{differences:#?}");
 }

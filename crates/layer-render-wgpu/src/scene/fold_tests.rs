@@ -93,3 +93,35 @@ fn normal_runs_fold_each_cell_in_a_pass_per_sixteen_inputs_to_the_per_layer_arit
         assert_eq!(work.fold_inputs,inputs,"{count} layers: every present layer tile is folded");
     }
 }
+
+#[test]
+fn a_cold_mask_folds_from_its_native_u8_slot_like_a_resident_mask_page() {
+    let folded=folded_document(3);
+    let doc=&folded.doc;
+    let (_,mask)=folded.mask.unwrap();
+    let render=|resident:bool| {
+        let mut r=crate::memory::memory_tests::renderer(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(8<<30),..Default::default()}).unwrap();
+        crate::test_support::submit_settled(&mut r,crate::test_support::packet(doc.scene(),doc.composition().size));
+        crate::test_support::evict_sources(&mut r);
+        if resident {
+            let SourceTarget::Coverage(handle)=mask else {unreachable!()};
+            let tile=doc.artwork.coverage.get(handle).unwrap().raster.wait_data().unwrap().tiles.values().next().unwrap().clone();
+            let mut capture=WgpuRasterizer::native_capture_on_factory(r.factory.clone(),r.device.clone(),r.document_color()).unwrap();
+            let page=capture.restore_mask_page(&tile.wait_backing().unwrap(),r.current_mask_version(mask,[0,0]).unwrap()).unwrap();
+            crate::test_support::complete(&capture);
+            r.layer_masks.pages.insert((mask,[0,0]),page);
+        }
+        let before=crate::test_support::PassCounts::snapshot();
+        let composite=crate::test_support::canonical_pixels(&mut r);
+        let normalizations=crate::test_support::PassCounts::snapshot().delta(before).normalizations;
+        (composite.into_iter().map(|pixel|pixel.map(f32::to_bits)).collect::<Vec<_>>(),normalizations,r.source_tiles.borrow().valid_slot_formats())
+    };
+    let (cold,normalizations,formats)=render(false);
+    assert!(formats.contains(&wgpu::TextureFormat::R8Unorm),"the cold mask tile is held natively: {formats:?}");
+    assert!(!formats.contains(&wgpu::TextureFormat::Rgba32Float),"no tile is normalized: {formats:?}");
+    assert_eq!(normalizations,0);
+    let (resident,_,formats)=render(true);
+    assert!(!formats.contains(&wgpu::TextureFormat::R8Unorm),"the resident mask page replaces the cold tile: {formats:?}");
+    let differing=cold.iter().zip(&resident).filter(|(a,b)|a!=b).count();
+    assert_eq!(differing,0,"cold and resident masks composite alike");
+}

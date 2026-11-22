@@ -53,15 +53,15 @@ pub(crate) fn upload_coverage(
     working: &wgpu::Texture,
     depth: SampleDepth,
     samples: &[u8],
-    channels: usize,
     class: crate::residency::Class,
 ) -> Result<(), GpuRasterError> {
     let step = depth.bytes();
-    if depth.is_float() || samples.len() != 256 * 256 * channels * step {
+    let channels = samples.len() / (256 * 256 * step);
+    if depth.is_float() || !matches!(channels, 1 | 4) || samples.len() != 256 * 256 * channels * step {
         return Err(GpuRasterError::Color("Invalid native coverage samples".into()));
     }
     let reservation = r.reserve_upload(class, COVERAGE_TILE_BYTES).ok_or(GpuRasterError::NotReady)?;
-    let reciprocal = reciprocal(depth);
+    let maximum = depth.maximum() as f32;
     r.uploads.write_texture(encoder, working, 1024, |mapped| {
         let mut row = [0u8; 1024];
         for (y, source) in samples.chunks_exact(256 * channels * step).enumerate() {
@@ -76,7 +76,7 @@ pub(crate) fn upload_coverage(
                 } else {
                     f32::from(u16::from_le_bytes([sample[0], sample[1]]))
                 };
-                *target = (code * reciprocal).to_le_bytes();
+                *target = (code / maximum).to_le_bytes();
             }
             mapped.slice(y * 1024..(y + 1) * 1024).copy_from_slice(&row);
         }

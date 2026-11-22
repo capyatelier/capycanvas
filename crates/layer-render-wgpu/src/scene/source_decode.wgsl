@@ -10,7 +10,7 @@ SOURCE_INPUT
     if any(position.xy >= settings.extent) { return vec4<f32>(0.); }
     if settings.display != 0u { return display_decode(display_samples(vec2<i32>(position.xy)), settings); }
     let samples = native_samples(vec2<i32>(position.xy));
-    if settings.scalar != 0u { return vec4(f32(samples.r) * settings.scalar_scale, 0., 0., 1.); }
+    if settings.scalar != 0u { return vec4(coverage_value(samples.r, settings.integer_max, settings.scalar_scale), 0., 0., 1.); }
     let integer = settings.integer_max != 0.;
     var color: vec4<f32>;
     if integer { color = native_color(samples, u32(settings.integer_max), 65535u / u32(settings.integer_max)); }

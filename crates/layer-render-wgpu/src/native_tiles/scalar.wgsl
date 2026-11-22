@@ -34,10 +34,11 @@ fn main(@builtin(global_invocation_id) invocation:vec3<u32>) {
         let pixel=vec2(x,y);
         let original=load_working(invocation.z,vec2<i32>(pixel));
         let code=quantize_coverage(unit_scalar(original),settings.maximum);
-        if comparison_enabled() && bitcast<u32>(original)!=bitcast<u32>(f32(code)*settings.reciprocal) {atomicStore(&canonical_changes[invocation.z*1024u+(pixel.y/8u)*32u+pixel.x/8u],1u);}
+        let canonical=coverage_value(code,f32(settings.maximum),settings.reciprocal);
+        if comparison_enabled() && bitcast<u32>(original)!=bitcast<u32>(canonical) {atomicStore(&canonical_changes[invocation.z*1024u+(pixel.y/8u)*32u+pixel.x/8u],1u);}
         let shift=c*depth;
         word=(word&~(settings.maximum<<shift))|(code<<shift);
-        store_canonical(invocation.z,pixel,vec4(f32(code)*settings.reciprocal,0.,0.,1.));
+        store_canonical(invocation.z,pixel,vec4(canonical,0.,0.,1.));
     }
     store_word(invocation.z,address,word);
 }

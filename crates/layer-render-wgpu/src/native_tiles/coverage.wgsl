@@ -1,3 +1,8 @@
+fn coverage_value(code:u32,maximum:f32,reciprocal:f32)->f32 {
+    let value=f32(code);
+    let quotient=value*reciprocal;
+    return fma(fma(-quotient,maximum,value),reciprocal,quotient);
+}
 fn quantize_coverage(value:f32, maximum:u32)->u32 {
     // Exact integer rounding of the submitted Float32 coverage. Form the
     // 40-bit product significand*(2^depth-1) as two uint32 words; ordinary float

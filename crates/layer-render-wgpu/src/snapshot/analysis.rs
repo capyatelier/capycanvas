@@ -120,7 +120,7 @@ impl SnapshotGpu {
                         let scene::sources::PreparedSourcePixels::NativeSamples(samples) = pixels else {return Err("Coverage requires native samples".into());};
                         r.submit_restore(|r,_,encoder| {
                             let receipt=encoder.submission();let write=page.initialize(&receipt)?;
-                            crate::native_tiles::scalar::upload_coverage(r,encoder,&write.value().texture,blob.descriptor.depth(),&samples,4,crate::residency::Class::Authored)?;
+                            crate::native_tiles::scalar::upload_coverage(r,encoder,&write.value().texture,blob.descriptor.depth(),&samples,crate::residency::Class::Authored)?;
                             write.publish(tile.content_version());Ok(())
                         }).map_err(|e|e.to_string())?;
                         page

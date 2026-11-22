@@ -520,7 +520,7 @@ fn prepare_raster_tile_with(blob:&Arc<layer_core::raster::TileBlob>,space:RgbSpa
     use layer_core::color::source::SourceChannels;
     crate::scene::sources::validate_raster(blob,space).map_err(|error|error.to_string())?;
     let native=decode()?;
-    if blob.descriptor.channels==4 {return Ok(crate::scene::sources::PreparedSourcePixels::NativeSamples(native));}
+    if blob.descriptor.channels==4 || native_scalar(blob.descriptor) {return Ok(crate::scene::sources::PreparedSourcePixels::NativeSamples(native));}
     let channels=if blob.descriptor.channels==1 {SourceChannels::Gray} else {SourceChannels::GrayAlpha};
     let depth=blob.descriptor.depth();
     let row=PAGE_SIZE as usize*4*depth.bytes();
@@ -529,6 +529,9 @@ fn prepare_raster_tile_with(blob:&Arc<layer_core::raster::TileBlob>,space:RgbSpa
         crate::scene::sources::expand_source_row(input,output,channels,depth);
     }
     Ok(crate::scene::sources::PreparedSourcePixels::NativeSamples(Arc::new(expanded)))
+}
+pub(crate) fn native_scalar(descriptor:layer_core::color::PixelDescriptor)->bool {
+    descriptor.channels==1 && descriptor.depth()==layer_core::color::SampleDepth::U8
 }
 pub(crate) type CoordinateResult = Result<Arc<Vec<u8>>,String>;
 pub(crate) struct CoordinateSlot {pub(crate) result:Option<CoordinateResult>,charge:crate::residency::Charge}
