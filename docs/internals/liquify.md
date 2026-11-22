@@ -588,8 +588,9 @@ its field the same way; accept it rather than restrict these tools.
   conservatively through chunks. No full-canvas snapshot is allocated at the
   first dab. The stroke's lane admits each allocation with the frame's other
   outputs. An allocation that holds no tile the current frame reads is released
-  when another edit needs its memory; a later read copies the tile again from
-  $I_0$ and rebuilds its levels. A frame still reads every original under the
+  when another edit needs its memory. Before a later frame reads the tile, its
+  restore decodes it again from $I_0$ straight into an allocation and rebuilds
+  its levels, holding no page copy. A frame still reads every original under the
   connected field of its contact. `liquify::memory_tests` checks the release,
   the rebuilt pixels and the pass counts of a stroke that fits.
 - **Peak memory.** Map storage costs 16 bytes per touched pixel, plus unchanged

@@ -99,6 +99,7 @@ impl Lease {
     }
     pub(crate) fn demand(&self) -> Option<Class> { self.state.lock().unwrap().demand.class_at(self.heap.epoch()) }
     pub(crate) fn stamp(&self, class: Class) { self.state.lock().unwrap().demand.stamp(self.heap.epoch(), class); }
+    pub(crate) fn release_demand(&self) { self.state.lock().unwrap().demand = Default::default(); }
     pub(crate) fn guard(&self, guard: Weak<dyn Send + Sync>) { self.state.lock().unwrap().guard = Some(guard); }
 }
 impl Drop for Lease {
