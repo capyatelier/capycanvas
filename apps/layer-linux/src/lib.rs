@@ -14,6 +14,8 @@ mod proof_view;
 mod screen_view;
 mod hdr;
 mod hdr_color_scale;
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+mod heap;
 mod effects;
 mod curve_editor;
 mod pressure_calibration;
@@ -128,6 +130,8 @@ pub fn check_saved_data_cli() -> Option<gtk::glib::ExitCode> {
 }
 
 pub fn run() -> gtk::glib::ExitCode {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    heap::cap_arenas();
     glib::set_application_name(launch_localization().language().app_name());
     if let Err(error) = gtk::init() {
         eprintln!("{error}");
@@ -292,6 +296,8 @@ fn application(id: &str) -> (adw::Application, Rc<RefCell<Vec<Rc<workspace::Work
         std::ops::ControlFlow::Continue(())
     });
     let active: Rc<RefCell<Vec<Rc<workspace::Workspace>>>> = Rc::default();
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    heap::watch_contacts(&active);
     app.connect_startup(|app| {
         storage::clear_temporary_files();
         text_language::install(app, launch_localization());

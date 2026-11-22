@@ -867,6 +867,9 @@ pub(crate) fn widget_point(
 }
 
 impl Input {
+    pub(crate) fn contact(&self) -> bool {
+        self.last.get().is_some_and(|event| matches!(event.phase, PenPhase::Down | PenPhase::Move)) || !self.touches.borrow().is_empty()
+    }
     fn timestamp(&self, ms: u32) -> u64 {
         self.timestamp_at(ms, glib::monotonic_time().max(0) as u64 * 1000)
     }
@@ -1098,6 +1101,8 @@ impl Input {
             } else {
                 Some(event)
             });
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        crate::heap::active();
         {
             let mut gpu = workspace.gpu.borrow_mut();
             let Some(gpu) = gpu.as_mut() else {

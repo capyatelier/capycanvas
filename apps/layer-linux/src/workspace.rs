@@ -2757,6 +2757,8 @@ impl Workspace {
                     };
                     this.frame_deadline.set(next);
                     let interaction = this.visible_dialog().is_some();
+                    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+                    crate::heap::active();
                     let result = this.gpu.borrow_mut().as_mut().map(|g| {
                         this.update_canvas_chrome(g);
                         g.render(area, now, !expedited, interaction)
@@ -2817,7 +2819,12 @@ impl Workspace {
                         glib::ControlFlow::Continue
                     } else {
                         this.frame_timer.borrow_mut().take();
-                        if let layer_render::FrameDemand::WaitUntil(deadline) = demand { this.wake_frame_at(deadline); }
+                        match demand {
+                            layer_render::FrameDemand::WaitUntil(deadline) => this.wake_frame_at(deadline),
+                            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+                            layer_render::FrameDemand::Wait => crate::heap::schedule_release(),
+                            _ => {}
+                        }
                         glib::ControlFlow::Break
                     }
                 }
