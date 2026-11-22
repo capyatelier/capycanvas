@@ -244,7 +244,6 @@ impl Blocked {
     }
     pub(crate) fn deficit(&self) -> u64 { self.tier.used().saturating_add(self.bytes).saturating_sub(self.tier.available(self.class)) }
 }
-#[cfg(target_arch = "wasm32")]
 impl Blocked {
     pub(crate) fn overcommit(self) -> Reservation { Reservation(self.tier.charge(self.bytes), self.class) }
 }

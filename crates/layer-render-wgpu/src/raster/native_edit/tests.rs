@@ -1655,7 +1655,7 @@ fn native_fill_texture_matches_contact_and_flat_pixels_through_history() {
 }
 
 #[test]
-fn refused_native_capture_keeps_painted_revision_pending_until_admission_returns() {
+fn a_capture_without_room_still_publishes_the_painted_revision() {
     let color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
     let budget = layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {
         host_default_bytes: Some(2 << 30), override_bytes: Some(2 << 30), ..Default::default()
@@ -1683,16 +1683,10 @@ fn refused_native_capture_keeps_painted_revision_pending_until_admission_returns
     let before = r.metrics().dabs;
     let pressure = budget.admit_import(budget.import_headroom_bytes()).unwrap();
     assert_eq!(budget.import_headroom_bytes(), 0);
-    let submitted = r.submit(frame);
-    let publication = revision.try_data();
-    assert!(submitted.is_ok() && publication.is_none(),
-        "late capture refusal must submit paint and leave its revision pending: submit={submitted:?}, publication={publication:?}");
-    assert_eq!(r.metrics().dabs, before + 1);
-    assert!(r.next_frame()==layer_render::FrameDemand::Work);
-    drop(pressure);
-    crate::test_support::submit_settled(&mut r, packet(&doc, false));
-    assert!(revision.try_data().unwrap().is_ok());
+    crate::test_support::submit_settled(&mut r, frame);
+    assert!(revision.try_data().is_some_and(|data| data.is_ok()), "a capture without room still publishes the painted revision");
     assert_eq!(r.metrics().dabs, before + 1, "capture settlement must not replay persistent dabs");
+    drop(pressure);
     let stored = backing(&revision);
     assert!(!stored.is_empty());
     assert_ne!(stored, original, "the accepted persistent dab must reach authored backing");
