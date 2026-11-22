@@ -14,6 +14,7 @@ layer-render-wgpu = { path = "../layer-render-wgpu" }
 layer-ui = { path = "../layer-ui" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+web-time = "1.1.0"
 wgpu.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

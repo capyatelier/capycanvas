@@ -7,6 +7,7 @@ use jni::{
     sys::{jboolean, jfloat, jint, jintArray, jlong, jstring},
 };
 use layer_host::scene::SceneDisplay;
+use layer_render::FrameDemand;
 use layer_render_wgpu::{ViewportPresenter, WgpuRasterizer, SdrSurfaceColor};
 use raw_window_handle::{
     AndroidDisplayHandle, AndroidNdkWindowHandle, RawDisplayHandle, RawWindowHandle,
@@ -602,7 +603,7 @@ impl App {
     fn check_gpu(&self) -> Result<(), String> {
         self.gpu_watch.failure().map_or(Ok(()), Err)
     }
-    fn render(&mut self, now: u64, presentation: u64) -> Result<bool, String> {
+    fn render(&mut self, now: u64, presentation: u64) -> Result<FrameDemand, String> {
         self.host.poll_preparation();
         let launch = self.host.launch_frame();
         if let Some(surface) = &mut self.surface { surface.sync_launch(launch); }
@@ -612,14 +613,14 @@ impl App {
         // A lost device may already have been retired by observe_gpu_failure.
         // Still propagate its error so the host offers renderer recovery.
         self.check_gpu()?;
-        if self.host.session.rendering_suspended() || self.host.session.engine().backend().0.is_none() { return Ok(false); }
+        if self.host.session.rendering_suspended() || self.host.session.engine().backend().0.is_none() { return Ok(FrameDemand::Wait); }
         self.frame_cost.fill(0);
         if let Some(surface) = &mut self.surface {
             if let Some((target, launch)) = surface.pending_target.take() {
                 let clock = self.profiling.then(std::time::Instant::now);
                 if let Err(target) = self.host.session.engine().backend().0.as_ref().unwrap().queue().try_present(target) {
                     surface.pending_target = Some((target, launch));
-                    return Ok(true);
+                    return Ok(FrameDemand::Work);
                 }
                 surface.track_launch(self.host.session.engine().backend().0.as_ref().unwrap(), launch, self.host.wake_callback());
                 self.frame_cost[3] = clock.map_or(0, |clock| clock.elapsed().as_nanos() as i64);
@@ -628,10 +629,10 @@ impl App {
         }
         let launch_needed = self.host.launch_frame().is_some_and(|frame|
             self.surface.as_ref().is_some_and(|surface| surface.launch_frame.ticket() != Some(frame)));
-        if (self.host.frame_demand() == layer_render::FrameDemand::Wait && self.host.startup.complete && !launch_needed) || self.surface.is_none() {
-            return Ok(self.surface.as_ref().is_some_and(|surface| surface.launch_frame.ticket().is_some()));
+        if (self.host.frame_demand() == FrameDemand::Wait && self.host.startup.complete && !launch_needed) || self.surface.is_none() {
+            return Ok(work_when(self.surface.as_ref().is_some_and(|surface| surface.launch_frame.ticket().is_some())));
         }
-        if self.surface.as_ref().is_some_and(|s| s.waits_for_completion(2)) { return Ok(false); }
+        if self.surface.as_ref().is_some_and(|s| s.waits_for_completion(2)) { return Ok(FrameDemand::Wait); }
         let clock = self.profiling.then(std::time::Instant::now);
         let elapsed = || clock.map_or(0, |c| c.elapsed().as_nanos() as i64);
         let view = self.host.session.state().camera.view();
@@ -650,7 +651,7 @@ impl App {
                 surface.ink
             };
             if surface.ink != ink {
-                if surface.waits_for_completion(1) { return Ok(false); }
+                if surface.waits_for_completion(1) { return Ok(FrameDemand::Wait); }
                 surface.present_with(ink);
                 let switch_started = std::time::Instant::now();
                 surface.configure(gpu, [view.width_px, view.height_px])?;
@@ -694,7 +695,7 @@ impl App {
         let display = SceneDisplay { scale, headroom: 1., blank_presented: self.blank_presented, compositor_hdr: hdr_output };
         let composition = self.host.compose_scene(&mut surface.presenter, &mut self.cursor, &self.navigators, &self.glass, tone, display)?;
         surface.presenter.set_surface_rotation(surface.quarter_turns);
-        if !composition.ready {return Ok(true);}
+        if !composition.ready {return Ok(FrameDemand::Work);}
         let launch = self.host.launch_frame();
         surface.sync_launch(launch);
         let launch_needed = launch.is_some() && surface.launch_frame.ticket() != launch;
@@ -715,7 +716,7 @@ impl App {
 
         self.frame_cost[0] = elapsed();
         if !surface.presenter.needs_present(gpu, view, surround) && !launch_needed {
-            return Ok(self.host.frame_demand() != layer_render::FrameDemand::Wait || surface.launch_frame.ticket().is_some());
+            return Ok(self.host.frame_demand().sooner(work_when(surface.launch_frame.ticket().is_some())));
         }
         let target = match surface.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t)
@@ -723,14 +724,14 @@ impl App {
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 surface.configure(gpu, extent)?;
                 self.host.dirty = true;
-                return Ok(true);
+                return Ok(FrameDemand::Work);
             }
             wgpu::CurrentSurfaceTexture::Timeout => {
                 unsafe { ndk_sys::ATrace_setCounter(c"Capy canvas acquire timeout".as_ptr(), surface.submitted_frames as i64); }
                 self.host.dirty = true;
-                return Ok(true);
+                return Ok(FrameDemand::Work);
             }
-            wgpu::CurrentSurfaceTexture::Occluded => return Ok(false),
+            wgpu::CurrentSurfaceTexture::Occluded => return Ok(FrameDemand::Wait),
             wgpu::CurrentSurfaceTexture::Validation => {
                 return Err("Vulkan surface validation failed".into());
             }
@@ -797,9 +798,10 @@ impl App {
         if !pending { self.host.session.renderer_mut().0.as_mut().unwrap().after_present(); }
         let launch_pending = surface.launch_frame.ticket().is_some();
         self.check_gpu()?;
-        Ok(self.host.frame_demand() != layer_render::FrameDemand::Wait || pending || launch_pending)
+        Ok(self.host.frame_demand().sooner(work_when(pending || launch_pending)))
     }
 }
+fn work_when(pending: bool) -> FrameDemand { if pending { FrameDemand::Work } else { FrameDemand::Wait } }
 
 thread_local! {static APPS:layer_host::handles::LocalHandles=Default::default();}
 pub(crate) fn with_app_owner<T>(handle:jlong,work:impl FnOnce(&mut App)->Result<T,String>)->Result<T,String> {
@@ -1296,7 +1298,7 @@ pub extern "system" fn Java_art_capycanvas_Native_frame(
     handle: jlong,
     now: jlong,
     presentation: jlong,
-) -> jboolean {
+) -> jlong {
     crate::jni_entry!(env, handle, capy_app, {
     let app = &mut *capy_app;
     let clock = app.profiling.then(std::time::Instant::now);
@@ -1312,14 +1314,14 @@ pub extern "system" fn Java_art_capycanvas_Native_frame(
         }
     }
     match result {
-        Ok(wake) => wake as jboolean,
+        Ok(demand) => layer_host::frame_delay(demand).map_or(-1, |delay| delay.as_millis() as jlong),
         Err(e) => {
             if !app.host.session.rendering_suspended() {
                 let _ = app.host.suspend_renderer();
             }
             app.host.error = Some(e.clone());
             fail(&mut env, Err(e));
-            0
+            -1
         }
     }
     })

@@ -93,7 +93,7 @@ fn canvas_update_counter_observes_paint_without_advancing_it() {
         assert_ne!(app.pixels(), pixels);
         assert_eq!(unsafe { capy_apple_submitted_canvas_updates(app.0) }, painted);
         let now = app.frame_time(3_000_000_000);
-        assert_eq!(unsafe { capy_apple_frame(app.0, now, now, std::ptr::null_mut(), std::ptr::null_mut()) }, 0);
+        assert_eq!(unsafe { capy_apple_frame(app.0, now, now, std::ptr::null_mut(), std::ptr::null_mut()) }, FRAME_IDLE);
         assert_eq!(unsafe { capy_apple_submitted_canvas_updates(app.0) }, painted);
     }
 }
@@ -145,7 +145,7 @@ fn renderer_failure_retains_sources_history_settings_and_durable_recovery_on_bot
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             while !app.borrow().host.session.rendering_suspended() {
                 let now = app.frame_time(3_010_000_000);
-                assert_eq!(unsafe { capy_apple_frame(app.0, now, now, std::ptr::null_mut(), std::ptr::null_mut()) }, 0);
+                assert_eq!(unsafe { capy_apple_frame(app.0, now, now, std::ptr::null_mut(), std::ptr::null_mut()) }, FRAME_IDLE);
                 assert!(std::time::Instant::now() < deadline, "{platform} {fault}: loss callback did not arrive");
                 std::thread::sleep(std::time::Duration::from_millis(2));
             }
@@ -241,7 +241,7 @@ fn launch_requires_a_submitted_ready_drawable_on_both_apple_hosts() {
     for platform in [0, 1] {
         let app = App::new(platform);
         frame = u64::MAX;
-        assert_eq!(unsafe { capy_apple_frame(app.0, 1, 1, std::ptr::null_mut(), &mut frame) }, 0);
+        assert_eq!(unsafe { capy_apple_frame(app.0, 1, 1, std::ptr::null_mut(), &mut frame) }, FRAME_IDLE);
         assert_eq!(frame, 0);
         assert!(!unsafe { capy_apple_launch_presented(app.0, 0) });
         assert!(!unsafe { capy_apple_launch_presented(app.0, u64::MAX) });

@@ -2017,7 +2017,7 @@ fn optional_gpu_timing_has_explicit_uninitialized_state_and_bounded_abi() {
         let mut stats = layer_render_wgpu::GpuFrameTimingStats::default();
         unsafe {
             assert_eq!(capy_apple_gpu_timing(app.0, 1), 0);
-            assert_eq!(capy_apple_frame(app.0, 1, 1, std::ptr::null_mut(), std::ptr::null_mut()), 0);
+            assert_eq!(capy_apple_frame(app.0, 1, 1, std::ptr::null_mut(), std::ptr::null_mut()), FRAME_IDLE);
             assert_eq!(
                 capy_apple_take_gpu_timing(app.0, std::ptr::null_mut(), 0, &mut stats),
                 0

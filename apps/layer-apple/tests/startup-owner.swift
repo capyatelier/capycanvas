@@ -94,7 +94,7 @@ private final class StartupErrors: @unchecked Sendable {
         }
         try require(!failures.errors.isEmpty && failures.errors.allSatisfy { $0 == cause },
             "Queued startup operations replaced the original cause: \(failures.errors)")
-        try require(!result.0 && result.1 == 0 && result.2.allSatisfy { $0 == 0 }, "A failed owner must return an idle frame")
+        try require(result.0 == nil && result.1 == 0 && result.2.allSatisfy { $0 == 0 }, "A failed owner must return an idle frame")
         let before = failures.errors.count
         for _ in 0..<20 { await frame(owner) }
         try require(failures.errors.count == before, "A terminal launch failure must not report again on every frame")

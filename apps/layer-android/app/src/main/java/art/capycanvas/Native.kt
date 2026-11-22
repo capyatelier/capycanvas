@@ -44,7 +44,8 @@ internal object Native {
     @JvmStatic external fun touchPolicy(handle: Long, tapMs: Int, slop: Float)
     @JvmStatic external fun pointer(handle: Long, id: Long, tool: Int, button: Int, records: DoubleArray, count: Int, predicted: Boolean, deviceFlags: Int)
     @JvmStatic external fun canvasBarHold(handle: Long): Int
-    @JvmStatic external fun frame(handle: Long, now: Long, presentation: Long): Boolean
+    /** Milliseconds until the next frame: 0 now, -1 none. */
+    @JvmStatic external fun frame(handle: Long, now: Long, presentation: Long): Long
     /** First buffer on the current surface has completed GPU work. */
     @JvmStatic external fun surfaceReady(handle: Long): Boolean
     @JvmStatic external fun frameCost(handle: Long, output: LongArray)

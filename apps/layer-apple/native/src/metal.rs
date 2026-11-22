@@ -3,7 +3,7 @@ use layer_host::{
     NativeHost,
     scene::{Glass, Navigators, SceneDisplay},
 };
-use layer_render::CanvasRenderer;
+use layer_render::{CanvasRenderer, FrameDemand};
 use layer_render_wgpu::SdrSurfaceColor;
 use layer_render_wgpu::{
     GpuFrameSample, GpuFrameTimer, GpuFrameTimingStats, ViewportPresenter, WgpuRasterizer,
@@ -312,17 +312,17 @@ impl MetalHost {
         now: u64,
         presentation: u64,
         launch_frame: &mut u64,
-    ) -> Result<(bool, [u64; 5]), String> {
+    ) -> Result<(FrameDemand, [u64; 5]), String> {
         *launch_frame = 0;
         host.poll_preparation();
         self.observe_failure(host);
         self.poll_color(host)?;
         #[cfg(target_abi = "sim")]
         self.poll_launch(host);
-        if host.frame_demand() == layer_render::FrameDemand::Wait && host.startup.complete { self.poll_presentation(host)?; }
-        if host.session.rendering_suspended() { return Ok((false, [0; 5])); }
-        if (host.frame_demand() == layer_render::FrameDemand::Wait && host.startup.complete && host.launch_frame().is_none()) || self.surface.is_none() {
-            return Ok((false, [0; 5]));
+        if host.frame_demand() == FrameDemand::Wait && host.startup.complete { self.poll_presentation(host)?; }
+        if host.session.rendering_suspended() { return Ok((FrameDemand::Wait, [0; 5])); }
+        if (host.frame_demand() == FrameDemand::Wait && host.startup.complete && host.launch_frame().is_none()) || self.surface.is_none() {
+            return Ok((FrameDemand::Wait, [0; 5]));
         }
         // Own the timer locally so a panic cannot strand an active query in the
         // host. Normal errors/early returns still close their GPU span.
@@ -347,7 +347,7 @@ impl MetalHost {
         now: u64,
         presentation: u64,
         launch_frame: &mut u64,
-    ) -> Result<(bool, [u64; 5]), String> {
+    ) -> Result<(FrameDemand, [u64; 5]), String> {
         let mut costs = [0; 5];
         let clock = Instant::now();
         host.prepare_canvas_frame(now, presentation, self.blank_presented)?;
@@ -379,7 +379,7 @@ impl MetalHost {
         surface.presenter.set_panel_surfaces(gpu, self.glass.panels(scale));
         let display = SceneDisplay { scale, headroom: self.headroom, blank_presented: self.blank_presented, compositor_hdr: false };
         if !host.compose_scene(&mut surface.presenter, &mut self.cursor, &self.navigators,
-            self.glass.regions(scale), tone_guide, display)?.ready { return Ok((true, costs)); }
+            self.glass.regions(scale), tone_guide, display)?.ready { return Ok((FrameDemand::Work, costs)); }
         let ready_frame = host.launch_frame().unwrap_or(0);
         let hdr_output = surface.working_color.depth.is_float() && self.headroom > 1. && host.session.hdr_presentation_allowed();
         let screen = &host.session.state().screen;
@@ -404,15 +404,15 @@ impl MetalHost {
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 surface.surface.configure(gpu.device(), &surface.config);
                 host.dirty = true;
-                return Ok((true, costs));
+                return Ok((FrameDemand::Work, costs));
             }
             wgpu::CurrentSurfaceTexture::Timeout => {
                 host.dirty = true;
-                return Ok((true, costs));
+                return Ok((FrameDemand::Work, costs));
             }
             wgpu::CurrentSurfaceTexture::Occluded => {
                 host.dirty = true;
-                return Ok((false, costs));
+                return Ok((FrameDemand::Wait, costs));
             }
             wgpu::CurrentSurfaceTexture::Validation => {
                 return Err("Metal surface validation failed".into());
@@ -446,7 +446,7 @@ impl MetalHost {
             self.presented_panel_revision = revision;
             host.invalidate_snapshot();
         }
-        Ok((host.frame_demand() != layer_render::FrameDemand::Wait, costs))
+        Ok((host.frame_demand(), costs))
     }
 }
 

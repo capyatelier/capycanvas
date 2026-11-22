@@ -66,6 +66,18 @@ use serde::Deserialize;
 #[cfg(not(target_arch="wasm32"))]
 use serde_json::{Value, json};
 
+pub fn frame_delay(demand: layer_render::FrameDemand) -> Option<std::time::Duration> {
+    use layer_render::FrameDemand;
+    match demand {
+        FrameDemand::Animate | FrameDemand::Work => Some(std::time::Duration::ZERO),
+        FrameDemand::WaitUntil(deadline) => {
+            let remaining = deadline.saturating_duration_since(web_time::Instant::now());
+            Some(std::time::Duration::from_millis(remaining.as_nanos().div_ceil(1_000_000).max(1) as u64))
+        }
+        FrameDemand::Wait => None,
+    }
+}
+
 #[cfg(not(target_arch="wasm32"))]
 pub fn finish_native_process() {
     layer_render_wgpu::stop_shader_compilers();
@@ -1302,6 +1314,20 @@ mod test_storage;
 #[cfg(all(test,not(target_arch="wasm32")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_delay_runs_work_now_waits_for_a_deadline_by_whole_milliseconds_and_never_less_than_one() {
+        use layer_render::FrameDemand;
+        use std::time::{Duration, Instant};
+        assert_eq!(frame_delay(FrameDemand::Animate), Some(Duration::ZERO));
+        assert_eq!(frame_delay(FrameDemand::Work), Some(Duration::ZERO));
+        assert_eq!(frame_delay(FrameDemand::Wait), None);
+        assert_eq!(frame_delay(FrameDemand::WaitUntil(Instant::now() - Duration::from_secs(1))), Some(Duration::from_millis(1)));
+        assert_eq!(frame_delay(FrameDemand::WaitUntil(Instant::now())), Some(Duration::from_millis(1)));
+        let delay = frame_delay(FrameDemand::WaitUntil(Instant::now() + Duration::from_micros(250_400))).unwrap();
+        assert!((Duration::from_millis(240)..=Duration::from_millis(251)).contains(&delay), "{delay:?}");
+        assert_eq!(delay.subsec_nanos() % 1_000_000, 0, "{delay:?}");
+    }
 
     #[test]
     fn action_refusals_keep_the_native_host_usable() {

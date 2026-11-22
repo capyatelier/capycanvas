@@ -65,6 +65,22 @@ public:
     bool Due(std::chrono::steady_clock::time_point now)const{return due&&now>=*due;}
 };
 
+class CanvasFrameDeadline {
+    std::optional<std::chrono::steady_clock::time_point> due;
+public:
+    bool Demand(int32_t delay,std::chrono::steady_clock::time_point now){
+        if(delay==0)return true;
+        if(delay>0&&delay<CAPY_FRAME_IDLE){auto at=now+std::chrono::milliseconds(delay);if(!due||at<*due)due=at;}
+        return false;
+    }
+    void Serviced(){due.reset();}
+    std::chrono::steady_clock::time_point Wake(std::chrono::steady_clock::time_point other)const{return due?std::min(*due,other):other;}
+    bool Take(std::chrono::steady_clock::time_point now){
+        if(!due||now<*due)return false;
+        due.reset();return true;
+    }
+};
+
 class CanvasQuerySlots {
     struct Slot {
         std::shared_ptr<std::atomic<size_t>> count;

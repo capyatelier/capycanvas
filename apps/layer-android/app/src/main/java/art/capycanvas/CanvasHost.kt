@@ -944,7 +944,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
             try {
                 val start = System.nanoTime()
                 val threadStart = if (measuredFrames != null) android.os.Debug.threadCpuTimeNanos() else 0L
-                val again = Native.frame(handle, start, expectedPresentation.coerceAtLeast(start))
+                val delay = Native.frame(handle, start, expectedPresentation.coerceAtLeast(start))
                 if (awaitingSurfaceFrame && Native.surfaceReady(handle)) {
                     awaitingSurfaceFrame = false
                     val generation = activeSurfaceGeneration
@@ -962,8 +962,9 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
                 if (frameCosts != null) Native.frameCost(handle, frameCosts)
                 val publicationStart = if (measuredFrames != null) System.nanoTime() else 0L
                 // Shader warmup needs polling, not hundreds of empty presents/s.
-                if (again || awaitingSurfaceFrame) wake(if (lastStartupStage < 2) (frameInterval / 1_000_000).coerceAtLeast(1L) else 1L)
-                if (!framePublicationQueued) publish(!again)
+                val paced = if (lastStartupStage < 2) (frameInterval / 1_000_000).coerceAtLeast(1L) else 1L
+                if (delay == 0L || awaitingSurfaceFrame) wake(paced) else if (delay > 0L) wake(delay)
+                if (!framePublicationQueued) publish(delay != 0L)
                 if (!startupCatalogFinished && lastCanvasReady) {
                     Native.finishStartupCatalog(handle)
                     startupCatalogFinished = true

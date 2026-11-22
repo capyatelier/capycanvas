@@ -6,7 +6,7 @@ use layer_host::{
     NativeHost,
     scene::SceneDisplay,
 };
-use layer_render::CanvasRenderer;
+use layer_render::{CanvasRenderer, FrameDemand};
 use layer_render_wgpu::{HeldCanvas, ViewportPresenter, WgpuRasterizer};
 use layer_ui::{CanvasCursor, PointerButton};
 use std::{
@@ -17,6 +17,10 @@ use std::{
 };
 
 thread_local! { static ERROR: RefCell<CString> = RefCell::new(CString::default()); }
+const FRAME_IDLE: i32 = i32::MAX;
+fn next_frame(demand: FrameDemand) -> i32 {
+    layer_host::frame_delay(demand).map_or(FRAME_IDLE, |delay| i32::try_from(delay.as_millis()).unwrap_or(FRAME_IDLE))
+}
 fn fail(e: impl std::fmt::Display) {
     ERROR.with(|slot| *slot.borrow_mut() = CString::new(e.to_string().replace('\0', " ")).unwrap());
 }
@@ -559,7 +563,7 @@ impl CapyHost {
         Ok(())
     }
 
-    fn frame(&mut self, now: u64, presentation: u64, draw: bool) -> Result<i32, String> {
+    fn frame(&mut self, now: u64, presentation: u64, draw: bool) -> Result<FrameDemand, String> {
         self.gpu.check()?;
         // A tab command can arrive after DXGI acquisition. Retire that image
         // before touching the newly selected editor, including failed activation.
@@ -567,9 +571,9 @@ impl CapyHost {
         if self.native.session.engine().backend().0.is_none() {
             self.target = None;
             self.native.dirty = false;
-            return Ok(0);
+            return Ok(FrameDemand::Wait);
         }
-        if self.target.is_none() { return Ok(1); }
+        if self.target.is_none() { return Ok(FrameDemand::Work); }
         let prediction_before = self.prediction_frames.map(|_| self.native.session.engine().metrics());
         if draw { self.native.prepare_canvas_frame(now, presentation, self.blank_presented)?; }
         if let Some(timing) = &mut self.frame_timing { timing.prepared_ns = crate::frame_timing::now(); }
@@ -608,7 +612,7 @@ impl CapyHost {
             presenter.set_panel_surfaces(gpu,self.chrome.glass.panels(self.scale));
             if !presenter.prepare_chrome(gpu) {
                 self.native.dirty=true;
-                return Ok(1);
+                return Ok(FrameDemand::Work);
             }
         }
         let tone = self.documents.as_ref().and_then(|s| s.tone.current(&self.native));
@@ -630,7 +634,7 @@ impl CapyHost {
         if !self.chrome.can_present(composition.staged) {
             self.native.dirty = true;
             self.poll_services()?;
-            return Ok(1);
+            return Ok(FrameDemand::Work);
         }
         let gpu = self.native.session.engine().backend().0.as_ref().unwrap();
         if self.native.withheld_frame(&composition).is_some() {
@@ -651,7 +655,7 @@ impl CapyHost {
                 self.surface_ready.submitted(gpu, &self.chrome, None, None);
             }
             self.poll_services()?;
-            return Ok(i32::from(self.native.frame_demand() != layer_render::FrameDemand::Wait));
+            return Ok(self.native.frame_demand());
         }
         let target = self.target.take().ok_or("Missing acquired surface target")?;
         presenter.present(
@@ -678,7 +682,7 @@ impl CapyHost {
         self.native.session.renderer_mut().0.as_mut().unwrap().after_present();
         self.gpu.check()?;
         self.poll_services()?;
-        Ok(i32::from(self.native.frame_demand() != layer_render::FrameDemand::Wait))
+        Ok(self.native.frame_demand())
     }
 }
 /// # Safety
@@ -848,7 +852,10 @@ pub unsafe extern "C" fn capy_start_services(
 /// Exclusive render-owner access to a live host.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_needs_frame(host: u64) -> i32 {
-    guard(host, |host| Ok(i32::from(host.native.poll_preparation() != layer_render::FrameDemand::Wait || host.display_reconfigure)))
+    guard(host, |host| {
+        let demand = host.native.poll_preparation();
+        Ok(next_frame(if host.display_reconfigure { FrameDemand::Work } else { demand }))
+    })
 }
 
 /// # Safety
@@ -861,7 +868,7 @@ pub unsafe extern "C" fn capy_poll_services(host: u64) -> i32 {
             host.native.poll_canvas_presentation(presenter)?;
         }
         host.poll_surface()?;
-        Ok(i32::from(host.native.frame_demand() != layer_render::FrameDemand::Wait || host.display_reconfigure))
+        Ok(next_frame(if host.display_reconfigure { FrameDemand::Work } else { host.native.frame_demand() }))
     })
 }
 /// # Safety
@@ -877,7 +884,7 @@ pub unsafe extern "C" fn capy_poll_surface(host: u64, pending: *mut bool) -> i32
     guard(host, |host| {
         host.poll_surface()?;
         if let Some(pending)=unsafe { pending.as_mut() } { *pending=host.surface_ready.pending(); }
-        Ok(i32::from(host.native.frame_demand() != layer_render::FrameDemand::Wait))
+        Ok(next_frame(host.native.frame_demand()))
     })
 }
 /// # Safety
@@ -1321,7 +1328,7 @@ pub unsafe extern "C" fn capy_localization_input(host: u64, busy: bool) -> i32 {
 fn present(host: u64, now: u64, presentation: u64, draw: bool) -> i32 {
     guard(host, |host| {
         if let Some(timing) = &mut host.frame_timing { timing.prepared_ns=0;timing.composed_ns=0;timing.submitted_ns=0;timing.presented_ns=0; }
-        host.frame(now, presentation, draw)
+        host.frame(now, presentation, draw).map(next_frame)
     })
 }
 /// # Safety

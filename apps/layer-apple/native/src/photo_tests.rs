@@ -232,7 +232,7 @@ fn large_jpeg_gpen_preserves_photo_through_save_and_gpu_recovery() {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !app.borrow().host.session.rendering_suspended() {
             let now = app.frame_time(3_000_000_000);
-            assert_eq!(unsafe { capy_apple_frame(app.0, now, now, std::ptr::null_mut(), std::ptr::null_mut()) }, 0);
+            assert_eq!(unsafe { capy_apple_frame(app.0, now, now, std::ptr::null_mut(), std::ptr::null_mut()) }, FRAME_IDLE);
             assert!(std::time::Instant::now() < deadline, "GPU loss callback did not arrive");
             std::thread::sleep(std::time::Duration::from_millis(2));
         }

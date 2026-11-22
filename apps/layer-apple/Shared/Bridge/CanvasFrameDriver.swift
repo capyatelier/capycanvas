@@ -10,6 +10,7 @@ import QuartzCore
     private var pending = false
     private var active = false
     private var paused = true
+    private var timer: DispatchWorkItem?
     var canPresent: () -> Bool = { true }
     var setPaused: (Bool) -> Void = { _ in }
     var submittedViewport: () -> Void = {}
@@ -19,7 +20,7 @@ import QuartzCore
     func deactivate() {
         guard active else { return }
         active = false; generation &+= 1; surfaceGeneration &+= 1
-        resetSubmission(); pause(true)
+        disarm(); resetSubmission(); pause(true)
     }
     private func resetSubmission() {
         let surface = surfaceGeneration
@@ -39,7 +40,14 @@ import QuartzCore
         }
         setPaused(value)
     }
-    func wake() { generation &+= 1; if active { pause(false) } }
+    func wake() { generation &+= 1; disarm(); if active { pause(false) } }
+    private func disarm() { timer?.cancel(); timer = nil }
+    private func arm(after milliseconds: Int) {
+        disarm()
+        let work = DispatchWorkItem { [weak self] in self?.wake() }
+        timer = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(milliseconds), execute: work)
+    }
     func tick(target: TimeInterval) {
         guard canPresent() else { pause(true); return }
         guard let native = store?.native else { return }
@@ -52,7 +60,7 @@ import QuartzCore
         store?.bubbles.tick(CACurrentMediaTime())
         let submittedGeneration = generation
         let submittedSurface = surfaceGeneration
-        native.frame(now: now, target: targetTime) { [weak self] again, revision, costs in
+        native.frame(now: now, target: targetTime) { [weak self] delay, revision, costs in
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.pending = false
@@ -66,7 +74,9 @@ import QuartzCore
                 }
                 // A resize/input/wake during the queued frame must survive its
                 // idle reply, including a surface detached and attached again.
-                self.pause(!again && self.store?.bubbles.needsFrame != true && self.generation == submittedGeneration)
+                let settled = self.store?.bubbles.needsFrame != true && self.generation == submittedGeneration
+                self.pause(settled && delay != 0)
+                if settled, let delay, delay > 0 { self.arm(after: delay) }
             }
         }
     }

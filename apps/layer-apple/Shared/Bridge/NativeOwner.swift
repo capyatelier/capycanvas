@@ -1187,11 +1187,11 @@ final class NativeOwner: @unchecked Sendable {
         lastGpuClockSample = before
     }
     /// One frame may be outstanding. Completion never means drawable presentation.
-    func frame(now: UInt64, target: UInt64, completion: @escaping @Sendable (Bool, UInt64, [UInt64]) -> Void) {
+    func frame(now: UInt64, target: UInt64, completion: @escaping @Sendable (Int?, UInt64, [UInt64]) -> Void) {
         let observation = trace.flatMap { $0.isRecording ? $0 : nil }
         queue.async { [self] in
             var costs = [UInt64](repeating: 0, count: 5)
-            guard handle != nil else { completion(false, 0, costs); return }
+            guard handle != nil else { completion(nil, 0, costs); return }
             let start = observation == nil ? 0 : FrameTrace.now()
             var encodedCameraRevision: UInt64 = 0, frameOutcome: UInt64 = 0
             let submitted = launchVisible ? LaunchFrame() : nil
@@ -1231,14 +1231,15 @@ final class NativeOwner: @unchecked Sendable {
                 if wantsGpuTiming, let observation { sampleGpuClock(observation) }
                 var launchTicket: UInt64 = 0
                 let result = capy_apple_frame(nativeValue(handle), now, max(now, target), &costs, &launchTicket)
+                let delay = result == Int32(CAPY_APPLE_FRAME_IDLE) ? nil : Int(result)
                 if launchTicket == 0 { launchFrame = nil }
                 else if launchFrame?.ticket != launchTicket {
                     submitted?.ticket = launchTicket
                     launchFrame = submitted
                 }
-                if observation != nil && (result == 0 || result == 1) {
+                if observation != nil && result >= 0 {
                     encodedCameraRevision = capy_apple_camera_revision(nativeValue(handle))
-                    frameOutcome = UInt64(result) + 1
+                    frameOutcome = delay == 0 ? 2 : 1
                 }
                 try check(result)
                 #if targetEnvironment(simulator)
@@ -1251,7 +1252,7 @@ final class NativeOwner: @unchecked Sendable {
                 // Always flush the final state before the display link sleeps.
                 // Throttling the pen-up frame can otherwise leave Undo/layers
                 // stale indefinitely, until an unrelated action wakes the UI.
-                if motionPublicationPending || result == 0 || now >= lastSnapshotTime + 33_000_000 {
+                if motionPublicationPending || delay != 0 || now >= lastSnapshotTime + 33_000_000 {
                     try publish(); lastSnapshotTime = now
                 }
                 #if DEBUG
@@ -1262,19 +1263,19 @@ final class NativeOwner: @unchecked Sendable {
                 #endif
                 if canvasReady && !shadersReady { try check(capy_apple_finish_startup_catalog(nativeValue(handle))) }
                 if let observation {
-                    let state: UInt64 = (canvasReady ? 1 : 0) | (catalogLoaded ? 2 : 0) | (result == 1 ? 4 : 0) | (shadersReady ? 8 : 0)
+                    let state: UInt64 = (canvasReady ? 1 : 0) | (catalogLoaded ? 2 : 0) | (delay == 0 ? 4 : 0) | (shadersReady ? 8 : 0)
                     if state != lastTraceState {
                         observation.record(FrameTraceEvent(kind: .state, a: FrameTrace.now(), b: now, c: state))
                         lastTraceState = state
                     }
                 }
-                completion(result == 1, capy_apple_camera_revision(nativeValue(handle)), costs)
+                completion(delay, capy_apple_camera_revision(nativeValue(handle)), costs)
             } catch {
                 observation?.record(FrameTraceEvent(kind: .state, a: FrameTrace.now(), b: now, d: 1))
                 try? publish()
                 finishGlass()
                 receive(nil, error.localizedDescription)
-                completion(false, capy_apple_camera_revision(nativeValue(handle)), costs)
+                completion(nil, capy_apple_camera_revision(nativeValue(handle)), costs)
             }
         }
     }

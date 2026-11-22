@@ -1407,10 +1407,12 @@ void CanvasWindow::Run() {
         if(!prepared) {std::string cause=NativeString(capy_error()).get();OutputDebugStringA(cause.c_str());Fail(to_string(CapyUi::str(bootstrap,L"canvas_init_failed"))+"\n\n"+cause);}
         else {std::lock_guard lock(mutex);resize=true;}
         bool dirty=true;
+        CanvasFrameDeadline frameDeadline;
+        auto demand=[&](int32_t delay){dirty|=frameDeadline.Demand(delay,std::chrono::steady_clock::now());};
         auto refreshFrameDemand=[&]{
             auto requested=capy_needs_frame(host);
             if(requested<0)throw std::runtime_error(NativeString(capy_error()).get());
-            dirty|=requested!=0;
+            demand(requested);
         };
         auto answer=[&](CanvasQuery& query){
             auto request=query.kind==CanvasQueryKind::Filters?capy_filter_previews:
@@ -1453,8 +1455,9 @@ void CanvasWindow::Run() {
             bool pollServices=false,pollSurface=false,resized=false;
             {
                 std::unique_lock lock(mutex);
-                wake.wait_until(lock,surfacePoll.Wake(navigatorDirty?std::min(nextServices,navigatorWake):nextServices),[&]{return closing||resize||dirty||!navigatorWork.empty()||servicesReady||transportFailed||!work.Empty()||pendingHover.has_value()||!previewWork.Empty();});
+                wake.wait_until(lock,frameDeadline.Wake(surfacePoll.Wake(navigatorDirty?std::min(nextServices,navigatorWake):nextServices)),[&]{return closing||resize||dirty||!navigatorWork.empty()||servicesReady||transportFailed||!work.Empty()||pendingHover.has_value()||!previewWork.Empty();});
                 if(closing) break;
+                dirty|=frameDeadline.Take(std::chrono::steady_clock::now());
                 if(resize) {
                     auto next=desired;resize=false;probeReady=false;
                     lock.unlock();
@@ -1470,7 +1473,7 @@ void CanvasWindow::Run() {
             if(pollSurface){
                 bool pending=false;auto surfaceResult=capy_poll_surface(host,&pending);
                 if(surfaceResult<0){if(capy_device_lost(host))continue;Fail(NativeString(capy_error()).get());break;}
-                dirty|=surfaceResult!=0;surfacePoll.Schedule(pending,std::chrono::steady_clock::now(),RefreshPeriod(nativeWindow));
+                demand(surfaceResult);surfacePoll.Schedule(pending,std::chrono::steady_clock::now(),RefreshPeriod(nativeWindow));
                 CapySnapshotInfo routing{};
                 if(auto snapshot=capy_snapshot(host,&routing)){
                     NativeString owned(snapshot,capy_string_free);
@@ -1483,7 +1486,7 @@ void CanvasWindow::Run() {
                 if(serviceResult<0){if(capy_device_lost(host))continue;Fail(NativeString(capy_error()).get());break;}
                 nextServices=std::chrono::steady_clock::now()+std::chrono::milliseconds(250);
                 surfacePoll.Schedule(capy_surface_pending(host)>0,std::chrono::steady_clock::now(),RefreshPeriod(nativeWindow));
-                dirty|=serviceResult!=0;
+                demand(serviceResult);
                 dirty|=TracePresentation(false,dirty);
                 if(!dirty&&presentationTrace.Withheld(std::chrono::steady_clock::now())){presentationTrace.Repeat();dirty=true;}
                 CapySnapshotInfo routing{};
@@ -1545,7 +1548,7 @@ void CanvasWindow::Run() {
             if(overflow){sentModifiers.store(0);if(capy_input(host,R"({"type":"blur"})")<0){Fail(NativeString(capy_error()).get());break;}}
             if(capy_device_lost(host))continue;
             auto now=Now();
-            auto repetition=presentationTrace.Repeats([&]{return pending.empty()&&!hover&&!overflow&&capy_needs_frame(host)==0;});
+            auto repetition=presentationTrace.Repeats([&]{return pending.empty()&&!hover&&!overflow&&capy_needs_frame(host)==CAPY_FRAME_IDLE;});
             auto result=repetition==PresentationTrace::Repetition::Held?capy_present_held(host):capy_frame(host,now,now);
             if(latencyTrace.enabled){
                 auto end=Now();uint64_t stats[6]{};auto error=capy_presentation_stats(host,stats);
@@ -1553,7 +1556,7 @@ void CanvasWindow::Run() {
                 latencyTrace.Frame(acquireStart,acquiredAt,now,end,stats,error,drainedAt,timing);
             }
             if(result<0){if(capy_device_lost(host))continue;Fail(NativeString(capy_error()).get());break;}
-            dirty=result!=0;
+            frameDeadline.Serviced();dirty=frameDeadline.Demand(result,std::chrono::steady_clock::now());
             PresentNavigators();navigatorWake=std::chrono::steady_clock::now()+RefreshPeriod(nativeWindow);
             surfacePoll.Schedule(capy_surface_pending(host)>0,std::chrono::steady_clock::now(),RefreshPeriod(nativeWindow));
             TracePresentation(true,dirty,repetition!=PresentationTrace::Repetition::None);
@@ -1570,7 +1573,7 @@ void CanvasWindow::Run() {
             }
             if(brushReady)recoveryAttempts=0;
             CompleteCommands();
-            if(latencyTrace.enabled&&!probeReady&&result==0&&brushReady) {
+            if(latencyTrace.enabled&&!probeReady&&result==CAPY_FRAME_IDLE&&brushReady) {
                 auto info=capy_surface_info(host);
                 if(!info){Fail(NativeString(capy_error()).get());break;}
                 NativeString owned(info,capy_string_free);

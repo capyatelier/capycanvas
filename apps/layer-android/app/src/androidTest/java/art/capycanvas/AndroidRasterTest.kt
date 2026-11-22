@@ -86,7 +86,7 @@ class AndroidRasterTest {
         return runBlocking { ColorPreferencesStore.presets(activity, color, obj("type" to "get", "index" to index)) }.getJSONObject("recipe")
     }
     private val files get() = activity.cacheDir
-    private fun tick() = native { val now=System.nanoTime(); Native.frame(it,now,now+16_666_667) }
+    private fun tick() = native { val now=System.nanoTime(); Native.frame(it,now,now+16_666_667) >= 0L }
     private fun refresh() { tick(); compose.runOnUiThread { host.documentChanged() }; compose.waitForIdle() }
     private fun drawingSettled(): Boolean {
         tick()
@@ -291,6 +291,45 @@ class AndroidRasterTest {
         compose.waitUntil(10_000) { compose.onAllNodesWithText("Submitted FPS").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Submitted FPS").assertIsDisplayed()
         assertNull(host.failure)
+    }
+    @Test fun aFutureFrameDeadlineSleepsTheOwnerUntilOneFrameAtTheDeadline() {
+        val hold = 1_500L
+        val row = native { state(it).array("layers").objects().first { layer -> layer.optBoolean("editing") }.getLong("id") }
+        fun submitted() = native { JSONObject(Native.displayStatus(it)).getLong("submitted_frames") }
+        fun frameStarts(reset: Boolean = false): List<Long> {
+            val done = java.util.concurrent.CountDownLatch(1)
+            var report = JSONObject()
+            host.measurements(reset) { report = it; done.countDown() }
+            assertTrue(done.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            val rows = report.array("frames")
+            return (0 until rows.length()).map { rows.getJSONArray(it).getLong(1) }
+        }
+        fun touch(id: Int, phase: String) = host.input(obj("type" to "layer_touch", "surface" to 7_001, "id" to id, "phase" to phase,
+            "position" to org.json.JSONArray(listOf(40.0, 40.0)), "row" to row, "time_ns" to SystemClock.uptimeMillis() * 1_000_000L))
+        native { Native.touchPolicy(it, hold.toInt(), 16f) }
+        try {
+            compose.waitUntil(60_000) { !tick() }
+            compose.waitForIdle()
+            frameStarts(reset = true)
+            val touched = System.nanoTime()
+            touch(1, "down"); touch(2, "down")
+            SystemClock.sleep(400)
+            val quietFrom = System.nanoTime()
+            val submittedBefore = submitted()
+            SystemClock.sleep(hold - 600)
+            assertEquals("No frame is submitted before the deadline", submittedBefore, submitted())
+            val deadline = touched + hold * 1_000_000
+            compose.waitUntil(5_000) { frameStarts().any { it >= deadline } }
+            val starts = frameStarts().filter { it >= quietFrom }
+            assertTrue("The owner makes no poll before the deadline: $starts", starts.none { it < deadline })
+            assertTrue("One frame runs at the deadline: $starts", starts.first() <= deadline + 500_000_000)
+            assertNull(host.failure)
+        } finally {
+            touch(1, "cancel"); touch(2, "cancel")
+            native { Native.touchPolicy(it, android.view.ViewConfiguration.getLongPressTimeout(),
+                android.view.ViewConfiguration.get(activity).scaledTouchSlop.toFloat()) }
+            invoke("deselect")
+        }
     }
     private fun state(handle: Long): JSONObject {
         Native.dispatch(handle,obj("type" to "close_settings").toString())

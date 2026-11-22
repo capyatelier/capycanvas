@@ -21,13 +21,13 @@ import Foundation
         admissions.append(admitted); denials.append(denial)
     }
     func observeActivity(active: Bool) {}
-    var completions: [@Sendable (Bool, UInt64, [UInt64]) -> Void] = []
+    var completions: [@Sendable (Int?, UInt64, [UInt64]) -> Void] = []
     func frame(now: UInt64, target: UInt64,
-        completion: @escaping @Sendable (Bool, UInt64, [UInt64]) -> Void) {
+        completion: @escaping @Sendable (Int?, UInt64, [UInt64]) -> Void) {
         completions.append(completion)
     }
-    func complete(again: Bool = false, revision: UInt64 = 1) {
-        completions.removeFirst()(again, revision, [1, 1, 1, 1, 1])
+    func complete(delay: Int? = nil, revision: UInt64 = 1) {
+        completions.removeFirst()(delay, revision, [1, 1, 1, 1, 1])
     }
 }
 
@@ -68,7 +68,7 @@ import Foundation
         assert(store.canvasSubmitted && submissions == 1)
 
         frames.tick(target: 2.5)
-        store.native!.complete(again: true)
+        store.native!.complete(delay: 0)
         await drainMainQueue()
         assert(submissions == 1, "Canvas readiness must not publish accessibility changes on every frame")
 
@@ -108,7 +108,7 @@ import Foundation
         frames.wake(); frames.tick(target: 8)
         visible = false; frames.wake(); frames.tick(target: 9)
         assert(paused && store.native!.completions.count == 1, "Hiding must reject ticks while a frame is pending")
-        store.native!.complete(again: true, revision: 6)
+        store.native!.complete(delay: 0, revision: 6)
         await drainMainQueue()
         assert(paused && store.canvasSubmitted && store.cameraRevision == 6 && submissions == 2,
             "A pending completion cannot wake a hidden window or reset its canvas")
@@ -146,7 +146,7 @@ import Foundation
             frames.activate()
             frames.tick(target: 11)
             sceneActive = false
-            native.complete(again: true)
+            native.complete(delay: 0)
             await drainMainQueue()
             assert(!native.framePublicationActive, "Scene deactivation must flush pending motion without another tick")
             assert(paused && native.admissions == [true] && native.completions.isEmpty,
@@ -162,6 +162,38 @@ import Foundation
             assert(paused && store.canvasSubmitted && native.admissions == [true, true],
                 "The resumed idle frame must preserve canvas readiness without free-running")
         }
-        print("Shared frame-driver checks passed: admission, wake, detach, replacement, visibility and bubble motion")
+        do {
+            let store = EditorStore(), native = store.native!
+            let frames = CanvasFrameDriver(store: store)
+            var paused = true
+            frames.setPaused = { paused = $0 }
+            frames.activate()
+            frames.tick(target: 20)
+            native.complete(delay: 120)
+            await drainMainQueue()
+            assert(paused && native.completions.isEmpty, "A future deadline must pause the display link instead of polling every refresh")
+            try? await Task.sleep(nanoseconds: 60_000_000)
+            assert(paused && native.admissions == [true], "No frame may be admitted before the deadline")
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            assert(!paused, "The deadline must wake the display link")
+            frames.tick(target: 21)
+            assert(native.admissions == [true, true] && native.completions.count == 1, "One frame runs at the deadline")
+            native.complete()
+            await drainMainQueue()
+            assert(paused, "An idle reply after the deadline must pause the display link")
+
+            frames.wake(); frames.tick(target: 22)
+            native.complete(delay: 80)
+            await drainMainQueue()
+            assert(paused)
+            frames.wake()
+            assert(!paused, "Input must wake an armed deadline at once")
+            frames.tick(target: 23)
+            native.complete()
+            await drainMainQueue()
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            assert(paused && native.completions.isEmpty, "A superseded deadline must not wake the display link later")
+        }
+        print("Shared frame-driver checks passed: admission, wake, detach, replacement, visibility, bubble motion and timed deadlines")
     }
 }

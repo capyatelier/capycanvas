@@ -294,11 +294,7 @@ impl WebApp {
         self.session.engine().frame_demand() != layer_render::FrameDemand::Wait
     }
     pub fn next_frame_ms(&self) -> f64 {
-        match self.session.frame_demand() {
-            layer_render::FrameDemand::Animate | layer_render::FrameDemand::Work => 0.,
-            layer_render::FrameDemand::WaitUntil(deadline) => (deadline.saturating_duration_since(web_time::Instant::now()).as_secs_f64() * 1000.).max(1.),
-            layer_render::FrameDemand::Wait => -1.,
-        }
+        layer_host::frame_delay(self.session.frame_demand()).map_or(-1., |delay| delay.as_millis() as f64)
     }
     pub fn set_window_hidden(&mut self, hidden: bool) { self.session.set_window_hidden(hidden); }
     pub fn take_layer_thumbnail(&mut self) -> Result<JsValue, JsValue> {

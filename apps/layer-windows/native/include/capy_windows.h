@@ -81,7 +81,9 @@ __declspec(dllimport) int32_t capy_test_device_loss(CapyHost,char const*);
 /* Start/load on the render owner before queued user actions. Wake runs on the
    storage thread and must only signal owned synchronization state. */
 __declspec(dllimport) int32_t capy_start_services(CapyHost, void* context, void (*wake)(void*));
-/* Returns 1 when canvas work is pending; 0 permits an idle service-only tick. */
+/* Frame demand from capy_needs_frame, capy_poll_services, capy_poll_surface, capy_frame and capy_present_held:
+   milliseconds until the next frame (0 = now), CAPY_FRAME_IDLE when none is due, -1 on error. */
+enum { CAPY_FRAME_IDLE = INT32_MAX };
 __declspec(dllimport) int32_t capy_needs_frame(CapyHost);
 __declspec(dllimport) int32_t capy_poll_services(CapyHost);
 /* Chrome or surface readiness awaits GPU completion; a non-blocking poll publishes it. */

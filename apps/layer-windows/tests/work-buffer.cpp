@@ -1060,6 +1060,28 @@ int main() {
     }
     std::cout<<"Pending chrome acknowledgements wake the idle render loop at the next refresh, not the service tick\n";
     {
+        auto at=[](int ms){return std::chrono::steady_clock::time_point{}+std::chrono::hours(1)+std::chrono::milliseconds(ms);};
+        auto services=at(250);
+        CanvasWorkBuffer idle;CanvasQueryQueue none;CanvasFrameDeadline deadline;
+        bool dirty=deadline.Demand(CAPY_FRAME_IDLE,at(0));
+        assert(!dirty&&deadline.Wake(services)==services&&!deadline.Take(at(1000)));
+        dirty=deadline.Demand(40,at(0));
+        assert(!dirty&&NextCanvasRenderStep(dirty,idle,none)==CanvasRenderStep::Wait&&deadline.Wake(services)==at(40));
+        for(int query=1;query<40;++query){
+            dirty|=deadline.Demand(40,at(query));
+            assert(!dirty&&deadline.Wake(services)==at(40)&&!deadline.Take(at(query))&&"A future deadline arms one wake, never a render, until it arrives");
+        }
+        dirty|=deadline.Take(at(40));
+        assert(dirty&&NextCanvasRenderStep(dirty,idle,none)==CanvasRenderStep::Frame&&deadline.Wake(services)==services&&"One frame runs at the deadline");
+        deadline.Serviced();dirty=deadline.Demand(30,at(41));
+        assert(!dirty&&deadline.Wake(services)==at(71));
+        dirty|=deadline.Demand(0,at(50));
+        assert(dirty&&"Input or a retry renders at once");
+        deadline.Serviced();dirty=deadline.Demand(CAPY_FRAME_IDLE,at(51));
+        assert(!dirty&&deadline.Wake(services)==services&&!deadline.Take(at(1000))&&"A frame replaces the armed deadline");
+    }
+    std::cout<<"A future frame deadline arms one timed render-loop wake that a frame replaces\n";
+    {
         auto origin=PresentationTrace::Clock::time_point{}+std::chrono::hours(1);
         auto at=[&](int ms){return origin+std::chrono::milliseconds(ms);};
         PresentationTrace presentation(true);

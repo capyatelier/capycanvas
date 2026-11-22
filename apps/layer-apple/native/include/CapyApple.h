@@ -269,8 +269,10 @@ int32_t capy_apple_pointer_updates(CapyApple app, uint64_t id, uint32_t tool, ui
 int32_t capy_apple_scroll(CapyApple app, float x, float y, float dx, float dy,
                           float scale, uint32_t zoom, uint32_t horizontal);
 int32_t capy_apple_gesture(CapyApple app, float x, float y, float scale, float rotation, uint32_t began);
-/* Returns 1 if more frames are needed, 0 when idle, -1 on error. Optional costs
+/* Returns the milliseconds until the next frame is needed (0 = next refresh),
+   CAPY_APPLE_FRAME_IDLE when none is, -1 on error. Optional costs
    receives 5 nanosecond durations: paint, acquire, viewport, present, poll. */
+enum { CAPY_APPLE_FRAME_IDLE = INT32_MAX };
 int32_t capy_apple_frame(CapyApple app, uint64_t now_ns, uint64_t presentation_ns,
                         uint64_t *costs, uint64_t *launch_frame);
 bool capy_apple_launch_presented(CapyApple app, uint64_t frame);

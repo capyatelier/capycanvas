@@ -20,6 +20,7 @@ pub use storage::*;
 /// SDR viewing contract shared by canvas, UI values and image transports.
 /// Core Animation/ColorSync maps tagged P3 to the current screen, including sRGB.
 const DISPLAY_SPACE: layer_core::color::RgbSpace = layer_core::color::RgbSpace::DisplayP3;
+const FRAME_IDLE: i32 = i32::MAX;
 mod project;
 pub use project::*;
 mod previews;
@@ -994,16 +995,16 @@ pub unsafe extern "C" fn capy_apple_frame(
         if presentation < now {
             return Err("Presentation precedes observation time".into());
         }
-        if a.host.session.rendering_suspended() { return Ok(0); }
+        if a.host.session.rendering_suspended() { return Ok(FRAME_IDLE); }
         let mut frame = 0;
-        let (again, timing) = a.gpu_operation(|a| a.metal.frame(&mut a.host, now, presentation, &mut frame))?;
+        let (demand, timing) = a.gpu_operation(|a| a.metal.frame(&mut a.host, now, presentation, &mut frame))?;
         if !launch_frame.is_null() { unsafe { *launch_frame = frame; } }
         if !costs.is_null() {
             unsafe {
                 std::ptr::copy_nonoverlapping(timing.as_ptr(), costs, 5);
             }
         }
-        Ok(i32::from(again))
+        Ok(layer_host::frame_delay(demand).map_or(FRAME_IDLE, |delay| i32::try_from(delay.as_millis()).unwrap_or(FRAME_IDLE)))
     })
     .unwrap_or(-1)
 }
