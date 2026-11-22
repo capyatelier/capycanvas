@@ -34,6 +34,8 @@ pub(super) struct Contact {
     baselines:BTreeMap<[u32;2],Baseline>,
     drawn_directly:bool,
     reduced_from:BTreeMap<[u32;2],Vec<Description>>,
+    tip:PixelRect,
+    carried:Vec<PixelRect>,
 }
 
 type Description=(crate::resident::Input,PixelRect);
@@ -155,6 +157,10 @@ fn request_ahead(r:&mut WgpuRasterizer,scene:SceneView<'_>,frame:&Arc<SignatureF
 fn local_reach(packet:FramePacket<'_>,target:SourceTarget,phase:[u32;2])->Vec<PixelRect> {
     let extent=packet.scene.target_extent(target);
     packet.dab_batches.iter().map(|batch|crate::pixel_rect::pixel_rect(batch.damage,extent)).filter(|reach|!reach.is_empty()).map(|reach|reach.translated(phase)).collect()
+}
+fn painted(packet:FramePacket<'_>,extent:[u32;2],kinds:&[DabBatchKind])->PixelRect {
+    packet.dab_batches.iter().filter(|batch|kinds.contains(&batch.kind)).map(|batch|DocRect::from(crate::batch_pixel_rect(batch,packet.scene.target_extent(batch.target)))
+        .translated(packet.scene.target_offset(batch.target)).in_frame(extent)).fold(PixelRect::EMPTY,PixelRect::union)
 }
 fn stroke(packet:FramePacket<'_>)->Option<(layer_core::StrokeId,SourceTarget)> {
     let first=packet.dab_batches.first()?;
@@ -318,7 +324,8 @@ impl Cache {
             previewed:r.preview_input_tiles(target),next:None,
             ahead,
             footprints,tainted,guard,generation:std::sync::Mutex::new(generation),exit:std::sync::OnceLock::new(),preview_level,cells,inputs,pages,level,
-            stale:BTreeMap::new(),written:IdMap::default(),submissions:Vec::new(),stamps:Arc::default(),reduced,baselines:BTreeMap::new(),drawn_directly,reduced_from:BTreeMap::new()};
+            stale:BTreeMap::new(),written:IdMap::default(),submissions:Vec::new(),stamps:Arc::default(),reduced,baselines:BTreeMap::new(),drawn_directly,reduced_from:BTreeMap::new(),
+            tip:painted(packet,plan.extent,&[DabBatchKind::Preview]),carried:Vec::new()};
         contact.stale=contact.phased(&contact.previewed).map(|tile|(tile,page_rect(tile))).collect();
         self.gesture=Some(contact);
         Ok(())
@@ -458,8 +465,9 @@ impl Cache {
         let previewed=r.preview_input_tiles(target);
         let stale=contact.footprints.iter().filter(|(local,_)|changed.iter().any(|tile|!page_rect(*tile).intersect(*local).is_empty()))
             .flat_map(|(_,cells)|cells.iter().copied()).collect::<Vec<_>>();
-        let all=pages::coordinates(contact.plan.bounds,contact.plan.level).collect::<Vec<_>>();
-        let reached=stale.iter().map(|index|pages::bounds(all[*index],contact.plan.level,contact.plan.extent)).collect();
+        let (level,extent)=(contact.plan.level,contact.plan.extent);
+        let all=pages::coordinates(contact.plan.bounds,level).collect::<Vec<_>>();
+        let reached=stale.iter().map(|index|pages::bounds(all[*index],level,extent)).collect();
         let refreshed:BTreeSet<_>=changed.iter().chain(&contact.previewed).chain(&previewed).copied().collect();
         let planes:&[layer_core::raster::RasterPlane]=if wet {&[layer_core::raster::RasterPlane::Color,layer_core::raster::RasterPlane::WatercolorWetness]}else {&[layer_core::raster::RasterPlane::Color]};
         if !contact.inputs.refresh_contact(r,packet.scene,target,planes,refreshed,&persistent,encoder) {return None;}
@@ -471,7 +479,8 @@ impl Cache {
             contact.stale.extend(tipped);
         }
         contact.next=Some((current,changed,predicted,previewed));
-        self.invalidate_cells(stale);
+        let carried=self.invalidate_cells(stale).into_iter().map(|index|pages::bounds(all[index],level,extent)).collect();
+        self.gesture.as_mut()?.carried=carried;
         Some(reached)
     }
     #[cfg(test)]
@@ -490,12 +499,15 @@ impl Cache {
     }
     pub(super) fn compose_contact(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,
         composes:Vec<PixelRect>,retained:u64,
-    )->Result<(Vec<PixelRect>,Vec<PixelRect>),GpuRasterError> {
+    )->Result<(Vec<(PixelRect,PixelRect)>,Vec<PixelRect>),GpuRasterError> {
         let drawn=self.unnamed_writes(&composes);
         let contact=self.gesture.as_mut().expect("live contact");
         let (root,tiled,target)=(contact.root.clone(),contact.tiled,contact.target);
         let (plan,frame)=(contact.plan,contact.source);
         let patch=Patch::of(contact,tiled,frame);
+        let pointwise=matches!(patch,Some(Patch::Tile)) && packet.dab_batches.iter().all(|batch|crate::pointwise(&batch.style) && !crate::revisits_stroke(&batch.style));
+        let moved=pointwise.then(||painted(packet,plan.extent,&[DabBatchKind::Persistent,DabBatchKind::Preview]).union(contact.tip));
+        let carried=std::mem::take(&mut contact.carried);
         let (side,span)=(1u32<<plan.level,PAGE_SIZE<<plan.level);
         let reduced=contact.reduced_tiles(std::iter::empty());
         let mut inputs=std::mem::take(&mut contact.inputs);
@@ -557,7 +569,8 @@ impl Cache {
                         if let Some(texels)=texels {crop(&mut scene.jobs[start..],texels);}
                         if let Some((stroked,reads))=now {fresh.push((cell,stroked,reads));}
                         unit.work=scene.planned_work(start);units.push(unit);
-                        composed.push(texels.map_or(region,|[x,y,width,height]|PixelRect::new(x*side,y*side,(x+width)*side,(y+height)*side).translated([region.min_x(),region.min_y()]).intersect(region)));
+                        let written=texels.map_or(region,|[x,y,width,height]|PixelRect::new(x*side,y*side,(x+width)*side,(y+height)*side).translated([region.min_x(),region.min_y()]).intersect(region));
+                        composed.push((written,moved.filter(|_|carried.contains(&region)).map_or(written,|moved|written.intersect(moved))));
                     },
                     Err(GpuRasterError::NotReady|GpuRasterError::NotPublished|GpuRasterError::SourceWorkingSetExceeded)=>{scene.discard_jobs_from(start);blocked.push(region);},
                     Err(error)=>return Err(error),
@@ -573,6 +586,7 @@ impl Cache {
         contact.baselines.extend(fresh.into_iter().map(|(cell,stroked,reads)|(cell,Baseline {submission:submission.clone(),stroked,reads})));
         for (tile,now) in witnessed {match now {Some(now)=>{contact.reduced_from.insert(tile,now);},None=>{contact.reduced_from.remove(&tile);}}}
         if let Some((versions,_,predicted,previewed))=contact.next.take() {contact.composed=versions;contact.predicted=predicted;contact.previewed=previewed;}
+        contact.tip=painted(packet,plan.extent,&[DabBatchKind::Preview]);
         {
             let tipped:BTreeSet<_>=contact.phased(&contact.previewed).collect();
             let mut store=self.pages.lock().unwrap();

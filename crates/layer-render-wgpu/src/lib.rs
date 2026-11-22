@@ -5290,6 +5290,7 @@ impl WgpuRasterizer {
 
         self.drain_image_decodes(&mut encoder)?;
         let animated = packet.scene.order().iter().any(|&h| packet.scene.visible(h) && packet.scene.effect(h).is_some_and(|e| e.animated()));
+        let mut published=PixelRect::EMPTY;
         // Newly populated display pages change visible pixels too, even when
         // the document itself did not change (for example after navigation).
         if !dirty.is_empty() || animated || display_rebuilt || !unchanged || self.objects_outstanding()
@@ -5312,12 +5313,11 @@ impl WgpuRasterizer {
                 Err(GpuRasterError::NotReady)
             } else {scene.compose(self, packet, &mut encoder, &mut work)};
             self.scene = Some(scene);
-            let published=match result {
+            published=match result {
                 Err(error) if error.is_preparation_pending()=>PixelRect::EMPTY,
                 result=>result?,
             };
-            if !published.is_empty() {self.composite_revision=self.composite_revision.wrapping_add(1);}
-            self.composite_damage=published;
+            if !published.is_empty() {self.composite_revision=self.composite_revision.wrapping_add(1);self.composite_damage=published;}
         }
         let mut navigator = std::mem::take(&mut self.navigator);
         let navigator_revision = navigator.revision;
@@ -5339,7 +5339,8 @@ impl WgpuRasterizer {
             let changed=match result {Err(error) if error.is_preparation_pending()=>PixelRect::EMPTY,result=>result?};
             if !changed.is_empty() {
                 refined = true;
-                self.composite_damage = self.composite_damage.union(changed);
+                published = published.union(changed);
+                self.composite_damage = published;
                 self.composite_revision = self.composite_revision.wrapping_add(1);
             }
         }
