@@ -19,10 +19,11 @@ fn renderer(doc:&layer_core::Document)->WgpuRasterizer {
 
 #[expect(clippy::too_many_arguments,reason="Each contact case names its document, view, brush, dabs and renderer")]
 fn each_contact_frame_matches_a_fresh_renderer(doc:&layer_core::Document,view:layer_render::ViewState,level:u32,preset:DefaultBrushPreset,dabs:&[layer_render::Dab],
-    renderer:&dyn Fn(&layer_core::Document)->WgpuRasterizer,contact:std::ops::Range<usize>,mut before:impl FnMut(&mut WgpuRasterizer,usize),
+    renderer:&dyn Fn(&layer_core::Document)->WgpuRasterizer,contact:std::ops::Range<usize>,compared:Option<PixelRect>,mut before:impl FnMut(&mut WgpuRasterizer,usize),
 ) {
-    let extent=doc.composition().size;let target=doc.active_target().unwrap();let style=crate::layer_tests::preset_style(preset);
-    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view;
+    let extent=doc.composition().size;let target=doc.active_target().unwrap();
+    let style=layer_render::DabStyle {blend_space:doc.composition().blend,..crate::layer_tests::preset_style(preset)};
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view;frame.blend_space=doc.composition().blend;
     let mut r=renderer(doc);layer_render::CanvasRenderer::set_working_layer(&mut r,doc.working.occurrence);
     crate::test_support::submit_settled(&mut r,frame);
     assert_eq!(r.scale_display.as_ref().unwrap().plan.level,level);
@@ -43,7 +44,11 @@ fn each_contact_frame_matches_a_fresh_renderer(doc:&layer_core::Document,view:la
         crate::test_support::submit_settled(&mut fresh,frame);
         let whole=batch(&dabs[..=step],true);
         crate::test_support::submit_ready(&mut fresh,FramePacket {dabs:&dabs[..=step],dab_batches:std::slice::from_ref(&whole),time_seconds:time,..frame}).unwrap();
-        let error=max_error(&display_pixels(&r),&display_pixels(&fresh));
+        let (shown,expected)=(display_pixels(&r),display_pixels(&fresh));
+        let error=match compared {
+            Some(region)=>texels_inside(r.scale_display.as_ref().unwrap().plan,region).into_iter().map(|(_,index)|max_error(&shown[index..=index],&expected[index..=index])).fold(0f32,f32::max),
+            None=>max_error(&shown,&expected),
+        };
         assert!(error<1e-4,"contact frame {step} differs from a fresh renderer by {error}");
         assert!(r.has_presentable_frame(),"contact frame {step} presents");
     }
@@ -53,20 +58,20 @@ fn dabs(xs:&[f32],y:f32)->Vec<layer_render::Dab> {xs.iter().map(|x|stroke_dab(*x
 #[test]
 fn a_stroke_entering_a_new_level_page_mid_contact_matches_a_fresh_renderer() {
     let doc=document_at([2048,1024]);
-    each_contact_frame_matches_a_fresh_renderer(&doc,view_at([2048,1024],4),2,DefaultBrushPreset::GPen,&dabs(&[880.,940.,1000.,1060.,1120.],500.),&renderer,1..5,|_,_|{});
+    each_contact_frame_matches_a_fresh_renderer(&doc,view_at([2048,1024],4),2,DefaultBrushPreset::GPen,&dabs(&[880.,940.,1000.,1060.,1120.],500.),&renderer,1..5,None,|_,_|{});
 }
 
 #[test]
 fn a_cell_revisited_later_in_the_same_contact_recomposes_and_matches_a_fresh_renderer() {
     let doc=document_at([2048,1024]);
-    each_contact_frame_matches_a_fresh_renderer(&doc,view_at([2048,1024],1),0,DefaultBrushPreset::GPen,&dabs(&[1500.,300.,700.,320.,1520.],300.),&renderer,1..5,|_,_|{});
+    each_contact_frame_matches_a_fresh_renderer(&doc,view_at([2048,1024],1),0,DefaultBrushPreset::GPen,&dabs(&[1500.,300.,700.,320.,1520.],300.),&renderer,1..5,None,|_,_|{});
 }
 
 #[test]
 fn a_stroke_on_an_offset_layer_crossing_a_level_page_edge_stays_in_contact_and_matches_a_fresh_renderer() {
     let mut doc=document_at([2048,1024]);
     let working=doc.working.occurrence.unwrap();doc.artwork.occurrences.get_mut(working).unwrap().offset=[3,5];
-    each_contact_frame_matches_a_fresh_renderer(&doc,view_at([2048,1024],4),2,DefaultBrushPreset::GPen,&dabs(&[900.,960.,1000.,1040.],500.),&renderer,1..4,|_,_|{});
+    each_contact_frame_matches_a_fresh_renderer(&doc,view_at([2048,1024],4),2,DefaultBrushPreset::GPen,&dabs(&[900.,960.,1000.,1040.],500.),&renderer,1..4,None,|_,_|{});
 }
 
 #[test]
@@ -143,7 +148,7 @@ fn store_pressure_mid_stroke_releases_the_contact_and_every_frame_matches_a_fres
     let mut large=dabs(&[400.,450.,500.,550.,600.,650.],500.);
     for dab in &mut large {dab.radii=[400.;2];}
     let (release,gate)=std::sync::mpsc::channel::<()>();let mut gate=Some(gate);let mut held=Vec::new();
-    each_contact_frame_matches_a_fresh_renderer(&doc,view,1,DefaultBrushPreset::GPen,&large,&tight,1..3,|r,step| {
+    each_contact_frame_matches_a_fresh_renderer(&doc,view,1,DefaultBrushPreset::GPen,&large,&tight,1..3,None,|r,step| {
         let store=r.scene.as_ref().unwrap().scale_pages.clone();
         if step==3 {
             held=r.scale_display.as_ref().unwrap().gesture.as_ref().unwrap().pages.keys().cloned().collect();
@@ -170,7 +175,7 @@ fn a_stroke_under_a_blur_and_a_layer_above_matches_a_fresh_renderer_in_every_con
     let blur=effect_occurrence(&mut doc,layer_core::EffectInstance::new(crate::tests::fixture("gaussian_blur").program()),"Blur");
     set_effect_value(&mut doc,blur,"sigma",layer_core::EffectValue::Number(12.));
     set_root_entries(&mut doc,vec![above,blur,ink]);
-    each_contact_frame_matches_a_fresh_renderer(&doc,view_at(extent,1),0,DefaultBrushPreset::GPen,&dabs(&[200.,250.,500.,540.,580.],240.),&renderer,1..5,|_,_|{});
+    each_contact_frame_matches_a_fresh_renderer(&doc,view_at(extent,1),0,DefaultBrushPreset::GPen,&dabs(&[200.,250.,500.,540.,580.],240.),&renderer,1..5,None,|_,_|{});
 }
 
 fn contact_frame(r:&mut WgpuRasterizer,frame:FramePacket<'_>,target:SourceTarget,x:f32,start:bool)->Option<Arc<crate::scene::SignatureFrame>> {
@@ -806,20 +811,33 @@ fn a_reduced_pencil_stroke_on_a_perceptual_photo_changes_display_texels_outside_
     assert!(error<1e-4,"after pen-up the view differs from a renderer given only the persistent dabs by {error}");
 }
 
-#[test]
-fn a_wide_dab_centred_just_off_screen_shows_its_ink_in_every_visible_cell_it_covers_in_its_own_frame() {
+fn wide_photo()->layer_core::Document {
     let extent=[4096,3072];
     let photo=rgba8_source(extent,|x,y| {
         let mut h=x.wrapping_mul(0x9E37_79B1)^y.wrapping_mul(0x85EB_CA77);h^=h>>15;h=h.wrapping_mul(0x2C1B_3C6D);h^=h>>12;
         let noise=(h&31) as u8;[30+noise+(x*40/extent[0]) as u8,90+noise+(y*40/extent[1]) as u8,40+noise,255]
     });
-    let doc=layer_color::photo_project(Arc::unwrap_or_clone(photo),Default::default(),"Photo".into(),SampleDepth::U8).unwrap();
-    let target=doc.active_target().unwrap();
-    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.blend_space=doc.composition().blend;
-    frame.view=crate::test_support::view([800,600]);frame.view.document_to_surface=[0.5,0.,0.,0.5,-800.,-600.];
-    let visible=PixelRect::new(1600,1200,3200,2400);
+    layer_color::photo_project(Arc::unwrap_or_clone(photo),Default::default(),"Photo".into(),SampleDepth::U8).unwrap()
+}
+fn wide_frame(doc:&layer_core::Document)->FramePacket<'_> {
+    let mut frame=packet(doc.scene(),doc.composition().size);frame.composite_all=false;frame.blend_space=doc.composition().blend;
+    frame.view=crate::test_support::view([800,600]);frame.view.document_to_surface=[0.5,0.,0.,0.5,-800.,-600.];frame
+}
+fn ink(x:f32,y:f32,radius:f32)->layer_render::Dab {let mut dab=crate::tests::test_dab([x,y],[0.01,0.01,0.01,1.],1.);dab.radii=[radius;2];dab}
+fn texels_inside(plan:display_mips::Plan,region:PixelRect)->Vec<([u32;2],usize)> {
+    let (side,span)=(1u32<<plan.level,PAGE_SIZE<<plan.level);
+    (0..plan.size[1]).flat_map(|y|(0..plan.size[0]).map(move|x|[x,y])).filter_map(|[x,y]| {
+        let texel=PixelRect::new(plan.bounds.min_x()+x*side,plan.bounds.min_y()+y*side,plan.bounds.min_x()+(x+1)*side,plan.bounds.min_y()+(y+1)*side);
+        (region.intersect(texel)==texel).then_some(([texel.min_x()/span,texel.min_y()/span],(y*plan.size[0]+x) as usize))
+    }).collect()
+}
+
+#[test]
+fn a_wide_dab_centred_just_off_screen_shows_its_ink_in_every_visible_cell_it_covers_in_its_own_frame() {
+    let doc=wide_photo();let target=doc.active_target().unwrap();let frame=wide_frame(&doc);
+    let visible=display_mips::view_bounds(frame.view,doc.composition().size,0).unwrap();
     let style=layer_render::DabStyle {blend_space:doc.composition().blend,..crate::layer_tests::preset_style(DefaultBrushPreset::GPen)};
-    let mut dab=crate::tests::test_dab([3400.,1800.],[0.01,0.01,0.01,1.],1.);dab.radii=[1000.;2];
+    let dab=ink(3400.,1800.,1000.);
     let batch=layer_render::DabBatch {stroke_start:true,stroke_end:false,..dab_batch(target,style,dab.bounds())};
     let stroke=FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame};
     let (plan,shown,settled)=crate::test_support::with_pace([2*object_cache::PASS_TAPS,crate::frame_pace::IDLE_TAPS],|| {
@@ -827,19 +845,26 @@ fn a_wide_dab_centred_just_off_screen_shows_its_ink_in_every_visible_cell_it_cov
         crate::test_support::submit_settled(&mut r,frame);
         crate::test_support::submit_ready(&mut r,stroke).unwrap();
         let shown=display_pixels(&r);
-        crate::test_support::submit_settled(&mut r,frame);
+        let still=layer_render::Dab {flow:0.,..dab};
+        let lift=layer_render::DabBatch {stroke_start:false,stroke_end:true,..batch.clone()};
+        crate::test_support::submit_settled(&mut r,FramePacket {dabs:std::slice::from_ref(&still),dab_batches:std::slice::from_ref(&lift),time_seconds:0.02,..stroke});
         (r.scale_display.as_ref().unwrap().plan,shown,display_pixels(&r))
     });
-    let (side,span)=(1u32<<plan.level,PAGE_SIZE<<plan.level);
-    let reach=crate::pixel_rect::pixel_rect(dab.bounds(),extent).intersect(plan.bounds);
-    assert!(plan.level==1 && pages::coordinates(reach,plan.level).any(|cell|pages::bounds(cell,plan.level,extent).intersect(visible).is_empty()),
+    let reach=crate::pixel_rect::pixel_rect(dab.bounds(),plan.extent).intersect(plan.bounds);
+    assert!(plan.level==1 && pages::coordinates(reach,plan.level).any(|cell|pages::bounds(cell,plan.level,plan.extent).intersect(visible).is_empty()),
         "the dab covers window cells outside the view at level 1");
-    let stale:BTreeSet<_>=(0..plan.size[1]).flat_map(|y|(0..plan.size[0]).map(move|x|[x,y])).filter(|&[x,y]| {
-        let texel=PixelRect::new(plan.bounds.min_x()+x*side,plan.bounds.min_y()+y*side,plan.bounds.min_x()+(x+1)*side,plan.bounds.min_y()+(y+1)*side);
-        let index=(y*plan.size[0]+x) as usize;
-        visible.intersect(texel)==texel && shown[index][..3].iter().zip(&settled[index][..3]).any(|(shown,settled)|(shown-settled).abs()>0.05)
-    }).map(|[x,y]|[(plan.bounds.min_x()+x*side)/span,(plan.bounds.min_y()+y*side)/span]).collect();
+    let stale:BTreeSet<_>=texels_inside(plan,visible).into_iter()
+        .filter(|(_,index)|shown[*index][..3].iter().zip(&settled[*index][..3]).any(|(shown,settled)|(shown-settled).abs()>0.05)).map(|(cell,_)|cell).collect();
     assert!(stale.is_empty(),"the dab's own frame leaves visible cells under it without its ink: {stale:?}");
+}
+
+#[test]
+fn a_wide_stroke_crossing_the_view_edge_composes_in_the_contact_it_begins_at_pen_down_as_a_fresh_renderer_shows_it() {
+    let doc=wide_photo();let view=wide_frame(&doc).view;
+    let visible=display_mips::view_bounds(view,doc.composition().size,0).ok();
+    let dabs=(0..5).map(|step|ink(3400.-60.*step as f32,1800.,1000.)).collect::<Vec<_>>();
+    crate::test_support::with_pace([2*object_cache::PASS_TAPS,crate::frame_pace::IDLE_TAPS],||
+        each_contact_frame_matches_a_fresh_renderer(&doc,view,1,DefaultBrushPreset::GPen,&dabs,&renderer,1..dabs.len(),visible,|_,_|{}));
 }
 
 #[test]

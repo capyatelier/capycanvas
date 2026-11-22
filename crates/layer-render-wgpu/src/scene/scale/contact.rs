@@ -305,7 +305,7 @@ impl Cache {
         if required.iter().any(|cell|!ready.contains(cell)) {return Ok(());}
         let source=source_frame(Some(&scene.scale_sources),packet.scene,target);
         let reduced=local_reach(packet,target,source.phase).into_iter().flat_map(page_coordinates).collect();
-        let Some(Declared {cells,inputs,pages,level})=self.declare_contact(scene,r,packet,encoder,retained,budget,&frame,&root,target,tiled,None,ready,&required,&reduced)? else {return Ok(());};
+        let Some(Declared {cells,inputs,pages,level})=self.declare_contact(scene,r,packet,encoder,retained,budget,&frame,&root,target,tiled,None,ready,&|cell|required.contains(&cell).then_some(Class::Authored),&reduced)? else {return Ok(());};
         if required.iter().any(|region|!cells.iter().any(|(cell,_)|cell==region)) {return Ok(());}
         request_ahead(r,packet.scene,&frame,encoder,target,source.phase,ahead.iter().copied());
         let footprints=frame.reader_regions(target,self.plan.level).into_iter().map(|(local,regions)|(local,regions.into_iter().flat_map(|region|self.reached_cells(region)).collect())).collect();
@@ -347,7 +347,7 @@ impl Cache {
         cells.extend(waiting.into_iter().take(1));
         cells.retain(|cell|!self.pivot_missing(*cell));
         let declared=if cells.is_empty() && tiles.is_empty() {Some(Declared::default())}
-            else {self.declare_contact(scene,r,packet,encoder,retained,budget,&frame,&root,target,tiled,level,cells.clone(),&cells,&tiles)?};
+            else {self.declare_contact(scene,r,packet,encoder,retained,budget,&frame,&root,target,tiled,level,cells,&|cell|Some(if reached.contains(&cell) {Class::Authored}else {Class::Visible}),&tiles)?};
         let Some(Declared {cells,inputs,pages,level})=declared else {return Ok(false);};
         let contact=self.gesture.as_mut().expect("live contact");
         contact.cells.extend(cells);
@@ -361,7 +361,7 @@ impl Cache {
     }
     #[expect(clippy::too_many_arguments,reason="A contact declares its cells with the frame's scene, encoding and budget, around the pages it already holds")]
     fn declare_contact(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,retained:u64,budget:&mut WorkBudget,
-        frame:&Arc<SignatureFrame>,root:&graph::Node,target:SourceTarget,tiled:bool,level:Option<u32>,cells:Vec<PixelRect>,prepared:&[PixelRect],tiles:&BTreeSet<[u32;2]>,
+        frame:&Arc<SignatureFrame>,root:&graph::Node,target:SourceTarget,tiled:bool,level:Option<u32>,cells:Vec<PixelRect>,prepare:&dyn Fn(PixelRect)->Option<Class>,tiles:&BTreeSet<[u32;2]>,
     )->Result<Option<Declared>,GpuRasterError> {
         let wet=frame.watercolor(target);
         let inside:BTreeSet<SourceTarget>=self.pivot_halves().iter().flat_map(|node|node.reads().0).collect();
@@ -379,9 +379,9 @@ impl Cache {
                 }}
                 request.required=Damage::from_regions(unheld);
             }
-            if prepared.contains(&cell) {
+            if let Some(class)=prepare(cell) {
                 for (id,request) in wanted.iter().filter(|(id,request)|!self.source_ready(scene,r,*id,request)).cloned().collect::<Vec<_>>() {
-                    self.prepare_source(scene,r,packet,encoder,id,request,Class::Visible,budget)?;
+                    self.prepare_source(scene,r,packet,encoder,id,request,class,budget)?;
                 }
             }
             if wanted.iter().all(|(id,request)|self.source_ready(scene,r,*id,request)) {ready.push(cell);requests.extend(wanted);}
