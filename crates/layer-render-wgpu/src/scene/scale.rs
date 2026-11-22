@@ -1095,7 +1095,7 @@ impl Cache {
             let input = input_plan(self.plan, packet.scene,Some(self.graph.objects()));
             let tiled = use_tiles(r, self.plan, packet, Some(scene)) && !(self.plan.level > 0 && root.fused_transform(r));
             let view=work_view(packet,0);
-            composes.sort_by_key(|region|centre_distance(view,*region));
+            composes.sort_by_cached_key(|region|(!budget.required(class(*region)),centre_distance(view,*region)));
             streamed.sort_by_key(|region|centre_distance(view,*region));
             let cells=streamed.iter().map(|region|self.refinement_interest(self.plan.level,*region).key).collect::<Vec<_>>();
             if !stroking && !halves.is_empty() {self.prepare_edit_sources(scene,r,packet,encoder,budget)?;}

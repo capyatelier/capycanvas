@@ -807,6 +807,42 @@ fn a_reduced_pencil_stroke_on_a_perceptual_photo_changes_display_texels_outside_
 }
 
 #[test]
+fn a_wide_dab_centred_just_off_screen_shows_its_ink_in_every_visible_cell_it_covers_in_its_own_frame() {
+    let extent=[4096,3072];
+    let photo=rgba8_source(extent,|x,y| {
+        let mut h=x.wrapping_mul(0x9E37_79B1)^y.wrapping_mul(0x85EB_CA77);h^=h>>15;h=h.wrapping_mul(0x2C1B_3C6D);h^=h>>12;
+        let noise=(h&31) as u8;[30+noise+(x*40/extent[0]) as u8,90+noise+(y*40/extent[1]) as u8,40+noise,255]
+    });
+    let doc=layer_color::photo_project(Arc::unwrap_or_clone(photo),Default::default(),"Photo".into(),SampleDepth::U8).unwrap();
+    let target=doc.active_target().unwrap();
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.blend_space=doc.composition().blend;
+    frame.view=crate::test_support::view([800,600]);frame.view.document_to_surface=[0.5,0.,0.,0.5,-800.,-600.];
+    let visible=PixelRect::new(1600,1200,3200,2400);
+    let style=layer_render::DabStyle {blend_space:doc.composition().blend,..crate::layer_tests::preset_style(DefaultBrushPreset::GPen)};
+    let mut dab=crate::tests::test_dab([3400.,1800.],[0.01,0.01,0.01,1.],1.);dab.radii=[1000.;2];
+    let batch=layer_render::DabBatch {stroke_start:true,stroke_end:false,..dab_batch(target,style,dab.bounds())};
+    let stroke=FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame};
+    let (plan,shown,settled)=crate::test_support::with_pace([2*object_cache::PASS_TAPS,crate::frame_pace::IDLE_TAPS],|| {
+        let mut r=renderer(&doc);
+        crate::test_support::submit_settled(&mut r,frame);
+        crate::test_support::submit_ready(&mut r,stroke).unwrap();
+        let shown=display_pixels(&r);
+        crate::test_support::submit_settled(&mut r,frame);
+        (r.scale_display.as_ref().unwrap().plan,shown,display_pixels(&r))
+    });
+    let (side,span)=(1u32<<plan.level,PAGE_SIZE<<plan.level);
+    let reach=crate::pixel_rect::pixel_rect(dab.bounds(),extent).intersect(plan.bounds);
+    assert!(plan.level==1 && pages::coordinates(reach,plan.level).any(|cell|pages::bounds(cell,plan.level,extent).intersect(visible).is_empty()),
+        "the dab covers window cells outside the view at level 1");
+    let stale:BTreeSet<_>=(0..plan.size[1]).flat_map(|y|(0..plan.size[0]).map(move|x|[x,y])).filter(|&[x,y]| {
+        let texel=PixelRect::new(plan.bounds.min_x()+x*side,plan.bounds.min_y()+y*side,plan.bounds.min_x()+(x+1)*side,plan.bounds.min_y()+(y+1)*side);
+        let index=(y*plan.size[0]+x) as usize;
+        visible.intersect(texel)==texel && shown[index][..3].iter().zip(&settled[index][..3]).any(|(shown,settled)|(shown-settled).abs()>0.05)
+    }).map(|[x,y]|[(plan.bounds.min_x()+x*side)/span,(plan.bounds.min_y()+y*side)/span]).collect();
+    assert!(stale.is_empty(),"the dab's own frame leaves visible cells under it without its ink: {stale:?}");
+}
+
+#[test]
 fn a_wide_wet_watercolor_stroke_on_a_zoomed_out_photo_reads_only_tiles_its_contact_declared() {
     use layer_engine::{CanvasEngine,PenEvent,PenPhase,SampleFlags,ViewTransform,input_queue};
     let (extent,zoom,events)=([9504,6336],0.2,120);
