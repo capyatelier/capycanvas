@@ -430,7 +430,9 @@ Sparse pages and changed-region bounds limit the affected area. Specialized path
 avoid allocating or updating material state that a brush does not use.
 
 Smudge, wet and watercolor evaluate one page job per page their contact batch
-touches, each writing its whole page. Consecutive batches and watercolor transport
+touches, each writing the page's other surface whole. A committed wet job writes
+only its damage and the page's previous damage while that surface still holds
+the page's previous version. Consecutive batches and watercolor transport
 share one compute pass, so a large brush or a long frame adds no page copies or
 passes per page or batch; only preparing decoded source tiles, a page's
 starting paint, a pen-up edge or healing ends it. Dry, clone and healing

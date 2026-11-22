@@ -1,8 +1,10 @@
 //! Smudge, Wet and watercolor read only the pre-batch pages around
 //! each page they write, so one compute pass dispatches every page job of a
-//! batch. A job writes its whole inactive page: the material result inside its
+//! batch. A job writes its inactive page: the material result inside its
 //! dirty rectangle and the unchanged texel elsewhere, so no page copy precedes
-//! it. Watercolor wetness is stored only inside the rectangle.
+//! it. A committed Wet job writes only its rectangle and the page's last change
+//! while its inactive page holds the version before that change. Watercolor
+//! wetness is stored only inside the rectangle.
 use super::*;
 use dry_material::{Entries, MATERIAL_BLENDS, MATERIAL_SLOTS};
 use material_sources::{elapsed, record, rect_words};
@@ -192,6 +194,11 @@ pub(super) struct Dispatch {
     sources: wgpu::BindGroup,
     coordinate: [u32; 2],
     record_offset: u32,
+    area: PixelRect,
+}
+
+fn dispatched(area: PixelRect, [width, height]: [u32; 2]) -> PixelRect {
+    PixelRect::new(area.min_x() / width * width, area.min_y() / height * height, area.max_x(), area.max_y())
 }
 
 impl WgpuRasterizer {
@@ -210,12 +217,24 @@ impl WgpuRasterizer {
         let started = self.telemetry.enabled.then(web_time::Instant::now);
         let extent = self.target_extent(batch.target);
         let operation = BrushPassPlan::for_style(&batch.style).material;
-        let exchange = dabs.first().zip(dabs.last()).filter(|_| !preview && operation == MaterialOperation::Wet);
+        let committed_wet = !preview && operation == MaterialOperation::Wet;
+        let exchange = dabs.first().zip(dabs.last()).filter(|_| committed_wet);
         let seeds: Vec<_> = jobs.iter().map(|job| operation == MaterialOperation::Watercolor && !self.watercolor_written.contains(&job.coordinate)).collect();
         self.watercolor_written.extend(jobs.iter().zip(&seeds).filter(|(_, seed)| **seed).map(|(job, _)| job.coordinate));
+        let intents=jobs.iter().map(|job| {
+            let intent=self.raster_intent(batch.target,RasterPlane::Color,job.coordinate)?;
+            let wet_intent=(operation==MaterialOperation::Watercolor).then(||self.raster_intent(batch.target,RasterPlane::WatercolorWetness,job.coordinate)).transpose()?;
+            Ok((intent,wet_intent))
+        }).collect::<Result<Vec<_>,GpuRasterError>>()?;
+        let receipt=encoder.submission();
+        let (areas,coverage_deltas):(Vec<_>,Vec<_>)=jobs.iter().zip(&intents).map(|(job,(intent,_))| {
+            let (area,coverage)=if committed_wet {self.wet_page_area(batch,job,layer_index,intent,&receipt)}
+                else {(PixelRect::full([PAGE_SIZE;2]),resident::Delta::Unknown)};
+            (dispatched(area,workgroup(operation)),coverage)
+        }).unzip();
         self.metrics.material_cpu_ms[0] += elapsed(started);
-        let mut first_record = self.prepare_records(jobs.iter().zip(&seeds).map(|(job, &seed)| {
-            record([job.dabs.start, job.dabs.end - job.dabs.start, 0, u32::from(seed)], [rect_words(job.local)])
+        let mut first_record = self.prepare_records(jobs.iter().zip(&seeds).zip(&areas).map(|((job, &seed), area)| {
+            record([job.dabs.start, job.dabs.end - job.dabs.start, 0, u32::from(seed)], [rect_words(job.local), [area.min_x(), area.min_y(), 0, 0]])
         }).chain(exchange.map(|(first, _)| {
             let color = first.color_rgba_linear;
             record([0; 4], [[color[0], color[1], color[2], batch.style.wet_mix.amount_of_paint * first.material[2]].map(f32::to_bits)])
@@ -223,14 +242,9 @@ impl WgpuRasterizer {
         let mut publications=Vec::with_capacity(jobs.len()*3+usize::from(exchange.is_some()));
         let mut written=Vec::with_capacity(jobs.len()*3+usize::from(exchange.is_some()));
         let mut dispatches = Vec::with_capacity(jobs.len());
-        let intents=jobs.iter().map(|job| {
-            let intent=self.raster_intent(batch.target,RasterPlane::Color,job.coordinate)?;
-            let wet_intent=(operation==MaterialOperation::Watercolor).then(||self.raster_intent(batch.target,RasterPlane::WatercolorWetness,job.coordinate)).transpose()?;
-            Ok((intent,wet_intent))
-        }).collect::<Result<Vec<_>,GpuRasterError>>()?;
         let source_bindings=jobs.iter().zip(&intents).map(|(job,(intent,_))|self.transport_sources(encoder,batch_index,batch,job.coordinate,target,intent))
             .collect::<Result<Vec<_>,_>>()?;
-        for (((index,job),sources),(intent,wet_intent)) in jobs.iter().enumerate().zip(source_bindings).zip(intents) {
+        for ((((index,job),sources),(intent,wet_intent)),(area,coverage_delta)) in jobs.iter().enumerate().zip(source_bindings).zip(intents).zip(areas.into_iter().zip(coverage_deltas)) {
             let color_ticket=preview.then(||self.preview_material_version(batch,batch_index,RasterPlane::Color,job.coordinate,scene::PreviewPass::Color,&intent)).transpose()?;
             let coverage_ticket=(preview && job.coverage_index.is_some()).then(||self.preview_material_version(batch,batch_index,RasterPlane::Color,job.coordinate,scene::PreviewPass::Coverage,&intent)).transpose()?;
             let wetness_ticket=wet_intent.as_ref().filter(|_|preview).map(|wet_intent|self.preview_material_version(batch,batch_index,RasterPlane::WatercolorWetness,job.coordinate,scene::PreviewPass::Wetness,wet_intent)).transpose()?;
@@ -265,11 +279,11 @@ impl WgpuRasterizer {
                 Some(MaterialPublication {kind:MaterialOutputKind::Color,coordinate:job.coordinate,preview:color_ticket.clone(),input:intent.clone(),
                     encoding:destination.encoded(color_ticket.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|ticket|ticket.version().clone())).certified(delta)}),
                 coverage.map(|write|MaterialPublication {kind:MaterialOutputKind::Coverage,coordinate:job.coordinate,preview:coverage_ticket.clone(),input:intent,
-                    encoding:write.encoded(coverage_ticket.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|ticket|ticket.version().clone()))}),
+                    encoding:write.encoded(coverage_ticket.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|ticket|ticket.version().clone())).certified(coverage_delta)}),
                 wetness.map(|write|MaterialPublication {kind:MaterialOutputKind::Wetness,coordinate:job.coordinate,preview:wetness_ticket.clone(),input:wet_intent.unwrap(),
                     encoding:write.encoded(wetness_ticket.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|ticket|ticket.version().clone()))}),
             ];
-            dispatches.push(Dispatch {entry,output,sources,coordinate:job.coordinate,record_offset:self.material_records.offset(first_record)});
+            dispatches.push(Dispatch {entry,output,sources,coordinate:job.coordinate,record_offset:self.material_records.offset(first_record),area});
             publications.extend(next_publications.into_iter().flatten());
             first_record += 1;
         }
@@ -283,7 +297,7 @@ impl WgpuRasterizer {
             let output=self.pipelines.destination_material.output(&self.device,&self.style_buffer,&write,None,None);
             let publication=MaterialPublication {kind:MaterialOutputKind::Reservoir,coordinate,preview:None,input:intent,
                 encoding:write.encoded(layer_core::raster::ContentName::fresh())};
-            dispatches.push(Dispatch {entry:Entry::Reservoir,output,sources,coordinate,record_offset:self.material_records.offset(first_record)});
+            dispatches.push(Dispatch {entry:Entry::Reservoir,output,sources,coordinate,record_offset:self.material_records.offset(first_record),area:PixelRect::full([RESERVOIR_SIZE;2])});
             publications.push(publication);
         }
         self.encode_transport(encoder, batch_index, batch, &dispatches);
@@ -291,6 +305,22 @@ impl WgpuRasterizer {
         self.publish_material(batch,written)?;
         if exchange.is_some() { self.reservoir.active_secondary = !self.reservoir.active_secondary; }
         Ok(())
+    }
+
+    fn wet_page_area(&self,batch:&DabBatch,job:&MaterialJob,layer_index:usize,intent:&crate::raster::contents::Intent,
+        receipt:&crate::submission::Submission)->(PixelRect,resident::Delta) {
+        let whole=PixelRect::full([PAGE_SIZE;2]);
+        let layer=&self.paint_layers[layer_index];
+        let page=&layer.pages[job.page_index];
+        let color=page.active().read(intent.version(),Some(receipt)).and_then(|read|page.surface(job.destination_secondary).behind(&read.input()));
+        let Some((index,secondary))=job.coverage_index.zip(job.coverage_destination_secondary) else {
+            return (color.map_or(whole,|stale|job.local.union(stale)),resident::Delta::Unknown);
+        };
+        let page=&layer.coverage_pages[index];
+        let Some(read)=page.state.as_ref().filter(|_|page.owner==Some(batch.stroke_id)).and_then(|state|page.active().read(&state.version,Some(receipt)))
+            .map(|read|read.input()) else {return (whole,resident::Delta::Unknown);};
+        let coverage=if secondary {&page.secondary}else {&page.primary}.behind(&read);
+        (color.zip(coverage).map_or(whole,|(color,coverage)|job.local.union(color).union(coverage)),resident::Delta::seeded(&read,job.local))
     }
 
     fn transport_sources(
@@ -325,13 +355,17 @@ impl WgpuRasterizer {
             pass.set_bind_group(0, &dispatch.output, &[style_offset]);
             pass.set_bind_group(1, self.paint_target_binding(&batch.style), &[self.layer_target_offset(batch.target, dispatch.coordinate)]);
             pass.set_bind_group(2, &dispatch.sources, &[dispatch.record_offset]);
-            let size = if dispatch.entry == Entry::Reservoir { RESERVOIR_SIZE } else { PAGE_SIZE };
             let extent = if blender(&batch.style).cells {
                 let cell = batch.style.blender.cell_size as u32;
                 if batch.style.blender.kind == layer_core::BlenderKind::Scatter { [PAGE_SIZE.div_ceil(cell) + 1; 2] }
                 else { dispatch.coordinate.map(|coordinate| ((coordinate * PAGE_SIZE) % cell + PAGE_SIZE).div_ceil(cell)) }
-            } else { [size; 2] };
-            pass.dispatch_workgroups(extent[0].div_ceil(width), extent[1].div_ceil(height), 1);
+            } else { [dispatch.area.width(), dispatch.area.height()] };
+            let groups = [extent[0].div_ceil(width), extent[1].div_ceil(height)];
+            #[cfg(test)]
+            if dispatch.entry != Entry::Reservoir {
+                crate::test_support::PassCounts { transport_pages: 1, transport_invocations: u64::from(groups[0] * width) * u64::from(groups[1] * height), ..Default::default() }.record();
+            }
+            pass.dispatch_workgroups(groups[0], groups[1], 1);
         }
         self.metrics.material_cpu_ms[3] += elapsed(started);
     }

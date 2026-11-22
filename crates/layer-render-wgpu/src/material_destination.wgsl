@@ -1,5 +1,9 @@
 @group(0) @binding(3) var material_wetness_output: texture_storage_2d<r32float, write>;
 
+fn transport_texel(id: vec3<u32>) -> vec2<u32> {
+    return id.xy + material_sources.pages[1].xy;
+}
+
 fn transport_dirty(id: vec2<u32>) -> bool {
     let bounds = material_sources.pages[0];
     return all(id >= bounds.xy) && all(id < bounds.zw);
@@ -16,10 +20,11 @@ fn transport_original(p: vec2<i32>) -> vec4<f32> {
 
 @compute @workgroup_size(TRANSPORT_WORKGROUP_X, TRANSPORT_WORKGROUP_Y)
 fn transport_color(@builtin(global_invocation_id) id: vec3<u32>) {
-    if transport_dirty(id.xy) {
-        store_dry_color(id.xy, operation_color(render_target.origin_extent.xy + vec2<f32>(id.xy) + 0.5, transport_result(id.xy)));
+    let texel = transport_texel(id);
+    if transport_dirty(texel) {
+        store_dry_color(texel, operation_color(render_target.origin_extent.xy + vec2<f32>(texel) + 0.5, transport_result(texel)));
     } else {
-        store_dry_color(id.xy, transport_original(vec2<i32>(id.xy)));
+        store_dry_color(texel, transport_original(vec2<i32>(texel)));
     }
 }
 
@@ -49,16 +54,18 @@ fn store_transport_coverage(id: vec2<u32>, dirty: bool) -> MaterialOutput {
 
 @compute @workgroup_size(TRANSPORT_WORKGROUP_X, TRANSPORT_WORKGROUP_Y)
 fn transport_coverage(@builtin(global_invocation_id) id: vec3<u32>) {
-    store_transport_coverage(id.xy, transport_dirty(id.xy));
+    let texel = transport_texel(id);
+    store_transport_coverage(texel, transport_dirty(texel));
 }
 
 @compute @workgroup_size(TRANSPORT_WORKGROUP_X, TRANSPORT_WORKGROUP_Y)
 fn transport_watercolor(@builtin(global_invocation_id) id: vec3<u32>) {
-    let dirty = transport_dirty(id.xy);
-    let wetness = store_transport_coverage(id.xy, dirty).wetness;
+    let texel = transport_texel(id);
+    let dirty = transport_dirty(texel);
+    let wetness = store_transport_coverage(texel, dirty).wetness;
     if dirty {
-        textureStore(material_wetness_output, vec2<i32>(id.xy), wetness);
+        textureStore(material_wetness_output, vec2<i32>(texel), wetness);
     } else if material_sources.header.w != 0u {
-        textureStore(material_wetness_output, vec2<i32>(id.xy), textureLoad(reservoir_texture, vec2<i32>(id.xy), 0));
+        textureStore(material_wetness_output, vec2<i32>(texel), textureLoad(reservoir_texture, vec2<i32>(texel), 0));
     }
 }

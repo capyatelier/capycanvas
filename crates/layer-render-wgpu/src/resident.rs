@@ -51,7 +51,7 @@ impl Names {
         let first = !self.version.as_ref().is_some_and(|previous| previous.submission.same(&version.submission));
         if first { self.before = self.held().cloned(); }
         self.delta = match (first, std::mem::take(&mut self.delta), delta) {
-            (true, _, delta) => delta,
+            (true, _, delta) | (false, _, delta @ Delta::Seeded { .. }) => delta,
             (false, Delta::InPlace(a), Delta::InPlace(b)) => Delta::InPlace(a.union(b)),
             _ => Delta::Unknown,
         };
@@ -152,6 +152,9 @@ impl<T> Resident<T> {
     pub fn allocation_identity(&self)->usize {Arc::as_ptr(&self.names) as usize}
     pub fn has_name(&self,name:&ContentVersion)->bool {
         self.names.lock().unwrap().held().is_some_and(|version|version.name.matches(name)==Some(true))
+    }
+    pub(crate) fn behind(&self,later:&Input)->Option<PixelRect> {
+        later.seed().filter(|(from,_)|Arc::ptr_eq(&self.names,&from.names) && from.live()).map(|(_,rect)|rect)
     }
 
     pub fn read(&self, expected: impl Into<ContentVersion>, consumer: Option<&Submission>) -> Option<Read<'_, T>> {

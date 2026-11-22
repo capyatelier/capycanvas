@@ -451,3 +451,28 @@ fn a_seeded_record_names_its_source_weakly() {
     drop((first, source, back));
     assert!(copy.seed().is_none(), "two surfaces that seed each other keep neither alive");
 }
+
+#[test]
+fn a_surface_is_behind_the_copy_seeded_from_the_version_it_holds() {
+    use crate::resident::Delta;
+    let frame = receipt(SubmissionState::Encoding);
+    let (mut first, mut second) = (Resident::unwritten(0u32), Resident::unwritten(0u32));
+    let start = certified(&mut first, &frame, Delta::Unknown);
+    assert_eq!(second.behind(&start), None, "an unrecorded version relates to no surface");
+    let one = certified(&mut second, &frame, Delta::seeded(&start, area(4)));
+    assert_eq!(first.behind(&one), Some(area(4)));
+    let two = certified(&mut first, &frame, Delta::seeded(&one, area(20)));
+    assert_eq!(second.behind(&two), Some(area(20)));
+    let three = certified(&mut second, &frame, Delta::seeded(&two, area(40)));
+    assert_eq!(first.behind(&three), Some(area(40)), "a later seeded write in the submission records its own source");
+    assert_eq!(second.behind(&three), None, "a surface is not behind the version it holds");
+    assert_eq!(Resident::unwritten(0u32).behind(&three), None);
+    certified(&mut first, &frame, Delta::Unknown);
+    assert_eq!(first.behind(&three), None, "a surface written since holds another version");
+    frame.0.store(SubmissionState::Submitted as u8, Ordering::Release);
+    let next = receipt(SubmissionState::Encoding);
+    let four = certified(&mut first, &next, Delta::seeded(&three, area(8)));
+    assert_eq!(second.behind(&four), Some(area(8)));
+    next.0.store(SubmissionState::Discarded as u8, Ordering::Release);
+    assert_eq!(second.behind(&four), None, "a discarded copy is not believed");
+}

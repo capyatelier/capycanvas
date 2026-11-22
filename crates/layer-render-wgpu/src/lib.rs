@@ -6889,6 +6889,9 @@ pub fn bundled_preview_webp(width: u32, height: u32, rgba: &[u8]) -> webpkit::Re
 #[cfg(test)]
 mod dry_preview_tests;
 
+#[cfg(test)]
+mod wet_page_tests;
+
 struct CompletionFlag(Arc<std::sync::atomic::AtomicBool>);
 impl Drop for CompletionFlag {fn drop(&mut self) {self.0.store(true,std::sync::atomic::Ordering::Release);}}
 
