@@ -221,6 +221,7 @@ impl WgpuRasterizer {
         result
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn backed_raster_tile(
         &mut self,
         blob: &std::sync::Arc<layer_core::raster::TileBlob>,

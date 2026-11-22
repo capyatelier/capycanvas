@@ -152,15 +152,15 @@ fn liquify_sparse_original_atlas_chunks_match_unfragmented_source() {
         assert_eq!(originals.atlases.len(), 1);
         assert!(originals.tiles.contains_key(&[0, 0]) && originals.tiles.contains_key(&[1, 0]));
         if fragmented {
-            let base = &originals.atlases[0];
+            let base = originals.atlases[0].as_ref().unwrap();
             let texture = base.texture.clone();
             let view = base.view.clone();
             let tier = base._charge.tier().clone();
             for _ in 1..12 {
-                originals.atlases.push(OriginalAtlas {
+                originals.atlases.push(Some(OriginalAtlas {
                     id: NEXT_RESOURCE.fetch_add(1, Ordering::Relaxed),
-                    texture: texture.clone(), view: view.clone(), _charge: tier.charge(0),
-                });
+                    texture: texture.clone(), view: view.clone(), held: false, _charge: tier.charge(0),
+                }));
             }
             let distant = originals.tiles[&[1, 0]].clone();
             originals.tiles.insert([1, 0], Arc::new(OriginalTile {

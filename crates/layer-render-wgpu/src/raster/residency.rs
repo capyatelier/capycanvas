@@ -9,7 +9,7 @@ impl WgpuRasterizer {
         self.paint_layers.iter().flat_map(|layer| &layer.pages).map(color_page_bytes).sum()
     }
     pub(crate) fn pinned_paint_bytes(&self) -> u64 {
-        self.paint_memory_bytes().saturating_sub(self.evictable_native_color_bytes())
+        self.paint_memory_bytes().saturating_sub(self.evictable_native_color_bytes()).saturating_sub(self.idle_original_bytes())
     }
     fn evictable_native_color_bytes(&self) -> u64 {
         let Some(native) = &self.native_edit else { return 0; };
@@ -172,7 +172,7 @@ impl WgpuRasterizer {
     pub(crate) fn evict_color(&mut self, bytes: u64, batches: &[DabBatch], tiles: &[Vec<BrushTile>]) -> (Vec<PageSurface>, Vec<Arc<crate::residency::Lease>>) {
         if bytes == 0 { return Default::default(); }
         let leases = self.offer_native_color(batches, tiles);
-        self.raster_tiers.raster.heap().evict(bytes, crate::residency::Class::Fallback);
+        self.evict_originals(|r| { r.raster_tiers.raster.heap().evict(bytes, crate::residency::Class::Fallback); });
         self.raster_buffers.release_evicted();
         self.take_evicted_color(leases)
     }

@@ -33,7 +33,8 @@ struct FrameRoot {target:SourceTarget,revision:u64,published:Option<usize>,resto
 #[derive(PartialEq)]
 enum Key {
     Frame {color:layer_core::color::DocumentColor,extent:[u32;2],reset:bool,clear_starts:bool,roots:Vec<FrameRoot>,
-        required:Vec<(SourceTarget,Vec<[u32;2]>)>,bases:Vec<(SourceTarget,usize,[u32;2])>,outputs:Vec<(SourceTarget,Output)>,restored:Vec<(SourceTarget,TileKey)>},
+        required:Vec<(SourceTarget,Vec<[u32;2]>)>,bases:Vec<(SourceTarget,usize,[u32;2])>,outputs:Vec<(SourceTarget,Output)>,restored:Vec<(SourceTarget,TileKey)>,
+        originals:Vec<(SourceTarget,Vec<[u32;2]>)>,atlases:u64},
     Direct {color:layer_core::color::DocumentColor,target:SourceTarget,extent:[u32;2],before:DataKey,after:DataKey},
 }
 #[derive(Default)]
@@ -74,6 +75,7 @@ struct TargetRestore {
     allocated:usize,
     pages:PreparedPages,
     replace:bool,
+    detached:bool,
     scalars:Vec<object_image_mips::PreparedRasterTile>,
     inputs:scene::sources::AcceptedInputs,
 }
@@ -169,7 +171,16 @@ impl TargetRestore {
             pending.extend(required.iter().filter(|coordinate| !commit.is_some_and(|commit|commit.contains(target,RasterPlane::Color,**coordinate)) && (replace || !resident(&TileKey {plane:RasterPlane::Color,coordinate:**coordinate})) && !data.tiles.contains_key(&TileKey {plane:RasterPlane::Color,coordinate:**coordinate})
                 && source_access::paint_base_contains(&base,**coordinate)).map(|coordinate|SourcePage::Base(*coordinate,base.clone())));
         }
-        Ok(Self {target,extent,defaults,data,selected,pending,next:0,allocated:0,pages:PreparedPages::default(),replace,scalars:Vec::new(),inputs:Default::default()})
+        Ok(Self {target,extent,defaults,data,selected,pending,next:0,allocated:0,pages:PreparedPages::default(),replace,detached:false,scalars:Vec::new(),inputs:Default::default()})
+    }
+    fn originals(target:SourceTarget,source:&layer_core::authored::PaintSource,data:Arc<RasterData>,coordinates:&[[u32;2]])->Self {
+        let pending=coordinates.iter().filter_map(|coordinate| {
+            let key=TileKey {plane:RasterPlane::Color,coordinate:*coordinate};
+            data.tiles.get(&key).map(|tile|SourcePage::Raster(key,tile.clone())).or_else(||source.base.as_ref()
+                .filter(|base|source_access::paint_base_contains(base,*coordinate)).map(|base|SourcePage::Base(*coordinate,base.clone())))
+        }).collect();
+        Self {target,extent:source.domain,defaults:super::contents::defaults_for(source.domain,source.base.as_ref(),None),data,selected:RasterData::default(),pending,next:0,allocated:0,
+            pages:PreparedPages::default(),replace:false,detached:true,scalars:Vec::new(),inputs:Default::default()}
     }
     fn awaits(&self,blob:&TileBlob)->bool {
         self.pending.iter().skip(self.next).filter(|source|!matches!(source,SourcePage::Output(_))).take(PREFETCH).any(|source|matches!(source,SourcePage::Raster(key,tile) if key.plane!=RasterPlane::Color
@@ -354,6 +365,7 @@ pub(crate) struct RestorePreflight {
     starts:Vec<(SourceTarget,[u32;2],layer_core::StrokeId,bool,resident::Resident<PageSurface>)>,
     transforms:Vec<((SourceTarget,u32),paint_transform::Plan)>,
     preview:Option<crate::residency::Reservation>,
+    originals:Option<crate::residency::Reservation>,
     refused:Option<crate::residency::Blocked>,
 }
 impl RestorePreflight {
@@ -366,7 +378,7 @@ impl RestorePreflight {
             _=>&[],
         }
     }
-    fn new(r:&mut WgpuRasterizer,key:Key,requests:Vec<Request>,commit:Option<paint_transform::PreparedTransformCommit>,transforms:Vec<((SourceTarget,u32),paint_transform::Plan)>)->Self {
+    fn new(r:&mut WgpuRasterizer,key:Key,requests:Vec<Request>,originals:Vec<TargetRestore>,commit:Option<paint_transform::PreparedTransformCommit>,transforms:Vec<((SourceTarget,u32),paint_transform::Plan)>)->Self {
         let mut targets=Vec::new();let mut failure=None;
         let restored=match &key {Key::Frame {restored,..}=>restored.as_slice(),Key::Direct {..}=>&[]};
         for request in requests {
@@ -376,7 +388,8 @@ impl RestorePreflight {
             }
         }
         if let Key::Frame {outputs,reset,clear_starts,..}=&key {for target in targets.iter_mut().flatten() {target.add_outputs(r,outputs,*reset,*clear_starts,commit.as_ref(),restored);}}
-        Self {key,commit,native:None,targets,failure,consumed:false,starts:Vec::new(),transforms,preview:None,refused:None}
+        targets.extend(originals.into_iter().map(Some));
+        Self {key,commit,native:None,targets,failure,consumed:false,starts:Vec::new(),transforms,preview:None,originals:None,refused:None}
     }
     fn complete(&self)->bool {self.failure.is_some() || self.targets.iter().flatten().all(TargetRestore::complete)}
     fn waiting(&self)->bool {!self.complete() || self.failure.is_none() && self.refused.is_some()}
@@ -393,6 +406,18 @@ impl WgpuRasterizer {
             Key::Frame {outputs,..}=>outputs.binary_search(&(target,output)).is_ok(),_=>false,
         });
         prepared_raster_output(accepted.then_some(()))
+    }
+    pub(crate) fn staged_original(&self,target:SourceTarget,coordinate:[u32;2],expected:&layer_core::raster::ContentVersion,consumer:Option<&submission::Submission>)
+        ->Option<resident::Read<'_,PageSurface>> {
+        self.restore_preflight.as_ref()?.targets.iter().flatten().filter(|entry|entry.detached && entry.target==target)
+            .flat_map(|entry|&entry.pages.colors).find(|page|page.coordinate==coordinate)?.primary.read(expected,consumer)
+    }
+    pub(crate) fn admitted_original_atlas(&mut self)->Result<(),GpuRasterError> {
+        prepared_raster_output(self.restore_preflight.as_mut().and_then(|restore|restore.originals.as_mut())
+            .and_then(|room|room.split(liquify::ORIGINAL_ATLAS_BYTES)).map(drop))
+    }
+    pub(crate) fn release_original_room(&mut self) {
+        if let Some(room)=self.restore_preflight.as_mut().and_then(|restore|restore.originals.take()) {self.commit_raster_working(room);}
     }
     pub(crate) fn accepted_previews(&self,target:SourceTarget)->Vec<Output> {
         self.restore_preflight.as_ref().map_or_else(Vec::new,|restore|match &restore.key {
@@ -681,7 +706,10 @@ impl WgpuRasterizer {
         self.restore_preflight.as_ref().map_or(0,|restore|restore.targets.iter().flatten().flat_map(|target|&target.pages.masks).map(|(_,page)|page.storage_bytes()).sum())
     }
     pub(crate) fn projected_restore_bytes(&self)->u64 {self.restore_preflight.as_ref().map_or(0,|restore|restore.targets.iter().flatten()
-        .try_fold(self.unreserved_preview_bytes(restore),|bytes,target|bytes.checked_add(target.projected_bytes(self)?).ok_or(GpuRasterError::SizeOverflow)).unwrap_or(u64::MAX))}
+        .try_fold(self.unreserved_preview_bytes(restore).saturating_add(Self::unreserved_original_bytes(restore)),|bytes,target|bytes.checked_add(target.projected_bytes(self)?).ok_or(GpuRasterError::SizeOverflow)).unwrap_or(u64::MAX))}
+    fn unreserved_original_bytes(restore:&RestorePreflight)->u64 {
+        match &restore.key {Key::Frame {atlases,..} if restore.originals.is_none()=>atlases.saturating_mul(liquify::ORIGINAL_ATLAS_BYTES),_=>0}
+    }
     fn unreserved_preview_bytes(&self,restore:&RestorePreflight)->u64 {
         if restore.preview.is_some() {return 0;}
         restore.outputs().iter().filter(|(_,output)|output.preview() && !output.preview_present(self,self.preview_level)).map(|(_,output)|output.bytes(self,0)).sum()
@@ -794,15 +822,15 @@ impl WgpuRasterizer {
     }
     pub(crate) fn restore_pages_ready(&self)->bool {self.restore_preflight.as_ref()
         .and_then(|restore|restore.targets.iter().flatten().find(|target|!target.complete())).is_some_and(|target|target.ready(self))}
-    fn replace_restore(&mut self,key:Key,requests:Vec<Request>,commit:Option<paint_transform::PreparedTransformCommit>,transforms:Vec<((SourceTarget,u32),paint_transform::Plan)>) {
+    fn replace_restore(&mut self,key:Key,requests:Vec<Request>,originals:Vec<TargetRestore>,commit:Option<paint_transform::PreparedTransformCommit>,transforms:Vec<((SourceTarget,u32),paint_transform::Plan)>) {
         if self.restore_preflight.as_ref().is_none_or(|restore|restore.key!=key || restore.consumed) {
             self.retire_restore();
-            self.restore_preflight=Some(RestorePreflight::new(self,key,requests,commit,transforms));
+            self.restore_preflight=Some(RestorePreflight::new(self,key,requests,originals,commit,transforms));
         }
     }
     fn accept_restore_inputs(&mut self)->Result<bool,GpuRasterError> {
         self.adopt_preview_working();
-        let Some(index)=self.restore_preflight.as_ref().and_then(|restore|restore.targets.iter().position(|target|target.as_ref().is_some_and(|target|!target.complete()))) else {return Ok(self.reserve_preview_outputs());};
+        let Some(index)=self.restore_preflight.as_ref().and_then(|restore|restore.targets.iter().position(|target|target.as_ref().is_some_and(|target|!target.complete()))) else {return Ok(self.reserve_frame_outputs());};
         let target=self.restore_preflight.as_ref().unwrap().targets[index].as_ref().unwrap();
         let first=target.next;
         let remaining=PREFETCH-usize::from(!matches!(target.pending[first],SourcePage::Output(_)));
@@ -850,7 +878,7 @@ impl WgpuRasterizer {
         }
         let target=self.restore_preflight.as_ref().unwrap().targets[index].as_ref().unwrap();
         Ok(target.pending[first].inputs(self.document_color().space)?.is_some_and(|inputs|
-            target.inputs.contains(&inputs) && first<target.allocated) && self.reserve_preview_outputs())
+            target.inputs.contains(&inputs) && first<target.allocated) && self.reserve_frame_outputs())
     }
     fn advance_restore(&mut self)->Result<bool,GpuRasterError> {
         if let Some(target)=self.restore_preflight.as_ref().and_then(|restore|restore.targets.iter().flatten().find(|target|!target.complete()))
@@ -883,6 +911,16 @@ impl WgpuRasterizer {
         let admitted=self.admit_raster_working(bytes);
         self.note_restore_admission(&admitted);
         self.restore_preflight.as_mut().unwrap().preview=admitted.ok();self.restore_preflight.as_ref().unwrap().preview.is_some()
+    }
+    fn reserve_frame_outputs(&mut self)->bool {self.reserve_preview_outputs() && self.reserve_original_atlases()}
+    fn reserve_original_atlases(&mut self)->bool {
+        let Some(restore)=self.restore_preflight.as_ref() else {return true;};
+        let bytes=Self::unreserved_original_bytes(restore);
+        if bytes==0 {return true;}
+        let admitted=self.admit_raster_working(bytes);
+        self.note_restore_admission(&admitted);
+        let restore=self.restore_preflight.as_mut().unwrap();
+        restore.originals=admitted.ok();restore.originals.is_some()
     }
     fn restore_ready(&mut self)->bool {
         match self.advance_restore() {
@@ -1013,7 +1051,7 @@ impl WgpuRasterizer {
             let bounds=scene::operation_read_bounds(&fill.operation,pixel_rect(fill.operation.bounds(extent),extent),extent);
             required.entry(fill.target).or_default().extend(page_coordinates(bounds));
         }
-        liquify::Liquify::required_sources(self,packet,plans,&mut required);
+        let originals=liquify::Liquify::required_sources(self,packet,plans,&mut required);
         self.required_retouch_sources(packet,plans,&mut required);
         for batch in packet.dab_batches {
             if let DabBatchKind::RasterOperation(index)=batch.kind
@@ -1040,13 +1078,14 @@ impl WgpuRasterizer {
         let clear_starts=packet.dab_batches.iter().zip(plans).any(|(batch,tiles)|self.clears_stroke_starts(batch,tiles,packet.scene.target_extent(batch.target)));
         let key=Key::Frame {color:self.document_color(),extent:packet.document_extent,reset,clear_starts,roots,bases,
             required:required.iter().map(|(target,coordinates)|(*target,coordinates.iter().copied().collect())).collect(),outputs,
-            restored:if self.cancels_transform_preview(packet) {self.transforms.as_ref().unwrap().cancel_restores(self)}else {Vec::new()}};
+            restored:if self.cancels_transform_preview(packet) {self.transforms.as_ref().unwrap().cancel_restores(self)}else {Vec::new()},
+            originals:originals.staged.iter().map(|(target,_,coordinates)|(*target,coordinates.clone())).collect(),atlases:originals.atlases};
         if self.restore_preflight.as_ref().is_some_and(|restore|restore.key==key && !restore.consumed && restore.commit.as_ref().is_none_or(|commit|commit.matches(self,packet))) {
             if !self.prepare_native_admission_for_frame(packet) {return false;}
             self.refresh_memory_limits();return self.restore_ready();}
         self.retire_restore();
         let commit=match self.transforms.as_ref().unwrap().prepare_commit(self,packet) {
-            Ok(commit)=>commit,Err(error)=>{self.restore_preflight=Some(RestorePreflight {key,commit:None,native:None,targets:Vec::new(),failure:Some(error),consumed:false,starts:Vec::new(),transforms,preview:None,refused:None});return true;},
+            Ok(commit)=>commit,Err(error)=>{self.restore_preflight=Some(RestorePreflight {key,commit:None,native:None,targets:Vec::new(),failure:Some(error),consumed:false,starts:Vec::new(),transforms,preview:None,originals:None,refused:None});return true;},
         };
         let mut requests=Vec::new();
         for (target,scene) in retained {
@@ -1071,7 +1110,12 @@ impl WgpuRasterizer {
             let before=if reset || !replace {RasterData::default()}else {current.map_or_else(RasterData::default,|current|current.contents.restorable_data())};
             requests.push(Request {target,extent:scene.target_extent(target),before,data,required,base:scene.paint_base(target).cloned(),replace});
         }
-        self.replace_restore(key,requests,commit,transforms);
+        let mut staged=Vec::new();
+        for (target,source,coordinates) in originals.staged {
+            let data=match source.raster.try_data() {Some(Ok(data))=>data,Some(Err(_))=>return true,None=>return false,};
+            staged.push(TargetRestore::originals(target,&source,data,&coordinates));
+        }
+        self.replace_restore(key,requests,staged,commit,transforms);
         if !self.prepare_native_admission_for_frame(packet) {return false;}
         self.refresh_memory_limits();self.restore_ready()
     }
@@ -1140,7 +1184,7 @@ impl WgpuRasterizer {
     pub(super) fn publish_warm_restore_pages(&mut self)->Result<(),GpuRasterError> {
         self.validate_restore_publication()?;
         let Some(restore)=&mut self.restore_preflight else {return Ok(());};
-        let outputs=restore.targets.iter_mut().filter_map(|entry|entry.as_ref().is_some_and(|target|!target.replace)
+        let outputs=restore.targets.iter_mut().filter_map(|entry|entry.as_ref().is_some_and(|target|!target.replace && !target.detached)
             .then(||entry.take().unwrap())).collect::<Vec<_>>();
         if !outputs.is_empty() {restore.consumed=true;}
         for target in outputs {self.append_prepared_pages(target.target,target.pages)?;}
@@ -1163,7 +1207,7 @@ impl WgpuRasterizer {
         let key=Key::Direct {color:self.document_color(),target,extent:self.target_extent(target),before:DataKey::new(before),after:DataKey::new(data)};
         if self.restore_preflight.as_ref().is_none_or(|restore|restore.key!=key || restore.consumed) {
             self.replace_restore(key,vec![Request {target,extent:self.target_extent(target),before:before.clone(),data:Arc::new(data.clone()),
-                required:BTreeSet::new(),base:None,replace:true}],None,Vec::new());
+                required:BTreeSet::new(),base:None,replace:true}],Vec::new(),None,Vec::new());
         }
         if !self.advance_restore()? {
             return Err(GpuRasterError::NotReady);
@@ -1211,7 +1255,7 @@ mod tests {
         r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
         let previous=RasterData::default();
         r.replace_restore(key(color,target,extent,&previous,&data),
-            vec![Request {target,extent,before:previous,data:data.clone(),required:(0..count).map(|x|[x,0]).collect(),base:None,replace:true}],None,Vec::new());
+            vec![Request {target,extent,before:previous,data:data.clone(),required:(0..count).map(|x|[x,0]).collect(),base:None,replace:true}],Vec::new(),None,Vec::new());
         (r,data)
     }
 
@@ -1296,7 +1340,7 @@ mod tests {
         pollster::block_on(r.compilation.prepare_all(startup::SourceKinds::for_descriptor(warm.descriptor).pipelines(&r.scene_pipelines.source))).unwrap();
         let request=|target,data:Arc<RasterData>|Request {target,extent,before:RasterData::default(),data,required:[[0,0]].into_iter().collect(),base:None,replace:true};
         r.replace_restore(Key::Frame {color,extent,reset:false,clear_starts:false,roots:Vec::new(),bases:Vec::new(),
-            required:vec![(first,vec![[0,0]]),(second,vec![[0,0]])],outputs:Vec::new(),restored:Vec::new()},vec![request(first,data(0)),request(second,data(1))],None,Vec::new());
+            required:vec![(first,vec![[0,0]]),(second,vec![[0,0]])],outputs:Vec::new(),restored:Vec::new(),originals:Vec::new(),atlases:0},vec![request(first,data(0)),request(second,data(1))],Vec::new(),None,Vec::new());
         let (send,woken)=std::sync::mpsc::channel();
         r.set_preparation_wake(Arc::new(move||{let _=send.send(());}));
         let restore=r.restore_preflight.as_ref().unwrap();
@@ -1332,7 +1376,7 @@ mod tests {
     #[test]
     fn a_restore_reserves_only_the_preview_pages_it_lacks() {
         let (mut r,_)=restore_request(2,|color,target,extent,_,_|Key::Frame {color,extent,reset:false,clear_starts:false,roots:Vec::new(),bases:Vec::new(),
-            required:vec![(target,vec![[0,0],[1,0]])],outputs:vec![(target,Output::PreviewColor([0,0]))],restored:Vec::new()});
+            required:vec![(target,vec![[0,0],[1,0]])],outputs:vec![(target,Output::PreviewColor([0,0]))],restored:Vec::new(),originals:Vec::new(),atlases:0});
         let page=Output::PreviewColor([0,0]).bytes(&r,0);
         assert_eq!(r.unreserved_preview_bytes(r.restore_preflight.as_ref().unwrap()),page);
         r.prepare_preview_outputs(r.preview_level).unwrap();
@@ -1347,7 +1391,7 @@ mod tests {
     #[test]
     fn a_refused_restore_group_holds_none_of_its_outputs_and_finishes_once_room_returns() {
         let (mut r,data)=restore_request(2,|color,target,extent,_,_|Key::Frame {color,extent,reset:false,clear_starts:false,roots:Vec::new(),bases:Vec::new(),
-            required:vec![(target,vec![[0,0],[1,0]])],outputs:vec![(target,Output::PreviewColor([0,0]))],restored:Vec::new()});
+            required:vec![(target,vec![[0,0],[1,0]])],outputs:vec![(target,Output::PreviewColor([0,0]))],restored:Vec::new(),originals:Vec::new(),atlases:0});
         let (send,woken)=std::sync::mpsc::channel();
         r.set_preparation_wake(Arc::new(move||{let _=send.send(());}));
         let preview=r.unreserved_preview_bytes(r.restore_preflight.as_ref().unwrap());
@@ -1382,7 +1426,7 @@ mod tests {
     #[test]
     fn a_restore_stages_the_pages_of_the_sources_it_admitted_while_the_rest_wait_for_room() {
         let (mut r,data)=restore_request(4,|color,target,extent,_,_|Key::Frame {color,extent,reset:false,clear_starts:false,roots:Vec::new(),bases:Vec::new(),
-            required:vec![(target,(0..4).map(|x|[x,0]).collect())],outputs:Vec::new(),restored:Vec::new()});
+            required:vec![(target,(0..4).map(|x|[x,0]).collect())],outputs:Vec::new(),restored:Vec::new(),originals:Vec::new(),atlases:0});
         let page=r.projected_restore_bytes()/4;
         assert!(r.admit_raster_working(u64::MAX/2).is_err(),"the lane borrows every working reservation the display can lend");
         let room=r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used());
