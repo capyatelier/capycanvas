@@ -24,12 +24,13 @@ const NEIGHBOUR_REACH:u32=64;
 const PARAMS: u64 = 112;
 const PARAMETER_BATCH_BYTES:u64=64*1024;
 const MAX_CHUNK_TAPS:f64=5e8;
-const SCOPE_BLOCK:u32=128;
+pub(super) const SCOPE_BLOCK:u32=128;
 const SCOPE_BLOCKS:i64=3;
 type Step = (&'static str,u64,Vec<u32>);
 type Readback<T> = Option<mpsc::Receiver<Result<T,GpuRasterError>>>;
 const SNAP_AREA:usize=33*33;
-pub(crate) struct ScopeProbe {pub on_ink:bool, pub stale:u32, pub flagged:Vec<[u32;2]>, region:Vec<u32>}
+const MIDDLE_CLIMB:u32=16;
+pub(crate) struct ScopeProbe {pub stale:u32, pub flagged:Vec<[u32;2]>, region:Vec<u32>}
 #[derive(Clone, PartialEq, Debug)]
 enum Built {Grain,Blocks(std::collections::BTreeSet<[u32;2]>),Full}
 struct Build { steps:std::collections::VecDeque<Step>, submission:Option<crate::submission::Submission>,in_flight:std::sync::Arc<std::sync::atomic::AtomicU32>, ends:Readback<[u32;2]>, ranked:bool, incremental:bool,
@@ -277,10 +278,10 @@ impl Lines {
         let count=u64::from(window[2])*u64::from(window[3]);
         steps.push(("skeleton_seeds",count,self.params(core,window,[0;4],grain)));
         let sparse_count=word_count(window);
-        let mut input=0;
         for distance in (2..=16).step_by(2) {for phase in 0..4 {
-            steps.push(("skeleton_ridges",sparse_count,self.params(core,window,[distance,0,phase,input],grain)));input^=1;
+            steps.push(("skeleton_ridges",sparse_count,self.params(core,window,[distance,0,phase,0],grain)));
         }}
+        let mut input=0;
         for _ in 0..2 {for mode in 0..2 {steps.push(("skeleton_prune",count,self.params(core,window,[mode,0,0,input],grain)));}input^=1;}
         steps.push(("line_ends",word_count(core),self.params(core,window,[0,MAX_LINE_WIDTH,0,input],grain)));
     }
@@ -312,7 +313,7 @@ impl Lines {
     pub fn discarded(&self)->bool {self.building.as_ref().is_some_and(|work|work.submission.as_ref().is_some_and(|owner|owner.discarded()))}
     pub fn cancel(&mut self) {self.building=None;}
     #[allow(clippy::too_many_arguments)]
-    pub fn build(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,paper:([f32;4],u32,bool),budget:f64,demand:bool,dirty:&std::collections::BTreeSet<[u32;2]>,lines:bool)->Result<(bool,f64),GpuRasterError> {
+    pub fn build(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,paper:([f32;4],u32,bool),budget:f64,demand:bool,dirty:&std::collections::BTreeSet<[u32;2]>,(lines,reads_open):(bool,bool))->Result<(bool,f64),GpuRasterError> {
         let (grain,radius,has_paper)=paper;
         if self.building.as_ref().is_some_and(|work|work.scoped) {self.building=None;}
         if self.building.is_none() {
@@ -325,7 +326,7 @@ impl Lines {
                 self.ends=0;
                 let empty=std::collections::BTreeSet::new();
                 let steps=[if incremental {vec![self.clear_ends(grain)]} else {Vec::new()},self.grain_steps(grain,radius,has_paper,if incremental {dirty} else {&empty})].concat();
-                Build {incremental,reads_open:true,lines,..Build::new(steps,Built::Grain,grain)}
+                Build {incremental,reads_open:reads_open || lines,ranked:!reads_open && !lines,lines,..Build::new(steps,Built::Grain,grain)}
             });
             self.built=Built::Grain;
         }
@@ -350,9 +351,16 @@ impl Lines {
         flagged.chain([seed.map(|n|n/SCOPE_BLOCK)]).flat_map(|[x,y]|(-SCOPE_BLOCKS..=SCOPE_BLOCKS).flat_map(move |dy|(-SCOPE_BLOCKS..=SCOPE_BLOCKS).map(move |dx|[i64::from(x)+dx,i64::from(y)+dy])))
             .filter(|[x,y]|(0..blocks[0]).contains(x) && (0..blocks[1]).contains(y)).map(|[x,y]|[x as u32,y as u32]).collect()
     }
+    pub fn tap_distance(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,tap:[u32;2],grain:[f32;4]) {
+        let reach=MIDDLE_CLIMB+1;
+        let around=PixelRect::new(tap[0].saturating_sub(reach),tap[1].saturating_sub(reach),(tap[0]+reach+1).min(self.extent[0]),(tap[1]+reach+1).min(self.extent[1]));
+        let mut steps=Vec::new();
+        self.distance_steps(&mut steps,self.windows_in(&[around],DISTANCE_HALO),grain);
+        self.encode(input,encoder,None,None,steps);
+    }
     pub fn probe_scope(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,tap:[u32;2])->mpsc::Receiver<Result<ScopeProbe,GpuRasterError>> {
         let columns=self.extent[0].div_ceil(SCOPE_BLOCK);let blocks=columns as usize*self.extent[1].div_ceil(SCOPE_BLOCK) as usize;
-        let scope=&self.scratch.as_ref().unwrap()[0];let bytes=((2+blocks+SNAP_AREA)*4) as u64;
+        let scope=&self.scratch.as_ref().unwrap()[0];let bytes=((1+blocks+SNAP_AREA)*4) as u64;
         encoder.clear_buffer(scope,0,Some(bytes));
         self.encode(input,encoder,None,None,vec![("scope_region",u64::from(self.offsets[0]),self.params([0;4],[0;4],[tap[0],tap[1],0,0],[1.,1.,0.,0.]))]);
         let readback=input.device.create_buffer(&wgpu::BufferDescriptor {label:Some("region scope"),size:bytes,usage:wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::MAP_READ,mapped_at_creation:false});
@@ -360,9 +368,16 @@ impl Lines {
         let (tx,rx)=mpsc::channel();
         crate::raster::map_then(input.device,Some(encoder),&readback,bytes,move|bytes|{
             let words:Vec<u32>=bytes.as_chunks::<4>().0.iter().map(|word|u32::from_le_bytes(*word)).collect();
-            let flagged=words[2..2+blocks].iter().enumerate().filter(|(_,flag)|**flag!=0).map(|(index,_)|[index as u32%columns,index as u32/columns]).collect();
-            Ok(ScopeProbe {on_ink:words[0]!=0,stale:words[1],flagged,region:words[2+blocks..].to_vec()})
+            let flagged=words[1..1+blocks].iter().enumerate().filter(|(_,flag)|**flag!=0).map(|(index,_)|[index as u32%columns,index as u32/columns]).collect();
+            Ok(ScopeProbe {stale:words[0],flagged,region:words[1+blocks..].to_vec()})
         },move|result|{let _=tx.send(result);});
+        rx
+    }
+    pub fn read_stale(&self,device:&PipelineDevice,encoder:&mut crate::submission::CommandEncoder)->mpsc::Receiver<Result<u32,GpuRasterError>> {
+        let readback=device.create_buffer(&wgpu::BufferDescriptor {label:Some("region seed check"),size:4,usage:wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::MAP_READ,mapped_at_creation:false});
+        encoder.copy_buffer_to_buffer(self.data.as_ref().unwrap(),u64::from(self.offsets[1]+2)*4,&readback,0,4);
+        let (tx,rx)=mpsc::channel();
+        crate::raster::map_then(device,Some(encoder),&readback,4,|bytes|Ok(u32::from_le_bytes(bytes[..4].try_into().unwrap())),move|result|{let _=tx.send(result);});
         rx
     }
     pub fn check_snap(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,tap:[u32;2],probe:&ScopeProbe,stop:Option<&wgpu::Buffer>) {
@@ -433,9 +448,10 @@ impl Lines {
         self.encode(input,encoder,Some(parents),None,params(vec![("hold_barriers",u64::from(self.offsets[0]),self.params([0;4],[0;4],[0;4],[1.,1.,0.,0.]))]));
     }
 
-    pub fn assign(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,fill:bool) {
+    pub fn assign(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,fill:bool,included:Option<&[bool]>) {
         let mut steps=Vec::new();
-        for &(core,window) in &self.windows {
+        for (at,&(core,window)) in self.windows.iter().enumerate() {
+            if included.is_some_and(|included|!included[at]) {continue;}
             steps.push(("reset_ends",1,self.params(core,window,[2,0,0,0],[1.,1.,0.,0.])));
             let words=(window[0]+window[2]).div_ceil(32)-window[0]/32;
             steps.push(("region_seeds",u64::from(words)*u64::from(window[3]),self.params(core,window,[0,5,0,0],[1.,1.,0.,0.])));
@@ -584,7 +600,7 @@ mod tests {
             let input=Input {device:&r.device,mask:&mask,paper:&r.empty_paper_view};
             let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
             if before_build {assert!(lines.prepare_cache(&compiler,startup::BRUSH));}
-            assert!(!lines.build(&input,&mut encoder,([1.,1.,0.,0.],1,false),1.,true,&Default::default(),true).unwrap().0);
+            assert!(!lines.build(&input,&mut encoder,([1.,1.,0.,0.],1,false),1.,true,&Default::default(),(true,true)).unwrap().0);
             assert!(!lines.building.as_ref().unwrap().ranked);
             assert!(lines.prepare_cache(&compiler,startup::BRUSH));
             for entry in ["refine_ends","seal_candidates"] {

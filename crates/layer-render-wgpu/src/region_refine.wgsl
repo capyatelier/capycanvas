@@ -73,6 +73,7 @@ fn selected_component(label:u32,global:u32,wide:bool)->bool {
 fn component_mask(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
     let p = window_word(id, groups);
     if p.y >= size().y { return; }
+    if params.input.x==4u {let q=origin()+p;region_mask[q.y*mask_stride()+q.x/32u]=0u;return;}
     var packed = 0u;var thin=0u;var previous=NONE;var selected=false;var is_thin=false;
     for (var i = 0u; i < 32u && p.x+i < size().x; i++) {
         let local=p+vec2<u32>(i,0u);let parent=atomicLoad(&parents[local_index(local,size())]);

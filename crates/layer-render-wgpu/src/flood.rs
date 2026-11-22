@@ -8,6 +8,7 @@ use wgpu::util::DeviceExt;
 mod lines;
 pub(super) use lines::{Input,ScopeProbe,UNDERFILL_HALF_PIXELS};
 const WINDOW: u32 = 2048;
+const UNLABELED: u32 = 4;
 const PARAMETER_BYTES: u64 = 96;
 
 pub(super) struct Flood {
@@ -18,6 +19,7 @@ pub(super) struct Flood {
     empty: wgpu::Buffer,
     lines: lines::Lines,
     trail:Option<(u64,[u32;2],wgpu::Buffer)>,
+    unlabeled: wgpu::Buffer,
 }
 const STAGES: [&str; 12] = ["initialize", "merge", "mark_exterior", "export_border", "seam_merge", "propagate_flags", "resolve_seed", "component_mask", "finish_attempt", "restore_components", "pack", "area_tokens"];
 fn stages(enclosed: bool, contiguous: bool) -> impl Iterator<Item = &'static str> {
@@ -122,6 +124,11 @@ impl Flood {
             labels: None,
             capacity: 0,
             trail:None,
+            unlabeled: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("unlabeled window border"),
+                contents: &[0xff; 16 * WINDOW as usize],
+                usage: wgpu::BufferUsages::COPY_SRC,
+            }),
             empty: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("unlimited region"),
                 size: 48,
@@ -144,7 +151,7 @@ impl Flood {
     }
     pub fn prepare_cache(&self,compiler:&compile::Scope,priority:startup::Class)->bool {self.lines.prepare_cache(compiler,priority)}
     #[allow(clippy::too_many_arguments)]
-    pub fn build_lines(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,extent:[u32;2],paper:([f32;4],u32,bool),(budget,demand):(f64,bool),dirty:&std::collections::BTreeSet<[u32;2]>,lines:bool)->Result<(bool,f64),GpuRasterError> {
+    pub fn build_lines(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,extent:[u32;2],paper:([f32;4],u32,bool),(budget,demand):(f64,bool),dirty:&std::collections::BTreeSet<[u32;2]>,lines:(bool,bool))->Result<(bool,f64),GpuRasterError> {
         let device=input.device;
         let labels=Labels::new(extent,&device.limits()).ok_or(GpuRasterError::SizeOverflow)?;
         let windows:Vec<_>=labels.windows(extent).collect();
@@ -158,6 +165,8 @@ impl Flood {
     #[cfg(test)]
     pub fn built_blocks(&self)->Option<usize> {self.lines.built_blocks()}
     pub fn lines_open(&self)->bool {self.lines.open()}
+    pub fn tap_distance(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,tap:[u32;2],grain:[f32;4]) {self.lines.tap_distance(input,encoder,tap,grain);}
+    pub fn read_stale(&self,device:&PipelineDevice,encoder:&mut crate::submission::CommandEncoder)->mpsc::Receiver<Result<u32,GpuRasterError>> {self.lines.read_stale(device,encoder)}
     pub fn scope_blocks(&self,seed:[u32;2],flagged:impl Iterator<Item=[u32;2]>)->std::collections::BTreeSet<[u32;2]> {self.lines.scope_blocks(seed,flagged)}
     pub fn check_snap(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,tap:[u32;2],probe:&ScopeProbe,stop:Option<&wgpu::Buffer>,fill:Option<&layer_render::RegionFillQuery>) {
         self.lines.exclude(input,encoder,fill.map_or(&[],|fill|fill.excluded_seals.as_ref()));
@@ -166,7 +175,7 @@ impl Flood {
     #[allow(clippy::too_many_arguments)]
     pub fn probe_scope(&mut self,device:&PipelineDevice,encoder:&mut crate::submission::CommandEncoder,extent:[u32;2],seed:[u32;2],tolerance:f32,classified:&wgpu::Buffer,paper:&wgpu::TextureView,stop:Option<(&wgpu::Buffer,bool)>)->Result<mpsc::Receiver<Result<ScopeProbe,GpuRasterError>>,GpuRasterError> {
         let open=RegionRefinement {close_gaps:false,edges:layer_render::RegionEdges::Exact,smooth_edges:false};
-        self.encode_input(device,encoder,extent,seed,tolerance,None,open,classified,true,false,paper,stop,None)?;
+        self.encode_input(device,encoder,extent,seed,tolerance,None,open,classified,true,false,paper,stop,None,None)?;
         Ok(self.lines.probe_scope(&Input {device,mask:classified,paper},encoder,seed))
     }
     pub fn prepare_areas(&self,compiler:&compile::Scope,priority:startup::Class)->bool {
@@ -263,6 +272,7 @@ impl Flood {
         paper: &wgpu::TextureView,
         stop: Option<(&wgpu::Buffer, bool)>,
         fill: Option<&layer_render::RegionFillQuery>,
+        reach: Option<&[[u32;2]]>,
     ) -> Result<Region, GpuRasterError> {
         let requested_close=refinement.close_gaps;
         let trail=fill.and_then(|fill|fill.trail.as_ref()).filter(|trail|!trail.points.is_empty());
@@ -324,10 +334,15 @@ impl Flood {
         if band {encoder.copy_buffer_to_buffer(&summary,32,&region.coverage,region.bounds_offset+32,20);}
         let stride = PARAMETER_BYTES.next_multiple_of(u64::from(limit.min_uniform_buffer_offset_alignment));
         let windows: Vec<_> = labels.windows(extent).collect();
-        let mut data = vec![0u8;(stride*windows.len() as u64*u64::from(attempts)*if multiple {4}else{3}) as usize];
+        let included=reach.map(|blocks|windows.iter().map(|(_,[x,y,w,h])|blocks.iter().any(|&[bx,by]| {
+            let [x0,y0,x1,y1]=[bx.saturating_sub(1),by.saturating_sub(1),bx+2,by+2].map(|n|n*lines::SCOPE_BLOCK);
+            x0<x+w && *x<x1 && y0<y+h && *y<y1
+        })).collect::<Vec<_>>());
+        let modes:u32=if multiple {4}else{3};
+        let mut data = vec![0u8;(stride*windows.len() as u64*u64::from(attempts)*u64::from(modes+1)) as usize];
         let offsets = [labels.slots, labels.flags, labels.marks, labels.seed].map(|v| v as u32);
         for (parameter,((index, window), entry)) in windows.iter().cycle().zip(data.chunks_mut(stride as usize)).enumerate() {
-            let mode=(parameter/windows.len()/attempts as usize) as u32;
+            let mode=match (parameter/windows.len()/attempts as usize) as u32 {bank if bank==modes=>UNLABELED,bank=>bank};
             let attempt=(parameter/windows.len()) as u32%attempts;
             let params = [
                 w,h,seed[0],seed[1],
@@ -364,6 +379,7 @@ impl Flood {
         let enabled: Vec<_> = stages(enclosed, contiguous).collect();
         let dimension = limit.max_compute_workgroups_per_dimension;
         let pipelines = &self.pipelines;
+        let clear=modes as usize;
         let run = |encoder: &mut crate::submission::CommandEncoder, mode:usize, attempt:usize, at: usize, entries: &[&'static str]| {
             let [_, _, ww, wh] = windows[at].1;
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -400,8 +416,15 @@ impl Flood {
         }
         let last=windows.len()-1;
         let mode=if attempts>1 {1}else{0};
+        let inside=|at:usize|included.as_ref().is_none_or(|included|included[at]);
         for at in 0..=last {
             for attempt in labeled.clone() {
+                if !inside(at) {
+                    let side=u64::from(labels.side);
+                    let slot=labels.slots+(u64::from(attempt)*u64::from(labels.grid[0]*labels.grid[1])+at as u64)*4*side;
+                    encoder.copy_buffer_to_buffer(&self.unlabeled,0,store,slot*4,16*side);
+                    continue;
+                }
                 encoder.clear_buffer(store,labels.marks*4,Some((labels.seed-labels.marks)*4));
                 run(encoder,mode,attempt as usize,at,&["initialize","merge","mark_exterior","export_border"]);
             }
@@ -419,10 +442,12 @@ impl Flood {
             encoder.clear_buffer(&region.coverage,32+u64::from(attempts)*mask_bytes,Some(mask_bytes));
             self.lines.barrier_plane(&input,encoder,&region.coverage,store,(labels.seed+40) as u32,1);
         }
+        let reuse=attempts==1 && included.is_none();
         for attempt in 0..if enclosed {attempts as usize}else{1} {
             if attempts>1 && enclosed && attempt+1==attempts as usize {encoder.clear_buffer(&region.coverage,32,Some(mask_bytes));}
-            if attempts==1 {run(encoder,0,attempt,last,&["component_mask"]);}
-            for at in (0..if attempts==1 {last}else{windows.len()}).rev() {
+            if reuse {run(encoder,0,attempt,last,&["component_mask"]);}
+            for at in (0..if reuse {last}else{windows.len()}).rev() {
+                if !inside(at) {run(encoder,clear,0,at,&["component_mask"]);continue;}
                 encoder.clear_buffer(store,labels.marks*4,Some((labels.seed-labels.marks)*4));
                 run(encoder,if attempts>1 {2}else{0},attempt,at,&["initialize","merge","mark_exterior","component_mask"]);
             }
@@ -434,7 +459,7 @@ impl Flood {
         if enclosed {run(encoder,if attempts>1 {2}else{0},0,0,&["restore_components"]);}
         if band {
             self.lines.barrier_plane(&input,encoder,&region.coverage,store,0,2);
-            self.lines.assign(&input,encoder,fill.is_some());
+            self.lines.assign(&input,encoder,fill.is_some(),included.as_deref());
         }
         if let layer_render::RegionEdges::GrowShrink(value)=refinement.edges && value!=0 {self.lines.grow(&input,encoder,value);}
         if let Some((stop,clip))=stop && (clip || !band) {self.lines.intersect(&input,encoder,stop);}

@@ -101,14 +101,14 @@ fn snap_index(q:vec2<i32>,tap:vec2<i32>)->u32{let d=vec2<u32>(q-tap+vec2(SNAP_RE
 fn scope_region(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>){
     let index=id.x+id.y*groups.x*64u+line.job.x;
     if index<line.offsets.x && atomicLoad(&eligible[index])!=0u {
-        let y=index/line.extent.z;let x=index%line.extent.z*32u;first[2u+y/128u*scope_columns()+x/128u]=1u;
+        let y=index/line.extent.z;let x=index%line.extent.z*32u;first[1u+y/128u*scope_columns()+x/128u]=1u;
     }
     if index==0u {
         let tap=vec2<i32>(line.options.xy);
-        first[0]=u32(ink(tap));first[1]=atomicLoad(&cached[line.offsets.y+2u]);
+        first[0]=atomicLoad(&cached[line.offsets.y+2u]);
         for(var y=-SNAP_REACH;y<=SNAP_REACH;y++){for(var x=-SNAP_REACH;x<=SNAP_REACH;x++){
             let q=tap+vec2(x,y);
-            first[2u+scope_columns()*((line.extent.y+127u)/128u)+snap_index(q,tap)]=u32(valid(q) && (atomicLoad(&eligible[u32(q.y)*line.extent.z+u32(q.x)/32u])&(1u<<(u32(q.x)%32u)))!=0u);
+            first[1u+scope_columns()*((line.extent.y+127u)/128u)+snap_index(q,tap)]=u32(valid(q) && (atomicLoad(&eligible[u32(q.y)*line.extent.z+u32(q.x)/32u])&(1u<<(u32(q.x)%32u)))!=0u);
         }}
     }
 }
@@ -255,20 +255,18 @@ fn skeleton(p: vec2<i32>) -> u32 {
 }
 fn skeleton_ridges_point(p:vec2<u32>) {
     let index=local_index(p);
-    let q=line.window.xy+p;if !initial_skeleton(vec2<i32>(q)){return;}
-    var value=input(index);
-    if value!=0u && ((q.x&1u)|((q.y&1u)<<1u))==line.options.z && distance(vec2<i32>(q))<=line.options.x {
-        var around:array<u32,8>;var count=0u;var crossings=0u;
-        for(var i=0u;i<8u;i++){around[i]=skeleton(vec2<i32>(p)+AROUND[i]);count+=around[i];}
-        for(var i=0u;i<8u;i++){crossings+=u32(around[i]==0u && around[(i+1u)%8u]!=0u);}
-        if count>=2u && crossings==1u && around[0]*around[2]*around[4]*around[6]==0u {value=0u;}
-    }
-    output(index,value);
+    if first[index]==0u || distance(vec2<i32>(line.window.xy+p))>line.options.x {return;}
+    var around:array<u32,8>;var count=0u;var crossings=0u;
+    for(var i=0u;i<8u;i++){around[i]=skeleton(vec2<i32>(p)+AROUND[i]);count+=around[i];}
+    for(var i=0u;i<8u;i++){crossings+=u32(around[i]==0u && around[(i+1u)%8u]!=0u);}
+    if count>=2u && crossings==1u && around[0]*around[2]*around[4]*around[6]==0u {first[index]=0u;}
 }
 @compute @workgroup_size(64)
 fn skeleton_ridges(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>) {
     if line.job.y!=0u && atomicLoad(&cached[line.offsets.y+3u])==0u {return;}
-    let block=skeleton_block(id.x+id.y*groups.x*64u+line.job.x);var bits=block.z;
+    let block=skeleton_block(id.x+id.y*groups.x*64u+line.job.x);
+    if (block.y&1u)!=line.options.z>>1u {return;}
+    var bits=block.z&select(0x55555555u,0xaaaaaaaau,(line.options.z&1u)!=0u);
     loop {
         if bits==0u {break;}let bit=countTrailingZeros(bits);bits&=bits-1u;
         let q=block.xy+vec2(bit,0u);

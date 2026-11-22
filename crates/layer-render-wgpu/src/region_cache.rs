@@ -15,13 +15,14 @@ pub(super) struct Cache {
     pub mask:Option<wgpu::Buffer>,
     pub dirty:BTreeMap<SourceTarget,BTreeSet<[u32;2]>>,
     pub sampling:region_sources::Sampling,
+    pub seeded:Option<u64>,
     frame:Option<std::sync::Arc<artwork::Frame>>,
 }
 impl Cache {
     pub fn new(r:&WgpuRasterizer,request:&RegionRequest,source:RegionSource,enclosed:bool)->Self {
         let seeds=r.device.create_buffer(&wgpu::BufferDescriptor {label:Some("cached reference seed keys"),size:source.sources().len() as u64*16,
             usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::COPY_SRC,mapped_at_creation:false});
-        Self {source,paper:request.paper.clone(),tolerance:request.tolerance.to_bits(),enclosed,seeds,ready:false,lastwrite:None,classified:false,reclassify:false,mask:None,dirty:BTreeMap::new(),sampling:region_sources::Sampling::Transparent,frame:r.artwork_frame.clone()}
+        Self {source,paper:request.paper.clone(),tolerance:request.tolerance.to_bits(),enclosed,seeds,ready:false,lastwrite:None,classified:false,reclassify:false,mask:None,dirty:BTreeMap::new(),sampling:region_sources::Sampling::Transparent,seeded:None,frame:r.artwork_frame.clone()}
     }
     pub fn submitted(&self)->bool {self.lastwrite.as_ref().is_none_or(|owner|owner.submitted())}
     pub fn pending(&self)->bool {self.lastwrite.as_ref().is_some_and(|owner|!owner.submitted() && !owner.discarded())}

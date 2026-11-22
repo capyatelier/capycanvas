@@ -12,7 +12,7 @@ mod cache;
 mod areas;
 
 const DEMAND_CHUNKS:f64=3.;
-enum Scope {Probe(mpsc::Receiver<Result<flood::ScopeProbe,GpuRasterError>>),Known(flood::ScopeProbe),Full}
+enum Scope {Check(mpsc::Receiver<Result<u32,GpuRasterError>>),Probe(mpsc::Receiver<Result<flood::ScopeProbe,GpuRasterError>>),Known(flood::ScopeProbe),Full}
 pub(super) struct RegionRequests {
     pub(super) flood: Flood,
     pub(super) raw: region_sources::RawRegions,
@@ -205,6 +205,7 @@ impl RegionRequests {
                 }
                 self.raw.encode_sampling(r,&base,encoder,self.sampling)?;
                 let cache=self.cache.as_mut().unwrap();cache.classified=true;cache.source=source;cache.sampling=self.sampling;
+                if cache.dirty.is_empty() {cache.seeded=Some(request.request_id);}
                 let classified=self.raw.mask().unwrap();
                 if let Some(saved)=&cache.mask {encoder.copy_buffer_to_buffer(&classified,0,saved,0,saved.size());}
                 else{cache.mask=Some(Self::copy(&r.device,encoder,&classified,"cached reference classification"));}
@@ -217,8 +218,9 @@ impl RegionRequests {
             if budget<=0. {return Err(GpuRasterError::NotReady);}
             self.chunk_timing=self.refiner(r).begin_timing(encoder);
             let dirty=self.cache.as_ref().unwrap().dirty.values().flatten().copied().collect::<std::collections::BTreeSet<_>>();
-            let prepared=!demand && self.cache.as_ref().unwrap().sampling!=region_sources::Sampling::Retained;
-            let (ready,taps)=self.flood.build_lines(&flood::Input {device:&r.device,mask:&classified,paper:&paper},encoder,r.document_extent,(grain,radius,request.paper.is_some()),(budget,demand),&dirty,prepared)?;
+            let sampling=self.cache.as_ref().unwrap().sampling;
+            let prepared=!demand && sampling!=region_sources::Sampling::Retained;
+            let (ready,taps)=self.flood.build_lines(&flood::Input {device:&r.device,mask:&classified,paper:&paper},encoder,r.document_extent,(grain,radius,request.paper.is_some()),(budget,demand),&dirty,(prepared,sampling==region_sources::Sampling::Transparent))?;
             self.refiner.as_mut().unwrap().end_timing(encoder,self.chunk_timing,taps);
             if let Some(work)=grant {work.spend(taps as u64);}
             if !ready {return Err(GpuRasterError::NotReady);}
@@ -279,6 +281,11 @@ impl RegionRequests {
         let source=cache::source(r,request);
         let base=RegionRequest {source,limit:None,reference_count:None,..request.clone()};
         let seeded=self.cache.as_ref().is_some_and(|cache|cache.sampling==region_sources::Sampling::Retained);
+        if !seeded && !self.flood.lines_full() && self.scope.as_ref().is_none_or(|(id,_)|*id!=request.request_id) {
+            let mask=self.raw.mask().ok_or(GpuRasterError::InvalidExtent)?;
+            let (paper,grain,_)=Self::paper(r,request)?;
+            self.flood.tap_distance(&flood::Input {device:&r.device,mask:&mask,paper:&paper},encoder,request.position,grain);
+        }
         let classified={
             self.raw.encode_sampling(r,&base,encoder,region_sources::Sampling::Seeds)?;
             let mask=self.raw.mask().ok_or(GpuRasterError::InvalidExtent)?;
@@ -310,9 +317,25 @@ impl RegionRequests {
         let input=flood::Input {device:&r.device,mask:classified,paper:&paper};
         let id=request.request_id;
         let whole=!request.contiguous || request.enclosure.is_some() || request.fill.as_ref().and_then(|fill|fill.trail.as_ref()).is_some_and(|trail|!trail.points.is_empty());
-        let probe=match self.scope.take().filter(|(scope,_)|*scope==id).map(|(_,scope)|scope) {
+        let mut scope=self.scope.take().filter(|(scope,_)|*scope==id).map(|(_,scope)|scope);
+        if scope.is_none() && !whole && self.cache.as_ref().is_some_and(|cache|cache.sampling==region_sources::Sampling::Retained && cache.seeded!=Some(id)) {
+            self.scope=Some((id,Scope::Check(self.flood.read_stale(&r.device,encoder))));
+            return Err(GpuRasterError::NotReady);
+        }
+        if let Some(Scope::Check(rx))=&scope {
+            match rx.try_recv() {
+                Ok(stale)=>{
+                    if stale?&1!=0 {self.reclassify();return Err(GpuRasterError::NotReady);}
+                    scope=None;
+                },
+                Err(mpsc::TryRecvError::Empty)=>{self.scope=Some((id,scope.unwrap()));return Err(GpuRasterError::NotReady);},
+                Err(error)=>return Err(GpuRasterError::MapFailed(error.to_string())),
+            }
+        }
+        let probe=match scope {
             _ if whole=>None,
             Some(Scope::Full)=>None,
+            Some(Scope::Check(_))=>unreachable!(),
             None=>{
                 let stop=self.stop_mask.as_ref().map(|stop|(stop,request.fill_areas.is_none()));
                 self.scope=Some((id,Scope::Probe(self.flood.probe_scope(&r.device,encoder,r.document_extent,request.position,request.tolerance,classified,&paper,stop)?)));
@@ -329,7 +352,7 @@ impl RegionRequests {
             self.scope=Some((id,Scope::Full));
             return if self.flood.build_scope(&input,encoder,(grain,radius),budget,None)? {Ok(())}else{Err(GpuRasterError::NotReady)};
         };
-        if probe.stale&1!=0 && !probe.on_ink {self.reclassify();return Err(GpuRasterError::NotReady);}
+        if probe.stale&1!=0 {self.reclassify();return Err(GpuRasterError::NotReady);}
         let blocks=self.flood.scope_blocks(request.position,probe.flagged.iter().copied());
         let built=self.flood.build_scope(&input,encoder,(grain,radius),budget,Some(blocks));
         if built.as_ref().is_ok_and(|built|*built) {self.flood.check_snap(&input,encoder,request.position,&probe,self.stop_mask.as_ref(),request.fill.as_ref());}
@@ -557,6 +580,7 @@ impl RegionRequests {
                     request.contiguous,
                     request.enclosure.is_some(),
                     &paper, self.stop_mask.as_ref().map(|stop|(stop,request.fill_areas.is_none())),request.fill.as_ref(),
+                    match &self.scope {Some((id,Scope::Known(probe))) if *id==request.request_id=>Some(&probe.flagged),_=>None},
                 )?
             }
         };
@@ -1021,6 +1045,42 @@ pub(crate) mod tests {
         RegionRequest { fill_areas: None, colour_mode: Default::default(), fill: None, source, reference_count: None, paper: None, enclosure: None,
             contiguous: true, selection: None, request_id: 91, position: [32, 32], tolerance: 0.,
             refinement: RegionRefinement { close_gaps: false, edges: layer_render::RegionEdges::Exact, smooth_edges: false }, limit: None }
+    }
+
+    #[test]
+    fn a_tap_on_another_colour_of_an_opaque_image_classifies_again_before_flooding_the_earlier_colour() {
+        let extent=[256,128];
+        let mut document=layer_core::Document::new(layer_core::authored::PortableId::random(),extent[0],extent[1],
+            layer_core::DocumentNames {paint:"Photo".into(),paper:"Paper".into()});
+        placement::set_source(&mut document,layer_core::color::source::rgba8_source(extent,|x,y| {
+            if (x+y)%37==0 {[20,20,20,255]}else if x<128 {[200,40,40,255]}else{[40,40,200,255]}
+        }));
+        let source=RegionSource::Scene {snapshot:document.snapshot(),scope:SceneScope::Raw(placement::target(&document))};
+        let renderer=|| {
+            let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+            test_support::submit_ready(&mut r,test_support::packet(document.scene(),extent)).unwrap();
+            r.set_refine_chunk(Some(1_048_576.));
+            r.prepare_regions(Some(&RegionPreparation {source:source.clone(),reference_count:None,paper:None,tolerance:0.,refinement:Default::default(),enclosed:false}));
+            test_support::submit_settled(&mut r,test_support::packet(document.scene(),extent));
+            r
+        };
+        let query=|request_id,position|RegionRequest {request_id,position,
+            refinement:RegionRefinement {close_gaps:true,edges:layer_render::RegionEdges::Exact,smooth_edges:false},..reference_query(source.clone())};
+        let mut r=renderer();
+        test_support::receive_request(&mut r,query(1,[64,64]));
+        assert!(r.request_region(query(2,[192,64]).into()).unwrap());
+        let mut reclassified=false;
+        let result=test_support::prepare_raster(&mut r,|r| {
+            let regions=r.regions.as_ref().unwrap();
+            reclassified|=regions.cache.as_ref().is_some_and(|cache|!cache.classified);
+            assert!(reclassified || regions.pending.is_none() && !matches!(regions.scope,Some((_,Scope::Probe(_)|Scope::Known(_)))),
+                "a tap on another colour flooded the earlier tap's classification before classifying its own");
+            r.take_region().unwrap_or(Err(GpuRasterError::NotReady))
+        }).unwrap();
+        let RegionOutput::Mask(result)=result else {panic!("expected region mask")};
+        let expected=test_support::receive_request(&mut renderer(),query(2,[192,64]));
+        assert!(reclassified);
+        assert_eq!((result.pixels.bounds(),result.pixels.words()),(expected.pixels.bounds(),expected.pixels.words()));
     }
 
     #[test]
