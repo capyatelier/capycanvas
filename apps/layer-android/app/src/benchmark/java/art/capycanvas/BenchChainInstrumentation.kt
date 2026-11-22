@@ -144,7 +144,7 @@ class BenchChainInstrumentation : Instrumentation() {
             if (alive) sampleMemory()
             steps.put(record)
             write()
-            sendStatus(0, Bundle().apply { putString("stream", "BENCH_STEP $id ${record.getString("status")} ${if (record.isNull("reason")) "" else record.getString("reason")}\n") })
+            progress("BENCH_STEP $id ${record.getString("status")} ${if (record.isNull("reason")) "" else record.getString("reason")}")
             if (alive && host.failure != null) break
         }
         write()
@@ -165,6 +165,7 @@ class BenchChainInstrumentation : Instrumentation() {
         else -> throw Skipped("unknown step kind ${step.getString("do")}")
     }
 
+    private fun progress(line: String) = sendStatus(0, Bundle().apply { putString("stream", "$line\n") })
     private fun now() = SystemClock.elapsedRealtimeNanos()
     private fun extra(): JSONObject = record.getJSONObject("extra")
     private fun motion(window: LongArray) = record.getJSONArray("motion").put(obj("begin_ns" to window[0], "end_ns" to window[1]))
@@ -214,9 +215,12 @@ class BenchChainInstrumentation : Instrumentation() {
         native { }
         failed()?.let { error(it) }
     }
+    private fun commandEnabled(id: String) = main {
+        state().array("commands").objects().firstOrNull { it.getString("id") == id }?.optBoolean("enabled", true)
+    }
     private fun command(name: String) {
         val id = aliases[name] ?: name
-        when (main { state().array("commands").objects().firstOrNull { it.getString("id") == id }?.optBoolean("enabled", true) }) {
+        when (commandEnabled(id)) {
             null -> throw Skipped("command $id is not in this build")
             false -> error("command $id is disabled")
             else -> dispatch(obj("type" to "invoke", "command" to id))
@@ -518,11 +522,14 @@ class BenchChainInstrumentation : Instrumentation() {
 
     private fun tap(step: JSONObject) {
         val tool = step.getString("tool")
+        val document = tool == "fill"
+        if (document && commandEnabled("deselect") == true) command("deselect")
         command(tool)
         val surface = step.optString("surface", "canvas")
-        val document = tool == "fill"
-        for (point in step.getJSONArray("points").values().map { it as JSONArray }) {
+        val id = step.getString("id")
+        for ((index, point) in step.getJSONArray("points").values().map { it as JSONArray }.withIndex()) {
             await("idle before tap")
+            progress("BENCH_TAP $id ${index + 1}")
             val before = main { if (document) revision() else state().getLong("revision") }
             val a = area()
             val input = tap(a.at(point.getDouble(0), point.getDouble(1)), true)

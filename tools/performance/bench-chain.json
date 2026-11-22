@@ -23,7 +23,7 @@
     {"id": "nav.fit", "do": "repeat", "count": 2, "commands": ["fit_canvas"], "surface": "canvas"},
     {"id": "select.lasso", "do": "drag", "tool": "lasso", "target": "canvas", "path": "loop"},
     {"id": "select.wand", "do": "tap", "tool": "magic_wand", "target": "canvas", "points": [[0.3, 0.4], [0.6, 0.5], [0.5, 0.7]], "surface": "canvas"},
-    {"id": "fill", "do": "tap", "tool": "fill", "target": "canvas", "points": [[0.25, 0.25], [0.75, 0.3], [0.5, 0.75]], "surface": "canvas"},
+    {"id": "fill", "do": "tap", "tool": "fill", "target": "canvas", "points": [[0.25, 0.25], [0.75, 0.3], [0.53, 0.493]], "surface": "canvas"},
     {"id": "transform", "do": "drag", "command": "transform", "target": "canvas", "path": "arc", "then": "apply"},
     {"id": "filter.scrub", "do": "scrub", "effect": "curves", "frames": 150},
     {"id": "layers.opacity", "do": "scrub", "layer_opacity": [1.0, 0.2]},
