@@ -2187,3 +2187,28 @@ fn a_unified_device_settles_with_its_retention_within_the_display_grant() {
     assert!(grant<r.memory.retention_grant(),"the view's target bounds the display grant below the ledger grant");
     assert!(used<=grant.saturating_add(r.scene_tiers.retiring.used()),"display retention {} MiB exceeds the display grant {} MiB",used>>20,grant>>20);
 }
+
+#[test]
+fn a_display_blocked_while_ram_is_exhausted_completes_once_another_owner_releases_it() {
+    let extent = [4096, 4096];
+    let budget = MemoryBudget::with_facts(MemoryFacts { host_default_bytes: Some(2 << 30), override_bytes: Some(2 << 30), ..Default::default() });
+    let photo = layer_core::color::source::rgba8_source(extent, |x, y| [(x % 251) as u8, (y % 241) as u8, ((x ^ y) % 199) as u8, 255]);
+    let document = layer_color::photo_project(Arc::unwrap_or_clone(photo), Default::default(), "Photo".into(), layer_core::color::SampleDepth::U8).unwrap();
+    let mut r = renderer_in_budget(document.composition().color, layer_core::DeviceMemoryFacts { unified: true, ..Default::default() }, budget.clone()).unwrap();
+    let view = layer_render::ViewState { width_px: 1024, height_px: 1024, document_to_surface: [0.25, 0., 0., 0.25, 0., 0.] };
+    let frame = FramePacket { view, ..crate::test_support::packet(document.scene(), extent) };
+    crate::test_support::submit_settled(&mut r, frame);
+    let pressure = budget.admit_import(budget.import_headroom_bytes()).unwrap();
+    crate::test_support::submit_ready(&mut r, FramePacket { composite_all: false, ..frame }).unwrap();
+    let (signal, woken) = std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move || { let _ = signal.send(()); }));
+    let class = crate::residency::Class::Navigator;
+    let bytes = r.scene_tiers.display.headroom(class) + r.scene_tiers.display.yielding() + MIB;
+    let blocked = r.scene_tiers.display.blocked(class, bytes).expect("with the RAM taken by another owner the display has no room for optional work");
+    assert!(r.refuses(&blocked));
+    while woken.try_recv().is_ok() {}
+    drop(pressure);
+    assert!(woken.recv_timeout(std::time::Duration::from_secs(10)).is_ok(), "the room another owner returns wakes the renderer");
+    assert!(!r.refuses(&blocked), "without a frame, the blocked request is judged against the room the ledger now gives the display");
+    assert!(r.admit_display(None, class, bytes).is_ok(), "and the request is admitted");
+}

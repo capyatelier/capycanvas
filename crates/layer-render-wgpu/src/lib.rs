@@ -1371,7 +1371,7 @@ impl WgpuRasterizer {
         device.sample_memory = Some(memory.sample_owner());
         device.resource_limit = memory.resource_limit();
         device.source_samples.set_limit(memory.sample_grant().min(usize::MAX as u64) as usize);
-        let scene_tiers = scene::Tiers::default();
+        let scene_tiers = scene::Tiers::new(memory.display_owner());
         if device.analysis_memory.is_root() { device.analysis_memory = residency::Tier::within(&scene_tiers.display); }
         let sampler = recipes.sampler.clone();
         let brush_sampler = recipes.brush_sampler.clone();

@@ -370,10 +370,10 @@ pub(super) fn raw_output(scope:&SceneScope)->Option<Output> {Some(match scope {
 pub(crate) struct Usage {pub(crate) working:u64,pub(crate) ram:u64,pub(crate) pinned:u64}
 #[derive(Clone)]
 pub(crate) struct Tiers {pub(super) display:Arc<crate::residency::Tier>,pub(super) windows:Arc<crate::residency::Tier>,pub(super) retiring:Arc<crate::residency::Tier>,pub(super) gpu:Arc<crate::residency::Tier>,pub(super) ram:Arc<crate::residency::Tier>,pub(super) objects:Arc<crate::residency::Tier>,pub(super) pinned:Arc<crate::residency::Tier>,pub(super) moving:[Arc<crate::residency::Tier>;2],pub(super) decodes:Arc<crate::residency::Tier>,pub(super) schedule:crate::schedule::Schedule}
-impl Default for Tiers {
-    fn default()->Self {
+impl Tiers {
+    pub(crate) fn new(ledger:layer_core::MemoryOwner)->Self {
         let retiring=Arc::new(crate::residency::Tier::default());
-        let display=crate::residency::Tier::retiring_into(&retiring);
+        let display=crate::residency::Tier::granted_by(ledger,&retiring);
         Self {windows:crate::residency::Tier::within(&display),retiring,gpu:crate::residency::Tier::within(&display),objects:crate::residency::Tier::within(&display),moving:[crate::residency::Tier::within(&display),Default::default()],
             ram:Default::default(),pinned:Default::default(),decodes:Default::default(),schedule:Default::default(),display}
     }

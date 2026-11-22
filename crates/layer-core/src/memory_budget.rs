@@ -686,7 +686,10 @@ impl State {
             let gpu_changed=owner.grants.gpu.swap(unified[i],Ordering::AcqRel)!=unified[i];
             if (changed || gpu_changed) && let Some(wake)=owner.grants.wake.get() {wakes.push(wake.clone());}
         }
-        for (id,owner) in &self.owners {owner.grants.working_limit.store(self.gpu_working_limit(*id),Ordering::Release);}
+        for (id,owner) in &self.owners {
+            let limit=self.gpu_working_limit(*id);
+            if owner.grants.working_limit.swap(limit,Ordering::AcqRel)<limit && let Some(wake)=owner.grants.wake.get() {wakes.push(wake.clone());}
+        }
         wakes
     }
 }
