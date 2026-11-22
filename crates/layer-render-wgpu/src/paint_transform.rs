@@ -124,8 +124,8 @@ impl PreparedRegion {
     pub fn pipelines<'a>(&self, r: &'a WgpuRasterizer) -> [Option<&'a Deferred<wgpu::RenderPipeline>>; 2] {
         match &self.0 {
             Region::Copy { .. } => [None, None],
-            Region::Draw { mesh, kept, .. } => {
-                let pipelines = &r.scene_pipelines.resample.mesh;
+            Region::Draw { mesh, kept, destination, .. } => {
+                let pipelines = r.scene_pipelines.resample.mesh(destination.texture().format());
                 if mesh.is_some() { [Some(&pipelines[usize::from(*kept)]), Some(&pipelines[2+usize::from(*kept)])] }
                 else { [Some(&pipelines[4+usize::from(*kept)]), None] }
             }
@@ -2542,7 +2542,7 @@ mod prepared_region_tests {
     #[test]
     fn prepared_transform_draws_upload_their_own_geometry_at_commit() {
         let (mut r,target)=renderer();
-        pollster::block_on(r.compilation.prepare_all(r.scene_pipelines.resample.mesh.iter())).unwrap();
+        pollster::block_on(r.compilation.prepare_all(r.scene_pipelines.resample.mesh(wgpu::TextureFormat::Rgba32Float).iter())).unwrap();
         let a=create_target(&r.device,[64;2],wgpu::TextureFormat::Rgba32Float,"first prepared mesh");
         let b=create_target(&r.device,[64;2],wgpu::TextureFormat::Rgba32Float,"second prepared mesh");
         let first=prepare(&mut r,target,0.,&a.1);let second=prepare(&mut r,target,16.,&b.1);
@@ -2555,7 +2555,7 @@ mod prepared_region_tests {
     #[test]
     fn discarded_transform_geometry_is_uploaded_before_its_next_draw() {
         let (mut r,target)=renderer();
-        pollster::block_on(r.compilation.prepare_all(r.scene_pipelines.resample.mesh.iter())).unwrap();
+        pollster::block_on(r.compilation.prepare_all(r.scene_pipelines.resample.mesh(wgpu::TextureFormat::Rgba32Float).iter())).unwrap();
         let output=create_target(&r.device,[64;2],wgpu::TextureFormat::Rgba32Float,"discarded prepared mesh");
         let region=prepare(&mut r,target,0.,&output.1);
         drop(encode(&mut r,std::slice::from_ref(&region)));

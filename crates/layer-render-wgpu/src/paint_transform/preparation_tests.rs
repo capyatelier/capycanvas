@@ -77,7 +77,7 @@ fn cropped_against_full_extent(extent: [u32; 2], pages: &[[u32; 2]], offset: [i6
     let exact = transforms.0[0].color.display_pipeline();
     pollster::block_on(r.compilation.prepare_all([&r.recipes.display.reduce, &r.recipes.display.fused_reduce, &exact]
         .into_iter().chain(r.selection_clip.pipelines()))).unwrap();
-    pollster::block_on(r.compilation.prepare_all(r.scene_pipelines.resample.mesh.iter())).unwrap();
+    pollster::block_on(r.compilation.prepare_all(r.scene_pipelines.resample.mesh(wgpu::TextureFormat::Rgba32Float).iter())).unwrap();
     let [x, y] = pages[0].map(|v| (v * PAGE_SIZE + PAGE_SIZE / 2) as f32);
     let preview = layer_render::TransformPreview { transaction: 1, target, moving: true, selection: selection.clone(),
         transform: layer_core::ImageTransform::affine(layer_core::Affine::around(layer_core::Point { x, y }, [0.9; 2], 0.3,

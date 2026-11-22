@@ -2374,8 +2374,8 @@ fn analytic_display_resample(transform: layer_core::Projective) {
         fine.written(slot,&encoder);
         fine.write_directory(&mut r,&mut encoder,[0;2]).unwrap();
         let fine_pass=r.scene_pipelines.fine_resample.clone();
-        pollster::block_on(r.compilation.prepare_all([&resample.area])).unwrap();
-        pollster::block_on(r.compilation.prepare_all([&resample.mesh[4], &fine_pass.mesh[4]])).unwrap();
+        pollster::block_on(r.compilation.prepare_all([resample.area(wgpu::TextureFormat::Rgba32Float)])).unwrap();
+        pollster::block_on(r.compilation.prepare_all([&resample.mesh(wgpu::TextureFormat::Rgba32Float)[4], &fine_pass.mesh(wgpu::TextureFormat::Rgba32Float)[4]])).unwrap();
         let tiled_binding=fine_pass.fine_binding(&r.device,&uniforms,&[source.clone(),r.empty_view.clone()],&fine.view,&fine.directory);
         fine_pass.encode_mesh(&mut encoder,&tiled_binding,&tiled.create_view(&Default::default()),texels,None,false);
         if let Some(binding)=&binding {resample.encode(&mut encoder,binding,texels);}
@@ -2486,23 +2486,23 @@ fn first_tiled_transform_draw_waits_for_its_fine_resample_entries() {
                 [[900., 150.], [5140., 100.], [5900., 3920.], [150., 3940.]]
                     .map(|[x, y]| layer_core::Point { x, y })).unwrap()), ..Default::default() } };
     crate::memory::memory_tests::legacy_scene_frame(&mut r, frame);
-    assert!(r.scene_pipelines.fine_resample.mesh.iter().all(|p| !p.ready()));
+    assert!(r.scene_pipelines.fine_resample.mesh(wgpu::TextureFormat::Rgba32Float).iter().all(|p| !p.ready()));
     assert!(!r.raster_dependencies_ready(frame, Some(&preview)), "the first fine draw must wait for its cold pipelines");
     while !r.raster_dependencies_ready(frame, Some(&preview)) {
         r.poll_startup().unwrap();
         assert!(std::time::Instant::now() < deadline, "Fine transform preparation timed out");
         std::thread::sleep(Duration::from_millis(1));
     }
-    assert!(r.scene_pipelines.fine_resample.mesh[4..].iter().all(|p| p.ready()), "admission prepares what the admitted preview binds");
-    assert!(r.scene_pipelines.fine_resample.mesh[..4].iter().all(|p| !p.ready()));
-    assert!(r.scene_pipelines.resample.mesh[..4].iter().all(|p| !p.ready()));
+    assert!(r.scene_pipelines.fine_resample.mesh(wgpu::TextureFormat::Rgba32Float)[4..].iter().all(|p| p.ready()), "admission prepares what the admitted preview binds");
+    assert!(r.scene_pipelines.fine_resample.mesh(wgpu::TextureFormat::Rgba32Float)[..4].iter().all(|p| !p.ready()));
+    assert!(r.scene_pipelines.resample.mesh(wgpu::TextureFormat::Rgba32Float)[..4].iter().all(|p| !p.ready()));
     r.set_transform_preview(Some(&preview)).unwrap();
     let selected = request(&r, frame).unwrap();
     assert_eq!(selected.plan.level, 1);
     assert!(matches!(selected.evaluation, Evaluation::Tiled(_)));
     crate::test_support::submit_published(&mut r, frame);
     assert!(matches!(r.scale_display.as_ref().unwrap().evaluation, Evaluation::Tiled(_)));
-    assert!(r.scene_pipelines.fine_resample.mesh[..4].iter().all(|p| !p.ready()));
+    assert!(r.scene_pipelines.fine_resample.mesh(wgpu::TextureFormat::Rgba32Float)[..4].iter().all(|p| !p.ready()));
 }
 
 #[test]

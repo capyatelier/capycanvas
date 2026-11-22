@@ -731,7 +731,9 @@ impl WgpuRasterizer {
         if request.plan.level==0 || request.evaluation==scene::scale::Evaluation::Native {self.transforms.as_mut().unwrap().cancel_preparation();return true;}
         let pipelines=if request.evaluation.fine_capacity().is_some() {&self.scene_pipelines.fine_resample} else {&self.scene_pipelines.resample};
         let entries:&[usize]=if preview.transform.placement.mesh.is_some() {&[0,1,2,3]} else {&[4,5]};
-        if !self.compilation.require(entries.iter().map(|&i|&pipelines.mesh[i]),startup::BRUSH) {return false;}
+        let window=Some(self.display_precision(packet.scene).format()).filter(|format|*format!=wgpu::TextureFormat::Rgba32Float);
+        let formats=std::iter::once(wgpu::TextureFormat::Rgba32Float).chain(window);
+        if !self.compilation.require(formats.flat_map(|format|entries.iter().map(move|&i|&pipelines.mesh(format)[i])),startup::BRUSH) {return false;}
         let mut transforms=self.transforms.take().unwrap();
         let result=self.record_restore_uploads(|r,encoder|transforms.prepare_preview(r,encoder,preview,packet.scene,request.plan.level,request.evaluation.fine_capacity().is_some()));
         self.transforms=Some(transforms);

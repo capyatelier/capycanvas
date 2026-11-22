@@ -2547,7 +2547,7 @@ impl Scene {
                 Job::Placement(job)=>compute(&self.placement[usize::from(job.scalar)].placement_pipeline(&job.transform,job.taps)),
                 Job::Positions(..)=>r.transforms.as_ref().unwrap().mesh_pipelines().iter().for_each(&mut render),
                 Job::Compose {format,..}=>compute(&r.scene_pipelines.scale.output(*format).compose),
-                Job::Resample {..}=>compute(&r.scene_pipelines.resample.area),
+                Job::Resample {views,..}=>compute(r.scene_pipelines.resample.area(views[1].texture().format())),
                 Job::Reduce {kernel,format,..}=> {
                     let kernels=r.scene_pipelines.scale.output(*format);
                     compute(match kernel {Reduction::Pages=>&kernels.reduce,Reduction::Phased=>&kernels.reduce_phased});
@@ -2793,8 +2793,8 @@ impl Scene {
                             #[cfg(test)]
                             crate::test_support::PassCounts {composed_texels:u64::from(values[2])*u64::from(values[3]),..Default::default()}.record();
                         }
-                        Job::Resample { size, .. } => {
-                            pass.set_pipeline(&r.scene_pipelines.resample.area);
+                        Job::Resample { size, views, .. } => {
+                            pass.set_pipeline(r.scene_pipelines.resample.area(views[1].texture().format()));
                             pass.set_bind_group(0, resamples.next().unwrap(), &[]);
                             pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
                         }
@@ -3117,7 +3117,8 @@ impl Pipelines {
     }
     pub fn fill_pipelines(&self,device:&PipelineDevice)->[&Deferred<wgpu::RenderPipeline>;3] { [&self.pipeline[10],&self.pipeline[3],&self.pipeline[fill_line_pipeline(device)]] }
     pub fn scale_pipelines(&self,format:wgpu::TextureFormat) -> impl Iterator<Item = &Deferred<wgpu::ComputePipeline>> {
-        self.scale.display(format).chain([&self.resample.area])
+        self.scale.display(format).chain([self.resample.area(wgpu::TextureFormat::Rgba32Float)])
+            .chain((format!=wgpu::TextureFormat::Rgba32Float).then(||self.resample.area(format)))
     }
     pub fn effects(&self, r: &WgpuRasterizer) -> effects::Effects {
         effects::Effects::new(r, &self.uniforms)

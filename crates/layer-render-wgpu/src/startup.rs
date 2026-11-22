@@ -199,7 +199,7 @@ impl Needs {
         self.render.extend(transforms.pipelines());
         self.compute.extend(transforms.display_pipelines());
         self.compute.extend(transforms.linear_affine_placement_pipelines());
-        self.render.extend([4, 5].map(|i| r.scene_pipelines.resample.mesh[i].clone()));
+        self.render.extend([4, 5].map(|i| r.scene_pipelines.resample.mesh(wgpu::TextureFormat::Rgba32Float)[i].clone()));
         self.compute.extend(r.selection_clip.pipelines().into_iter().cloned());
     }
     pub(super) fn selection_paint(&mut self, r: &WgpuRasterizer) {
@@ -1602,8 +1602,8 @@ mod gpu_tests {
             std::thread::sleep(Duration::from_millis(2));
         }
         assert!(meshes.iter().all(|p| p.ready()), "prepared warp dependencies must be reused");
-        assert!(renderer.scene_pipelines.resample.mesh[..4].iter().all(|p| !p.ready())
-            && renderer.scene_pipelines.fine_resample.mesh.iter().all(|p| !p.ready()),
+        assert!(renderer.scene_pipelines.resample.mesh(wgpu::TextureFormat::Rgba32Float)[..4].iter().all(|p| !p.ready())
+            && renderer.scene_pipelines.fine_resample.mesh(wgpu::TextureFormat::Rgba32Float).iter().all(|p| !p.ready()),
             "a native warp must not prepare unused display resampling");
         renderer.prepare_startup(&document, &brush, false).unwrap();
         assert!(renderer.poll_startup().unwrap().brush_ready, "cached dependencies resume immediately");
@@ -1625,11 +1625,11 @@ mod gpu_tests {
         crate::test_support::wait_startup(&mut renderer, deadline, |progress| progress.brush_ready,
             format_args!("Transform startup timed out"));
         let cold = |renderer: &WgpuRasterizer| {
-            assert!(renderer.scene_pipelines.resample.mesh[..4].iter().all(|p| !p.ready()));
-            assert!(renderer.scene_pipelines.fine_resample.mesh.iter().all(|p| !p.ready()));
+            assert!(renderer.scene_pipelines.resample.mesh(wgpu::TextureFormat::Rgba32Float)[..4].iter().all(|p| !p.ready()));
+            assert!(renderer.scene_pipelines.fine_resample.mesh(wgpu::TextureFormat::Rgba32Float).iter().all(|p| !p.ready()));
         };
         cold(&renderer);
-        assert!(renderer.scene_pipelines.resample.mesh[4..].iter().all(|p| p.ready()));
+        assert!(renderer.scene_pipelines.resample.mesh(wgpu::TextureFormat::Rgba32Float)[4..].iter().all(|p| p.ready()));
         let mut packet = crate::test_support::packet(document.scene(), extent);
         packet.view = layer_render::ViewState { width_px: 128, height_px: 128,
             document_to_surface: [0.25, 0., 0., 0.25, 0., 0.] };
@@ -1673,10 +1673,10 @@ mod gpu_tests {
             assert!(std::time::Instant::now() < deadline, "Warp display preparation timed out");
             std::thread::sleep(Duration::from_millis(1));
         }
-        assert!(renderer.scene_pipelines.resample.mesh.iter().all(|p| p.ready()));
-        assert!(renderer.scene_pipelines.fine_resample.mesh.iter().all(|p| !p.ready()));
+        assert!(renderer.scene_pipelines.resample.mesh(wgpu::TextureFormat::Rgba32Float).iter().all(|p| p.ready()));
+        assert!(renderer.scene_pipelines.fine_resample.mesh(wgpu::TextureFormat::Rgba32Float).iter().all(|p| !p.ready()));
         crate::test_support::submit_published(&mut renderer, packet);
-        assert!(renderer.scene_pipelines.fine_resample.mesh.iter().all(|p| !p.ready()));
+        assert!(renderer.scene_pipelines.fine_resample.mesh(wgpu::TextureFormat::Rgba32Float).iter().all(|p| !p.ready()));
     }
 
     #[test]

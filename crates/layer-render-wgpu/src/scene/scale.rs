@@ -93,7 +93,7 @@ pub(crate) struct OutputPipelines {
     pub compose: Deferred<wgpu::ComputePipeline>,
     pub project: Deferred<wgpu::ComputePipeline>,
 }
-fn half_output(source:std::borrow::Cow<'static,str>,format:wgpu::TextureFormat)->String {
+pub(super) fn half_output(source:std::borrow::Cow<'static,str>,format:wgpu::TextureFormat)->String {
     if format!=wgpu::TextureFormat::Rgba16Float {return source.into_owned();}
     source.replace("texture_storage_2d<rgba32float","texture_storage_2d<rgba16float")
         .replace("fn display_value(value: vec4<f32>) -> vec4<f32> { return value; }","fn display_value(value: vec4<f32>) -> vec4<f32> { return half_nearest(value); }")
@@ -1863,13 +1863,7 @@ impl Evaluator<'_> {
         Ok(Value::Image { view, slot, opacity: 1., plan, preview: None, encode: false })
     }
     fn materialize(&mut self, value: Value, output: Option<Target>) -> Result<Value, GpuRasterError> {
-        if matches!(value,Value::Transform(_) | Value::Placed(_)) {
-            if output.as_ref().is_some_and(|target|target.view.texture().format()==wgpu::TextureFormat::Rgba16Float) {
-                let value=self.resample(value,None)?;
-                return self.materialize(value,output);
-            }
-            return self.resample(value,output);
-        }
+        if matches!(value,Value::Transform(_) | Value::Placed(_)) { return self.resample(value,output); }
         if !value.needs_encode() && value.preview().is_none() && value.opacity() == 1. && output.as_ref().map_or_else(|| value.slot().is_some(), |target| value.view() == Some(&target.view)) { return Ok(value); }
         let (front, back) = if matches!(value, Value::Color(_)) { (Value::Color([0.; 4]), value) } else { (value, Value::Color([0.; 4])) };
         self.draw(front, back, layer_core::LayerBlend::Normal, 0, output)

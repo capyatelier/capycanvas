@@ -476,7 +476,7 @@ impl Evaluator<'_> {
             else {self.cache.pages.lock().unwrap().prepare_write(key,region,pages::Accuracy::Display,self.cache.required_input_level())?};
         let window=self.cache.pixels.root().ok_or(GpuRasterError::NotReady)?;
         let output=Target {view:window.view.clone(),slot:Some(Slot::Root),plan:window.plan};
-        let fused=(window.texture.format()==wgpu::TextureFormat::Rgba32Float).then(||output.clone());
+        let fused=(window.texture.format()==wgpu::TextureFormat::Rgba32Float || matches!(node.as_ref(),Expression::Combine {..})).then(||output.clone());
         let outer=std::mem::replace(&mut self.approximate,false);
         let value=self.evaluate_uncached(node,fused)?;
         if super::refinement::exact_at_view_level(self.packet.scene) && !self.approximate {write.accuracy=pages::Accuracy::Exact;}
@@ -533,7 +533,7 @@ impl Evaluator<'_> {
         }
         let mut write=self.cache.pages.lock().unwrap().prepare_write(key.clone(),region,pages::Accuracy::Display,required_input_level)?;
         let output=Target {view:image.view.clone(),slot:Some(Slot::Root),plan:image.plan};
-        let direct=(image.texture.format()==wgpu::TextureFormat::Rgba32Float || matches!(node.as_ref(),Expression::Vector {..})).then(||output.clone());
+        let direct=(image.texture.format()==wgpu::TextureFormat::Rgba32Float || matches!(node.as_ref(),Expression::Vector {..} | Expression::Combine {..})).then(||output.clone());
         let outer=std::mem::replace(&mut self.approximate,false);
         let value=self.evaluate_uncached(node,direct)?;
         if exact_at_view && !self.approximate {write.accuracy=pages::Accuracy::Exact;}

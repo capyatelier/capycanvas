@@ -7,7 +7,7 @@
 fn composite_color(color:vec4<f32>)->vec4<f32> {
     var layer=color*resample.options.x;
     if resample.encoding.x!=0. {layer=working_encode(color)*resample.options.x;}
-    return layer+resample.backdrop*(1.-layer.a);
+    return display_value(layer+resample.backdrop*(1.-layer.a));
 }
 fn resample_color(t:vec2<u32>,mesh:bool,keeps:bool,source:vec2<f32>,dx:vec2<f32>,dy:vec2<f32>)->vec4<f32> {
     let footprint=min(vec2(1.),resample.target_extent.xy-vec2<f32>(t));
@@ -50,7 +50,7 @@ fn mesh_source(owner:vec2<f32>)->vec2<f32> {
 }
 @fragment fn background_color(@builtin(position) position:vec4<f32>)->@location(0) vec4<f32> {
     if resample.options.z!=0. {return resample_color(vec2<u32>(position.xy),true,false,vec2(UNCOVERED),vec2(0.),vec2(0.));}
-    return resample.backdrop;
+    return display_value(resample.backdrop);
 }
 @fragment fn background_color_kept(@builtin(position) position:vec4<f32>)->@location(0) vec4<f32> {
     return resample_color(vec2<u32>(position.xy),true,true,vec2(UNCOVERED),vec2(0.),vec2(0.));
