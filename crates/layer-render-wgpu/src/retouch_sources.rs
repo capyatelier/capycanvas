@@ -434,6 +434,10 @@ impl RetouchSources {
     pub fn retire_stroke(&mut self) {
         if self.live.is_none() && !self.heal_pending() {
             self.release_stroke();
+            if self.pool.len() > POOL_PAGES && self.free.len() == self.pool.len() {
+                self.pool.truncate(POOL_PAGES);
+                self.free = (0..POOL_PAGES).collect();
+            }
         }
     }
 

@@ -593,3 +593,29 @@ fn a_clone_preview_from_persistent_accepts_the_captured_inputs_before_submit() {
         }
     }
 }
+
+#[test]
+fn retiring_a_clone_stroke_returns_its_grown_pool_to_the_resting_size() {
+    let (mut input, mut engine) = engine(document([1536, 1536]), false);
+    engine.set_retouch(Some(RetouchSource::Editing));
+    flush(&mut engine);
+    let mut sequence = 1;
+    draw(&mut engine, &mut input, pen(sequence, PenPhase::Down, [40., 40.], SampleFlags::PRIMARY));
+    for (row, y) in [40., 300., 560., 820., 1080.].into_iter().enumerate() {
+        let [from, to] = if row % 2 == 0 { [40., 1500.] } else { [1500., 40.] };
+        for step in 0..=12 {
+            sequence += 1;
+            draw(&mut engine, &mut input, pen(sequence, PenPhase::Move, [from + (to - from) * step as f32 / 12., y], SampleFlags::PRIMARY));
+        }
+    }
+    draw(&mut engine, &mut input, pen(sequence + 1, PenPhase::Up, [40., 1080.], SampleFlags::PRIMARY));
+    flush(&mut engine);
+    let pool = |engine: &CanvasEngine<WgpuRasterizer>| engine.backend().retouch.as_ref().unwrap().pool.len();
+    assert!(pool(&engine) > POOL_PAGES, "a stroke over more pages than the resting pool grows it: {}", pool(&engine));
+    engine.backend_mut().retire_stroke_sources();
+    assert_eq!(pool(&engine), POOL_PAGES, "retirement returns the pool to its resting size");
+    let retouch = engine.backend().retouch.as_ref().unwrap();
+    assert_eq!(retouch.free.len(), POOL_PAGES);
+    stroke(&mut engine, &mut input, 1000, [80., 90.], [700., 400.]);
+    assert!(pool(&engine) >= POOL_PAGES, "the next stroke draws from the resting pool");
+}
