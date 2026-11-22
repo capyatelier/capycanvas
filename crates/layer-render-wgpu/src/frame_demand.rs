@@ -117,8 +117,7 @@ impl WgpuRasterizer {
     pub(crate) fn frame_work(&self) -> bool { self.unwoken().next().is_some() }
     fn completion_edge(&self) -> bool {
         let Some(wake) = self.preparation_wake.as_ref().filter(|_| self.gpu_results_pending()) else { return false; };
-        let completions = self.device.on_next_completion(wake);
-        self.observed_completions.swap(completions, std::sync::atomic::Ordering::AcqRel) != completions && self.frame_results_ready()
+        self.device.on_next_completion(wake) != self.observed_completions.load(std::sync::atomic::Ordering::Acquire) && self.frame_results_ready()
     }
     fn frame_results_ready(&self) -> bool {
         self.settling.is_some() && self.background_ready.load(std::sync::atomic::Ordering::Acquire) && self.raster_ready()

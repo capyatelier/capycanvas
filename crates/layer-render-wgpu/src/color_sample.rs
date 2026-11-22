@@ -270,4 +270,44 @@ mod tests {
         }
         assert!(r.paint_layers[0].pages.is_empty());assert!(!r.color_sample_pending());
     }
+    #[test]
+    fn a_color_sample_reaches_a_host_that_reads_frame_demand_twice_per_tick() {
+        use layer_render::{CanvasRenderer, FrameDemand};
+        let extent=[256;2];
+        let doc=crate::layer_tests::placement::paint_document(extent,"sampled");
+        let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let frame=crate::test_support::packet(doc.scene(),extent);
+        crate::test_support::submit_settled(&mut r,frame);
+        let (signal,woken)=std::sync::mpsc::channel();
+        r.set_preparation_wake(Arc::new(move||{let _=signal.send(());}));
+        let idle=FramePacket {composite_all:false,..frame};
+        let render=|r:&mut WgpuRasterizer| {
+            r.poll_pending(idle.view).unwrap();
+            if r.can_submit() && let std::task::Poll::Ready(result)=r.submit_when_ready(idle,None) {result.unwrap();}
+            r.take_color_sample().map(Result::unwrap)
+        };
+        let deadline=std::time::Instant::now()+Duration::from_secs(20);
+        let tick=|r:&mut WgpuRasterizer,demand:FrameDemand|->Option<layer_render::ColorSample> {
+            let remaining=deadline.saturating_duration_since(std::time::Instant::now());
+            assert!(!remaining.is_zero(),"the host must reach the colour sample, not wait on {:?}",r.outstanding_terms());
+            match demand {
+                FrameDemand::Wait=>{assert!(woken.recv_timeout(remaining).is_ok(),"the renderer stopped asking for frames before the colour sample was taken, while {:?} were outstanding",r.outstanding_terms());return None;},
+                FrameDemand::WaitUntil(at)=>std::thread::sleep(at.saturating_duration_since(std::time::Instant::now())),
+                _=>{},
+            }
+            render(r)
+        };
+        loop {
+            let demand=r.next_frame();
+            if demand==FrameDemand::Wait {break;}
+            tick(&mut r,demand);
+        }
+        assert!(r.request_color_sample(ColorSampleRequest {request_id:5,source:ColorSampleSource::Composite,position:[64;2],area:layer_render::ColorSampleArea::Average5}).unwrap());
+        let sample=loop {
+            let _screen_check=r.next_frame();
+            let demand=r.next_frame();
+            if let Some(sample)=tick(&mut r,demand) {break sample;}
+        };
+        assert_eq!(sample.request_id,5);
+    }
 }
