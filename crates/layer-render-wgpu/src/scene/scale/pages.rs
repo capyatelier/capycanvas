@@ -1919,9 +1919,22 @@ impl Cache {
         }
     }
     pub(super) fn reached_cells(&self,region:DocRect)->Vec<usize> {Cells::reached(self.plan,region.in_frame(self.plan.extent))}
-    pub(super) fn invalidate_cells(&self,indices:Vec<usize>) {
-        let mut cells=self.cells.lock().unwrap();
-        for index in indices {if let Some(cell)=cells.cells.get_mut(index) {cell.invalidate();}}
+    pub(super) fn invalidate_cells(&self,indices:Vec<usize>)->Vec<usize> {
+        let Some((mut cells,_store,_))=self.cells() else {return Vec::new();};
+        indices.into_iter().filter(|index|cells.cells.get_mut(*index).is_some_and(|cell| {
+            let current=cell.current && !cell.queued && cell.shown.as_ref().is_some_and(|shown|self.shows_composition(shown));
+            cell.invalidate();current
+        })).collect()
+    }
+    #[cfg(test)]
+    pub(super) fn projected_cells(&self)->Vec<PixelRect> {
+        let cells=self.cells.lock().unwrap();
+        cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level)).filter(|(cell,_)|cell.shown.as_ref().is_some_and(|shown|!self.shows_composition(shown)))
+            .map(|(_,coordinate)|bounds(coordinate,self.plan.level,self.plan.extent)).collect()
+    }
+    fn shows_composition(&self,shown:&Shown)->bool {
+        !shown.exact && (shown.direct || shown.recorded.as_ref().is_some_and(|recorded|recorded.key.level==self.plan.level && recorded.key.format==self.precision.format()
+            && recorded.key.color==self.color && recorded.key.blend_space==self.graph.blend_space()))
     }
     pub(super) fn requeue_keyless_cells(&self) {
         let mut cells=self.cells.lock().unwrap();

@@ -1008,22 +1008,21 @@ impl Cache {
         let retained=encoding.retained;
         let with=|memory:u64|retained+memory;
         let rendered=|scene:&mut Scene,result|match result {Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>{scene.clear_unencoded_jobs();Ok(PixelRect::EMPTY)},result=>result};
-        let mut changed=PixelRect::EMPTY;
+        let mut stand_in=PixelRect::EMPTY;
         if first && let Some(overview)=overview.as_deref_mut() {
             encoding.retained=with(self.window_memory());
             let result=overview.render_graph(scene,r,packet,encoding,Destination::Overview(self,PixelRect::EMPTY));
-            changed=rendered(scene,result)?;
+            stand_in=rendered(scene,result)?;
         }
         encoding.retained=with(overview.as_deref().map_or(0,Cache::window_memory));
         let result=self.render_graph(scene,r,packet,encoding,Destination::View);
         let view=rendered(scene,result)?;
-        changed=changed.union(view);
         if !first && let Some(overview)=overview.filter(|overview|!overview.held(r)) {
             encoding.retained=with(self.window_memory());
             let result=overview.render_graph(scene,r,packet,encoding,Destination::Overview(self,view));
-            changed=changed.union(rendered(scene,result)?);
+            stand_in=stand_in.union(rendered(scene,result)?);
         }
-        Ok(changed)
+        Ok(if self.complete && self.pixels.committed_root().is_some() {view} else {view.union(stand_in)})
     }
 
     fn render_graph(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>, encoding: &mut Encoding<'_>, destination: Destination<'_>) -> Result<PixelRect, GpuRasterError> {
@@ -1077,19 +1076,21 @@ impl Cache {
         let class=|region:PixelRect|if region.intersect(visible).is_empty() {deferred}else if transition || own.contains(&region) {Class::Authored}else {Class::Visible};
         let side=1<<self.plan.level;
         let output_bounds=self.output_plan().bounds;
+        let texels=|region:PixelRect| {let [x,y,width,height]=paint_transform::texel_rect(region.window_local(output_bounds),side);PixelRect::new(x,y,x+width,y+height)};
         let mut written=PixelRect::EMPTY;
+        let mut shown=None;
         let mut composed=Vec::new();
         if live {
             let (done,blocked)=self.compose_contact(scene,r,packet,encoder,std::mem::take(&mut composes),*retained)?;
             #[cfg(test)] crate::test_support::PassCounts {destination_units:(done.len()+blocked.len()) as u64,..Default::default()}.record();
-            for region in &done {
-                let [x, y, width, height] = paint_transform::texel_rect(region.window_local(output_bounds), side);
-                self.pixels.wrote(PixelRect::new(x, y, x + width, y + height));
-                written = written.union(PixelRect::new(x, y, x + width, y + height));
+            for (region,_) in &done {
+                self.pixels.wrote(texels(*region));
+                written=written.union(texels(*region));
             }
+            shown=Some(done.iter().filter(|(_,changed)|!changed.is_empty()).fold(PixelRect::EMPTY,|shown,(_,changed)|shown.union(texels(*changed))));
             if !written.is_empty() || self.pixels.committed_root().is_none() {self.commit_window(r,encoder)?;}
             for region in blocked {self.hide(region);self.block(arrivals,region,waiting_input(scene,r,false));}
-            composed=done;
+            composed=done.into_iter().map(|(region,_)|region).collect();
         } else if !composes.is_empty() || !copies.is_empty() || !streamed.is_empty() || !halves.is_empty() || self.graph.prepared.is_some() {
             let root = self.graph.root.clone().expect("prepared composition graph");
             let input = input_plan(self.plan, packet.scene,Some(self.graph.objects()));
@@ -1265,9 +1266,8 @@ impl Cache {
             };
             let copied=self.copy_cells(r,encoder,commands,copies)?;
             for region in composed.iter().copied().filter(|_|target==Root::Window).chain((!copied.is_empty()).then_some(copied)) {
-                let [x, y, width, height] = paint_transform::texel_rect(region.window_local(output_bounds), side);
-                self.pixels.wrote(PixelRect::new(x, y, x + width, y + height));
-                written = written.union(PixelRect::new(x, y, x + width, y + height));
+                self.pixels.wrote(texels(region));
+                written=written.union(texels(region));
             }
             if !held && (!written.is_empty() || transition || self.pixels.committed_root().is_none()) {self.commit_window(r,encoder)?;}
             if presented==pages::Accuracy::Exact {blocks.extend(composed.iter().map(|region|(*region,waiting_input(scene,r,false))));}
@@ -1296,14 +1296,11 @@ impl Cache {
         }
         if !matches!(destination, Destination::Navigator) {
             r.telemetry.phase_begin(11, &r.device, &r.queue, encoder);
-            if let Some((finer,changed))=finer {
-                let [x,y,width,height]=paint_transform::texel_rect(self.derive(scene,r,encoder,commands,finer,changed)?.window_local(output_bounds),side);
-                written=written.union(PixelRect::new(x,y,x+width,y+height));
-            }
+            if let Some((finer,changed))=finer {written=written.union(texels(self.derive(scene,r,encoder,commands,finer,changed)?));}
             self.reduce_output(scene,r,encoder,commands)?;
             r.telemetry.phase_end(11, encoder);
         }
-        Ok(document(written))
+        Ok(document(shown.unwrap_or(written)))
     }
     fn encode_units(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, encoder: &mut submission::CommandEncoder,
         units: impl IntoIterator<Item = Unit>,

@@ -2367,3 +2367,54 @@ fn a_watercolor_stroke_that_turns_back_leaves_the_tiles_it_asked_for_and_never_r
     assert_eq!(turned.samples,control.samples,"every Move accepts the same dabs on the same clock and composes the same texels");
     assert!(turned.settled==control.settled && turned.exported==control.exported,"the settled and exported pictures are the control's");
 }
+
+#[test]
+fn a_predicted_pencil_stroke_on_a_photo_at_full_size_publishes_only_what_its_dabs_and_tips_change_while_in_contact() {
+    let (extent,surface,frames)=([3072,2048],[1536,1024],24);
+    let photo=rgba8_source(extent,|x,y|[(x*7%256) as u8,(y*5%256) as u8,((x+y)%256) as u8,255]);
+    let doc=layer_color::photo_project(Arc::unwrap_or_clone(photo),Default::default(),"Ink".into(),SampleDepth::U8).unwrap();
+    let target=doc.active_target().unwrap();
+    let mut style=crate::layer_tests::preset_style(DefaultBrushPreset::Pencil);style.blend_space=doc.composition().blend;
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.blend_space=doc.composition().blend;
+    frame.view=layer_render::ViewState {width_px:surface[0],height_px:surface[1],document_to_surface:[1.,0.,0.,1.,-768.,-512.]};
+    let mut r=renderer(&doc);
+    crate::test_support::submit_settled(&mut r,frame);
+    assert_eq!(r.scale_display.as_ref().unwrap().plan.level,0);
+    let format=wgpu::TextureFormat::Rgba8UnormSrgb;
+    let (shown,shown_view)=crate::create_target(r.device(),surface,format,"retained stroke");
+    let (whole,whole_view)=crate::create_target(r.device(),surface,format,"repainted stroke");
+    let mut retained=crate::ViewportPresenter::for_surface(&r,format,crate::SdrSurfaceColor::Srgb).unwrap();
+    retained.set_target_retention(true);
+    let mut presents_whole=|r:&WgpuRasterizer| {
+        pollster::block_on(retained.prepare(r)).unwrap();
+        retained.present(r,&shown_view,frame.view,[0.2;4]).unwrap();
+        let mut full=crate::ViewportPresenter::for_surface(r,format,crate::SdrSurfaceColor::Srgb).unwrap();
+        pollster::block_on(full.prepare(r)).unwrap();
+        full.present(r,&whole_view,frame.view,[0.2;4]).unwrap();
+        crate::layer_tests::page_bytes(r,&shown)==crate::layer_tests::page_bytes(r,&whole)
+    };
+    assert!(presents_whole(&r),"the settled photo presents like a full repaint");
+    let reach=|dab:&layer_render::Dab|crate::pixel_rect::pixel_rect(dab.bounds(),extent);
+    let cells=|area:PixelRect|pages::coordinates(area,0).fold(PixelRect::EMPTY,|cells,coordinate|cells.union(pages::bounds(coordinate,0,extent)));
+    let (mut tip,mut wide,mut stale)=(PixelRect::EMPTY,Vec::new(),Vec::new());
+    for step in 0..=frames {
+        let x=1000.+16.*step as f32;
+        let dabs=[pencil(x,1020.,15.,&style),pencil(x+8.,1020.,15.,&style)];
+        let [persistent,preview]=predicted_batches(target,&style,1,&dabs,step==0);
+        let lifted=layer_render::DabBatch {stroke_end:true,..persistent.clone()};
+        let batches=if step==frames {vec![lifted]}else {vec![persistent,preview]};
+        let (revision,projected)=(r.composite_revision,r.scale_display.as_ref().unwrap().projected_cells());
+        crate::test_support::submit_ready(&mut r,FramePacket {dabs:&dabs,dab_batches:&batches,time_seconds:0.01*(step+1) as f32,..frame}).unwrap();
+        crate::test_support::complete(&r);
+        let painted=reach(&dabs[0]).union(if step==frames {PixelRect::EMPTY}else {reach(&dabs[1])}).union(tip);
+        tip=if step==frames {PixelRect::EMPTY}else {reach(&dabs[1])};
+        let allowed=if step==0 || step==frames {cells(painted)}
+            else {projected.into_iter().filter(|cell|!cell.intersect(cells(painted)).is_empty()).fold(painted,PixelRect::union)};
+        if r.composite_revision!=revision && r.composite_damage.union(allowed)!=allowed {wide.push((step,r.composite_damage,allowed));}
+        if step<frames && !presents_whole(&r) {stale.push(step);}
+    }
+    crate::test_support::submit_settled(&mut r,frame);
+    assert!(wide.is_empty(),"a contact frame published more than its dabs and tips changed and the projected cells it recomposed, or pen-down or pen-up more than their cells (frame, published, allowed): {wide:?}");
+    assert!(stale.is_empty(),"the retained picture differs from a full repaint after frames {stale:?}");
+    assert!(presents_whole(&r),"after pen-up and settling, the retained picture differs from a full repaint");
+}
