@@ -197,6 +197,46 @@ fn back_to_back_contacts_commit_the_revisions_a_roomy_run_commits() {
 }
 
 #[test]
+fn a_rebuilt_original_leaves_the_photo_page_it_decoded_to_the_next_admission() {
+    const RADIUS: f32 = 1. / 16.;
+    let mut canvas = Canvas::photo(1024);
+    let SourceTarget::Paint(paint) = canvas.target else { unreachable!() };
+    let base = canvas.engine.document().artwork.paint.get(paint).unwrap().base.clone().expect("the photo is the layer's base");
+    canvas.brush(layer_core::DefaultBrushPreset::LiquifyPush, 200.);
+    assert!(canvas.ovals([0.5; 2], RADIUS, 1), "the first contact must end");
+    let (held, r) = (canvas.original_bytes(), canvas.engine.backend());
+    let unpinned = r.raster_tiers.raster.limit() - r.raster_tiers.raster.used() + r.paint_memory_bytes() - r.pinned_paint_bytes();
+    let taken = canvas.take(unpinned - (1 << 20)).expect("the lane admits the bytes no edit pins");
+    canvas.engine.backend_mut().commit_raster_working(taken);
+    assert!(canvas.settle() && canvas.original_bytes() < held, "another edit takes the finished contact's originals");
+    let painted: Vec<[u32; 2]> = canvas.contents().keys().map(|key| key.coordinate).collect();
+    let (view, start, refusals) = (canvas.engine.view(), canvas.clock + 1_000_000_000, canvas.engine.backend().stroke_memory_refusals());
+    let mut rebuilt = 0;
+    for step in 0..=2u64 {
+        let angle = step as f32 * std::f32::consts::TAU / 32.;
+        let phase = [PenPhase::Down, PenPhase::Move, PenPhase::Up][step as usize];
+        canvas.sequence += 1;
+        canvas.input.push(PenEvent { timestamp_ns: start + step * 125_000_000, view_revision: 1, pressure: if phase == PenPhase::Up { 0. } else { 1. },
+            ..crate::test_support::pen(canvas.sequence, phase, [view.width_px as f32 * (0.5 + RADIUS * angle.cos()), view.height_px as f32 * (0.5 + RADIUS * angle.sin())], SampleFlags::PRIMARY) }).unwrap();
+        for _ in 0..SAMPLE_FRAMES {
+            canvas.frame(canvas.clock + FRAME_NS);
+            let document = canvas.engine.document();
+            let state = document.scene().paint(paint).and_then(|source| source.raster.liquify()).expect("the session keeps its field");
+            let originals = state.field.as_any().downcast_ref::<Field>().unwrap().originals.lock().unwrap();
+            let cache = canvas.engine.backend().source_tiles.borrow();
+            for at in painted.iter().filter(|at| originals.readable(**at)) {
+                rebuilt += 1;
+                assert_eq!(cache.base_demand(&base, *at), None, "a photo page decoded to rebuild its original is left to the next admission once written: {at:?}");
+            }
+            drop((cache, originals));
+            if !canvas.engine.has_pending_input() && !canvas.engine.has_pending_document_edits() { break; }
+        }
+    }
+    assert!(canvas.settle() && rebuilt != 0, "the second contact rebuilds originals of pages the first one painted");
+    assert_eq!(canvas.engine.backend().stroke_memory_refusals(), refusals, "the second contact fits");
+}
+
+#[test]
 fn a_liquify_session_holds_only_what_its_contact_reads_and_commits_what_a_roomy_run_commits() {
     const LEFT: [f32; 2] = [7. / 24., 0.5];
     const RIGHT: [f32; 2] = [17. / 24., 0.5];

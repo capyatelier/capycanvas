@@ -53,6 +53,10 @@ impl Tile {
     fn source_bounds(&self,extent:[u32;2],preview:bool)->PixelRect {field_source_bounds(self.bounds,extent,preview)}
 }
 
+fn decodes_original(source:&layer_core::authored::PaintSource,coordinate:[u32;2])->bool {
+    source.raster.try_data().and_then(Result::ok).is_none_or(|data|data.tiles.contains_key(&layer_core::raster::TileKey {plane:layer_core::raster::RasterPlane::Color,coordinate}))
+        || source.base.as_ref().is_some_and(|base|source_access::paint_base_contains(base,coordinate))
+}
 fn field_source_bounds(bounds:Rect,extent:[u32;2],preview:bool)->PixelRect {
     let diameter=(bounds.max.x-bounds.min.x).hypot(bounds.max.y-bounds.min.y);
     let level=(diameter/if preview {2.}else {4.}).max(1.).log2().ceil().clamp(0.,8.) as u32;
@@ -87,7 +91,7 @@ struct OriginalAtlas {
     _charge: crate::residency::Charge,
 }
 
-struct Originals {
+pub(crate) struct Originals {
     versions: raster::contents::Versions,
     tiles: BTreeMap<[u32; 2], Arc<OriginalTile>>,
     atlases: Vec<Option<OriginalAtlas>>,
@@ -213,7 +217,7 @@ pub(super) struct Liquify {
 #[derive(Default)]
 pub(super) struct OriginalDemand {
     pub atlases: u64,
-    pub staged: Vec<(SourceTarget, Arc<layer_core::authored::PaintSource>, Vec<[u32; 2]>)>,
+    pub staged: Vec<(SourceTarget, Arc<layer_core::authored::PaintSource>, Arc<Mutex<Originals>>, Vec<[u32; 2]>)>,
 }
 
 struct Session {
@@ -429,7 +433,7 @@ impl Liquify {
                     if originals.readable(at) {continue;}
                     let authored=current.as_ref().and_then(|current|current.tile(plane,at).matches(&originals.versions.tile(plane,at)));
                     if authored!=Some(false) {coordinates.insert(at);}
-                    if authored!=Some(true) {session.staged.insert(at);}
+                    if authored!=Some(true) && session.source.as_ref().is_none_or(|source|decodes_original(source,at)) {session.staged.insert(at);}
                 }
             }
             if !preview {session.fields.extend(outputs);}
@@ -444,7 +448,7 @@ impl Liquify {
                 demand.atlases+=new_atlases(chunks.into_values());
                 continue;
             };
-            if let Some(source)=session.source.filter(|_|!session.staged.is_empty()) {demand.staged.push((target,source,session.staged.into_iter().collect()));}
+            if let Some(source)=session.source.filter(|_|!session.staged.is_empty()) {demand.staged.push((target,source,originals.clone(),session.staged.into_iter().collect()));}
             match shared.iter_mut().find(|(known,..)|Arc::ptr_eq(known,&originals)) {
                 Some((_,needed,_))=>needed.extend(session.needed),
                 None=>shared.push((originals,session.needed,extent)),
@@ -525,7 +529,7 @@ impl Liquify {
             if tile.read(&encoder.submission()).is_ok() || writes.iter().any(|(pending,_)|Arc::ptr_eq(pending,tile)) {return Ok(tile.clone());}
         }
         let receipt=encoder.submission();
-        let source=if let Some(read)=r.read_layer_color(target,coordinate,&capture,Some(&receipt)).or_else(||r.staged_original(target,coordinate,&capture,Some(&receipt))) {
+        let source=if let Some(read)=r.read_layer_color(target,coordinate,&capture,Some(&receipt)) {
             Some(source_access::RawTile {texture:read.value().texture.clone().into(),view:read.value().view.clone()})
         }else {
             let data=stroke.original.raster.try_data().ok_or(GpuRasterError::NotReady)?.map_err(GpuRasterError::Effect)?;
@@ -541,11 +545,36 @@ impl Liquify {
             }
             None
         };
-        let chunk=original_chunk(coordinate,r.target_extent(target));
+        let extent=r.target_extent(target);
+        let mut room=r.original_room();
+        let stored=Self::store(r,&mut room,&mut stroke.field.originals.lock().expect("liquify sources"),coordinate,extent,capture,prior,source.as_ref(),encoder,pending,writes);
+        r.keep_original_room(room);
+        stored
+    }
+
+    pub(crate) fn restore_original(r:&WgpuRasterizer,originals:&Mutex<Originals>,room:&mut Option<crate::residency::Reservation>,coordinate:[u32;2],extent:[u32;2],
+        version:&layer_core::raster::ContentVersion,source:&source_access::RawTile,encoder:&mut submission::CommandEncoder)->Result<(),GpuRasterError> {
+        let mut originals=originals.lock().expect("liquify sources");
+        let capture=originals.versions.tile(layer_core::raster::RasterPlane::Color,coordinate);
+        if version.matches(&capture)!=Some(true) {return Err(GpuRasterError::Invariant("Liquify backing does not match its captured input"));}
+        if originals.readable(coordinate) {return Ok(());}
+        let prior=originals.tiles.get(&coordinate).cloned();
+        let (mut pending,mut writes)=(Vec::new(),Vec::new());
+        Self::store(r,room,&mut originals,coordinate,extent,capture,prior,Some(source),encoder,&mut pending,&mut writes)?;
+        display_mips::CompleteUpdates::flush_all(&mut pending,encoder);
+        let actual=encoder.submission();
+        for (_,encoding) in writes {encoding.publish(&actual);}
+        Ok(())
+    }
+
+    fn store(r:&WgpuRasterizer,room:&mut Option<crate::residency::Reservation>,originals:&mut Originals,coordinate:[u32;2],extent:[u32;2],
+        capture:layer_core::raster::ContentVersion,prior:Option<Arc<OriginalTile>>,source:Option<&source_access::RawTile>,encoder:&mut submission::CommandEncoder,
+        pending:&mut Vec<display_mips::CompleteUpdates>,writes:&mut Vec<(Arc<OriginalTile>,resident::Encoding)>)->Result<Arc<OriginalTile>,GpuRasterError> {
+        let receipt=encoder.submission();
+        let chunk=original_chunk(coordinate,extent);
         let layers=chunk*CHUNK_TILES..(chunk+1)*CHUNK_TILES;
-        let mut originals=stroke.field.originals.lock().expect("liquify sources");
         if prior.is_none() && originals.free.range(layers.clone()).next().is_none() {
-            r.admitted_original_atlas()?;
+            crate::prepared_raster_output(room.as_mut().and_then(|room|room.split(ORIGINAL_ATLAS_BYTES)).map(drop))?;
             let texture=r.device.create_texture(&wgpu::TextureDescriptor {
                 label:Some("liquify original tiles"),size:wgpu::Extent3d {width:PAGE_SIZE,height:PAGE_SIZE,depth_or_array_layers:ORIGINAL_LAYERS},
                 mip_level_count:9,sample_count:1,dimension:wgpu::TextureDimension::D2,format:r.device.working_format(),

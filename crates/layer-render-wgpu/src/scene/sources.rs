@@ -1291,6 +1291,15 @@ impl DecodedTiles {
     fn stamp(&self,view:&wgpu::TextureView,class:crate::residency::Class) {
         if let Some(index)=self.views.get(view) {self.slots[*index].lease.stamp(class);}
     }
+    pub(crate) fn consumed(&self,read:&source_access::SourceRead) {
+        for view in read.assembly.iter().flat_map(|assembly|assembly.sources()).chain([&read.tile.view]) {
+            if let Some(index)=self.views.get(view) {self.slots[*index].lease.release_demand();}
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn base_demand(&self,base:&layer_core::authored::PaintBase,coordinate:[u32;2])->Option<crate::residency::Class> {
+        self.keyed(&Key::base(base,coordinate)).and_then(|slot|slot.lease.demand())
+    }
     fn remove_slot(&mut self,index:usize)->Slot {
         let slot=self.slots.swap_remove(index);self.views.remove(&slot.view);
         if let Some(key)=&slot.key {self.keys.remove(key);}
