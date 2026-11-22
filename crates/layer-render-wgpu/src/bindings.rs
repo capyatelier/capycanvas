@@ -1,27 +1,27 @@
 //! Bindings live with the resources that bound their lifetime. Replacing a
 //! dependent buffer/view replaces a retained binding, rather than growing
 //! a global cache that can keep retired tiles or stroke state alive.
-use std::cell::RefCell;
+use std::sync::{Arc, Mutex, Weak};
 
-pub(super) struct CachedBinding<K, const N: usize = 1>(RefCell<[Option<Box<(K, wgpu::BindGroup)>>; N]>);
+pub(super) struct CachedBinding<K, const N: usize = 1>(Mutex<[Option<Box<(K, wgpu::BindGroup)>>; N]>);
 impl<K, const N: usize> Default for CachedBinding<K, N> {
     fn default() -> Self {
-        Self(RefCell::new(std::array::from_fn(|_| None)))
+        Self(Mutex::new(std::array::from_fn(|_| None)))
     }
 }
 impl<K, const N: usize> CachedBinding<K, N> {
     pub fn clear(&self) {
-        *self.0.borrow_mut() = std::array::from_fn(|_| None);
+        *self.0.lock().unwrap() = std::array::from_fn(|_| None);
     }
     pub fn forget(&self, binds: impl Fn(&K) -> bool) {
-        for entry in self.0.borrow_mut().iter_mut().filter(|entry| entry.as_deref().is_some_and(|(key, _)| binds(key))) {
+        for entry in self.0.lock().unwrap().iter_mut().filter(|entry| entry.as_deref().is_some_and(|(key, _)| binds(key))) {
             *entry = None;
         }
     }
 }
 impl<K: PartialEq, const N: usize> CachedBinding<K, N> {
     pub fn get(&self, key: K, create: impl FnOnce(&K) -> wgpu::BindGroup) -> wgpu::BindGroup {
-        let mut entries = self.0.borrow_mut();
+        let mut entries = self.0.lock().unwrap();
         let found = entries.iter().position(|entry| entry.as_deref().is_some_and(|(previous, _)| *previous == key));
         let slot = found.or_else(|| entries.iter().position(Option::is_none)).unwrap_or(N - 1);
         entries[..=slot].rotate_right(1);
@@ -72,6 +72,34 @@ impl MaterialBindings {
         self.display.forget(material);
         self.gather.forget(|(style, written)| buffer(style) || written.iter().any(view));
         self.output.forget(|(style, color, states, changed)| buffer(style) || view(color) || states.iter().flatten().any(view) || changed.as_ref().is_some_and(buffer));
+    }
+}
+
+#[derive(Default)]
+pub(super) struct MaterialHolders(std::collections::HashMap<(Option<layer_core::SourceTarget>, [u32; 2]), Vec<Weak<MaterialBindings>>>);
+impl MaterialHolders {
+    pub fn hold(&mut self, target: Option<layer_core::SourceTarget>, coordinate: [u32; 2], bindings: &Arc<MaterialBindings>) {
+        let holders = self.0.entry((target, coordinate)).or_default();
+        holders.retain(|holder| holder.strong_count() != 0);
+        if !holders.iter().any(|holder| holder.as_ptr() == Arc::as_ptr(bindings)) {
+            holders.push(Arc::downgrade(bindings));
+        }
+    }
+    pub fn forget(&self, target: Option<layer_core::SourceTarget>, coordinate: [u32; 2], views: &[wgpu::TextureView], buffers: &[wgpu::Buffer]) {
+        if self.0.is_empty() {
+            return;
+        }
+        let locations = [(target, coordinate), (None, coordinate)];
+        for holder in locations[..if target.is_some() { 2 } else { 1 }].iter().filter_map(|at| self.0.get(at)).flatten().filter_map(Weak::upgrade) {
+            #[cfg(test)] crate::test_support::PassCounts {binding_visits: 1, ..Default::default()}.record();
+            holder.forget(views, buffers);
+        }
+    }
+    pub fn release_prediction(&mut self) {
+        self.0.retain(|(target, _), holders| {
+            holders.retain(|holder| holder.strong_count() != 0);
+            target.is_some() && !holders.is_empty()
+        });
     }
 }
 

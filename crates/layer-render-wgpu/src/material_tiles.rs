@@ -178,6 +178,7 @@ impl WgpuRasterizer {
             }).transpose()?;
             let output=pipelines.output(&self.device,&self.style_buffer,&write,coverage.as_ref(),changed);
             let held=&coverage.as_ref().unwrap_or(&write).value().material;
+            self.material_holders.hold((!preview).then_some(batch.target),job.coordinate,held);
             let (source,display)=held.inputs(sources,|key|create_material_inputs(&self.device,&self.material_layout,self.material_records.binding().size,key));
             let display=display_slot.zip(display).map(|(slot,inputs)|dry_material::DisplayJob {
                 gather:self.dry_display_inputs[slot].gather(&self.device,&self.style_buffer,pipelines.in_place(),pipelines.gather_layout(),&write,held),inputs,

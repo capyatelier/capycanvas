@@ -138,3 +138,45 @@ impl ChangedCells {
             && (1<<r.preview_level)<=self.side && self.reusable(id,coordinate).is_some()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retiring_changed_cells_visits_only_the_bindings_held_at_the_retired_pages() {
+        let doc=crate::memory::memory_tests::layered_raster_document(8,8);
+        let extent=doc.composition().size;
+        let open=|| {
+            let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+            crate::test_support::submit_settled(&mut r,crate::test_support::packet(doc.scene(),extent));r
+        };
+        let retire_every_page=|r:&mut WgpuRasterizer| {
+            for index in 0..r.paint_layers.len() {
+                for coordinate in page_coordinates(PixelRect::full(extent)) {
+                    if !r.paint_layers[index].pages.iter().any(|page|page.coordinate==coordinate) {
+                        let page=r.create_page(coordinate,"retired changed cells");r.paint_layers[index].pages.push(page);
+                    }
+                }
+            }
+            let mut cells=r.changed_cells.take().unwrap();
+            for layer in &r.paint_layers {for page in &layer.pages {cells.pages.insert((layer.id,page.coordinate),r.device.create_buffer(&wgpu::BufferDescriptor {
+                label:None,size:20,usage:wgpu::BufferUsages::STORAGE,mapped_at_creation:false}));}}
+            let (keys,side,before)=(cells.pages.len(),cells.side,crate::test_support::PassCounts::snapshot());
+            cells.retire(r,&BTreeSet::new(),side);
+            r.changed_cells=Some(cells);
+            (keys,crate::test_support::PassCounts::snapshot().delta(before).binding_visits)
+        };
+        let (keys,visits)=retire_every_page(&mut open());
+        assert!(keys>=8*64,"every page of every layer has changed cells: {keys}");
+        assert_eq!(visits,0,"with no binding cached, retiring {keys} changed-cell pages visits no surface");
+        let mut r=open();
+        let target=r.paint_layers[0].id;
+        let dab=crate::tests::test_dab([700.,700.],[0.9,0.1,0.3,1.],0.8);
+        let batch=crate::test_support::dab_batch(target,crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::GPen),dab.bounds());
+        crate::test_support::submit_settled(&mut r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..crate::test_support::packet(doc.scene(),extent)});
+        let holders=4*page_coordinates(crate::pixel_rect::pixel_rect(dab.bounds(),extent)).count() as u64;
+        let (keys,visits)=retire_every_page(&mut r);
+        assert!((1..=holders).contains(&visits),"retiring {keys} changed-cell pages visited {visits} surfaces; only the {holders} at the stroke's pages hold its bindings");
+    }
+}
