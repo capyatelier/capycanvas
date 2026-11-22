@@ -93,6 +93,7 @@ pub(crate) fn defaults(scene:SceneView<'_>,target:SourceTarget)->[ContentVersion
 pub(crate) fn fallback(default:&ContentVersion,coordinate:[u32;2])->ContentVersion {
     ContentVersion::derive(u128::from(coordinate[0])|u128::from(coordinate[1])<<32,std::slice::from_ref(default))
 }
+pub(crate) fn empty_color(extent:[u32;2],coordinate:[u32;2])->ContentVersion {fallback(&defaults_for(extent,None,None)[0],coordinate)}
 pub(crate) fn selected_version(scene:SceneView<'_>,target:SourceTarget,data:&RasterData,key:TileKey)->ContentVersion {
     data.tiles.get(&key).map_or_else(||fallback(&defaults(scene,target)[index(key.plane)],key.coordinate),RasterTile::content_version)
 }

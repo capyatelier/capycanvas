@@ -132,6 +132,8 @@ mod taper_tests;
 #[cfg(test)]
 mod delivered_pixel_tests;
 #[cfg(test)]
+mod stroke_start_tests;
+#[cfg(test)]
 mod cold_camera_storm;
 mod frame_demand;
 mod schedule;
@@ -881,7 +883,7 @@ impl StrokeStart {
     fn matches(&self,stroke:StrokeId,input:&raster::contents::Intent,declaration:Option<&Arc<scene::PreviewDeclaration>>)->bool {
         self.state.matches(stroke,input) && self.preview.as_ref().is_none_or(|preview|declaration.is_some_and(|declaration|preview.same_declaration(declaration)))
     }
-    fn storage_bytes(&self)->u64 {self.surface.storage_bytes()}
+    fn storage_bytes(&self)->u64 {self.surface.charged_bytes()}
 }
 struct LayerPage {
     derived:Option<scene::PreviewVersion>,
@@ -1273,6 +1275,7 @@ pub struct WgpuRasterizer {
     snapshot_worker_callback: Option<snapshot::BrowserSnapshot>,
     zero_pages: [wgpu::Texture; 2],
     _zero_charge: residency::Charge,
+    empty_start: PageSurface,
     declared_scratch: [PageSurface; 2],
     empty_texture: wgpu::Texture,
     empty_view: wgpu::TextureView,
@@ -1453,12 +1456,14 @@ impl WgpuRasterizer {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format,
-                usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+                usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             })
         });
         let raster_tiers = memory::RasterTiers::new(memory.raster_owner());
         let zero_charge = raster_tiers.paint.charge(zero_pages.iter().map(texture_bytes).sum());
+        let empty_start = page_surface(&device, &float_texture_layout, &sampler,
+            (zero_pages[0].clone(), zero_pages[0].create_view(&Default::default())), raster_tiers.paint.charge(0));
         let declared_scratch = [device.working_format(), device.scalar_format()]
             .map(|format| create_page_surface(&device, &float_texture_layout, &sampler, [1, 1], format, "declared scratch page", &raster_tiers.paint));
         let reservoir = BrushReservoir {
@@ -1707,6 +1712,7 @@ impl WgpuRasterizer {
             snapshot_worker_callback: None,
             zero_pages,
             _zero_charge: zero_charge,
+            empty_start,
             declared_scratch,
             empty_texture,
             empty_view,
@@ -2421,7 +2427,12 @@ impl WgpuRasterizer {
                         .is_some_and(|page|page.stroke_start.as_ref().is_none_or(|start|!start.state.matches(batch.stroke_id,&intent)))};
                 let start = if needed {
                     self.accepted_raster_output(batch.target,RasterOutput::StrokeStart(coordinate,batch.stroke_id,reads_preview))?;
-                    Some(prepared_raster_output(self.take_prepared_stroke_start(batch.target, coordinate, batch.stroke_id, reads_preview))?)
+                    let start=prepared_raster_output(self.take_prepared_stroke_start(batch.target, coordinate, batch.stroke_id, reads_preview))?;
+                    let shared=start.holds_texture(&self.empty_start.texture);
+                    if shared && (reads_preview || !self.empty_color(batch.target,coordinate,intent.version())) {
+                        return Err(GpuRasterError::Invariant("a shared empty stroke start was prepared for painted pixels"));
+                    }
+                    Some((start,shared))
                 }
                     else { None };
                 let preview_expected=reads_preview.then(||self.preview_expected(batch.target,RasterPlane::Color,coordinate,scene::PreviewStage::BeforeBatch(batch_index))).transpose()?;
@@ -2439,7 +2450,7 @@ impl WgpuRasterizer {
                     self.paint_layers.iter_mut().find(|l| l.id == batch.target)
                         .and_then(|l| l.pages.iter_mut().find(|p| p.coordinate == coordinate))
                 };
-                if let (Some(page),Some(mut start))=(page,start) {
+                if let (Some(page),Some((mut start,shared)))=(page,start) {
                     let expected=preview_expected.as_ref().unwrap_or_else(||intent.version());
                     let (read,witness)=start_read.as_ref().ok_or(GpuRasterError::Invariant("stroke start input is not prepared"))?;
                     let write=start.initialize(&receipt).ok_or(GpuRasterError::Invariant("prepared output was already initialized"))?;
@@ -2447,7 +2458,8 @@ impl WgpuRasterizer {
                         declaration.accept_inputs(batch.target,RasterPlane::Color,coordinate,scene::PreviewStage::Seed,scene::PreviewPass::StrokeStart,vec![witness.clone()])?;
                         history.push(witness.clone());
                     }
-                    write.value().copy_from(&read.texture,read.texture.size(),encoder);let version=expected.clone();write.publish(&version);
+                    if !shared {write.value().copy_from(&read.texture,read.texture.size(),encoder);}
+                    let version=expected.clone();write.publish(&version);
                     page.stroke_start=Some(StrokeStart {state:MaterialState {stroke:batch.stroke_id,input:intent.clone(),version},preview:start_context,surface:start});
                 }
             }
@@ -6028,15 +6040,14 @@ fn create_page_surface(
     label: &'static str,
     tier: &Arc<residency::Tier>,
 ) -> PageSurface {
-    let (texture, view) = create_target(device, extent, format, label);
-    let charge = Arc::new(tier.charge(texture_bytes(&texture)));
-    let texture_bind_group = create_texture_bind_group(
-        device,
-        texture_layout,
-        &view,
-        sampler,
-        "layer sparse surface binding",
-    );
+    let target = create_target(device, extent, format, label);
+    let charge = tier.charge(texture_bytes(&target.0));
+    page_surface(device, texture_layout, sampler, target, charge)
+}
+
+fn page_surface(device: &wgpu::Device, texture_layout: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler,
+    (texture, view): (wgpu::Texture, wgpu::TextureView), charge: residency::Charge) -> PageSurface {
+    let texture_bind_group = create_texture_bind_group(device, texture_layout, &view, sampler, "layer sparse surface binding");
     PageSurface {
         preview: Default::default(),
         texture,
@@ -6044,7 +6055,7 @@ fn create_page_surface(
         texture_bind_group,
         material: Default::default(),
         scene_output: Default::default(),
-        charge,
+        charge: Arc::new(charge),
     }
 }
 

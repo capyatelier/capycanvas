@@ -33,7 +33,8 @@ struct FrameRoot {target:SourceTarget,revision:u64,published:Option<usize>,resto
 #[derive(PartialEq)]
 enum Key {
     Frame {color:layer_core::color::DocumentColor,extent:[u32;2],reset:bool,clear_starts:bool,roots:Vec<FrameRoot>,
-        required:Vec<(SourceTarget,Vec<[u32;2]>)>,bases:Vec<(SourceTarget,usize,[u32;2])>,outputs:Vec<(SourceTarget,Output)>,restored:Vec<(SourceTarget,TileKey)>,atlases:u64},
+        required:Vec<(SourceTarget,Vec<[u32;2]>)>,bases:Vec<(SourceTarget,usize,[u32;2])>,outputs:Vec<(SourceTarget,Output)>,
+        fresh_starts:Vec<(SourceTarget,[u32;2],layer_core::StrokeId)>,restored:Vec<(SourceTarget,TileKey)>,atlases:u64},
     Originals {originals:Vec<(SourceTarget,Vec<[u32;2]>)>,atlases:u64},
     Direct {color:layer_core::color::DocumentColor,target:SourceTarget,extent:[u32;2],before:DataKey,after:DataKey},
 }
@@ -54,7 +55,7 @@ impl PreparedPages {
             +self.wetness.iter().map(|page|page.primary.storage_bytes()+page.secondary.storage_bytes()).sum::<u64>()
             +self.coverage.iter().map(|page|page.primary.storage_bytes()+page.secondary.storage_bytes()).sum::<u64>()
             +self.companions.iter().map(|(_,page)|page.storage_bytes()).sum::<u64>()
-            +self.starts.iter().map(|(_,_,_,page)|page.storage_bytes()).sum::<u64>()
+            +self.starts.iter().map(|(_,_,_,page)|page.charged_bytes()).sum::<u64>()
     }
     fn discharge(&mut self) {
         self.colors.iter_mut().for_each(LayerPage::discharge);
@@ -79,6 +80,7 @@ struct TargetRestore {
     originals:Option<Arc<std::sync::Mutex<liquify::Originals>>>,
     scalars:Vec<object_image_mips::PreparedRasterTile>,
     inputs:scene::sources::AcceptedInputs,
+    empty_starts:BTreeSet<([u32;2],layer_core::StrokeId)>,
 }
 #[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
 pub(crate) enum Output {
@@ -172,7 +174,7 @@ impl TargetRestore {
             pending.extend(required.iter().filter(|coordinate| !commit.is_some_and(|commit|commit.contains(target,RasterPlane::Color,**coordinate)) && (replace || !resident(&TileKey {plane:RasterPlane::Color,coordinate:**coordinate})) && !data.tiles.contains_key(&TileKey {plane:RasterPlane::Color,coordinate:**coordinate})
                 && source_access::paint_base_contains(&base,**coordinate)).map(|coordinate|SourcePage::Base(*coordinate,base.clone())));
         }
-        Ok(Self {target,extent,defaults,data,selected,pending,next:0,allocated:0,pages:PreparedPages::default(),replace,originals:None,scalars:Vec::new(),inputs:Default::default()})
+        Ok(Self {target,extent,defaults,data,selected,pending,next:0,allocated:0,pages:PreparedPages::default(),replace,originals:None,scalars:Vec::new(),inputs:Default::default(),empty_starts:BTreeSet::new()})
     }
     fn originals(target:SourceTarget,source:&layer_core::authored::PaintSource,originals:Arc<std::sync::Mutex<liquify::Originals>>,data:Arc<RasterData>,coordinates:&[[u32;2]])->Self {
         let pending=coordinates.iter().filter_map(|coordinate| {
@@ -181,7 +183,7 @@ impl TargetRestore {
                 .filter(|base|source_access::paint_base_contains(base,*coordinate)).map(|base|SourcePage::Base(*coordinate,base.clone())))
         }).collect();
         Self {target,extent:source.domain,defaults:super::contents::defaults_for(source.domain,source.base.as_ref(),None),data,selected:RasterData::default(),pending,next:0,allocated:0,
-            pages:PreparedPages::default(),replace:false,originals:Some(originals),scalars:Vec::new(),inputs:Default::default()}
+            pages:PreparedPages::default(),replace:false,originals:Some(originals),scalars:Vec::new(),inputs:Default::default(),empty_starts:BTreeSet::new()}
     }
     fn awaits(&self,blob:&TileBlob)->bool {
         self.pending.iter().skip(self.next).filter(|source|!matches!(source,SourcePage::Output(_))).take(PREFETCH).any(|source|matches!(source,SourcePage::Raster(key,tile) if key.plane!=RasterPlane::Color
@@ -193,12 +195,15 @@ impl TargetRestore {
     fn projected_bytes(&self,r:&WgpuRasterizer)->Result<u64,GpuRasterError> {self.step_bytes(r,self.pending.len())}
     fn step_bytes(&self,r:&WgpuRasterizer,end:usize)->Result<u64,GpuRasterError> {
         if self.originals.is_some() {return Ok(0);}
-        self.pending[self.allocated.min(end)..end].iter().try_fold(0u64,|bytes,source|bytes.checked_add(source.output().bytes(r,r.preview_level)).ok_or(GpuRasterError::SizeOverflow))
+        self.pending[self.allocated.min(end)..end].iter().map(SourcePage::output).filter(|output|!matches!(output,Output::StrokeStart(c,id,false) if self.empty_starts.contains(&(*c,*id))))
+            .try_fold(0u64,|bytes,output|bytes.checked_add(output.bytes(r,r.preview_level)).ok_or(GpuRasterError::SizeOverflow))
     }
     fn step_end(&self,at:usize)->usize {
         at+1+self.pending[at+1..].iter().take_while(|source|matches!(source,SourcePage::Output(_))).count()
     }
-    fn add_outputs(&mut self,r:&WgpuRasterizer,outputs:&[(SourceTarget,Output)],reset:bool,clear_starts:bool,commit:Option<&paint_transform::PreparedTransformCommit>,restored:&[(SourceTarget,TileKey)]) {
+    #[allow(clippy::too_many_arguments)]
+    fn add_outputs(&mut self,r:&WgpuRasterizer,outputs:&[(SourceTarget,Output)],fresh_starts:&[(SourceTarget,[u32;2],layer_core::StrokeId)],
+        reset:bool,clear_starts:bool,commit:Option<&paint_transform::PreparedTransformCommit>,restored:&[(SourceTarget,TileKey)]) {
         for (_,output) in outputs.iter().filter(|(target,_)|*target==self.target) {
             if output.preview() {continue;}
             if self.pending.iter().any(|source|source.output().same_storage(output)) {continue;}
@@ -206,16 +211,14 @@ impl TargetRestore {
             let plane=match output {Output::Color(_)=>Some(RasterPlane::Color),Output::Wetness(_)=>Some(RasterPlane::WatercolorWetness),Output::Mask(..)=>Some(RasterPlane::Mask),_=>None};
             if plane.is_some_and(|plane|commit.is_some_and(|commit|commit.contains(self.target,plane,c)) || restored.binary_search(&(self.target,TileKey {plane,coordinate:c})).is_ok()) {continue;}
             let rewritten=self.pending.iter().any(|source|matches!(source.output(),Output::Color(at) if at==c));
+            let key=TileKey {plane:RasterPlane::Color,coordinate:c};
+            let name=(!self.replace).then(||r.current_raster_version(self.target,key.plane,c).ok()).flatten()
+                .or_else(||self.selected.tiles.get(&key).map(RasterTile::content_version))
+                .unwrap_or_else(||super::contents::fallback(&self.defaults[0],c));
             if let Output::StrokeStart(_,id,true)=output && self.pending.iter().any(|source|
                 matches!(source,SourcePage::Output(Output::StrokeStart(at,old,false)) if *at==c && old==id)) {continue;}
             let layer=(!reset).then(||r.paint_layers.iter().find(|layer|layer.id==self.target)).flatten();
-            let page=layer.and_then(|layer|layer.pages.iter().find(|page|page.coordinate==c)).filter(|page| {
-                let key=TileKey {plane:RasterPlane::Color,coordinate:c};
-                let name=(!self.replace).then(||r.current_raster_version(self.target,key.plane,c).ok()).flatten()
-                    .or_else(||self.selected.tiles.get(&key).map(RasterTile::content_version))
-                    .unwrap_or_else(||super::contents::fallback(&self.defaults[0],c));
-                !rewritten && page.active().has_name(&name)
-            });
+            let page=layer.and_then(|layer|layer.pages.iter().find(|page|page.coordinate==c)).filter(|page|!rewritten && page.active().has_name(&name));
             if matches!(output,Output::Companion(_)|Output::StrokeStart(_,_,false)) && page.is_none() && !rewritten {continue;}
             let present=match output {
                 Output::Color(_)=>page.is_some(),Output::Companion(_)=>page.is_some_and(|page|page.secondary.is_some()),
@@ -233,7 +236,12 @@ impl TargetRestore {
                 }),
                 _=>unreachable!(),
             };
-            if !present {self.pending.push(SourcePage::Output(output.clone()));}
+            if !present {
+                if let Output::StrokeStart(_,id,false)=output && fresh_starts.binary_search(&(self.target,c,*id)).is_ok() && r.empty_color(self.target,c,&name) {
+                    self.empty_starts.insert((c,*id));
+                }
+                self.pending.push(SourcePage::Output(output.clone()));
+            }
         }
     }
     fn allocate(&mut self,r:&WgpuRasterizer,encoder:&mut submission::CommandEncoder,end:usize)->Result<(),GpuRasterError> {
@@ -252,7 +260,8 @@ impl TargetRestore {
                 primary:resident::Resident::unwritten(r.create_scalar_page_surface(&r.raster_tiers.paint,"prepared wetness primary")),secondary:resident::Resident::unwritten(r.create_scalar_page_surface(&r.raster_tiers.paint,"prepared wetness companion")),
                 active_secondary:false,primary_needs_clear:true,secondary_needs_clear:true}),
             Output::Companion(c)=>self.pages.companions.push((c,resident::Resident::unwritten(r.create_page_surface(&r.raster_tiers.paint,"prepared destination companion")))),
-            Output::StrokeStart(c,id,preview)=>self.pages.starts.push((c,id,preview,resident::Resident::unwritten(r.create_page_surface(&r.raster_tiers.paint,"prepared stroke start")))),
+            Output::StrokeStart(c,id,preview)=>self.pages.starts.push((c,id,preview,resident::Resident::unwritten(
+                if !preview && self.empty_starts.contains(&(c,id)) {r.empty_start.sharing()}else {r.create_page_surface(&r.raster_tiers.paint,"prepared stroke start")}))),
             Output::Mask(c,default)=> {
                 let mut page=layer_masks::MaskPage::new(&r.device,&r.raster_tiers.paint);let value=f64::from(f32::from_bits(default));
                 if matches!(source,SourcePage::Output(_)) {
@@ -401,7 +410,7 @@ impl RestorePreflight {
                 Err(error)=>{failure=Some(error);break;},
             }
         }
-        if let Key::Frame {outputs,reset,clear_starts,..}=&key {for target in targets.iter_mut().flatten() {target.add_outputs(r,outputs,*reset,*clear_starts,commit.as_ref(),restored);}}
+        if let Key::Frame {outputs,fresh_starts,reset,clear_starts,..}=&key {for target in targets.iter_mut().flatten() {target.add_outputs(r,outputs,fresh_starts,*reset,*clear_starts,commit.as_ref(),restored);}}
         targets.extend(originals.into_iter().map(Some));
         Self {key,commit,native:None,targets,failure,consumed:false,starts:Vec::new(),transforms,preview:None,originals:None,refused:None}
     }
@@ -511,8 +520,9 @@ impl WgpuRasterizer {
         self.preview_pages.retain(|page|page.primary.size().width==PAGE_SIZE>>level);
         Ok(())
     }
-    fn raster_outputs(&self,packet:FramePacket<'_>,plans:&[Vec<BrushTile>])->(Vec<(SourceTarget,Output)>,Vec<((SourceTarget,u32),paint_transform::Plan)>) {
-        let mut outputs=BTreeSet::new();let mut transforms=Vec::new();
+    fn raster_outputs(&self,packet:FramePacket<'_>,plans:&[Vec<BrushTile>])
+        ->(Vec<(SourceTarget,Output)>,Vec<(SourceTarget,[u32;2],layer_core::StrokeId)>,Vec<((SourceTarget,u32),paint_transform::Plan)>) {
+        let mut outputs=BTreeSet::new();let mut fresh_starts=BTreeSet::new();let mut transforms=Vec::new();
         let from_persistent=self.preview_from_persistent(packet.dab_batches);
         let rectangular=from_persistent && !Self::sparse_preview(packet.dab_batches);
         let previews:Vec<_>=packet.dab_batches.iter().zip(plans).map(|(batch,tiles)|Self::preview_pages(packet.dab_batches,batch,tiles,packet.scene.target_extent(batch.target))).collect();
@@ -536,6 +546,7 @@ impl WgpuRasterizer {
             let pass=BrushPassPlan::for_device(&batch.style,&self.device);
             let destinations=brush_tiles::destinations(tiles,batch_pixel_rect(batch,packet.scene.target_extent(target)),
                 batch.kind==DabBatchKind::Preview && rectangular,batch.first_dab);
+            let unwritten:BTreeSet<_>=destinations.iter().map(|tile|tile.coordinate).filter(|c|!outputs.contains(&(target,Output::Color(*c)))).collect();
             if batch.kind==DabBatchKind::Persistent {
                 for tile in destinations.iter() {
                     let c=tile.coordinate;outputs.insert((target,Output::Color(c)));
@@ -559,8 +570,12 @@ impl WgpuRasterizer {
                 _=>false,
             };
             if planned && Self::tracks_stroke_start(batch) {
-                let source=if batch.kind==DabBatchKind::Preview {BrushEncodingTarget::Preview {from_persistent}}else {BrushEncodingTarget::Persistent};
-                for tile in destinations.iter() {outputs.insert((target,Output::StrokeStart(tile.coordinate,batch.stroke_id,source.material_source().is_preview())));}
+                let preview=batch.kind==DabBatchKind::Preview && !from_persistent;
+                for tile in destinations.iter() {
+                    if outputs.insert((target,Output::StrokeStart(tile.coordinate,batch.stroke_id,preview))) && !preview && unwritten.contains(&tile.coordinate) {
+                        fresh_starts.insert((target,tile.coordinate,batch.stroke_id));
+                    }
+                }
             }
             if let DabBatchKind::RasterOperation(index)=batch.kind && let Some(operation)=packet.scene.operations(target).and_then(|operations|operations.get(index as usize)) {
                 let masking=matches!(operation.kind,layer_core::RasterOperationKind::ColorMode(_)|layer_core::RasterOperationKind::ApplyMask|layer_core::RasterOperationKind::Erase {..});
@@ -596,7 +611,7 @@ impl WgpuRasterizer {
             outputs.insert((target,Output::Color(c)));
             outputs.insert((target,Output::Companion(c)));
         }
-        (outputs.into_iter().collect(),transforms)
+        (outputs.into_iter().collect(),fresh_starts.into_iter().collect(),transforms)
     }
     fn content_pages(&self,packet:FramePacket<'_>,target:SourceTarget,plane:RasterPlane,planned:&BTreeSet<(SourceTarget,Output)>)->BTreeSet<[u32;2]> {
         let data=[packet.scene.raster(target),packet.restore_rasters.iter().find(|(id,_)|*id==target).map(|(_,root)|root)].into_iter().flatten()
@@ -629,6 +644,9 @@ impl WgpuRasterizer {
         let retired={drop((pages,starts));charge};
         self.device.on_queue_done(&self.queue,move|| {#[cfg(not(target_arch="wasm32"))] retired.complete();#[cfg(target_arch="wasm32")] drop(retired);});
     }
+    pub(crate) fn empty_color(&self,target:SourceTarget,coordinate:[u32;2],version:&layer_core::raster::ContentVersion)->bool {
+        matches!(target,SourceTarget::Paint(_)) && version.matches(&super::contents::empty_color(self.target_extent(target),coordinate))==Some(true)
+    }
     pub(crate) fn take_prepared_stroke_start(&mut self,target:SourceTarget,coordinate:[u32;2],stroke:layer_core::StrokeId,preview:bool)->Option<resident::Resident<PageSurface>> {
         let starts=&mut self.restore_preflight.as_mut()?.starts;
         let index=starts.iter().position(|(id,c,old,p,_)|*id==target && *c==coordinate && *old==stroke && *p==preview)?;
@@ -642,7 +660,7 @@ impl WgpuRasterizer {
         let mut bytes=0u64;
         for layer in &self.paint_layers {
             for page in &layer.pages {
-                for surface in std::iter::once(&page.primary).chain(page.secondary.iter()).chain(page.stroke_start.iter().map(|start|&start.surface)) {
+                for surface in std::iter::once(&page.primary).chain(page.secondary.iter()).chain(page.stroke_start.iter().filter(|start|start.storage_bytes()!=0).map(|start|&start.surface)) {
                     if surface.account_texture(&mut textures) {bytes=bytes.checked_add(surface.storage_bytes()).ok_or(GpuRasterError::SizeOverflow)?;}
                 }
             }
@@ -711,7 +729,7 @@ impl WgpuRasterizer {
     }
     pub(crate) fn staged_restore_bytes(&self)->u64 {
         self.restore_preflight.as_ref().map_or(0,|restore|restore.targets.iter().flatten().map(|target|target.pages.storage_bytes()).sum::<u64>()
-            +restore.starts.iter().map(|(_,_,_,_,page)|page.storage_bytes()).sum::<u64>())
+            +restore.starts.iter().map(|(_,_,_,_,page)|page.charged_bytes()).sum::<u64>())
     }
     pub(crate) fn projected_restore_bytes(&self)->u64 {self.restore_preflight.as_ref().map_or(0,|restore|restore.targets.iter().flatten()
         .try_fold(self.unreserved_preview_bytes(restore).saturating_add(Self::unreserved_original_bytes(restore)),|bytes,target|bytes.checked_add(target.projected_bytes(self)?).ok_or(GpuRasterError::SizeOverflow)).unwrap_or(u64::MAX))}
@@ -1078,7 +1096,7 @@ impl WgpuRasterizer {
                 restore:packet.restore_rasters.iter().find(|(id,_)|id==target).map(|(_,root)|root.identity()),extent:scene.target_extent(*target)})
         }).collect();
         let bases=retained.iter().filter_map(|(target,scene)|scene.paint_base(*target).map(|base|(*target,Arc::as_ptr(base.image.storage()) as usize,base.offset))).collect();
-        let (outputs,transforms)=self.raster_outputs(packet,plans);
+        let (outputs,fresh_starts,transforms)=self.raster_outputs(packet,plans);
         for (target,output) in outputs.iter().filter(|(_,output)|!output.preview()) {required.entry(*target).or_default().insert(output.coordinate());}
         if self.preview_from_persistent(packet.dab_batches) && !Self::sparse_preview(packet.dab_batches) {
             for batch in packet.dab_batches.iter().filter(|batch|batch.kind==DabBatchKind::Preview && matches!(batch.target,SourceTarget::Paint(_))) {
@@ -1089,7 +1107,7 @@ impl WgpuRasterizer {
         }
         let clear_starts=packet.dab_batches.iter().zip(plans).any(|(batch,tiles)|self.clears_stroke_starts(batch,tiles,packet.scene.target_extent(batch.target)));
         let key=Key::Frame {color:self.document_color(),extent:packet.document_extent,reset,clear_starts,roots,bases,
-            required:required.iter().map(|(target,coordinates)|(*target,coordinates.iter().copied().collect())).collect(),outputs,
+            required:required.iter().map(|(target,coordinates)|(*target,coordinates.iter().copied().collect())).collect(),outputs,fresh_starts,
             restored:if self.cancels_transform_preview(packet) {self.transforms.as_ref().unwrap().cancel_restores(self)}else {Vec::new()},atlases:originals.atlases};
         if self.restore_preflight.as_ref().is_some_and(|restore|restore.key==key && !restore.consumed && restore.commit.as_ref().is_none_or(|commit|commit.matches(self,packet))) {
             if !self.prepare_native_admission_for_frame(packet) {return false;}
@@ -1361,7 +1379,7 @@ mod tests {
         pollster::block_on(r.compilation.prepare_all(startup::SourceKinds::for_descriptor(warm.descriptor).pipelines(&r.scene_pipelines.source))).unwrap();
         let request=|target,data:Arc<RasterData>|Request {target,extent,before:RasterData::default(),data,required:[[0,0]].into_iter().collect(),base:None,replace:true};
         r.replace_restore(Key::Frame {color,extent,reset:false,clear_starts:false,roots:Vec::new(),bases:Vec::new(),
-            required:vec![(first,vec![[0,0]]),(second,vec![[0,0]])],outputs:Vec::new(),restored:Vec::new(),atlases:0},vec![request(first,data(0)),request(second,data(1))],Vec::new(),None,Vec::new());
+            required:vec![(first,vec![[0,0]]),(second,vec![[0,0]])],outputs:Vec::new(),fresh_starts:Vec::new(),restored:Vec::new(),atlases:0},vec![request(first,data(0)),request(second,data(1))],Vec::new(),None,Vec::new());
         let (send,woken)=std::sync::mpsc::channel();
         r.set_preparation_wake(Arc::new(move||{let _=send.send(());}));
         let restore=r.restore_preflight.as_ref().unwrap();
@@ -1397,7 +1415,7 @@ mod tests {
     #[test]
     fn a_restore_reserves_only_the_preview_pages_it_lacks() {
         let (mut r,_)=restore_request(2,|color,target,extent,_,_|Key::Frame {color,extent,reset:false,clear_starts:false,roots:Vec::new(),bases:Vec::new(),
-            required:vec![(target,vec![[0,0],[1,0]])],outputs:vec![(target,Output::PreviewColor([0,0]))],restored:Vec::new(),atlases:0});
+            required:vec![(target,vec![[0,0],[1,0]])],outputs:vec![(target,Output::PreviewColor([0,0]))],fresh_starts:Vec::new(),restored:Vec::new(),atlases:0});
         let page=Output::PreviewColor([0,0]).bytes(&r,0);
         assert_eq!(r.unreserved_preview_bytes(r.restore_preflight.as_ref().unwrap()),page);
         r.prepare_preview_outputs(r.preview_level).unwrap();
@@ -1412,7 +1430,7 @@ mod tests {
     #[test]
     fn a_refused_restore_group_holds_none_of_its_outputs_and_finishes_once_room_returns() {
         let (mut r,data)=restore_request(2,|color,target,extent,_,_|Key::Frame {color,extent,reset:false,clear_starts:false,roots:Vec::new(),bases:Vec::new(),
-            required:vec![(target,vec![[0,0],[1,0]])],outputs:vec![(target,Output::PreviewColor([0,0]))],restored:Vec::new(),atlases:0});
+            required:vec![(target,vec![[0,0],[1,0]])],outputs:vec![(target,Output::PreviewColor([0,0]))],fresh_starts:Vec::new(),restored:Vec::new(),atlases:0});
         let (send,woken)=std::sync::mpsc::channel();
         r.set_preparation_wake(Arc::new(move||{let _=send.send(());}));
         let preview=r.unreserved_preview_bytes(r.restore_preflight.as_ref().unwrap());
@@ -1447,7 +1465,7 @@ mod tests {
     #[test]
     fn a_restore_stages_the_pages_of_the_sources_it_admitted_while_the_rest_wait_for_room() {
         let (mut r,data)=restore_request(4,|color,target,extent,_,_|Key::Frame {color,extent,reset:false,clear_starts:false,roots:Vec::new(),bases:Vec::new(),
-            required:vec![(target,(0..4).map(|x|[x,0]).collect())],outputs:Vec::new(),restored:Vec::new(),atlases:0});
+            required:vec![(target,(0..4).map(|x|[x,0]).collect())],outputs:Vec::new(),fresh_starts:Vec::new(),restored:Vec::new(),atlases:0});
         let page=r.projected_restore_bytes()/4;
         assert!(r.admit_raster_working(u64::MAX/2).is_err(),"the lane borrows every working reservation the display can lend");
         let room=r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used());
@@ -1561,7 +1579,7 @@ mod tests {
             watercolor:Some(RasterWatercolor {wet_edge:0.5,burnt_edge:0.5,edge_width:2.})});
         let mut restore=TargetRestore::new(&mut r,Request {target,extent,before:(*data).clone(),data,
             required:[coordinate].into(),base:None,replace:false},None,&[]).unwrap();
-        restore.add_outputs(&r,&[(target,Output::Wetness(coordinate))],false,false,None,&[]);
+        restore.add_outputs(&r,&[(target,Output::Wetness(coordinate))],&[],false,false,None,&[]);
         assert_eq!(restore.pending.len(),1);
         assert!(matches!(&restore.pending[0],SourcePage::Raster(key,_) if key.plane==RasterPlane::WatercolorWetness));
     }

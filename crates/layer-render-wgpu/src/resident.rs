@@ -264,6 +264,7 @@ impl Resident<crate::PageSurface> {
         self.value.material.forget(views,buffers);
     }
     pub(crate) fn discharge(&mut self) {self.value.discharge();}
+    pub(crate) fn charged_bytes(&self)->u64 {self.value.charge.bytes()}
     pub(crate) fn set_preview(&self,preview:Option<(crate::SourceTarget,[u32;2])>) {self.value.preview.set(preview);}
     pub(crate) fn preview(&self)->Option<(crate::SourceTarget,[u32;2])> {self.value.preview.get()}
 }
