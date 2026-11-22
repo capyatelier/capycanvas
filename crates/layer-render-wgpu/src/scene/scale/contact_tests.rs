@@ -977,6 +977,51 @@ fn a_watercolor_stroke_resumed_after_a_predicted_hold_matches_a_recomposing_twin
 }
 
 #[test]
+fn a_liquify_push_held_at_fit_with_a_platform_prediction_per_sample_submits_nothing_to_a_host_that_polls_every_callback() {
+    use layer_engine::{PenEvent,PenPhase,SampleFlags,ViewTransform};
+    let (extent,scale,viewport,tick)=([4248,2832],0.464f32,[1972,1314],2_500_000u64);
+    let photo=rgba8_source(extent,|x,y|[(x/17) as u8,(y/11) as u8,((x+y)/23) as u8,255]);
+    let doc=layer_color::photo_project(Arc::unwrap_or_clone(photo),Default::default(),"Photo".into(),SampleDepth::U8).unwrap();
+    let mut view=crate::test_support::view(viewport);view.document_to_surface=[scale,0.,0.,scale,0.,0.];
+    let (mut input,engine)=brush_engine(DefaultBrushPreset::LiquifyPush,doc,view,ViewTransform {revision:1,surface_to_document:[1./scale,0.,0.,1./scale,0.,0.]});
+    let mut engine=Box::new(engine);
+    engine.set_brush(layer_core::BrushSnapshot {diameter:512.,..layer_core::default_brush(DefaultBrushPreset::LiquifyPush)}).unwrap();
+    let mut clock=1_000_000_000;settle_engine(&mut engine,&mut clock);
+    let at=|ms:f32|{let angle=ms*0.004;[986.+185.*angle.cos(),657.+90.*angle.sin()]};
+    let (moving,held)=(80u64,200u64);
+    let mut sequence=0;
+    let mut counts=[0u64;3];
+    for step in 0..(moving+held+20)*2 {
+        clock+=tick;
+        if step%2==0 {
+            let sample=step/2;
+            let ms=sample.min(moving).max(sample.saturating_sub(held)) as f32*5.;
+            let phase=if sample==0 {PenPhase::Down}else {PenPhase::Move};
+            let [x,y]=at(ms);let [px,py]=if (moving..moving+held).contains(&sample) {[x,y]}else {at(ms+16.7)};
+            for (position,flags,timestamp_ns) in [([x,y],SampleFlags::PRIMARY,clock),([px,py],SampleFlags(SampleFlags::PRIMARY.0|SampleFlags::PREDICTED.0),clock+16_700_000)]
+                .into_iter().take(if sample==0 {1}else {2}) {
+                sequence+=1;
+                input.push(PenEvent {timestamp_ns,view_revision:1,pressure:1.,..crate::test_support::pen(sequence,phase,position,flags)}).unwrap();
+            }
+        }
+        let steady=(moving*2+40..(moving+held)*2).contains(&step);
+        if engine.frame_demand()==layer_render::FrameDemand::Wait {continue;}
+        let before=engine.backend().metrics().submissions;
+        engine.render_frame_for(clock,clock+8_333_333).unwrap();engine.backend_mut().wait_idle().unwrap();
+        if steady {counts=[counts[0]+1,counts[1]+engine.backend().metrics().submissions-before,counts[2]];}
+    }
+    let mut lifted=Some(PenEvent {timestamp_ns:clock,view_revision:1,pressure:0.,..crate::test_support::pen(sequence+1,PenPhase::Up,at((moving+20) as f32*5.),SampleFlags::PRIMARY)});
+    for _ in 0..2000 {
+        if let Some(up)=lifted.take() {input.push(up).unwrap();}
+        clock+=tick;
+        engine.render_frame_for(clock,clock+8_333_333).unwrap();engine.backend_mut().wait_idle().unwrap();
+        if !engine.has_active_stroke() && !engine.has_pending_input() && !engine.has_pending_document_edits() {counts[2]=1;break;}
+    }
+    assert_eq!(counts[2],1,"the stroke commits after pen-up");
+    assert_eq!(counts[1],0,"a held Liquify Push asked a polling host for {} frames in its steady held interval and submitted {} of them",counts[0],counts[1]);
+}
+
+#[test]
 fn a_predicted_watercolor_wash_leaving_a_settled_tile_matches_a_recomposing_twin_at_every_reduced_level() {
     let extent=[2048,1024];
     let doc=layer_core::Document::new(layer_core::authored::PortableId::random(),extent[0],extent[1],layer_core::DocumentNames {paint:"Current ink".into(),paper:"Paper".into()});

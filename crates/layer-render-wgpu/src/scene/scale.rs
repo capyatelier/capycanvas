@@ -298,7 +298,6 @@ pub(crate) struct Cache {
     previous: Option<Box<Cache>>,
     standing: Option<Arc<crate::residency::Lease>>,
     complete: bool,
-    contact: bool,
     gesture: Option<contact::Contact>,
     stroked: Option<Arc<SignatureFrame>>,
     presented: pages::Accuracy,
@@ -695,7 +694,7 @@ impl Cache {
             geometry,
             layer_count: layers,
             overview, preparing: false, declaring: false, exact_tile: None,
-            graph: Default::default(), transform: r.transform_preview.clone(), retired: None, previous: None, standing: None, complete: false, contact: false, gesture: None, stroked: None, presented: pages::Accuracy::Display, refused_at: None,
+            graph: Default::default(), transform: r.transform_preview.clone(), retired: None, previous: None, standing: None, complete: false, gesture: None, stroked: None, presented: pages::Accuracy::Display, refused_at: None,
             streaming: Default::default(), pivot_waiting: None, pivot_refusal: None, reduction_refusal: None, pivot_pending: false, pivot_edit: None, pointer: None,
         }
     }
@@ -1035,7 +1034,6 @@ impl Cache {
         if self.gesture.is_some() && reached.is_none() {
             self.end_held_frame(r,packet)?;self.end_contact(encoder);self.commit_window(r,encoder)?;
         }
-        self.contact=stroking;
         if self.pixels.root().is_some_and(|image|image.texture.format()!=self.precision.format()) {self.end_held_frame(r,packet)?;}
         if !self.ensure_window(r,scene,encoder) {self.previous=None;return Err(GpuRasterError::NotReady);}
         let live=self.gesture.is_some();
