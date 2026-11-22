@@ -267,7 +267,7 @@ fn native_bake_defers_cold_effects_to_its_parent_compiler_and_preserves_history(
 
 #[cfg(not(target_arch="wasm32"))]
 #[test]
-fn native_bake_defers_cold_mask_restoration_to_its_parent_compiler() {
+fn native_bake_restores_a_cold_u8_mask_without_waiting_for_a_normalization_pipeline() {
     use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey};
     use crate::layer_tests::placement::{paint_document,paint_mut,set_mask,reveal_all};
     use layer_render::CanvasRenderer;
@@ -304,25 +304,19 @@ fn native_bake_defers_cold_mask_restoration_to_its_parent_compiler() {
     assert!(!normalization.ready());
     let (entered,entry)=mpsc::channel();let (release,held)=mpsc::channel();
     compiler.enqueue(startup::DOCUMENT,move || {let _=entered.send(());let _=held.recv();Ok(())});
-    entry.recv_timeout(Duration::from_secs(5)).unwrap();let pending=compiler.pending();
-    wait_until("masked color normalization did not reach the held parent compiler",|| {
-        if compiler.pending()!=pending {return Ok(());}
-        assert!(!engine.backend_mut().prepare_bakes(frame));
-        assert!(!normalization.ready());
-        assert!(engine.backend().prepared_bake(target,0,[0;2]).is_none());
-        assert_eq!(engine.checkpoint(),merged);
-        Err(pending)
+    entry.recv_timeout(Duration::from_secs(5)).unwrap();
+    wait_until("a cold U8 mask bake prepares while the parent compiler is held",|| {
+        if engine.backend_mut().prepare_bakes(frame) {Ok(())} else {Err(engine.backend().prepared_bake(target,0,[0;2]).is_some())}
     });
-    assert!(compiler.pending()>pending,"color normalization bypassed the held parent compiler");
-    assert!(!normalization.ready());
-    assert!(engine.backend().prepared_bake(target,0,[0;2]).is_none());assert_eq!(engine.checkpoint(),merged);
+    assert!(!normalization.ready(),"the native mask and colour need no normalization pass");
+    assert_eq!(engine.checkpoint(),merged);
     release.send(()).unwrap();
     let settle=|engine:&mut layer_engine::CanvasEngine<WgpuRasterizer>| wait_until("masked bake did not settle",|| {
         engine.render_frame_at(0).unwrap();engine.backend_mut().wait_idle().unwrap();
         let pending=[engine.has_pending_document_edits(),engine.raster_backing_pending(),engine.backend().next_frame()==layer_render::FrameDemand::Work];
         if pending.contains(&true) {Err(pending)} else {Ok(())}
     });
-    settle(&mut engine);assert!(normalization.ready());
+    settle(&mut engine);
     let pixels=float_pixels(engine.backend(),crate::test_support::document_texture(engine.backend()));
     assert_eq!(pixels.len(),(EXTENT[0]*EXTENT[1]) as usize);
     for (i,pixel) in pixels.iter().enumerate() {
