@@ -632,6 +632,59 @@ fn a_finished_strokes_coverage_yields_to_raster_eviction_without_changing_pixels
     }
 }
 
+#[test]
+fn strokes_over_restored_pages_author_the_codes_strokes_over_resident_pages_author() {
+    use crate::test_support::{native_codes, native_corpus, native_samples};
+    let mut differences = Vec::new();
+    for space in [RgbSpace::Srgb, RgbSpace::DisplayP3] {
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
+            let color = DocumentColor { space, depth };
+            let corpus = || {
+                let mut document = document(color);
+                let tiles = (0..2).map(|page| (TileKey { plane: RasterPlane::Color, coordinate: [page as u32, 0] },
+                    RasterTile::backed(TileBlob::encode(color.paint_descriptor(), &native_samples(&native_corpus(depth, page), depth)).unwrap()))).collect();
+                paint_mut(&mut document).raster = RasterRevision::backed(RasterData { tiles, watercolor: None });
+                document
+            };
+            let (mut a, mut b) = (corpus(), corpus());
+            let id = target(&a);
+            let mut resident = renderer(&a, RESIDENT);
+            let mut evicting = renderer(&b, RESIDENT);
+            let style = DabStyle::for_brush(&layer_core::default_brush(layer_core::DefaultBrushPreset::GPen), layer_core::StrokeTool::Brush);
+            for (stroke, rgba, flow) in [(1, [0.1, 0.2, 0.8, 0.7], 0.6), (2, [0.9, 0.5, 0.05, 1.], 0.02), (3, [0., 0.01, 0.02, 0.3], 0.3)] {
+                let dabs = [128., 384.].map(|x| {
+                    let mut dab = test_dab([x, 128.], rgba, flow);
+                    dab.radii = [150., 150.];
+                    dab.hardness = 0.3;
+                    dab
+                });
+                let damage = Rect { min: dabs[0].bounds().min, max: dabs[1].bounds().max };
+                let batch = DabBatch { stroke_id: layer_core::StrokeId(stroke), dab_count: 2, ..crate::test_support::dab_batch(id, style.clone(), damage) };
+                for (r, p) in [(&mut resident, &mut a), (&mut evicting, &mut b)] {
+                    paint_mut(p).raster = RasterRevision::pending();
+                    r.submit(FramePacket { dabs: &dabs, dab_batches: std::slice::from_ref(&batch), ..packet(p, false) }).unwrap();
+                    complete(r);
+                    paint(p).raster.wait_data().unwrap();
+                }
+                let (over_resident, over_restored) = (backing(&paint(&a).raster), backing(&paint(&b).raster));
+                crate::test_support::evict_published_pages(&mut evicting);
+                assert!(evicting.paint_layers[0].pages.is_empty(), "{space:?} {depth:?} stroke {stroke}: the next stroke restores every page");
+                assert_eq!(over_resident.keys().collect::<Vec<_>>(), over_restored.keys().collect::<Vec<_>>());
+                for (key, expected) in &over_resident {
+                    let (expected, actual) = (native_codes(expected, depth), native_codes(&over_restored[key], depth));
+                    let differing = expected.iter().zip(&actual).filter(|(e, a)| e != a).count();
+                    if let Some(pixel) = expected.iter().zip(&actual).position(|(e, a)| e != a) {
+                        differences.push(format!("{space:?} {depth:?} stroke {stroke} tile {:?}: {differing} pixels, first {pixel} over a resident page {:?}, over a restored page {:?}",
+                            key.coordinate, expected[pixel], actual[pixel]));
+                    }
+                }
+            }
+        }
+    }
+    for difference in &differences { eprintln!("STROKE_DIFFERENCE {difference}"); }
+    assert!(differences.is_empty(), "{} stroke tiles differ", differences.len());
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_stroke_frame_refused_raster_room_waits_for_a_release() {

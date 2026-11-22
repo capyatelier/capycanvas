@@ -888,6 +888,37 @@ pub(crate) fn tiled_raster(color: layer_core::color::DocumentColor, pages: &[[u3
     }).collect(), watercolor: None })
 }
 
+pub(crate) fn native_corpus(depth: layer_core::color::SampleDepth, page: usize) -> Vec<[u32; 4]> {
+    use layer_core::color::SampleDepth;
+    let finite_half = |bits: u32| { let bits = bits & 65535; if bits & 0x7c00 == 0x7c00 { bits & 0xfbff } else { bits } };
+    (0..65536u32).map(|i| {
+        let [x, y] = [i % 256, i / 256];
+        match depth {
+            SampleDepth::U8 => [[y, (y * 101 + x * 7) & 255, (y * 237 + x * 13 + 5) & 255, x], [x, (x * 37 + y) & 255, (x * 91 + y * 3) & 255, y]][page],
+            SampleDepth::U16 => [[101, 237, 40503, 1], [1, 3, 65521, 40503]][page].map(|step| i.wrapping_mul(step) & 65535),
+            SampleDepth::F16 => {
+                let [r, g, b] = [1, 3, 7].map(|step| finite_half(i.wrapping_mul(step) + step / 2));
+                [r, g, b, (i.wrapping_mul(40503) + page as u32) % 0x3c01]
+            }
+            SampleDepth::F32 => [((i as f32 - 32768.) / 4096.).to_bits(), 0x3800_0000 + i * 97, 0xb000_0000 + i * 1021,
+                if i % 97 == page as u32 { 0 } else { 0x3f80_0000 - i * 61 }],
+        }
+    }).collect()
+}
+
+pub(crate) fn native_samples(codes: &[[u32; 4]], depth: layer_core::color::SampleDepth) -> Vec<u8> {
+    codes.iter().flatten().flat_map(|code| code.to_le_bytes().into_iter().take(depth.bytes())).collect()
+}
+
+pub(crate) fn native_codes(samples: &[u8], depth: layer_core::color::SampleDepth) -> Vec<[u32; 4]> {
+    let step = depth.bytes();
+    samples.chunks_exact(4 * step).map(|pixel| std::array::from_fn(|c| {
+        let mut word = [0; 4];
+        word[..step].copy_from_slice(&pixel[c * step..(c + 1) * step]);
+        u32::from_le_bytes(word)
+    })).collect()
+}
+
 pub(crate) fn floats(bytes: &[u8]) -> Vec<[f32; 4]> {
     bytes
         .as_chunks::<16>().0.iter()

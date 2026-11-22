@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_support::{page_texture as texture, upload_page as upload, prepare_raster};
+use crate::test_support::{floats, page_texture as texture, upload_page as upload, prepare_raster};
 use crate::{WgpuRasterizer, layer_tests::page_bytes};
 use layer_core::color::RgbSpace;
 
@@ -57,10 +57,10 @@ fn submit(
     r.queue.submit([commands.finish()]);
 }
 fn format(depth: SampleDepth) -> wgpu::TextureFormat {
-    if depth == SampleDepth::U8 {
-        wgpu::TextureFormat::Rgba8Uint
-    } else {
-        wgpu::TextureFormat::Rgba16Uint
+    match depth {
+        SampleDepth::U8 => wgpu::TextureFormat::Rgba8Uint,
+        SampleDepth::U16 | SampleDepth::F16 => wgpu::TextureFormat::Rgba16Uint,
+        SampleDepth::F32 => wgpu::TextureFormat::Rgba32Uint,
     }
 }
 fn code(bytes: &[u8], component: usize, depth: SampleDepth) -> u32 {
@@ -359,6 +359,7 @@ fn writeback_corpus(in_place: bool) {
     let mut cases = 0;
     for space in RgbSpace::ALL {
         let transfer = tables.prepare(&r.device, space).unwrap();
+        let table = transfer_table(space);
         for (depth, encoded) in [SampleDepth::U8, SampleDepth::U16]
             .into_iter()
             .zip(&outputs)
@@ -498,32 +499,9 @@ fn writeback_corpus(in_place: bool) {
                             );
                             continue;
                         }
-                        let codes = reference(pixels[i], depth, space, alpha);
-                        let coverage = codes[3] as f32 / max as f32;
-                        for c in 0..4 {
-                            let actual =
-                                f32::from_le_bytes(encoded[c * 4..c * 4 + 4].try_into().unwrap());
-                            let expected = if c == 3 {
-                                coverage
-                            } else {
-                                let decoded =
-                                    space.decode(f64::from(codes[c]) / f64::from(max)) as f32;
-                                if alpha == AlphaAssociation::Straight {
-                                    decoded * coverage
-                                } else {
-                                    decoded
-                                }
-                            };
-                            if mode == 11 && (coverage == 0. || coverage == 1.) {
-                                assert_eq!(actual.to_bits(), expected.to_bits(),
-                                    "endpoint canonical in_place={in_place} {depth:?} {space:?} {alpha:?} pixel={i} component={c}");
-                            }
-                            assert!(
-                                (actual - expected).abs()
-                                    <= 0.00000024 * expected.abs().max(0.0000001),
-                                "canonical in_place={in_place} {depth:?} {space:?} {alpha:?} pixel={i} component={c} actual={actual} expected={expected}"
-                            );
-                        }
+                        let actual = floats(encoded)[0];
+                        let channel = mismatched_channel(actual, &restored_reference(reference(pixels[i], depth, space, alpha), &table, depth, space, space, alpha));
+                        assert!(channel.is_none(), "canonical in_place={in_place} {depth:?} {space:?} {alpha:?} pixel={i} channel={channel:?} actual={actual:?}");
                     }
                     cases += 1;
                 }
@@ -536,103 +514,133 @@ fn writeback_corpus(in_place: bool) {
     );
 }
 
+fn transfer_table(space: RgbSpace) -> Vec<f32> {
+    (0..65536).map(|code| space.decode(f64::from(code) / 65_535.) as f32).collect()
+}
+fn dot_evaluations(row: [f32; 3], linear: [f32; 3]) -> Vec<f32> {
+    let term = |i: usize| row[i] * linear[i];
+    [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]].into_iter().flat_map(|[a, b, c]| [
+        term(a) + term(b) + term(c),
+        row[c].mul_add(linear[c], term(a) + term(b)),
+        row[b].mul_add(linear[b], term(a)) + term(c),
+        row[c].mul_add(linear[c], row[b].mul_add(linear[b], term(a))),
+    ]).collect()
+}
+fn restored_reference(code: [u32; 4], table: &[f32], depth: SampleDepth, space: RgbSpace, destination: RgbSpace,
+    association: AlphaAssociation) -> Vec<[f32; 4]> {
+    let value = |code: u32| match depth {
+        SampleDepth::F16 => layer_core::color::f16::from_bits(code as u16).to_f32(),
+        SampleDepth::F32 => f32::from_bits(code),
+        _ => table[(code * (65535 / depth.maximum())) as usize],
+    };
+    let exact = if depth.is_float() { value(code[3]) } else { code[3] as f32 / depth.maximum() as f32 };
+    if exact == 0. { return vec![[0.; 4]]; }
+    let coverages = if depth.is_float() || exact == 1. { vec![exact] } else { vec![exact.next_down(), exact, exact.next_up()] };
+    let linear = [0, 1, 2].map(|c| value(code[c]));
+    let rgb = if space == destination { vec![linear] } else {
+        let rows = space.linear_transform(destination).map(|row| dot_evaluations(row.map(|v| v as f32), linear));
+        (0..rows[0].len()).map(|k| [rows[0][k], rows[1][k], rows[2][k]]).collect()
+    };
+    coverages.into_iter().flat_map(|coverage| {
+        let scale = if association == AlphaAssociation::PremultipliedLinear { 1. } else { coverage };
+        rgb.iter().map(move |rgb| [rgb[0] * scale, rgb[1] * scale, rgb[2] * scale, coverage])
+    }).collect()
+}
+fn mismatched_channel(pixel: [f32; 4], candidates: &[[f32; 4]]) -> Option<usize> {
+    (0..4).find(|&c| !candidates.iter().any(|candidate| candidate[c].to_bits() == pixel[c].to_bits()))
+}
+fn boundary_edit(codes: &[[u32; 4]], depth: SampleDepth, space: RgbSpace, association: AlphaAssociation) -> Vec<[f32; 4]> {
+    let maximum = depth.maximum();
+    codes.iter().map(|code| {
+        let coverage = code[3] as f32 / maximum as f32;
+        let scale = if association == AlphaAssociation::Straight { coverage } else { 1. };
+        let [r, g, b] = [0, 1, 2].map(|c| if code[c] < maximum { native_boundary(space, maximum, code[c]) } else { 1. } * scale);
+        [r, g, b, coverage]
+    }).collect()
+}
+fn bit_differences(codes: &[[u32; 4]], actual: &[[f32; 4]], expected: impl Fn(usize) -> Vec<[f32; 4]>) -> Option<(usize, String)> {
+    let mut count = 0;
+    let mut example = None;
+    for (i, pixel) in actual.iter().enumerate() {
+        let candidates = expected(i);
+        let Some(c) = mismatched_channel(*pixel, &candidates) else { continue; };
+        count += 1;
+        example.get_or_insert_with(|| {
+            format!("codes={:?} channel={c} actual={:#010x} expected={:#010x}", codes[i], pixel[c].to_bits(), candidates[0][c].to_bits())
+        });
+    }
+    example.map(|example| (count, example))
+}
+
 #[test]
-fn native_restore_writeback_capture_round_trip_preserves_committed_codes() {
-    use crate::raster::TileCapture;
-    use layer_core::raster::RasterTile;
+fn restored_native_pages_reproduce_their_canonical_writeback_bit_for_bit() {
+    use crate::raster::{CaptureSource, TileCapture};
+    use crate::test_support::{native_codes, native_corpus, native_samples};
+    use layer_core::raster::{RasterTile, TileBlob};
+    const EDIT: usize = 2;
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let encoder = NativeTileEncoder::with_device(&r.device);
-    pollster::block_on(r.compilation.prepare_all(&encoder.pipelines)).unwrap();
-    let working = texture(&r, wgpu::TextureFormat::Rgba32Float);
-    let canonical = texture(&r, wgpu::TextureFormat::Rgba32Float);
-    let encoded8 = texture(&r, wgpu::TextureFormat::Rgba8Uint);
-    let encoded16 = texture(&r, wgpu::TextureFormat::Rgba16Uint);
-    for space in RgbSpace::ALL {
-        let transfer = r.prepare_native_transfer(space).unwrap();
-        assert_eq!(transfer, r.prepare_native_transfer(space).unwrap());
-        for depth in [SampleDepth::U8, SampleDepth::U16] {
-            let maximum = depth.maximum();
-            for association in [
-                AlphaAssociation::Straight,
-                AlphaAssociation::PremultipliedLinear,
-            ] {
-                let encoded = if depth == SampleDepth::U8 {
-                    &encoded8
-                } else {
-                    &encoded16
-                };
-                let pixels: Vec<_> = (0..65536u32)
-                    .map(|i| {
-                        let a = [0, 1, 2, 17, maximum / 2, maximum][i as usize % 6] as f32
-                            / maximum as f32;
-                        let rgb: [f32; 3] = std::array::from_fn(|c| {
-                            space.decode(
-                                f64::from(i.wrapping_mul([1, 101, 237][c]) & maximum)
-                                    / f64::from(maximum),
-                            ) as f32
-                                * a
-                        });
-                        [rgb[0], rgb[1], rgb[2], a]
-                    })
-                    .collect();
-                upload(&r, &working, &working_bytes(&pixels));
-                let request = NativeTileRequest { mode: Default::default(), space: RgbSpace::Srgb,
-                    working: &working,
-                    encoded: encoded.into(),
-                    canonical: &canonical,
-                    transfer: &transfer,
-                    depth,
-                    alpha: association,
-                    region: [0, 0, 256, 256],
-                };
-                let descriptor = request.descriptor();
-                let batch = encoder.prepare(&r.device, &[request], &mut Default::default()).unwrap();
-                let mut first = None;
-                for cycle in 0..4 {
-                    submit(&r, &encoder, std::slice::from_ref(&batch));
-                    let ticket = RasterTile::pending(descriptor);
-                    let capture = r
-                        .capture_tiles(
-                            &[TileCapture {
-                                source: crate::raster::CaptureSource::Texture(encoded),
-                                tile: ticket.clone(),
-                            }],
-                        )
-                        .unwrap();
-                    capture.finish().unwrap();
-                    let backing = ticket.wait_backing().unwrap();
-                    let bytes = backing.decode_on_worker().unwrap();
-                    if let Some(first) = &first {
-                        assert!(
-                            first == &bytes,
-                            "native code drift {space:?} {depth:?} {association:?} cycle={cycle}"
-                        );
-                    } else {
-                        first = Some(bytes);
+    let restored = texture(&r, wgpu::TextureFormat::Rgba32Float);
+    let mut differences = std::collections::BTreeMap::<String, (usize, String)>::new();
+    let mut record = |case: String, difference: Option<(usize, String)>| if let Some((count, example)) = difference {
+        differences.entry(case).or_insert((0, example)).0 += count;
+    };
+    let tables = RgbSpace::ALL.map(transfer_table);
+    for in_place in [false, true] {
+        let encoder = NativeTileEncoder::new(&r.device, in_place);
+        pollster::block_on(r.compilation.prepare_all(&encoder.pipelines)).unwrap();
+        let working = texture(&r, wgpu::TextureFormat::Rgba32Float);
+        let canonical = if in_place { working.clone() } else { texture(&r, wgpu::TextureFormat::Rgba32Float) };
+        for (space, table) in RgbSpace::ALL.into_iter().zip(&tables) {
+            let transfer = r.prepare_native_transfer(space).unwrap();
+            for (depth, page) in [(SampleDepth::U8, 0), (SampleDepth::U8, 1), (SampleDepth::U16, 0), (SampleDepth::U16, 1), (SampleDepth::F16, 0), (SampleDepth::F32, 0)] {
+                let encoded = texture(&r, format(depth));
+                for association in [AlphaAssociation::Straight, AlphaAssociation::PremultipliedLinear] {
+                    if depth.is_float() && association != AlphaAssociation::Straight { continue; }
+                    let case = format!("{space:?} {depth:?} {association:?}");
+                    let request = NativeTileRequest { mode: Default::default(), space, working: &working, encoded: (&encoded).into(),
+                        canonical: &canonical, transfer: &transfer, depth, alpha: association, region: [0, 0, 256, 256] };
+                    let descriptor = request.descriptor();
+                    let batch = encoder.prepare(&r.device, &[request], &mut Default::default()).unwrap();
+                    let corpus = native_corpus(depth, page);
+                    let mut blob = std::sync::Arc::new(TileBlob::encode(descriptor, &native_samples(&corpus, depth)).unwrap());
+                    let mut previous = corpus.iter().map(|code| if code[3] == 0 { [0; 4] } else { *code }).collect::<Vec<_>>();
+                    prepare_raster(&mut r, |r| r.restore_native_tiles(&[NativeTileRestore { blob: &blob, space, destination: space, working: &working }])).unwrap();
+                    for cycle in 0..5 {
+                        if cycle == EDIT && !depth.is_float() { upload(&r, &working, &working_bytes(&boundary_edit(&previous, depth, space, association))); }
+                        submit(&r, &encoder, std::slice::from_ref(&batch));
+                        let ticket = RasterTile::pending(descriptor);
+                        r.capture_tiles(&[TileCapture { source: CaptureSource::Texture(&encoded), tile: ticket.clone() }]).unwrap().finish().unwrap();
+                        blob = ticket.wait_backing().unwrap();
+                        let codes = native_codes(&blob.decode_on_worker().unwrap(), depth);
+                        if depth != SampleDepth::F32 && (cycle != EDIT || depth.is_float()) {
+                            let drift = codes.iter().zip(&previous).filter(|(a, b)| a != b).count();
+                            let first = codes.iter().zip(&previous).find(|(a, b)| a != b);
+                            record(format!("{} {case} in_place={in_place}", if cycle == 0 { "corpus codes" } else { "code drift" }),
+                                first.map(|(a, b)| (drift, format!("published={a:?} restored from={b:?}"))));
+                        }
+                        let canonical_pixels = floats(&page_bytes(&r, &canonical));
+                        let published = &codes;
+                        let reference = |destination| move |i: usize| restored_reference(published[i], table, depth, space, destination, association);
+                        record(format!("canonical {case} in_place={in_place}"), bit_differences(&codes, &canonical_pixels, reference(space)));
+                        let cross_space = !in_place && (cycle == 0 || cycle == EDIT);
+                        for destination in RgbSpace::ALL.into_iter().filter(|destination| *destination != space && cross_space).chain([space]) {
+                            prepare_raster(&mut r, |r| r.restore_native_tiles(&[NativeTileRestore { blob: &blob, space, destination, working: &restored }])).unwrap();
+                            let pixels = floats(&page_bytes(&r, &restored));
+                            record(format!("restore {case} to {destination:?}"), bit_differences(&codes, &pixels, reference(destination)));
+                            if destination == space {
+                                record(format!("restore against canonical {case} in_place={in_place}"),
+                                    bit_differences(&codes, &pixels, |i| vec![canonical_pixels[i]]));
+                            }
+                        }
+                        prepare_raster(&mut r, |r| r.restore_native_tiles(&[NativeTileRestore { blob: &blob, space, destination: space, working: &working }])).unwrap();
+                        previous = codes;
                     }
-                    prepare_raster(&mut r,|r|r.restore_native_tiles(&[NativeTileRestore {
-                        blob: &backing,
-                        space,
-                        destination: space,
-                        working: &working,
-                    }]))
-                    .unwrap();
-                    let restored = page_bytes(&r, &working);
-                    let canonical_bytes = page_bytes(&r, &canonical);
-                    let mut max_error = 0f32;
-                    for (a, b) in restored
-                        .as_chunks::<4>().0.iter()
-                        .zip(canonical_bytes.as_chunks::<4>().0.iter())
-                    {
-                        let a = f32::from_le_bytes(*a);
-                        let b = f32::from_le_bytes(*b);
-                        max_error = max_error.max((a - b).abs());
-                    }
-                    assert!(max_error <= 0.00000024, "canonical mismatch: {max_error}");
                 }
             }
         }
     }
+    for (case, (count, example)) in &differences { eprintln!("DECODE_DIFFERENCE {case}: {count} pixels, first {example}"); }
+    assert!(differences.is_empty(), "{} decode cases differ", differences.len());
 }
 
 #[test]
