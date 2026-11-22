@@ -40,13 +40,10 @@ impl ChangedCells {
     pub fn take_retired(&mut self)->Vec<wgpu::Buffer> {std::mem::take(&mut self.retired)}
     fn retire(&mut self,r:&WgpuRasterizer,wanted:&BTreeSet<Key>,side:u32) {
         let retired:BTreeSet<_>=self.pages.keys().copied().filter(|key|side!=self.side || !wanted.contains(key)).collect();
-        for layer in &r.paint_layers {
-            for page in &layer.pages {
-                if retired.contains(&(layer.id,page.coordinate)) {page.release_bindings();}
-            }
+        for ((id,coordinate),buffer) in self.pages.extract_if(..,|key,_|retired.contains(key)) {
+            r.forget_bindings(Some(id),coordinate,&[],std::slice::from_ref(&buffer));
+            self.retired.push(buffer);
         }
-        if !retired.is_empty() {r.release_preview_bindings();}
-        self.retired.extend(self.pages.extract_if(..,|key,_|retired.contains(key)).map(|(_,buffer)|buffer));
         self.recharge(r);
     }
     pub fn buffer(&self,id:SourceTarget,coordinate:[u32;2])->Option<&wgpu::Buffer> {

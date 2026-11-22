@@ -13,12 +13,18 @@ impl<K, const N: usize> CachedBinding<K, N> {
     pub fn clear(&self) {
         *self.0.borrow_mut() = std::array::from_fn(|_| None);
     }
+    pub fn forget(&self, binds: impl Fn(&K) -> bool) {
+        for entry in self.0.borrow_mut().iter_mut().filter(|entry| entry.as_deref().is_some_and(|(key, _)| binds(key))) {
+            *entry = None;
+        }
+    }
 }
 impl<K: PartialEq, const N: usize> CachedBinding<K, N> {
     pub fn get(&self, key: K, create: impl FnOnce(&K) -> wgpu::BindGroup) -> wgpu::BindGroup {
         let mut entries = self.0.borrow_mut();
         let found = entries.iter().position(|entry| entry.as_deref().is_some_and(|(previous, _)| *previous == key));
-        entries[..=found.unwrap_or(N - 1)].rotate_right(1);
+        let slot = found.or_else(|| entries.iter().position(Option::is_none)).unwrap_or(N - 1);
+        entries[..=slot].rotate_right(1);
         if found.is_none() {
             let binding = create(&key);
             entries[0] = Some(Box::new((key, binding)));
@@ -58,6 +64,14 @@ impl MaterialBindings {
         self.display.clear();
         self.gather.clear();
         self.output.clear();
+    }
+    pub fn forget(&self, views: &[wgpu::TextureView], buffers: &[wgpu::Buffer]) {
+        let (view, buffer) = (|view: &wgpu::TextureView| views.contains(view), |buffer: &wgpu::Buffer| buffers.contains(buffer));
+        let material = |(bound, sampled): &MaterialKey| bound.iter().any(buffer) || sampled.iter().any(view);
+        self.input.forget(material);
+        self.display.forget(material);
+        self.gather.forget(|(style, written)| buffer(style) || written.iter().any(view));
+        self.output.forget(|(style, color, states, changed)| buffer(style) || view(color) || states.iter().flatten().any(view) || changed.as_ref().is_some_and(buffer));
     }
 }
 

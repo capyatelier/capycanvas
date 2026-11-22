@@ -549,17 +549,9 @@ impl PaintLayer {
             page.primary_needs_clear = false;
         }
         page.active_secondary = false;
-        page.primary.clear_bindings();
-        let coordinate = page.coordinate;
-        for coverage in self.coverage_pages.iter().filter(|p| p.coordinate == coordinate) { coverage.release_bindings(); }
         Some(spare)
     }
     fn take_coverage(&mut self, index: usize) -> StrokeCoveragePage {
-        let coordinate = self.coverage_pages[index].coordinate;
-        for color in self.pages.iter().filter(|color| color.coordinate == coordinate) {
-            color.primary.clear_bindings();
-            if let Some(spare) = &color.secondary { spare.clear_bindings(); }
-        }
         self.coverage_pages.remove(index)
     }
 }
@@ -782,6 +774,10 @@ impl StrokeCoveragePage {
         }
     }
 
+    fn views(&self) -> Vec<wgpu::TextureView> {
+        [&self.primary, &self.secondary].map(|surface| surface.value_view().clone()).into()
+    }
+
     fn active(&self) -> &resident::Resident<PageSurface> {
         if self.active_secondary {
             &self.secondary
@@ -973,13 +969,16 @@ impl LayerPage {
         std::iter::once(&mut self.primary).chain(self.secondary.as_mut()).chain(self.stroke_start.as_mut().map(|start|&mut start.surface))
             .for_each(resident::Resident::discharge);
     }
-    fn clear_stroke_start(&mut self) {
-        if self.stroke_start.take().is_some() { self.release_bindings(); }
+    fn clear_stroke_start(&mut self) -> Option<wgpu::TextureView> {
+        let start = self.stroke_start.take()?.surface.value_view().clone();
+        for surface in self.surfaces() { surface.forget_bindings(std::slice::from_ref(&start), &[]); }
+        Some(start)
+    }
+    fn surfaces(&self) -> impl Iterator<Item = &resident::Resident<PageSurface>> {
+        std::iter::once(&self.primary).chain(self.secondary.as_ref())
     }
     fn release_bindings(&self) {
-        for surface in std::iter::once(&self.primary).chain(self.secondary.as_ref()) {
-            surface.clear_bindings();
-        }
+        for surface in self.surfaces() { surface.clear_bindings(); }
     }
     fn surface(&self, secondary: bool) -> &resident::Resident<PageSurface> {
         if secondary {
@@ -2373,9 +2372,13 @@ impl WgpuRasterizer {
                 .filter(|start|start.matches(batch.stroke_id,intent,declaration)).map(|start|(start,true)))
     }
 
-    fn release_preview_bindings(&self) {
-        for page in &self.preview_pages { page.release_bindings(); }
-        for page in &self.preview_coverage_pages { page.release_bindings(); }
+    fn forget_bindings(&self, target: Option<SourceTarget>, coordinate: [u32; 2], views: &[wgpu::TextureView], buffers: &[wgpu::Buffer]) {
+        let layer = self.paint_layers.iter().filter(|layer| Some(layer.id) == target);
+        let colors = layer.clone().flat_map(|layer| &layer.pages).chain(&self.preview_pages).filter(|page| page.coordinate == coordinate);
+        let coverage = layer.flat_map(|layer| &layer.coverage_pages).chain(&self.preview_coverage_pages).filter(|page| page.coordinate == coordinate);
+        for surface in colors.flat_map(LayerPage::surfaces).chain(coverage.flat_map(|page| [&page.primary, &page.secondary])) {
+            surface.forget_bindings(views, buffers);
+        }
     }
 
     fn material_key(&self,views:[&wgpu::TextureView;11])->bindings::MaterialKey {
@@ -4107,20 +4110,22 @@ impl CanvasRenderer for WgpuRasterizer {
             retouch.retire_stroke();
         }
         let (mut warm_coverage, mut warm_spares) = (WARM_COVERAGE_PAGES, WARM_SPARE_PAGES);
+        let mut retired = Vec::new();
         for layer in self.paint_layers.iter_mut().rev() {
-            for page in &mut layer.pages { page.clear_stroke_start(); }
-            layer.coverage_pages.retain(|p| p.primary.size().height == PAGE_SIZE);
-            while layer.coverage_pages.len() > warm_coverage { layer.take_coverage(0); }
-            for page in &layer.coverage_pages { page.release_bindings(); }
+            let id = layer.id;
+            retired.extend(layer.pages.iter_mut().filter_map(|page| Some((id, page.coordinate, vec![page.clear_stroke_start()?]))));
+            retired.extend(layer.coverage_pages.extract_if(.., |p| p.primary.size().height != PAGE_SIZE).map(|page| (id, page.coordinate, page.views())));
+            while layer.coverage_pages.len() > warm_coverage { let page = layer.take_coverage(0); retired.push((id, page.coordinate, page.views())); }
             warm_coverage -= layer.coverage_pages.len();
             for index in (0..layer.pages.len()).rev() {
                 if layer.pages[index].secondary.is_none() { continue; }
-                if warm_spares == 0 { layer.take_spare(index); } else { warm_spares -= 1; }
+                if warm_spares == 0 { retired.extend(layer.take_spare(index).map(|spare| (id, layer.pages[index].coordinate, vec![spare.value_view().clone()]))); } else { warm_spares -= 1; }
             }
         }
-        for page in &mut self.preview_pages { page.clear_stroke_start(); }
+        for page in &mut self.preview_pages { page.clear_stroke_start(); page.release_bindings(); }
         self.preview_coverage_pages.retain(|p| p.primary.size().height == PAGE_SIZE);
-        self.release_preview_bindings();
+        for page in &self.preview_coverage_pages { page.release_bindings(); }
+        for (target, coordinate, views) in retired { self.forget_bindings(Some(target), coordinate, &views, &[]); }
         self.live_stroke = None;
     }
     fn set_transform_preview(
@@ -5111,10 +5116,11 @@ impl WgpuRasterizer {
         if let Some(layer_id) =
             new_preview_layer.filter(|_| !reuse_preview && (fill_preview.is_none() || fill_changed))
         {
-            for page in &mut self.preview_pages {
+            let starts: Vec<_> = self.preview_pages.iter_mut().filter_map(|page| {
                 page.active_secondary = false;
-                page.clear_stroke_start();
-            }
+                Some((page.coordinate, page.clear_stroke_start()?))
+            }).collect();
+            for (coordinate, start) in starts { self.forget_bindings(None, coordinate, &[start], &[]); }
             for page in &mut self.preview_coverage_pages {
                 page.active_secondary = false;
             }
