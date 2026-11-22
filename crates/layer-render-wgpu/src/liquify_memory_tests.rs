@@ -294,3 +294,45 @@ fn a_contact_reconstructs_the_same_pixels_whatever_order_its_session_kept_its_or
             "kept, rebuilt and shifted originals reconstruct the same pixels (history {history}, pressed {pressed}): max error {max:e}, mean error {mean:e} over {} samples", errors.len());
     }
 }
+
+#[test]
+fn a_liquify_pen_up_holds_only_the_pages_it_reads_or_writes() {
+    use crate::layer_tests::{dab, placement, preset_style};
+    let extent = [2048, 1536];
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut doc = placement::paint_document(extent, "Liquify pen-up");
+    placement::set_source(&mut doc, layer_core::color::source::rgba8_source(extent, |x, y| [(x % 251) as u8, (y % 239) as u8, ((x + y) % 173) as u8, 255]));
+    let target = placement::target(&doc);
+    let view = layer_render::ViewState { width_px: extent[0] / 4, height_px: extent[1] / 4, document_to_surface: [0.25, 0., 0., 0.25, 0., 0.] };
+    crate::test_support::submit_settled(&mut r, FramePacket { view, ..crate::test_support::packet(doc.scene(), extent) });
+    let mut style = preset_style(layer_core::DefaultBrushPreset::LiquifyPush);
+    style.liquify = Some(Arc::new(layer_core::liquify::Context::for_source(placement::paint(&doc), false)));
+    const STEPS: usize = 5;
+    for step in 0..=STEPS {
+        let mut real = dab([0.; 4]);
+        real.center = layer_core::Point { x: 500. + 200. * step as f32, y: 700. + 40. * step as f32 };
+        real.radii = [140.; 2];real.motion = [40., 10.];real.material[3] = 1.;
+        let mut predicted = real;predicted.center.x += 45.;
+        let dabs = [real, predicted];
+        let mut persistent = crate::test_support::dab_batch(target, style.clone(), real.bounds());
+        persistent.stroke_id = StrokeId(61);persistent.stroke_start = step == 0;persistent.stroke_end = step == STEPS;
+        let mut preview = crate::test_support::dab_batch(target, style.clone(), predicted.bounds());
+        preview.stroke_id = StrokeId(61);preview.kind = DabBatchKind::Preview;preview.stroke_start = false;preview.stroke_end = false;preview.first_dab = 1;
+        let batches = [persistent, preview];
+        if step == STEPS { placement::paint_mut(&mut doc).raster = layer_core::raster::RasterRevision::pending(); }
+        let count = if step == STEPS { 1 } else { 2 };
+        let packet = FramePacket { view, composite_all: false, dabs: &dabs[..count], dab_batches: &batches[..count], ..crate::test_support::packet(doc.scene(), extent) };
+        let mut plans = brush_tiles::plan_packet(packet, |target| packet.scene.target_extent(target)).unwrap();
+        Liquify::extend_required_plans(&r, packet, &mut plans);
+        let mut declared = BTreeMap::new();
+        Liquify::required_sources(&r, packet, &plans, &mut declared);
+        crate::test_support::submit_ready(&mut r, packet).unwrap();
+        if step < STEPS { continue; }
+        let restore = r.restore_preflight.as_ref().unwrap();
+        let mut read = declared.remove(&target).unwrap_or_default();
+        read.extend(restore.outputs().iter().filter_map(|(at, output)| match output { raster::staging::Output::Color(c) if *at == target => Some(*c), _ => None }));
+        let held = restore.dependencies().iter().filter(|(at, _)| *at == target).flat_map(|(_, coordinates)| coordinates.iter().copied()).collect::<BTreeSet<_>>();
+        let unread = held.difference(&read).copied().collect::<Vec<_>>();
+        assert!(!read.is_empty() && unread.is_empty(), "pen-up holds pages the contact neither reads nor writes: {unread:?}");
+    }
+}

@@ -2347,7 +2347,7 @@ impl WgpuRasterizer {
     }
 
     fn material_offsets(&self, batch: &DabBatch) -> [Option<[i32; 2]>; 9] {
-        let stored = self.in_place_dry_material(batch) || self.compact_preview_contribution(batch);
+        let stored = batch.style.execution == BrushExecution::Liquify || self.in_place_dry_material(batch) || self.compact_preview_contribution(batch);
         let center = pointwise(&batch.style);
         std::array::from_fn(|i| (!stored && (!center || i == 4)).then_some([i as i32 % 3 - 1, i as i32 / 3 - 1]))
     }
