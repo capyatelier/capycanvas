@@ -102,7 +102,7 @@ so one merge equals blending each dab in turn:
 ## Android presentation
 
 When the surface has no `SharedDemandRefresh`, the Android host presents each ink
-frame through FIFO as soon as it is submitted, with a frame latency of one
+frame through FIFO as soon as its GPU work completes, with a frame latency of one
 (`android.rs`). Camera changes use the buffered navigation path, which holds each
 frame until its GPU work completes and allows three frames in flight; moving
 between the two reconfigures the swapchain, as it does on front-buffer devices.

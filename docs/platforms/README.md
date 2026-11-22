@@ -108,13 +108,17 @@ under the same lock that excludes concurrent submissions. If they are pending,
 the host retains the acquired image and retries without waiting on the GPU;
 ordinary cached navigation enters native presentation immediately. Driver
 presentation backpressure can still delay the canvas owner; the tier tables
-record that response cost separately from presented frame rate. Surface
+record that response cost separately from presented frame rate. Each ink frame
+is presented by its own GPU completion callback, so a driver whose present waits
+for that work, such as Mali's shared-demand present, never puts the canvas owner
+to sleep. The owner keeps consuming input and preparing the next frame, and draws
+it into the image only after the previous one is presented. Surface
 retirement discards any held image before releasing the swapchain.
 Each switch resets damage history, so its first frame is a full redraw. A driver
 without shared presentation or present fences presents ink through FIFO with a
-frame latency of one, as soon as each frame is submitted; camera changes switch
-it to the buffered navigation path as above. Ink then reaches the display about
-one frame later than shared ink and cannot tear.
+frame latency of one, as soon as each frame's GPU work completes; camera changes
+switch it to the buffered navigation path as above. Ink then reaches the display
+about one frame later than shared ink and cannot tear.
 The swapchain is pre-rotated to the display's native orientation, and the
 changes to wgpu's HAL are listed in [vendor/README.md](../../vendor/README.md).
 

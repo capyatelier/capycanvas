@@ -71,8 +71,28 @@ impl Drop for Window {
         unsafe { ndk_sys::ANativeWindow_release(self.0.as_ptr()) };
     }
 }
+#[derive(Default)]
+struct CompletionTarget(Arc<Mutex<Option<wgpu::SurfaceTexture>>>);
+impl CompletionTarget {
+    fn slot(slot: &Mutex<Option<wgpu::SurfaceTexture>>) -> std::sync::MutexGuard<'_, Option<wgpu::SurfaceTexture>> {
+        slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+    fn present_on_completion(&self, target: wgpu::SurfaceTexture, queue: &wgpu::Queue) -> impl FnOnce() + Send + 'static {
+        *Self::slot(&self.0) = Some(target);
+        let (slot, queue) = (self.0.clone(), queue.clone());
+        move || {
+            let mut slot = Self::slot(&slot);
+            if let Some(target) = slot.take() { queue.present(target); }
+        }
+    }
+    fn is_held(&self) -> bool { Self::slot(&self.0).is_some() }
+}
+impl Drop for CompletionTarget {
+    fn drop(&mut self) { Self::slot(&self.0).take(); }
+}
 pub(crate) struct Surface {
     pending_target: Option<(wgpu::SurfaceTexture, Option<u64>)>,
+    completion_target: CompletionTarget,
     launch_frame: crate::launch::LaunchFrame,
     // Drop the swapchain before releasing its native-window reference.
     surface: wgpu::Surface<'static>,
@@ -211,7 +231,7 @@ pub extern "system" fn Java_art_capycanvas_Native_displayStatus(
                 "retained_target": surface.presenter.retains_target(),
                 "pending_composition": !gpu.settled(),
                 "pending_edits": a.host.session.engine().has_pending_document_edits(),
-                "pending_presentation": surface.pending_target.is_some(),
+                "pending_presentation": surface.pending_target.is_some() || surface.completion_target.is_held(),
                 "canvas_revision": gpu.canvas_preview_revision(),
                 "presented_canvas_revision": surface.presenter.canvas_revision(),
                 "overview_count": a.navigators.count(),
@@ -535,6 +555,7 @@ impl App {
         let gpu = self.host.session.engine().backend().0.as_ref().unwrap();
         let mut surface = Surface {
             pending_target: None,
+            completion_target: CompletionTarget::default(),
             launch_frame: crate::launch::LaunchFrame::default(),
             surface,
             config,
@@ -676,6 +697,10 @@ impl App {
         let screen = &self.host.session.state().screen;
         let screen_check = layer_render_wgpu::ScreenCheck::for_view(&screen.assessment, color.primaries(), hdr_output, screen.show_clipped);
         let surface = self.surface.as_mut().unwrap();
+        if surface.ink && surface.waits_for_completion(1) {
+            self.host.dirty = true;
+            return Ok(FrameDemand::Wait);
+        }
         let gpu = self.host.session.renderer_mut().0.as_ref().unwrap();
         let format = if hdr_output { wgpu::TextureFormat::Rgba16Float } else { surface.sdr_format };
         let output_changed = surface.color!=color || surface.config.format!=format;
@@ -748,9 +773,8 @@ impl App {
             .map_err(error)?;
         self.frame_cost[2] = elapsed() - self.frame_cost[0] - self.frame_cost[1];
         let submitted_ns = surface.completion_observer.as_ref().map_or(0, |_| monotonic_ns());
-        if surface.ink { gpu.queue().present(target); }
-        else { surface.pending_target = gpu.queue().try_present(target).err().map(|target| (target, launch)); }
-        if surface.pending_target.is_none() { surface.track_launch(gpu, launch, wake); }
+        let present = if surface.ink { Some(surface.completion_target.present_on_completion(target, gpu.queue())) }
+        else { surface.pending_target = gpu.queue().try_present(target).err().map(|target| (target, launch)); None };
         surface.last_view = Some(view);
         surface.last_paint_start = paint_start;
         surface.submitted_frames += 1;
@@ -767,10 +791,11 @@ impl App {
                 unsafe { ndk_sys::ATrace_setCounter(c"Capy artwork revision".as_ptr(), object_revision as i64); }
             }
             gpu.on_gpu_done(move || {
+                let completed_ns = observer.as_ref().map_or(0, |_| monotonic_ns());
+                if let Some(present) = present { present(); }
                 complete.fetch_max(frame, Ordering::Release);
                 if waiter.swap(false, Ordering::AcqRel) { completed(); }
                 if let Some(observer) = observer {
-                    let completed_ns = monotonic_ns();
                     let mut rows = observer.lock().unwrap();
                     if rows.len() < 32768 { rows.push([frame, submitted_ns, completed_ns, raster_frame, consumed_paint_ns, object_revision]); }
                 }
@@ -779,6 +804,7 @@ impl App {
                 unsafe { ndk_sys::ATrace_setCounter(c"Capy canvas completed".as_ptr(), frame as i64); }
             });
         }
+        if surface.pending_target.is_none() { surface.track_launch(gpu, launch, wake); }
         // Shared-image submissions are not distinct displayed frames. Perfetto
         // records producer progress here, not scanout or input visibility.
         unsafe {
