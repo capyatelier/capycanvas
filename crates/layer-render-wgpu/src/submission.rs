@@ -185,6 +185,7 @@ impl CommandEncoder {
         }
         self.compute.as_mut().unwrap()
     }
+    pub fn end_compute_pass(&mut self) { self.compute = None; }
     /// RegionRecords that run before every other command of this encoder, such as
     /// uploads to storage that nothing earlier in it reads.
     pub fn prologue(&mut self) -> &mut wgpu::CommandEncoder {

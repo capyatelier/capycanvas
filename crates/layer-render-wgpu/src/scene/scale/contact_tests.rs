@@ -2576,3 +2576,24 @@ fn a_steady_predicted_stroke_rebinds_its_material_pages_without_new_bind_groups(
         assert!(error==0.,"frame {step} with reused bindings differs from freshly bound pages by {error}");
     }
 }
+
+fn steady_ink_frame_passes(radius:f32)->u64 {
+    let extent=[4096,2048];let doc=document_at(extent);let target=primary_target(&doc);let style=crate::layer_tests::preset_style(DefaultBrushPreset::GPen);
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,4);
+    let mut r=renderer(&doc);
+    crate::test_support::submit_settled(&mut r,frame);
+    (0..7).map(|step| {
+        let x=1100.+4.*step as f32;
+        let dabs=[x,x+4.].map(|x|{let mut dab=material_dab(x,1024.,&style);dab.radii=[radius;2];dab});
+        let batches=predicted_batches(target,&style,1,&dabs,step==0);
+        let counts=crate::test_support::PassCounts::snapshot();
+        crate::test_support::submit_ready(&mut r,FramePacket {dabs:&dabs,dab_batches:&batches,time_seconds:0.01*(step+1) as f32,..frame}).unwrap();
+        crate::test_support::PassCounts::snapshot().delta(counts).total
+    }).skip(3).min().unwrap()
+}
+
+#[test]
+fn a_predicted_ink_frame_takes_no_more_passes_for_a_brush_over_many_pages() {
+    let [large,small]=[steady_ink_frame_passes(512.),steady_ink_frame_passes(15.)];
+    assert!(large<=small,"a predicted 1024 px G-Pen frame took {large} passes, a 30 px one {small}");
+}
