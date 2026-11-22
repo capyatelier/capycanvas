@@ -116,6 +116,12 @@ impl Canvas {
         }
         atlases.values().sum()
     }
+    fn photo_page_bytes(&self) -> u64 {
+        let data = self.engine.document().scene().raster(self.target).unwrap().wait_data().unwrap();
+        self.engine.backend().paint_layers.iter().filter(|layer| layer.id == self.target).flat_map(|layer| &layer.pages)
+            .filter(|page| !data.tiles.contains_key(&layer_core::raster::TileKey { plane: layer_core::raster::RasterPlane::Color, coordinate: page.coordinate }))
+            .map(|page| page.primary.storage_bytes() + page.secondary.as_ref().map_or(0, |surface| surface.storage_bytes())).sum()
+    }
     fn take(&mut self, bytes: u64) -> Option<crate::residency::Reservation> {
         for _ in 0..SETTLE_FRAMES {
             if let Ok(taken) = self.engine.backend_mut().admit_raster_working(bytes) { return Some(taken); }
@@ -190,7 +196,7 @@ fn back_to_back_contacts_commit_the_revisions_a_roomy_run_commits() {
 }
 
 #[test]
-fn a_liquify_session_holds_only_the_originals_its_contact_reads_and_commits_what_a_roomy_run_commits() {
+fn a_liquify_session_holds_only_what_its_contact_reads_and_commits_what_a_roomy_run_commits() {
     const LEFT: [f32; 2] = [7. / 24., 0.5];
     const RIGHT: [f32; 2] = [17. / 24., 0.5];
     let session = |pressed: bool| {
@@ -208,6 +214,7 @@ fn a_liquify_session_holds_only_the_originals_its_contact_reads_and_commits_what
                 let r = canvas.engine.backend();
                 let unpinned = r.raster_tiers.raster.limit() - r.raster_tiers.raster.used() + r.paint_memory_bytes() - r.pinned_paint_bytes();
                 let taken = canvas.take(unpinned - (1 << 20)).expect("the lane admits the bytes no edit pins");
+                assert!(canvas.photo_page_bytes() <= 1 << 20, "another edit takes the pages the session restored from the photo, short of the 1 MiB it leaves: {}", canvas.photo_page_bytes());
                 canvas.engine.backend_mut().commit_raster_working(taken);
                 assert!(canvas.settle());
             }
