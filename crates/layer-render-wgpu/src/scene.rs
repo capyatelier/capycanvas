@@ -75,7 +75,8 @@ pub(crate) const IDLE_FRAME_TILES:usize=(crate::frame_pace::IDLE_TAPS/PASS_TAPS)
 
 use crate::residency::Class;
 thread_local! {static ATTEMPT_OPEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };}
-pub(crate) struct WorkBudget { used: u64, capacity: u64, motion: bool }
+type SourcePage=(SourceTarget,u32,[u32;2]);
+pub(crate) struct WorkBudget { used: u64, capacity: u64, motion: bool, admitted: crate::IdMap<SourcePage,Class>, sourced: Option<Class> }
 impl Drop for WorkBudget {
     fn drop(&mut self) {ATTEMPT_OPEN.with(|open|open.set(false));}
 }
@@ -84,7 +85,16 @@ impl WorkBudget {
     fn capacity(&self)->u64 {self.capacity}
     pub(crate) fn remaining(&self)->u64 {self.capacity().saturating_sub(self.used)}
     fn allowance(&self,class:Class)->u64 {if self.required(class) {u64::MAX}else {self.remaining()}}
-    fn fits(&self,class:Class,progressed:bool,work:u64)->bool {self.required(class) || work<=self.remaining() || !progressed && !(self.motion && class==Class::Fallback)}
+    fn overruns(&self,class:Class)->bool {!(self.motion && class==Class::Fallback)}
+    fn fits(&self,class:Class,progressed:bool,work:u64)->bool {self.required(class) || work<=self.remaining() || !progressed && self.overruns(class)}
+    fn source_pages(&self,class:Class)->usize {
+        if class==Class::Authored {return usize::MAX;}
+        usize::try_from(self.remaining()/PASS_TAPS).unwrap_or(usize::MAX)
+            .saturating_add(usize::from(self.sourced.is_none_or(|sourced|class<sourced) && self.overruns(class)))
+    }
+    fn begin_source(&mut self,class:Class) {self.sourced=Some(self.sourced.map_or(class,|sourced|sourced.min(class)));self.spend(PASS_TAPS);}
+    fn source_admitted(&self,page:SourcePage,class:Class)->bool {self.admitted.get(&page).is_some_and(|admitted|*admitted<=class)}
+    fn admit_source(&mut self,page:SourcePage,class:Class) {let admitted=self.admitted.entry(page).or_insert(class);*admitted=(*admitted).min(class);}
     pub(crate) fn spend(&mut self,work:u64) {self.used=self.used.saturating_add(work);}
     fn spent(&self)->u64 {self.used}
 }
@@ -724,7 +734,7 @@ impl Scene {
     }
     pub(crate) fn begin_paced(motion:bool,taps:u64)->WorkBudget {
         debug_assert!(!ATTEMPT_OPEN.with(|open|open.replace(true)),"a work attempt is already open on this thread");
-        WorkBudget {used:0,capacity:taps.max(PASS_TAPS),motion}
+        WorkBudget {used:0,capacity:taps.max(PASS_TAPS),motion,admitted:Default::default(),sourced:None}
     }
     pub fn begin_frame(&mut self) {
         self.clear_material_pages();

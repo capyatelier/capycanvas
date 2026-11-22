@@ -288,18 +288,17 @@ impl Cache {
     )->Result<Prepared,GpuRasterError> {
         if !Arc::ptr_eq(&self.pages,&scene.scale_pages) {self.pages=scene.scale_pages.clone();}
         let SourceRequest {plan,required,covered}=request;
-        let limit=(budget.allowance(class)/object_cache::PASS_TAPS).max(1) as usize;
         let source=&scene.scale_sources.entries[&id];
-        let candidates=nearest_pages(required.bounds().intersect(plan.bounds),work_view(packet,0),limit,std::iter::empty(),|coordinate| {
+        let candidates=nearest_pages(required.bounds().intersect(plan.bounds),work_view(packet,0),budget.source_pages(class),std::iter::empty(),|coordinate| {
             let region=page_rect(*coordinate).intersect(PixelRect::full(source.valid_extent(plan.level)));
             let key=source.key(r,id,plan.level,coordinate.map(|value|value>>plan.level));
-            required.intersects(region) && region.intersect(covered).is_empty()
+            required.intersects(region) && region.intersect(covered).is_empty() && !budget.source_admitted((id,plan.level,*coordinate),class)
                 && self.pages.lock().unwrap().get(&key,region,pages::Accuracy::Display,plan.level,class).is_none()
         });
         let mut ready=Vec::new();let mut handles=Vec::new();let mut prepared=Prepared::default();
         for coordinate in candidates {
-            if !budget.fits(class,!ready.is_empty(),object_cache::PASS_TAPS) {break;}
-            budget.spend(object_cache::PASS_TAPS);
+            if budget.source_pages(class)==0 {break;}
+            budget.begin_source(class);
             let source=&scene.scale_sources.entries[&id];
             let valid=source.valid_extent(plan.level);
             let region=page_rect(coordinate).intersect(PixelRect::full(valid));
@@ -327,6 +326,8 @@ impl Cache {
             let handle=match self.accept_working(scene,r,interest,areas,native,scratch,plan,true,class,Class::Prefetch,encoder)? {
                 Ok(handle)=>handle,Err(refusal)=>{prepared.refusal=prepared.refusal.or(refusal);continue;},
             };
+            budget.admit_source((id,plan.level,coordinate),class);
+            #[cfg(test)] crate::test_support::PassCounts {source_admissions:1,..Default::default()}.record();
             let image=self.pages.lock().unwrap().allocated(&key,class).expect("accepted source page");
             let write=self.pages.lock().unwrap().prepare_write(key.clone(),region,pages::Accuracy::Display,plan.level)?;
             let mut unit=Unit::default();unit.sources=self.pages.lock().unwrap().take_inputs(&handle)?;

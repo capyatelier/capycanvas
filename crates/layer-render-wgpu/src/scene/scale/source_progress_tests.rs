@@ -303,3 +303,50 @@ fn an_empty_store_rebuilds_without_a_cache_readiness_flag() {
     scene.encode_jobs(&mut r,&mut encoder).unwrap();r.uploads.finish(&encoder);encoder.submit(&r.queue);r.wait_idle().unwrap();
     assert!(cache.coverage_complete(),"ready without valid coverage must rebuild the coarse preview");
 }
+
+fn layered_photo(extent: [u32; 2], layers: u32) -> Document {
+    let mut artwork = Artwork::new(extent).unwrap();
+    let object = artwork.objects.insert(PortableId::random(), ImageObject::new(layer_core::authored::Image::new(rgba8_source(extent, |x, y| color(x, y, 0))))).unwrap();
+    let photo = artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Objects(object), "Photo")).unwrap();
+    let stack = artwork.compositions.get(artwork.root).unwrap().result;
+    artwork.stacks.get_mut(stack).unwrap().entries = vec![photo];
+    let mut doc = Document::from_artwork(artwork).unwrap();
+    let paints: Vec<_> = (0..layers).map(|seed| {
+        let image = rgba8_source([PAGE_SIZE; 2], |x, y| [(x + seed * 7) as u8, (y + seed * 13) as u8, (seed * 8) as u8, 96 + (x ^ y) as u8 % 128]);
+        let base = PaintBase { offset: [seed * 89 % (extent[0] - PAGE_SIZE), seed * 61 % (extent[1] - PAGE_SIZE)], ..PaintBase::new(image.into()) };
+        let paint = doc.artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(), domain: extent, raster: Default::default(), base: Some(base), operations: Arc::default() }).unwrap();
+        let mut occurrence = Occurrence::new(OccurrenceContent::Paint(paint), "Paint");
+        occurrence.opacity = 0.75;
+        doc.artwork.occurrences.insert(PortableId::random(), occurrence).unwrap()
+    }).collect();
+    let group = stack_occurrence(&mut doc, "Group", paints[8..16].to_vec());
+    set_root_entries(&mut doc, std::iter::once(photo).chain(paints[..8].iter().copied()).chain([group]).chain(paints[16..].iter().copied()).collect());
+    for &masked in paints.iter().step_by(5) { coverage_mask(&mut doc, masked, [0; 2], None); }
+    doc
+}
+
+#[test]
+fn a_many_layer_open_admits_no_more_source_pages_in_a_frame_than_its_budget() {
+    let extent = [1024, 768];
+    let doc = layered_photo(extent, 32);
+    let view = ViewState { width_px: 512, height_px: 384, document_to_surface: [0.5, 0., 0., 0.5, 0., 0.] };
+    let frame = FramePacket { view, ..packet(doc.scene(), extent) };
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut counts = crate::test_support::PassCounts::snapshot();
+    let mut admitted = Vec::new();
+    crate::test_support::submit_settled_observing(&mut r, frame, |_| {
+        let now = crate::test_support::PassCounts::snapshot();
+        admitted.push(now.delta(counts).source_admissions);
+        counts = now;
+    });
+    let budget = crate::frame_pace::IDLE_TAPS / crate::scene::PASS_TAPS + 1;
+    assert!(admitted.iter().sum::<u64>() > budget, "the drawing needs more source pages than one frame admits: {admitted:?}");
+    assert!(admitted.iter().all(|pages| *pages <= budget), "a frame admitted more source pages than its budget and one unit of visible progress: {admitted:?}");
+    assert!(r.next_frame() != layer_render::FrameDemand::Work, "the open reaches Wait");
+    let mut reference = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    crate::test_support::with_pace([1 << 30; 2], || crate::test_support::submit_settled(&mut reference, frame));
+    let (actual, expected) = (display_pixels(&r), display_pixels(&reference));
+    assert_eq!(actual.len(), expected.len());
+    let differing = actual.iter().zip(&expected).filter(|(actual, expected)| actual != expected).count();
+    assert_eq!(differing, 0, "the open settles on a different picture than one prepared in a single frame");
+}
