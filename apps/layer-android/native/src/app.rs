@@ -23,6 +23,7 @@ pub(crate) struct App {
     pub gpu_generation: u64,
     pub gpu_watch: layer_host::DeviceWatch,
     pub screen_presented: std::time::Instant,
+    pub frame_deadline: Option<std::time::Instant>,
 }
 impl App {
     pub fn new(saved: &str, preferred_tags: &[&str], screen: Option<layer_ui::ScreenInfo>) -> Result<Self, String> {
@@ -58,6 +59,7 @@ impl App {
             navigators: layer_host::scene::Navigators::new(layer_host::scene::SlotUnits::Physical),
             glass: Vec::new(),
             screen_presented: std::time::Instant::now(),
+            frame_deadline: None,
         })
     }
 }

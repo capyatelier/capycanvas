@@ -602,6 +602,7 @@ impl App {
         self.gpu_watch.failure().map_or(Ok(()), Err)
     }
     fn render(&mut self, now: u64, presentation: u64) -> Result<bool, String> {
+        self.frame_deadline = None;
         self.host.poll_preparation();
         let launch = self.host.launch_frame();
         if let Some(surface) = &mut self.surface { surface.sync_launch(launch); }
@@ -714,7 +715,8 @@ impl App {
 
         self.frame_cost[0] = elapsed();
         if !surface.presenter.needs_present(gpu, view, surround) && !launch_needed {
-            return Ok(self.host.frame_demand() != layer_render::FrameDemand::Wait || surface.launch_frame.ticket().is_some());
+            let launching = surface.launch_frame.ticket().is_some();
+            return Ok(self.demands_frame(launching));
         }
         let target = match surface.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t)
@@ -796,7 +798,12 @@ impl App {
         if !pending { self.host.session.renderer_mut().0.as_mut().unwrap().after_present(); }
         let launch_pending = surface.launch_frame.ticket().is_some();
         self.check_gpu()?;
-        Ok(self.host.frame_demand() != layer_render::FrameDemand::Wait || pending || launch_pending)
+        Ok(self.demands_frame(pending || launch_pending))
+    }
+    fn demands_frame(&mut self, presenting: bool) -> bool {
+        let demand = self.host.frame_demand();
+        self.frame_deadline = match demand { layer_render::FrameDemand::WaitUntil(at) if !presenting => Some(at), _ => None };
+        presenting || demand != layer_render::FrameDemand::Wait
     }
 }
 
@@ -1296,7 +1303,7 @@ pub extern "system" fn Java_art_capycanvas_Native_frame(
     handle: jlong,
     now: jlong,
     presentation: jlong,
-) -> jboolean {
+) -> jlong {
     crate::jni_entry!(env, handle, capy_app, {
     let app = &mut *capy_app;
     let clock = app.profiling.then(std::time::Instant::now);
@@ -1312,14 +1319,15 @@ pub extern "system" fn Java_art_capycanvas_Native_frame(
         }
     }
     match result {
-        Ok(wake) => wake as jboolean,
+        Ok(false) => -1,
+        Ok(true) => app.frame_deadline.map_or(0, |at| at.saturating_duration_since(std::time::Instant::now()).as_millis().max(1) as jlong),
         Err(e) => {
             if !app.host.session.rendering_suspended() {
                 let _ = app.host.suspend_renderer();
             }
             app.host.error = Some(e.clone());
             fail(&mut env, Err(e));
-            0
+            -1
         }
     }
     })
