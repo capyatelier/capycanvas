@@ -6,7 +6,8 @@ use super::*;
 impl WgpuRasterizer {
     #[cfg(test)]
     pub(crate) fn color_memory_bytes(&self) -> u64 {
-        self.paint_layers.iter().flat_map(|layer| &layer.pages).map(color_page_bytes).sum()
+        self.paint_layers.iter().flat_map(|layer| &layer.pages).map(|page| page.primary.storage_bytes()
+            + page.stroke_start.as_ref().map_or(0, StrokeStart::storage_bytes) + page.secondary.as_ref().map_or(0, |surface| surface.storage_bytes())).sum()
     }
     pub(crate) fn pinned_paint_bytes(&self) -> u64 {
         self.paint_memory_bytes().saturating_sub(self.evictable_native_color_bytes())
@@ -195,7 +196,7 @@ impl WgpuRasterizer {
                 let ready = data.and_then(|data| data.tiles.get(&TileKey { plane: RasterPlane::Color, coordinate: page.coordinate }))
                     .is_some_and(|tile| matches!(tile.try_backing(), Some(Ok(_))));
                 if ready && !contents.is_some_and(|contents| contents.modified(page.coordinate)) {
-                    let bytes = color_page_bytes(page);
+                    let bytes = page.primary.storage_bytes();
                     offer((layer.id, page.coordinate, Offered::Color), bytes, crate::residency::rebuild_value(bytes, bytes));
                 }
             }
@@ -213,6 +214,7 @@ impl WgpuRasterizer {
             while index < layer.pages.len() {
                 let coordinate = layer.pages[index].coordinate;
                 if take((layer.id, coordinate, Offered::Color)) {
+                    take((layer.id, coordinate, Offered::Spare));
                     for coverage in layer.coverage_pages.iter().filter(|p| p.coordinate == coordinate) { coverage.release_color_bindings(); }
                     let page = layer.pages.swap_remove(index);
                     retired.push(page.primary.retire());retired.extend(page.secondary.map(resident::Resident::retire));
@@ -239,11 +241,22 @@ impl Offered {
     fn coverage(page: &StrokeCoveragePage) -> Self { Self::Coverage(page.primary.size().height, page.primary.format()) }
 }
 
-fn color_page_bytes(page: &LayerPage) -> u64 {
-    page.primary.storage_bytes()
-        + page.stroke_start.as_ref().map_or(0,StrokeStart::storage_bytes)
-        + page
-            .secondary
-            .as_ref()
-            .map_or(0, |surface|surface.storage_bytes())
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn evicting_a_page_with_an_offered_spare_frees_exactly_the_offered_bytes() {
+        let (doc, mut r, _) = crate::memory::memory_tests::durable_color_renderer();
+        let target = doc.active_target().unwrap();
+        let spare = resident::Resident::unwritten(r.create_page_surface(&r.raster_tiers.paint, "offered spare"));
+        r.paint_layers.iter_mut().find(|layer| layer.id == target).unwrap().pages[0].secondary = Some(spare);
+        let heap = r.raster_tiers.raster.heap().clone();
+        heap.evict(u64::MAX, crate::residency::Class::Fallback);
+        r.raster_buffers.release_evicted();
+        let leases = r.offer_native_color(&[], &[]);
+        let offered = heap.evict(u64::MAX, crate::residency::Class::Fallback);
+        let (retired, _evicted) = r.take_evicted_color(leases);
+        assert_eq!(retired.len(), 65, "every color page and the one spare are evicted");
+        assert_eq!(offered, retired.iter().map(PageSurface::storage_bytes).sum::<u64>());
+    }
 }
