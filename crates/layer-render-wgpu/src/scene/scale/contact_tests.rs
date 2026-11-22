@@ -2390,3 +2390,51 @@ fn predicted_pencil_strokes_on_a_photo_at_full_size_publish_only_what_their_dabs
     assert!(stale.is_empty(),"the retained picture differs from a full repaint after (stroke, frame) {stale:?}");
     assert!(presents_whole(&r),"after pen-up and settling, the retained picture differs from a full repaint");
 }
+
+#[test]
+fn refinement_after_a_pencil_stroke_on_a_complete_photo_view_publishes_only_the_cells_the_stroke_reached() {
+    let (extent,surface)=([3072,2048],[1536,1024]);
+    let photo=rgba8_source(extent,|x,y|[(x*7%256) as u8,(y*5%256) as u8,((x+y)%256) as u8,255]);
+    let doc=layer_color::photo_project(Arc::unwrap_or_clone(photo),Default::default(),"Ink".into(),SampleDepth::U8).unwrap();
+    let target=doc.active_target().unwrap();
+    let mut style=crate::layer_tests::preset_style(DefaultBrushPreset::Pencil);style.blend_space=doc.composition().blend;
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.blend_space=doc.composition().blend;
+    frame.view=layer_render::ViewState {width_px:surface[0],height_px:surface[1],document_to_surface:[1.,0.,0.,1.,-768.,-512.]};
+    let mut r=renderer(&doc);
+    crate::test_support::submit_settled(&mut r,frame);
+    assert!(r.scale_display.as_ref().unwrap().overview.is_some(),"the photo view keeps an overview");
+    let format=wgpu::TextureFormat::Rgba8UnormSrgb;
+    let (shown,shown_view)=crate::create_target(r.device(),surface,format,"retained refinement");
+    let (whole,whole_view)=crate::create_target(r.device(),surface,format,"repainted refinement");
+    let mut retained=crate::ViewportPresenter::for_surface(&r,format,crate::SdrSurfaceColor::Srgb).unwrap();
+    retained.set_target_retention(true);
+    let mut presents_whole=|r:&WgpuRasterizer| {
+        pollster::block_on(retained.prepare(r)).unwrap();
+        retained.present(r,&shown_view,frame.view,[0.2;4]).unwrap();
+        let mut full=crate::ViewportPresenter::for_surface(r,format,crate::SdrSurfaceColor::Srgb).unwrap();
+        pollster::block_on(full.prepare(r)).unwrap();
+        full.present(r,&whole_view,frame.view,[0.2;4]).unwrap();
+        crate::layer_tests::page_bytes(r,&shown)==crate::layer_tests::page_bytes(r,&whole)
+    };
+    assert!(presents_whole(&r),"the settled photo presents like a full repaint");
+    let mut reached=PixelRect::EMPTY;
+    for step in 0..=8 {
+        let x=1000.+16.*step as f32;
+        let dabs=[pencil(x,1020.,15.,&style),pencil(x+8.,1020.,15.,&style)];
+        let [persistent,preview]=predicted_batches(target,&style,1,&dabs,step==0);
+        let batches=if step==8 {vec![layer_render::DabBatch {stroke_end:true,..persistent}]}else {vec![persistent,preview]};
+        crate::test_support::submit_ready(&mut r,FramePacket {dabs:&dabs,dab_batches:&batches,time_seconds:0.01*(step+1) as f32,..frame}).unwrap();
+        crate::test_support::complete(&r);
+        reached=dabs.iter().fold(reached,|reached,dab|reached.union(crate::pixel_rect::pixel_rect(dab.bounds(),extent)));
+        assert!(presents_whole(&r),"the stroke presents like a full repaint after frame {step}");
+    }
+    let cells=pages::coordinates(reached,0).fold(PixelRect::EMPTY,|cells,coordinate|cells.union(pages::bounds(coordinate,0,extent)));
+    let (mut revision,mut wide,mut stale)=(r.composite_revision,Vec::new(),0);
+    crate::test_support::submit_settled_observing(&mut r,frame,|r| {
+        if r.composite_revision!=revision && r.composite_damage.union(cells)!=cells {wide.push(r.composite_damage);}
+        revision=r.composite_revision;
+        stale+=usize::from(!presents_whole(r));
+    });
+    assert!(wide.is_empty(),"refinement after pen-up published more than the cells the stroke reached {cells:?}: {wide:?}");
+    assert_eq!(stale,0,"a refinement frame's retained picture differs from a full repaint");
+}

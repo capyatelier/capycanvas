@@ -462,9 +462,9 @@ impl Cache {
     }
 
     fn project_exact(&mut self,scene:&Scene,r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder,commands:&mut RegionRecords)->Result<PixelRect,GpuRasterError> {
-        let mut changed=self.copy_level(scene,r,encoder,commands)?;
-        if let Some(cache)=&mut self.overview {changed=changed.union(cache.copy_level(scene,r,encoder,commands)?);}
-        Ok(changed)
+        let view=self.copy_level(scene,r,encoder,commands)?;
+        let stand_in=match &mut self.overview {Some(cache)=>cache.copy_level(scene,r,encoder,commands)?,None=>PixelRect::EMPTY};
+        Ok(self.presented(view,stand_in))
     }
 }
 
