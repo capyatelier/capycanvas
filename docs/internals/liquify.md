@@ -584,7 +584,12 @@ its field the same way; accept it rather than restrict these tools.
   read. Each 16-layer allocation holds about 21.3 MiB including all mip levels;
   the unused last block is bounded by 15 tiles. Source bounds propagate
   conservatively through chunks. No full-canvas snapshot is allocated at the
-  first dab.
+  first dab. The stroke's lane admits each allocation with the frame's other
+  outputs. An allocation that holds no tile the current frame reads is released
+  when another edit needs its memory; a later read copies the tile again from
+  $I_0$ and rebuilds its levels. A frame still reads every original under the
+  connected field of its contact. `liquify::memory_tests` checks the release,
+  the rebuilt pixels and the pass counts of a stroke that fits.
 - **Peak memory.** Map storage costs 16 bytes per touched pixel, plus unchanged
   tiles shared across versions. An update temporarily owns both old and new
   tiles. Original caches cost 16 bytes per pixel plus one third for mip levels,
