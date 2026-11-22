@@ -632,12 +632,13 @@ fn pressure_retires_every_blend_scratch_page_in_one_pass_over_the_pages() {
     let end = layer_render::DabBatch { stroke_start: false, stroke_end: true, ..batch };
     submit_published(&mut r, FramePacket { dabs: &dabs, dab_batches: std::slice::from_ref(&end), ..packet(doc.scene(), extent) });
     complete(&r);
-    r.retire_stroke_sources();
     r.restore_preflight = None;
     let scratch = |r: &WgpuRasterizer| r.paint_layers[0].pages.iter().filter(|page| page.secondary.is_some()).count() as u64;
     let pages = r.paint_layers[0].pages.len() as u64;
+    assert!(scratch(&r) > 2 * SOURCE_SLOTS as u64, "the fixture retires several batches: {} of {pages} pages hold scratch", scratch(&r));
+    r.retire_stroke_sources();
     let k = scratch(&r);
-    assert!(k > 2 * SOURCE_SLOTS as u64, "the fixture retires several batches: {k} of {pages} pages hold scratch");
+    assert_eq!(k, WARM_SPARE_PAGES as u64, "a retired stroke keeps only the warm spares");
     let (retired,_leases)=r.evict_color(u64::MAX,&[],&[]);
     assert_eq!(scratch(&r),0,"one trim must release every optional scratch page");
     assert_eq!(retired.len() as u64,k);
@@ -2188,4 +2189,35 @@ fn a_unified_device_settles_with_its_retention_within_the_display_grant() {
     let (used,grant)=(r.scene_tiers.display.used(),r.memory.display_grant());
     assert!(grant<r.memory.retention_grant(),"the view's target bounds the display grant below the ledger grant");
     assert!(used<=grant.saturating_add(r.scene_tiers.retiring.used()),"display retention {} MiB exceeds the display grant {} MiB",used>>20,grant>>20);
+}
+
+#[test]
+fn retiring_a_stroke_keeps_only_warm_coverage_and_the_next_stroke_reuses_it() {
+    let side = [8, 8];
+    let extent = side.map(|side| PAGE_SIZE * side);
+    let doc = layer_core::Document::new(layer_core::PortableId::random(), extent[0], extent[1],
+        layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+    let target = doc.active_target().unwrap();
+    let mut r = renderer(doc.composition().color,
+        layer_core::DeviceMemoryFacts { unified: true, ..Default::default() }).unwrap();
+    submit_settled(&mut r, packet(doc.scene(), extent));
+    let style = crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::GPen);
+    let bounds = layer_core::Rect { min: layer_core::Point { x: 0., y: 0. }, max: layer_core::Point { x: extent[0] as f32, y: extent[1] as f32 } };
+    let dabs = (0..side[0] * side[1]).map(|index| crate::tests::test_dab(
+        [((index % side[0]) * PAGE_SIZE + PAGE_SIZE / 2) as f32, ((index / side[0]) * PAGE_SIZE + PAGE_SIZE / 2) as f32], [0.1, 0.3, 0.8, 1.], 1.)).collect::<Vec<_>>();
+    let stroke = |r: &mut WgpuRasterizer, id: u64| {
+        for (stroke_start, stroke_end) in [(true, false), (false, true)] {
+            let batch = layer_render::DabBatch { stroke_start, stroke_end, stroke_id: layer_core::StrokeId(id), dab_count: dabs.len() as u32, ..dab_batch(target, style.clone(), bounds) };
+            submit_published(r, FramePacket { dabs: &dabs, dab_batches: std::slice::from_ref(&batch), ..packet(doc.scene(), extent) });
+        }
+        complete(r);
+    };
+    stroke(&mut r, 1);
+    let coverage = |r: &WgpuRasterizer| r.paint_layers.iter().map(|layer| layer.coverage_pages.len()).sum::<usize>();
+    assert!(coverage(&r) > WARM_COVERAGE_PAGES, "the fixture leaves more finished coverage than the warm pool: {}", coverage(&r));
+    r.retire_stroke_sources();
+    assert_eq!(coverage(&r), WARM_COVERAGE_PAGES, "retirement keeps only the warm coverage pool");
+    assert!(r.paint_layers.iter().flat_map(|layer| &layer.pages).all(|page| page.stroke_start.is_none()));
+    stroke(&mut r, 2);
+    assert!(coverage(&r) >= WARM_COVERAGE_PAGES, "the next stroke allocates what the warm pool lacks");
 }

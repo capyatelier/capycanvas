@@ -218,27 +218,14 @@ impl WgpuRasterizer {
                     retired.push(page.primary.retire());retired.extend(page.secondary.map(resident::Resident::retire));
                     continue;
                 }
-                let page = &mut layer.pages[index];
-                if take((layer.id, coordinate, Offered::Spare)) && let Some(mut spare) = page.secondary.take() {
-                    if page.active_secondary {
-                        std::mem::swap(&mut page.primary, &mut spare);
-                        page.primary_needs_clear = false;
-                    }
-                    page.active_secondary = false;
-                    retired.push(spare.retire());
-                    for coverage in layer.coverage_pages.iter().filter(|p| p.coordinate == coordinate) { coverage.release_color_bindings(); }
-                }
+                if take((layer.id, coordinate, Offered::Spare)) && let Some(spare) = layer.take_spare(index) { retired.push(spare.retire()); }
                 index += 1;
             }
             let mut index = 0;
             while index < layer.coverage_pages.len() {
                 let page = &layer.coverage_pages[index];
                 if !take((layer.id, page.coordinate, Offered::coverage(page))) { index += 1; continue; }
-                for color in layer.pages.iter().filter(|color| color.coordinate == page.coordinate) {
-                    color.primary.clear_bindings();
-                    if let Some(spare) = &color.secondary { spare.clear_bindings(); }
-                }
-                let page = layer.coverage_pages.swap_remove(index);
+                let page = layer.take_coverage(index);
                 retired.push(page.primary.retire());retired.push(page.secondary.retire());
             }
         }

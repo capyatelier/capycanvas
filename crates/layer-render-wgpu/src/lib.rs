@@ -172,6 +172,8 @@ pub use present_screen::ScreenCheck;
 // RGB stores encode(linear RGB * alpha); sampling/blending uses Float32 linear
 // premultiplied values. Alpha is ordinary, unencoded UNORM8 coverage.
 const EXPORT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+const WARM_COVERAGE_PAGES: usize = 16;
+const WARM_SPARE_PAGES: usize = 8;
 const INITIAL_DAB_BYTES: u64 = 4 * 1024 * 1024;
 const INITIAL_STYLE_RECORDS: usize = 128;
 const INITIAL_TARGET_RECORDS: usize = 257;
@@ -534,6 +536,28 @@ struct PaintLayer {
     coverage_pages: Vec<StrokeCoveragePage>,
     watercolor_wetness_pages: Vec<WatercolorWetnessPage>,
     watercolor: Option<WatercolorLayerStyle>,
+}
+impl PaintLayer {
+    fn take_spare(&mut self, index: usize) -> Option<resident::Resident<PageSurface>> {
+        let page = &mut self.pages[index];
+        let mut spare = page.secondary.take()?;
+        if page.active_secondary {
+            std::mem::swap(&mut page.primary, &mut spare);
+            page.primary_needs_clear = false;
+        }
+        page.active_secondary = false;
+        let coordinate = page.coordinate;
+        for coverage in self.coverage_pages.iter().filter(|p| p.coordinate == coordinate) { coverage.release_color_bindings(); }
+        Some(spare)
+    }
+    fn take_coverage(&mut self, index: usize) -> StrokeCoveragePage {
+        let coordinate = self.coverage_pages[index].coordinate;
+        for color in self.pages.iter().filter(|color| color.coordinate == coordinate) {
+            color.primary.clear_bindings();
+            if let Some(spare) = &color.secondary { spare.clear_bindings(); }
+        }
+        self.coverage_pages.remove(index)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -4069,9 +4093,16 @@ impl CanvasRenderer for WgpuRasterizer {
         if let Some(retouch) = &mut self.retouch {
             retouch.retire_stroke();
         }
-        for layer in &mut self.paint_layers {
+        let (mut warm_coverage, mut warm_spares) = (WARM_COVERAGE_PAGES, WARM_SPARE_PAGES);
+        for layer in self.paint_layers.iter_mut().rev() {
             for page in &mut layer.pages { page.clear_stroke_start(); }
             layer.coverage_pages.retain(|p| p.primary.size().height == PAGE_SIZE);
+            while layer.coverage_pages.len() > warm_coverage { layer.take_coverage(0); }
+            warm_coverage -= layer.coverage_pages.len();
+            for index in (0..layer.pages.len()).rev() {
+                if layer.pages[index].secondary.is_none() { continue; }
+                if warm_spares == 0 { layer.take_spare(index); } else { warm_spares -= 1; }
+            }
         }
         for page in &mut self.preview_pages { page.clear_stroke_start(); }
         self.preview_coverage_pages.retain(|p| p.primary.size().height == PAGE_SIZE);
