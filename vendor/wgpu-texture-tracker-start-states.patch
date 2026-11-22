@@ -1,8 +1,8 @@
 diff --git a/wgpu-core/src/device/surface_tests.rs b/wgpu-core/src/device/surface_tests.rs
-index 4d9104977..9af3419e7 100644
+index 4d9104977..db2a24206 100644
 --- a/wgpu-core/src/device/surface_tests.rs
 +++ b/wgpu-core/src/device/surface_tests.rs
-@@ -876,3 +876,26 @@ fn nonblocking_backpressured_image_can_be_discarded_and_reacquired() {
+@@ -876,3 +876,28 @@ fn nonblocking_backpressured_image_can_be_discarded_and_reacquired() {
      f.surface.discard().unwrap();
      drop(reacquired);
  }
@@ -24,8 +24,10 @@ index 4d9104977..9af3419e7 100644
 +    let mut encoder = crate::track::TextureTracker::new(device.ordered_texture_usages);
 +    let _ = encoder.set_single(&texture, level(0), wgt::TextureUses::COPY_DST);
 +    encoder.set_from_tracker(&pass);
++    let mut submitted = crate::track::DeviceTextureTracker::new(device.ordered_texture_usages);
++    submitted.insert_single(&texture, wgt::TextureUses::UNINITIALIZED);
 +    let guard = device.snatchable_lock.read();
-+    let entering = device.trackers.lock().textures.set_from_tracker_and_drain_transitions(&encoder, &guard)
++    let entering = submitted.set_from_tracker_and_drain_transitions(&encoder, &guard)
 +        .filter(|barrier| barrier.range.base_mip_level == 1).map(|barrier| barrier.usage.to).collect::<Vec<_>>();
 +    assert_eq!(entering, [wgt::TextureUses::STORAGE_WRITE_ONLY], "the pass's first access to the level is a storage write");
 +}

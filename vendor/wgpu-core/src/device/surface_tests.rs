@@ -894,8 +894,10 @@ fn a_level_a_pass_writes_then_samples_is_submitted_writable_after_an_earlier_cop
     let mut encoder = crate::track::TextureTracker::new(device.ordered_texture_usages);
     let _ = encoder.set_single(&texture, level(0), wgt::TextureUses::COPY_DST);
     encoder.set_from_tracker(&pass);
+    let mut submitted = crate::track::DeviceTextureTracker::new(device.ordered_texture_usages);
+    submitted.insert_single(&texture, wgt::TextureUses::UNINITIALIZED);
     let guard = device.snatchable_lock.read();
-    let entering = device.trackers.lock().textures.set_from_tracker_and_drain_transitions(&encoder, &guard)
+    let entering = submitted.set_from_tracker_and_drain_transitions(&encoder, &guard)
         .filter(|barrier| barrier.range.base_mip_level == 1).map(|barrier| barrier.usage.to).collect::<Vec<_>>();
     assert_eq!(entering, [wgt::TextureUses::STORAGE_WRITE_ONLY], "the pass's first access to the level is a storage write");
 }
