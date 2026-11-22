@@ -128,6 +128,7 @@ fn region_cache_restore_keeps_all_pages_while_frame_time_advances() {
             let frame=Arc::new(artwork::Frame::new(FramePacket {time_seconds:*elapsed,..packet(document.scene(),document.composition().size)},
                 layer_core::EvaluationContext {elapsed:*elapsed,..Default::default()}));
             let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+            r.drain_image_decodes(&mut encoder).unwrap();
             r.prefetch_regions(&frame,&mut encoder).unwrap();
             r.uploads.finish(&encoder);encoder.submit(&r.queue);
             r.wait_idle().unwrap();
