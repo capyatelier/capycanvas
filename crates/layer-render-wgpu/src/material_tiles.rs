@@ -65,9 +65,11 @@ impl WgpuRasterizer {
             .position(|layer| layer.id == batch.target)
             .ok_or(GpuRasterError::MissingPaintLayer(batch.target))?;
         if self.clears_stroke_starts(batch, &tiles, context.target_extent) {
-            for layer in &mut self.paint_layers {
-                for page in &mut layer.pages { page.clear_stroke_start(); }
-            }
+            let starts: Vec<_> = self.paint_layers.iter_mut().flat_map(|layer| {
+                let id = layer.id;
+                layer.pages.iter_mut().filter_map(move |page| Some((id, page.coordinate, page.clear_stroke_start()?)))
+            }).collect();
+            for (id, coordinate, start) in starts { self.forget_bindings(Some(id), coordinate, &[start], &[]); }
         }
 
         let mut jobs = mem::take(&mut self.material_jobs);

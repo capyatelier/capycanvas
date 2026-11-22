@@ -81,7 +81,6 @@ pub(crate) trait TextureStorage:Storage {
     fn view(&self)->&wgpu::TextureView;
 }
 impl<T:TextureStorage> Resident<T> {
-    #[cfg(test)]
     pub(crate) fn value_view(&self)->&wgpu::TextureView {self.value.view()}
     pub(crate) fn texture_reference(&self)->Resident<crate::source_access::RawTile> {
         Resident {value:crate::source_access::RawTile {texture:self.value.texture().clone().into(),view:self.value.view().clone()},names:self.names.clone()}
@@ -260,6 +259,9 @@ impl Resident<crate::PageSurface> {
     }
     pub(crate) fn clear_bindings(&self) {
         self.value.material.clear();
+    }
+    pub(crate) fn forget_bindings(&self,views:&[wgpu::TextureView],buffers:&[wgpu::Buffer]) {
+        self.value.material.forget(views,buffers);
     }
     pub(crate) fn discharge(&mut self) {self.value.discharge();}
     pub(crate) fn set_preview(&self,preview:Option<(crate::SourceTarget,[u32;2])>) {self.value.preview.set(preview);}

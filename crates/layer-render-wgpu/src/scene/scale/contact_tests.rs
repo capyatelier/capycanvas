@@ -2346,15 +2346,29 @@ fn forget_material_bindings(r:&WgpuRasterizer) {
     }
 }
 
-#[test]
-fn a_steady_predicted_stroke_rebinds_its_material_pages_without_new_bind_groups() {
+fn evict_a_spare(r:&mut WgpuRasterizer,target:SourceTarget,coordinate:[u32;2]) {
+    let spare=crate::resident::Resident::unwritten(r.create_page_surface(&r.raster_tiers.paint,"evicted spare"));
+    fn page(r:&mut WgpuRasterizer,target:SourceTarget,coordinate:[u32;2])->&mut LayerPage {
+        r.paint_layers.iter_mut().find(|layer|layer.id==target).unwrap().pages.iter_mut().find(|page|page.coordinate==coordinate).unwrap()
+    }
+    page(r,target,coordinate).secondary=Some(spare);
+    crate::test_support::evict_published_pages(r);
+    assert!(page(r,target,coordinate).secondary.is_none(),"the budget evicts the unrelated spare");
+}
+
+fn steady_predicted_stroke_rebinds_without_new_bind_groups(evicting:bool) {
     let extent=[4096,2048];let doc=document_at(extent);let target=primary_target(&doc);let style=crate::layer_tests::preset_style(DefaultBrushPreset::GPen);
     let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,4);
     let [mut r,mut twin]=[renderer(&doc),renderer(&doc)];
-    for r in [&mut r,&mut twin] {crate::test_support::submit_settled(r,frame);}
+    let far=stroke_dab(3700.,1900.);let elsewhere=layer_render::DabBatch {stroke_id:layer_core::StrokeId(2),..stroke_batch(target,&far,true,true)};
+    for r in [&mut r,&mut twin] {
+        crate::test_support::submit_settled(r,frame);
+        crate::test_support::submit_settled(r,FramePacket {dabs:std::slice::from_ref(&far),dab_batches:std::slice::from_ref(&elsewhere),..frame});
+    }
     let dabs=|x:f32|[x,x+4.].map(|x|{let mut dab=material_dab(x,1024.,&style);dab.radii=[512.;2];dab});
     for step in 0..7 {
         let (x,time)=(1100.+4.*step as f32,0.01*(step+1) as f32);
+        if evicting {for r in [&mut r,&mut twin] {evict_a_spare(r,target,[14,7]);}}
         let counts=predicted_frame(&mut r,frame,target,&style,1,&dabs(x),step==0,time);
         forget_material_bindings(&twin);
         predicted_frame(&mut twin,frame,target,&style,1,&dabs(x),step==0,time);
@@ -2362,6 +2376,16 @@ fn a_steady_predicted_stroke_rebinds_its_material_pages_without_new_bind_groups(
         let error=max_error(&display_pixels(&r),&display_pixels(&twin));
         assert!(error==0.,"frame {step} with reused bindings differs from freshly bound pages by {error}");
     }
+}
+
+#[test]
+fn a_steady_predicted_stroke_rebinds_its_material_pages_without_new_bind_groups() {
+    steady_predicted_stroke_rebinds_without_new_bind_groups(false);
+}
+
+#[test]
+fn evicting_an_unrelated_page_every_frame_keeps_a_steady_stroke_s_bindings() {
+    steady_predicted_stroke_rebinds_without_new_bind_groups(true);
 }
 
 fn steady_ink_frame_passes(radius:f32)->u64 {

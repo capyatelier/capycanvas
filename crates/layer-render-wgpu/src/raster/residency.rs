@@ -211,31 +211,33 @@ impl WgpuRasterizer {
         leases
     }
     fn take_evicted_color(&mut self, mut leases: std::collections::HashMap<(SourceTarget, [u32; 2], Offered), Arc<crate::residency::Lease>>) -> (Vec<PageSurface>, Vec<Arc<crate::residency::Lease>>) {
-        let (mut retired, mut evicted) = (Vec::new(), Vec::new());
+        let (mut retired, mut evicted, mut forgotten) = (Vec::new(), Vec::new(), Vec::new());
         let mut take = |key| leases.remove(&key).filter(|lease: &Arc<crate::residency::Lease>| lease.evicted()).map(|lease| evicted.push(lease)).is_some();
         for layer in &mut self.paint_layers {
             let mut index = 0;
             while index < layer.pages.len() {
                 let coordinate = layer.pages[index].coordinate;
+                let first = retired.len();
                 if take((layer.id, coordinate, Offered::Color)) {
                     take((layer.id, coordinate, Offered::Spare));
-                    for coverage in layer.coverage_pages.iter().filter(|p| p.coordinate == coordinate) { coverage.release_bindings(); }
                     let page = layer.pages.swap_remove(index);
                     retired.push(page.primary.retire());retired.extend(page.secondary.map(resident::Resident::retire));
-                    continue;
+                } else {
+                    if take((layer.id, coordinate, Offered::Spare)) && let Some(spare) = layer.take_spare(index) { retired.push(spare.retire()); }
+                    index += 1;
                 }
-                if take((layer.id, coordinate, Offered::Spare)) && let Some(spare) = layer.take_spare(index) { retired.push(spare.retire()); }
-                index += 1;
+                if retired.len() > first { forgotten.push((layer.id, coordinate, retired[first..].iter().map(|surface: &PageSurface| surface.view.clone()).collect())); }
             }
             let mut index = 0;
             while index < layer.coverage_pages.len() {
                 let page = &layer.coverage_pages[index];
                 if !take((layer.id, page.coordinate, Offered::coverage(page))) { index += 1; continue; }
                 let page = layer.take_coverage(index);
+                forgotten.push((layer.id, page.coordinate, page.views()));
                 retired.push(page.primary.retire());retired.push(page.secondary.retire());
             }
         }
-        if !retired.is_empty() { self.release_preview_bindings(); }
+        for (target, coordinate, views) in forgotten { self.forget_bindings(Some(target), coordinate, &views, &[]); }
         (retired, evicted)
     }
 }

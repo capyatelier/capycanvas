@@ -470,14 +470,14 @@ impl WgpuRasterizer {
                 Output::PreviewColor(_)=>{
                     if let Some(page)=self.preview_pages.iter_mut().find(|page|!outputs.contains(&Output::PreviewColor(page.coordinate))
                         && page.primary.size().width==PAGE_SIZE>>level) {
-                        page.coordinate=coordinate;page.active_secondary=false;page.clear_stroke_start();
+                        page.coordinate=coordinate;page.active_secondary=false;page.clear_stroke_start();page.release_bindings();
                     }
                 },
                 Output::PreviewCoverage(_,slabs,rgba)=>{
                     if let Some(page)=self.preview_coverage_pages.iter_mut().find(|page|
                         !outputs.contains(&Output::PreviewCoverage(page.coordinate,page.primary.size().height/PAGE_SIZE,page.primary.format()==wgpu::TextureFormat::Rgba32Float))
                         && page.primary.size().height==PAGE_SIZE*slabs && (page.primary.format()==wgpu::TextureFormat::Rgba32Float)==*rgba) {
-                        page.coordinate=coordinate;page.owner=None;page.active_secondary=false;
+                        page.coordinate=coordinate;page.owner=None;page.active_secondary=false;page.release_bindings();
                     }
                 },
                 Output::PreviewWetness(_)=>{
