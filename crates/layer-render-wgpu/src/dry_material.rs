@@ -549,9 +549,7 @@ impl WgpuRasterizer {
         let block = self.dry_material_block(batch);
         let display_size = [PAGE_SIZE.div_ceil(block).div_ceil(32), PAGE_SIZE.div_ceil(block).div_ceil(2), 1];
         if jobs.iter().any(|job| job.display.is_some()) {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("dry material display inputs"), timestamp_writes: None,
-            });
+            let pass = encoder.compute_pass();
             pass.set_bind_group(3, &textures.bind_group, &[]);
             pass.set_pipeline(pipelines.gather_kernel());
             for job in jobs {
@@ -566,9 +564,7 @@ impl WgpuRasterizer {
         let stored_start = pipelines.in_place() && !self.compact_preview_contribution(batch);
         let copied = |job: &&Job| !in_place && if stored_start { job.display.is_none() } else { !job.coverage && cropped };
         if jobs.iter().any(|job| copied(&job)) {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("dry material copy pages"), timestamp_writes: None,
-            });
+            let pass = encoder.compute_pass();
             pass.set_bind_group(3, &textures.bind_group, &[]);
             for job in jobs.iter().filter(copied) {
                 pass.set_pipeline(pipelines.copy_kernel(job.coverage));
@@ -578,10 +574,7 @@ impl WgpuRasterizer {
                 pass.dispatch_workgroups(display_size[0], display_size[1], display_size[2]);
             }
         }
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("dry material pages"),
-            timestamp_writes: None,
-        });
+        let pass = encoder.compute_pass();
         pass.set_bind_group(3, &textures.bind_group, &[]);
         let marker=batch_index*self.style_stride as usize+mem::offset_of!(StyleGpu,material_a)+12;
         let aggregate=f32::from_ne_bytes(self.style_upload[marker..marker+4].try_into().unwrap())>0.5

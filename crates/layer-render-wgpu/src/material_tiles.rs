@@ -135,6 +135,7 @@ impl WgpuRasterizer {
         let mut publications=Vec::with_capacity(jobs.len()*2);
         let mut written=Vec::with_capacity(jobs.len()*2);
         let mut compute_jobs = mem::take(&mut self.dry_jobs);
+        if !transported {encoder.end_compute_pass();}
         for (record_index, job) in jobs.iter().enumerate().filter(|_| !transported) {
             if gathers && compute_jobs.len()==dry_material::DISPLAY_INPUT_SETS {
                 self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
@@ -186,6 +187,7 @@ impl WgpuRasterizer {
 
         }
         self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
+        if !transported {encoder.end_compute_pass();}
                 let receipt=encoder.submission();written.extend(publications.drain(..).map(|publication:MaterialPublication|publication.encoded(&receipt)));
         compute_jobs.clear();
         self.dry_jobs = compute_jobs;
