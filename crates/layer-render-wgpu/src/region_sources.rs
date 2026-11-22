@@ -50,6 +50,7 @@ struct Classification {
     frame: Option<Arc<artwork::Frame>>,
     extent: [u32; 2],
     batch: usize,
+    captured: usize,
     source: usize,
 }
 // Full-precision luminance/alpha replace repeated color decoding/composition.
@@ -263,7 +264,7 @@ impl RawRegions {
             layer_render::RegionSource::Source(_) | layer_render::RegionSource::Coverage(_) => None,
             _ => return Err(GpuRasterError::InvalidExtent),
         };
-        self.progress = Some(Classification {frame, extent:r.document_extent, batch:0, source:0});
+        self.progress = Some(Classification {frame, extent:r.document_extent, batch:0, captured:0, source:0});
         Ok(())
     }
     fn encode_cached(
@@ -657,9 +658,12 @@ impl RawRegions {
                     let region = page_rect(*coordinate).intersect(PixelRect::full([w, h]));
                     if self.captured.len() <= slot { self.captured.push(crate::create_color_target(&r.device, [PAGE_SIZE; 2], "raw region capture")); }
                     let (texture, view) = self.captured[slot].clone();
-                    let packet = frame.as_ref().unwrap().packet([w, h]);
-                    if sampling == Sampling::Target { self.capture.authored_region_into(r, packet, region, &texture, encoder)?; }
-                    else { self.capture.region_into(r, packet, region, &texture, encoder)?; }
+                    if slot >= self.progress.as_ref().unwrap().captured {
+                        let packet = frame.as_ref().unwrap().packet([w, h]);
+                        if sampling == Sampling::Target { self.capture.authored_region_into(r, packet, region, &texture, encoder)?; }
+                        else { self.capture.region_into(r, packet, region, &texture, encoder)?; }
+                        self.progress.as_mut().unwrap().captured = slot + 1;
+                    }
                     Some(source_access::RawTile { texture: texture.into(), view })
                 };
                 if let Some(source) = &source { leases.extend(r.source_tiles.borrow().lease(&source.view)); }
@@ -743,7 +747,9 @@ impl RawRegions {
                 self.bindings.pop_front();
             }
             self.bindings.push_back(binding);
-            self.progress.as_mut().unwrap().batch = i + 1;
+            let progress = self.progress.as_mut().unwrap();
+            progress.batch = i + 1;
+            progress.captured = 0;
             if !coverage {r.source_tiles.borrow_mut().release_batch(checkpoint);}
             if i>0 && let Some(left)=&mut self.batches_left {*left=left.saturating_sub(1);}
         }

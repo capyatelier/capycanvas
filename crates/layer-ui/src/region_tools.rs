@@ -507,7 +507,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let target=doc.drawing_target().or(doc.active_target());
         let reference_count=(source==RegionSource::Reference).then(||doc.scene().reference_leaves().len());
         let paper=doc.nearest_paper_binding(doc.drawing_content());
-        let Some(source)=self.region_source(source,None,target,true) else {return;};
+        let Some(source)=self.region_source(source,None,target,true) else {self.engine.backend_mut().prepare_regions(None);return;};
         self.engine.backend_mut().prepare_regions(Some(&layer_render::RegionPreparation {
             source,reference_count,paper,tolerance:self.region_tools.tolerance,refinement:self.region_tools.refinement,
             enclosed,

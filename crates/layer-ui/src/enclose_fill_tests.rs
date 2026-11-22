@@ -448,6 +448,18 @@ mod enclose_fill_checks {
     }
 
     #[test]
+    fn fill_preparation_ends_when_the_editing_layer_has_nothing_to_classify() {
+        for platform in Platform::ALL {
+            let mut s=session(platform);
+            invoke(&mut s,CommandId::Fill);
+            invoke(&mut s,CommandId::SelectionEditing);
+            assert!(s.renderer_mut().region_preparation.is_some());
+            s.dispatch(UiAction::Layer {action:LayerAction::New {group:true,clipped:false}}).unwrap();
+            assert!(s.renderer_mut().region_preparation.is_none(),"a group keeps the previous layer's fill preparation");
+        }
+    }
+
+    #[test]
     fn fill_preparation_follows_window_use_and_keeps_each_drawings_options() {
         for platform in Platform::ALL {
             for command in [CommandId::Fill,CommandId::EncloseFill] {

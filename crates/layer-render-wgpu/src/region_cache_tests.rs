@@ -826,12 +826,7 @@ fn taps_with_lines_built_around_their_region_match_taps_with_lines_built_everywh
     }
 }
 
-#[test]
-fn wand_and_fill_taps_on_a_photo_build_lines_only_around_the_tapped_patch() {
-    use layer_ui::{UiSession,UiAction,CommandId,Platform};
-    use layer_engine::{PenEvent,PenPhase,SampleFlags,ToolKind};
-    use layer_render::FrameDemand;
-    let extent=[2560u32,1920];
+fn patch_photo(extent:[u32;2])->Document {
     let pixels:Vec<u8>=(0..extent[1]).flat_map(|y|(0..extent[0]).flat_map(move |x| {
         let patch=x/256*7+y/256*13;let grain=(x.wrapping_mul(2654435761)^y.wrapping_mul(40503))>>27;
         [patch*37%200+grain,patch*91%200+grain,patch*53%200+grain].map(|channel|channel as u8)
@@ -843,7 +838,16 @@ fn wand_and_fill_taps_on_a_photo_build_lines_only_around_the_tapped_patch() {
     let photo=layer_color::photo::read_photo_detailed_with_cancel(std::io::Cursor::new(png),
         layer_color::photo::DecodeLimits {source_bytes:1<<30,codec_bytes:1<<30,dimension:8192},&std::sync::atomic::AtomicBool::new(false)).unwrap();
     let depth=photo.source.interpretation.depth;
-    let document=layer_color::photo_project(photo.source,photo.metadata,"Photo".into(),depth).unwrap();
+    layer_color::photo_project(photo.source,photo.metadata,"Photo".into(),depth).unwrap()
+}
+
+#[test]
+fn wand_and_fill_taps_on_a_photo_build_lines_only_around_the_tapped_patch() {
+    use layer_ui::{UiSession,UiAction,CommandId,Platform};
+    use layer_engine::{PenEvent,PenPhase,SampleFlags,ToolKind};
+    use layer_render::FrameDemand;
+    let extent=[2560u32,1920];
+    let document=patch_photo(extent);
     let r=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
     let mut s=UiSession::new(r,document,[1200,900],Platform::Gtk).unwrap();
     let clock=std::time::Instant::now();
@@ -882,5 +886,53 @@ fn wand_and_fill_taps_on_a_photo_build_lines_only_around_the_tapped_patch() {
         pen(&mut s,2*sequence as u64+1,PenPhase::Up,point);
         let built=settle(&mut s,revision);
         assert!(built.is_some_and(|built|built>0 && built<blocks[0]*blocks[1]/2),"{tool:?} built lines for {built:?} of {} blocks",blocks[0]*blocks[1]);
+    }
+}
+
+#[test]
+fn drawings_opened_after_fill_taps_on_a_photo_finish_their_region_preparation_and_go_idle() {
+    use layer_ui::{UiSession,UiAction,CommandId,Platform};
+    use layer_engine::{PenEvent,PenPhase,SampleFlags,ToolKind};
+    use layer_core::authored::vector::*;
+    use layer_render::FrameDemand;
+    let clock=std::time::Instant::now();
+    let step=|s:&mut UiSession<WgpuRasterizer>| {let now=clock.elapsed().as_nanos() as u64;s.frame(now,now).unwrap();crate::test_support::complete(s.renderer_mut());};
+    let idle=|s:&mut UiSession<WgpuRasterizer>|s.paint_ready() && s.require_document_idle().is_ok() && s.renderer_mut().settled()
+        && matches!(s.frame_demand(),FrameDemand::Wait|FrameDemand::WaitUntil(_));
+    let settle=|s:&mut UiSession<WgpuRasterizer>,label:&str| crate::test_support::wait_until(format!("{label} kept the renderer busy"),
+        || if idle(s) {Ok(())} else {step(s);Err(s.renderer_mut().outstanding_terms())});
+    let tap=|s:&mut UiSession<WgpuRasterizer>,sequence:u64,point:[f32;2]| for (offset,phase) in [PenPhase::Down,PenPhase::Up].into_iter().enumerate() {
+        let [a,b,c,d,x,y]=s.camera().document_to_surface();
+        s.pen(PenEvent {device_id:1,sequence:sequence+offset as u64,timestamp_ns:clock.elapsed().as_nanos() as u64,view_revision:s.camera().revision,
+            surface_position:Point {x:a*point[0]+c*point[1]+x,y:b*point[0]+d*point[1]+y},
+            pressure:1.,tilt_radians:[0.;2],twist_radians:0.,distance:0.,phase,tool:ToolKind::Pen,flags:SampleFlags::PRIMARY});
+        step(s);
+    };
+    let photo=patch_photo([1024,768]);
+    let mut first=UiSession::new(WgpuRasterizer::new_native_headless(photo.composition().color).unwrap(),photo,[1200,900],Platform::Gtk).unwrap();
+    first.dispatch(UiAction::Invoke {command:CommandId::AddLayer}).unwrap();
+    settle(&mut first,"the photo");
+    first.dispatch(UiAction::Invoke {command:CommandId::AutoSelect}).unwrap();
+    tap(&mut first,0,[300.,300.]);settle(&mut first,"the wand tap");
+    first.dispatch(UiAction::Invoke {command:CommandId::Deselect}).unwrap();
+    first.dispatch(UiAction::Invoke {command:CommandId::Fill}).unwrap();
+    tap(&mut first,2,[700.,500.]);settle(&mut first,"the fill tap");
+    let extent=[1024,768];
+    let mut filtered=crate::artwork_sample_tests::document_in(extent,layer_core::color::RgbSpace::Srgb,|x,y|[x as f32/256.,y as f32/256.,0.5,1.]);
+    let mut blur=layer_core::EffectInstance::new(crate::tests::fixture("gaussian_blur").program());
+    blur.set("sigma",layer_core::EffectValue::Number(4.)).unwrap();
+    crate::artwork_sample_tests::insert_effect(&mut filtered,blur,0);
+    let mut editor=layer_core::Editor::new(Document::from_artwork(layer_core::authored::Artwork::new(extent).unwrap()).unwrap());
+    let strokes=(0..40).map(|i| {
+        let mut stroke=Stroke::new(Paint::color(layer_core::color::RgbColor::new(Default::default(),[0.1,0.1,0.3,1.]).unwrap()),3.);stroke.cap=Cap::Round;
+        let anchors:Vec<_>=[[20.+i as f64*24.,40.],[60.+i as f64*20.,700.]].into_iter().map(Anchor::corner).collect();
+        Record::Path(PathItem::new(ItemId(i+1),Arc::new(PathGeometry::new(vec![Subpath::new(&anchors,false)]).unwrap()),Arc::new(Style::new(vec![PaintEntry::Stroke(stroke)]))))
+    }).collect();
+    let (_,edit)=editor.document().create_vector_layer_edit("Ink",VectorObject::from_records(strokes),None,0).unwrap();
+    editor.perform(edit).unwrap();
+    for (name,document) in [("a filtered drawing",filtered),("a vector drawing",editor.document().clone())] {
+        let mut second=UiSession::new(WgpuRasterizer::new_native_headless(document.composition().color).unwrap(),document,[1200,900],Platform::Gtk).unwrap();
+        second.inherit_window_state(&first).unwrap();
+        settle(&mut second,name);
     }
 }
