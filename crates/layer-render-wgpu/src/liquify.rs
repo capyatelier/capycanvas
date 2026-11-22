@@ -501,6 +501,7 @@ impl Liquify {
             let Some(stroke)=self.strokes.get(&target).filter(|s|s.id==batch.stroke_id) else {continue;};
             if stroke.field.tiles.values().any(|tile|tile.read(receipt).is_err()) {continue;}
             let stroke=self.strokes.remove(&target).unwrap();
+            stroke.field.originals.lock().expect("liquify sources").release();
             if batch.style.execution != BrushExecution::Liquify { continue; }
             let SourceTarget::Paint(handle) = target else { continue };
             let Some(source) = scene.paint(handle).filter(|s| s.raster.try_data().is_none()) else { continue };
