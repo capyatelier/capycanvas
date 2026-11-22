@@ -258,7 +258,7 @@ fn host_owned_surfaces_lift_the_launch_cover_until_they_close() {
         for active in [true, false] {
             assert_eq!(app.request(2, json!({"type": "launch_interaction", "active": active})), Some(Value::Null));
             let launch = app.request(7, Value::Null).unwrap()["launch"].clone();
-            assert_eq!(launch, json!({"visible": !active, "finished": false, "frame": null}));
+            assert_eq!(launch, json!({"visible": !active, "finished": false, "revealing": false, "frame": null}));
         }
     }
 }

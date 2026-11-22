@@ -63,6 +63,7 @@ pub struct LaunchReadiness {
 pub struct LaunchView {
     pub visible: bool,
     pub finished: bool,
+    pub revealing: bool,
     pub frame: Option<u64>,
 }
 
@@ -154,6 +155,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         LaunchView {
             visible: !self.launch_finished && !blocked,
             finished: self.launch_finished,
+            revealing: self.launch_revealing,
             frame,
         }
     }
@@ -162,8 +164,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         let view = self.launch_state(readiness);
         if view.frame != Some(frame) { return false; }
         self.launch_finished = true;
+        self.launch_revealing = true;
         self.release_held_notice();
         true
+    }
+
+    pub(super) fn finish_launch_reveal(&mut self) {
+        self.launch_revealing = false;
     }
 
     pub fn canvas_notice(&self, canvas_ready: bool, brush_ready: bool) -> Option<CanvasNotice> {
@@ -276,6 +283,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// tools, history, dirty checkpoint or color interpretation.
     pub fn inherit_window_state(&mut self, previous: &Self) -> Result<UiChange, String> {
         self.launch_finished = previous.launch_finished;
+        self.launch_revealing = previous.launch_revealing;
         self.workspace_attention = previous.workspace_attention;
         self.host_attention = previous.host_attention;
         let navigation=self.camera_navigation_revision();
@@ -732,6 +740,22 @@ mod tests {
         assert!(inherited.finished && !inherited.visible && inherited.frame.is_none());
         let new_window = launching();
         assert!(new_window.launch_state(LaunchReadiness::default()).visible);
+    }
+
+    #[test]
+    fn launch_reveal_ends_at_once_on_a_canvas_contact() {
+        for contact in [PointerKind::Pen, PointerKind::Mouse, PointerKind::Touch] {
+            let mut app = launching();
+            let frame = app.launch_state(LAUNCH_READY).frame.unwrap();
+            assert!(app.launch_presented(frame, LAUNCH_READY));
+            let fading = app.launch_state(LAUNCH_READY);
+            assert!(!fading.visible && fading.finished && fading.revealing, "a launch without input fades its cover");
+            assert_eq!(crate::bootstrap_view(app.localization()).launch_reveal_ms, 500);
+            if contact == PointerKind::Pen { pen_at(&mut app, 1, PenPhase::Down, [100., 100.]); }
+            else { app.input(pointer_input(1, ContactPhase::Down, contact, PointerButton::Primary, [100., 100.], 0)).unwrap(); }
+            let revealed = app.launch_state(LAUNCH_READY);
+            assert!(!revealed.visible && revealed.finished && !revealed.revealing, "a {contact:?} contact leaves the launch cover fading");
+        }
     }
 
     fn sources() -> Recorder {

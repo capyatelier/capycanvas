@@ -56,6 +56,7 @@ import UIKit
     @Published var canvasSubmitted = false
     var canvasReady: Bool { canvasSubmitted && snapshot["canvas_ready"].bool }
     var launchVisible: Bool { failure == nil && (snapshot["launch"].isNull || snapshot["launch"]["visible"].bool) }
+    var launchRevealCut: Bool { snapshot["launch"]["finished"].bool && !snapshot["launch"]["revealing"].bool }
     @Published private(set) var restartingCanvas = false
     @Published var storageFailure: String?
     @Published var storagePending = true
