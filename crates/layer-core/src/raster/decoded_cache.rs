@@ -60,9 +60,7 @@ impl DecodedTileCache {
             if state.stats.resident_bytes.saturating_add(held) <= state.stats.limit_bytes { break; }
             let Some(key) = state.entries.iter().filter(|(_,entry)|Arc::strong_count(&entry.samples)==1)
                 .min_by_key(|(_,entry)|(entry.tile.strong_count()!=0,entry.used)).map(|(&key,_)|key) else { break; };
-            let entry = state.remove(key);
-            state.track(&entry.samples);
-            released.push(entry.samples);
+            released.push(state.remove(key).samples);
         }
         drop(state);
         released.into_iter().map(|samples| {
@@ -222,6 +220,16 @@ mod tests {
         assert_eq!(cache.stats().resident_bytes,0);assert_eq!(cache.stats().physical_bytes,65536);
         assert_eq!(cache.stats().pinned_bytes,65536);drop(held);assert_eq!(cache.stats().physical_bytes,65536);
         drop(clone);assert_eq!(cache.stats().physical_bytes,0);assert_eq!(cache.stats().pinned_bytes,0);
+    }
+
+    #[test]
+    fn samples_trimmed_beyond_one_reap_step_leave_the_physical_charge_at_once() {
+        let cache=DecodedTileCache::new(usize::MAX);
+        let tiles:Vec<_>=(0..100).map(tile).collect();
+        for tile in &tiles {cache.decode_on_worker(tile).unwrap();}
+        cache.set_limit(0);
+        assert_eq!(cache.trim_unused(usize::MAX),100*65536);
+        assert_eq!(cache.stats().physical_bytes,0,"a parked renderer that trims every sample keeps none charged");
     }
 
     #[test]
