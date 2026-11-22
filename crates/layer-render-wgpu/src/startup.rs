@@ -142,8 +142,8 @@ impl SourceKinds {
     }
 }
 pub(super) fn has_watercolor(scene: SceneView<'_>) -> bool {
-    scene.targets().any(|target| scene.raster(target).is_some_and(|raster|
-        raster.try_data().is_none_or(|data| data.is_ok_and(|data| data.watercolor.is_some()))))
+    scene.targets().any(|target| scene.raster(target).and_then(|raster| raster.try_data())
+        .is_some_and(|data| data.is_ok_and(|data| data.watercolor.is_some())))
 }
 impl ShaderDocument {
     pub fn new(document: &Document) -> Self {
@@ -153,8 +153,10 @@ impl ShaderDocument {
         if self.id != document.artwork.id { return false; }
         if self.revision.load(std::sync::atomic::Ordering::Relaxed) == document.revision { return true; }
         let mut key = DocumentKey::new(document);
-        if key.composition.iter().zip(self.key.composition).any(|(required, prepared)| *required && !prepared) { return false; }
+        if key.composition.iter().zip(self.key.composition).any(|(required, prepared)| *required && !prepared)
+            || key.watercolor && !self.key.watercolor { return false; }
         key.composition = self.key.composition;
+        key.watercolor = self.key.watercolor;
         if self.key != key { return false; }
         self.revision.store(document.revision, std::sync::atomic::Ordering::Relaxed);
         true

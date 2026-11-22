@@ -246,7 +246,13 @@ fn prediction_tracks_composition_edits_and_unloaded_material() {
     placement::set_mask(&mut document, placement::reveal_all([256; 2], [0; 2]));
     assert!(!key.matches(&document), "adding coverage changes the document gate");
     let mut restored = self::document();
+    placement::paint_mut(&mut restored).raster = layer_core::raster::RasterRevision::backed(layer_core::raster::RasterData {
+        watercolor: Some(layer_core::raster::RasterWatercolor {wet_edge: 0.9, burnt_edge: 0.6, edge_width: 16.}), ..Default::default()
+    });
+    let key = startup::ShaderDocument::new(&restored);
     placement::paint_mut(&mut restored).raster = layer_core::raster::RasterRevision::pending();
-    assert!(r.scene_pipelines.for_scene(&r, restored.scene(), &[]).any(|pipeline| pipeline.identity() == r.scene_pipelines.pipeline[6].identity()),
-        "an unpublished backing can contain watercolor");
+    restored.revision += 1;
+    assert!(key.matches(&restored), "an unpublished backing keeps the watercolor preparation its drawing has");
+    assert!(!r.scene_pipelines.for_scene(&r, restored.scene(), &[]).any(|pipeline| pipeline.identity() == r.scene_pipelines.pipeline[6].identity()),
+        "an unpublished backing keeps Normal paint on its plain recipe");
 }
