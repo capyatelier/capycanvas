@@ -876,3 +876,26 @@ fn nonblocking_backpressured_image_can_be_discarded_and_reacquired() {
     f.surface.discard().unwrap();
     drop(reacquired);
 }
+
+#[test]
+fn a_level_a_pass_writes_then_samples_is_submitted_writable_after_an_earlier_copy_to_its_texture() {
+    let (device, _queue) = device();
+    let (texture, error) = device.create_texture(&wgt::TextureDescriptor {
+        label: None, size: wgt::Extent3d { width: 16, height: 16, depth_or_array_layers: 2 },
+        mip_level_count: 2, sample_count: 1, dimension: wgt::TextureDimension::D2,
+        format: wgt::TextureFormat::Rgba32Float, view_formats: vec![],
+        usage: wgt::TextureUsages::TEXTURE_BINDING | wgt::TextureUsages::STORAGE_BINDING | wgt::TextureUsages::COPY_DST,
+    });
+    assert!(error.is_none(), "{error:?}");
+    let level = |mip| wgt::TextureSelector { mips: mip..mip + 1, layers: 1..2 };
+    let mut pass = crate::track::TextureTracker::new(device.ordered_texture_usages);
+    let _ = pass.set_single(&texture, level(1), wgt::TextureUses::STORAGE_WRITE_ONLY);
+    let _ = pass.set_single(&texture, level(1), wgt::TextureUses::RESOURCE);
+    let mut encoder = crate::track::TextureTracker::new(device.ordered_texture_usages);
+    let _ = encoder.set_single(&texture, level(0), wgt::TextureUses::COPY_DST);
+    encoder.set_from_tracker(&pass);
+    let guard = device.snatchable_lock.read();
+    let entering = device.trackers.lock().textures.set_from_tracker_and_drain_transitions(&encoder, &guard)
+        .filter(|barrier| barrier.range.base_mip_level == 1).map(|barrier| barrier.usage.to).collect::<Vec<_>>();
+    assert_eq!(entering, [wgt::TextureUses::STORAGE_WRITE_ONLY], "the pass's first access to the level is a storage write");
+}

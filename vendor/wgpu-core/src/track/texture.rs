@@ -1075,13 +1075,12 @@ unsafe fn insert_or_barrier_update(
         return;
     }
 
-    let update_state_provider = end_state_provider.unwrap_or_else(|| start_state_provider.clone());
     unsafe {
         barrier(
             texture_selector,
             current_state_set,
             index,
-            start_state_provider,
+            start_state_provider.clone(),
             barriers,
             ordered_uses_mask,
         )
@@ -1092,9 +1091,12 @@ unsafe fn insert_or_barrier_update(
             start_state,
             current_state_set,
             index,
-            update_state_provider,
+            start_state_provider,
         )
     };
+    if let Some(end_state_provider) = end_state_provider {
+        unsafe { update(texture_selector, None, current_state_set, index, end_state_provider) };
+    }
 }
 
 #[inline(always)]

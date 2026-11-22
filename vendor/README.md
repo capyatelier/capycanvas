@@ -424,6 +424,24 @@ device check and backend discard. `AndroidRasterTest#frontBufferSurfaceLifecycle
 submits a buffered frame, destroys its device and detaches its surface in one
 native worker call before checking GPU recovery and exact artwork.
 
+`wgpu-texture-tracker-start-states.patch` keeps the first state a compute pass
+needs for a texture level when the encoder already used other levels of that
+texture. Upstream recorded the pass's last state as the encoder's first state
+for those levels, so the submission barrier skipped the state the pass needed
+first. A level that one pass writes as storage and then samples, such as an
+intermediate level of a mip reduction after a copy into the base level (Liquify
+originals), was written in the sampled Vulkan layout, which the validation
+layer reports as `VUID-vkCmdDraw-None-09600`. Encoders that see a texture first
+in a pass are unchanged. The core test
+`a_level_a_pass_writes_then_samples_is_submitted_writable_after_an_earlier_copy_to_its_texture`
+checks the submission barrier:
+
+```sh
+cargo test --offline --manifest-path vendor/wgpu-core/Cargo.toml --lib \
+  --config 'patch.crates-io.wgpu-types.path="vendor/wgpu-types"' \
+  --config 'patch.crates-io.wgpu-hal.path="vendor/wgpu-hal"' a_level_a_pass_writes_then_samples
+```
+
 The Vulkan HAL adds `SharedDemandRefresh`, advertised only by Android surfaces
 with shared-image color-attachment support and present fences. It acquires one
 image once, retains `SHARED_PRESENT_KHR` layout, retires a bounded pool of present
