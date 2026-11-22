@@ -137,6 +137,13 @@ pub unsafe extern "C" fn capy_apple_navigator_geometry(json: *const c_char) -> u
     }) }
 }
 
+/// # Safety
+/// Stateless title-bar geometry and tab-drag direction on any thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_header_frame(json: *const c_char) -> u64 {
+    unsafe { stateless_json(json, "Missing title-bar request", layer_ui::header_frame) }
+}
+
 pub struct CapyFilterPreviews {
     atlas: FilterPreviewImage,
     filters: CString,

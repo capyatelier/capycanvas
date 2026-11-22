@@ -23,19 +23,11 @@ struct Queued {
     prepared: Prepared,
     imported: Option<layer_ui::ImportedDocument>,
 }
-struct TabDrag {
-    id: u64,
-    origin: [f32; 2],
-    sequence: Option<gdk::EventSequence>,
-    device: Option<gdk::Device>,
-    button: gtk::Widget,
-    width: i32,
-    slide: Option<TabSlide>,
-}
 struct TabSlide {
     policy: layer_ui::DocumentTabDrag,
     view: NativeTabSlide,
     surface: gtk::Widget,
+    width: i32,
 }
 pub(crate) struct Parked {
     pub(crate) canvas: GpuCanvas,
@@ -62,42 +54,35 @@ pub(crate) struct Documents {
     pub exit_ready: Cell<bool>,
     pub exit_flushing: Cell<bool>,
     dragging: Cell<bool>,
-    drag: RefCell<Option<TabDrag>>,
+    slide: RefCell<Option<TabSlide>>,
     close_inset: Cell<i32>,
     #[cfg(test)]
     pub ram_budget: Cell<usize>,
 }
 const TAB_CLOSE_SIZE: i32 = 24;
 impl Documents {
-    fn reset_button(button: &gtk::Widget) {
-        // The captured controller consumes motion/release. Retire ancestor
-        // context holds too, so they cannot open a menu during a touch drag.
-        let mut current = Some(button.clone());
-        while let Some(widget) = current {
-            let controllers = widget.observe_controllers();
-            for i in 0..controllers.n_items() {
-                if let Some(gesture) = controllers.item(i).and_downcast::<gtk::Gesture>() {
-                    gesture.reset();
-                }
-            }
-            current = widget.parent();
-        }
+    pub(crate) fn accepts_drag(&self, w: &Workspace) -> bool {
+        !self.changing.get()
+            && !self.loading.get()
+            && !w.servicing.get()
+            && w.window.visible_dialog().is_none()
+            && self.slide_current()
     }
-    fn cancel_drag(&self) {
-        if let Some(drag) = self.drag.take() {
-            Self::reset_button(&drag.button);
-            if let Some(slide) = drag.slide {
-                slide.view.restore();
-                slide.surface.queue_draw();
-            }
+    pub(crate) fn slide_current(&self) -> bool {
+        self.root.is_sensitive()
+            && self.root.is_mapped()
+            && self.root.visible_child_name().as_deref() == Some("tabs")
+            && self.slide.borrow().as_ref().is_none_or(|slide| slide.width == self.root.width())
+    }
+    pub(crate) fn cancel_drag(&self) {
+        if let Some(slide) = self.slide.take() {
+            slide.view.restore();
+            slide.surface.queue_draw();
         }
         self.dragging.set(false);
     }
-    fn begin_slide(&self, w: &Workspace) {
-        let mut held = self.drag.borrow_mut();
-        let Some(drag) = held.as_mut() else {
-            return;
-        };
+    pub(crate) fn begin_slide(&self, w: &Workspace, id: u64, origin: [f32; 2]) {
+        self.dragging.set(true);
         let surface: &gtk::Widget = w.surface.upcast_ref();
         let palette = w.gpu.borrow().as_ref().map(|g| g.session.state().palette);
         let Some(clip) = self.strip.compute_bounds(surface) else {
@@ -107,12 +92,12 @@ impl Documents {
         let mut tabs = Vec::new();
         let mut hits = Vec::new();
         let mut child = self.strip.first_child();
-        for &id in &order {
+        for &tab_id in &order {
             let Some(row) = child else {
                 return;
             };
             child = row.next_sibling();
-            let backing = palette.filter(|_| id == drag.id).map(|p| {
+            let backing = palette.filter(|_| tab_id == id).map(|p| {
                 let [r, g, b] = if row.has_css_class("selected") {
                     p.panel
                 } else {
@@ -135,7 +120,7 @@ impl Documents {
                 return;
             };
             hits.push(layer_ui::DocumentTabHit {
-                id,
+                id: tab_id,
                 bounds: tab.bounds,
             });
             tabs.push(tab);
@@ -146,30 +131,27 @@ impl Documents {
             width: clip.width(),
             height: clip.height(),
         };
-        let Some(policy) = self.model.borrow().drag(drag.id, drag.origin, &hits, clip) else {
+        let Some(policy) = self.model.borrow().drag(id, origin, &hits, clip) else {
             return;
         };
         let Some(view) = order
             .iter()
-            .position(|&id| id == drag.id)
+            .position(|&tab_id| tab_id == id)
             .and_then(|source| NativeTabSlide::new(tabs, source, clip, 0))
         else {
             return;
         };
         view.hide();
         surface.queue_draw();
-        drag.slide = Some(TabSlide {
+        *self.slide.borrow_mut() = Some(TabSlide {
             policy,
             view,
             surface: surface.clone(),
+            width: self.root.width(),
         });
     }
-    fn slide_to(&self, point: [f32; 2]) {
-        if let Some(slide) = self
-            .drag
-            .borrow_mut()
-            .as_mut()
-            .and_then(|d| d.slide.as_mut())
+    pub(crate) fn slide_to(&self, point: [f32; 2]) {
+        if let Some(slide) = self.slide.borrow_mut().as_mut()
             && let Some(preview) = slide.policy.preview(point)
         {
             slide
@@ -180,9 +162,9 @@ impl Documents {
             slide.surface.queue_draw();
         }
     }
-    fn drop_at(&self, point: [f32; 2]) -> Option<Option<u64>> {
-        let held = self.drag.borrow();
-        let policy = &held.as_ref()?.slide.as_ref()?.policy;
+    pub(crate) fn drop_at(&self, point: [f32; 2]) -> Option<Option<u64>> {
+        let held = self.slide.borrow();
+        let policy = &held.as_ref()?.policy;
         if !policy.is_current(self.model.borrow().order()) {
             return None;
         }
@@ -192,164 +174,9 @@ impl Documents {
             .map(|preview| preview.before)
     }
     pub fn snapshot_drag(&self, snapshot: &gtk::Snapshot, now: i64, scale: f32) {
-        if let Some(slide) = self.drag.borrow().as_ref().and_then(|d| d.slide.as_ref()) {
+        if let Some(slide) = self.slide.borrow().as_ref() {
             slide.view.snapshot(snapshot, now, scale);
         }
-    }
-    // The root controller keeps the native implicit contact grab stable while
-    // GTK buttons arbitrate clicks. Like the existing workspace tabs, every
-    // device uses native slop.
-    fn bind_input(&self, w: &Rc<Workspace>) {
-        let input = gtk::EventControllerLegacy::new();
-        input.set_propagation_phase(gtk::PropagationPhase::Capture);
-        input.connect_event(glib::clone!(
-            #[weak]
-            w,
-            #[upgrade_or]
-            glib::Propagation::Proceed,
-            move |_, event| {
-                use gdk::EventType::*;
-                let kind = event.event_type();
-                if !matches!(
-                    kind,
-                    ButtonPress
-                        | ButtonRelease
-                        | MotionNotify
-                        | TouchBegin
-                        | TouchUpdate
-                        | TouchEnd
-                        | TouchCancel
-                ) {
-                    return glib::Propagation::Proceed;
-                }
-                if matches!(kind, ButtonPress | ButtonRelease)
-                    && event
-                        .downcast_ref::<gdk::ButtonEvent>()
-                        .is_none_or(|e| e.button() != 1)
-                {
-                    return glib::Propagation::Proceed;
-                }
-                let docs = &w.documents;
-                let touch = matches!(kind, TouchBegin | TouchUpdate | TouchEnd | TouchCancel);
-                let sequence = touch.then(|| event.event_sequence());
-                let point = event
-                    .position()
-                    .and_then(|(x, y)| crate::input::widget_point(&w.surface, x, y))
-                    .map(|p| [p.x(), p.y()]);
-                if matches!(kind, ButtonPress | TouchBegin) {
-                    if docs.drag.borrow().is_some()
-                        || docs.changing.get()
-                        || docs.loading.get()
-                        || w.servicing.get()
-                        || w.window.visible_dialog().is_some()
-                        || event.surface() != w.window.surface()
-                        || !docs.root.is_sensitive()
-                        || !docs.root.is_mapped()
-                        || docs.root.visible_child_name().as_deref() != Some("tabs")
-                    {
-                        return glib::Propagation::Proceed;
-                    }
-                    if let Some(p) = point {
-                        let mut child = docs.strip.first_child();
-                        for &id in docs.model.borrow().order() {
-                            let Some(row) = child else {
-                                break;
-                            };
-                            child = row.next_sibling();
-                            let Some(button) = row.first_child() else {
-                                continue;
-                            };
-                            if button.compute_bounds(&w.surface).is_some_and(|b| {
-                                b.contains_point(&gtk::graphene::Point::new(p[0], p[1]))
-                            }) {
-                                *docs.drag.borrow_mut() = Some(TabDrag {
-                                    id,
-                                    origin: p,
-                                    sequence,
-                                    device: event.device(),
-                                    button,
-                                    width: docs.root.width(),
-                                    slide: None,
-                                });
-                                break;
-                            }
-                        }
-                    }
-                    return glib::Propagation::Proceed;
-                }
-                let held = docs.drag.borrow();
-                let Some(drag) = held
-                    .as_ref()
-                    .filter(|d| d.sequence == sequence && d.device == event.device())
-                else {
-                    return glib::Propagation::Proceed;
-                };
-                let id = drag.id;
-                let cancelled = kind == TouchCancel
-                    || drag.width != docs.root.width()
-                    || !drag.button.is_mapped()
-                    || !docs.root.is_sensitive()
-                    || docs.root.visible_child_name().as_deref() != Some("tabs");
-                let pickup = !cancelled
-                    && !docs.dragging.get()
-                    && point.is_some_and(|p| {
-                        docs.root.drag_check_threshold(
-                            drag.origin[0] as i32,
-                            drag.origin[1] as i32,
-                            p[0] as i32,
-                            p[1] as i32,
-                        )
-                    });
-                if pickup {
-                    docs.dragging.set(true);
-                    Self::reset_button(&drag.button);
-                }
-                let started = docs.dragging.get();
-                // Release the RefCell guard before cancellation takes ownership.
-                drop(held);
-                if pickup {
-                    docs.begin_slide(&w);
-                }
-                if cancelled || matches!(kind, ButtonRelease | TouchEnd) {
-                    let before = point
-                        .filter(|_| started && !cancelled)
-                        .and_then(|p| docs.drop_at(p));
-                    if started || cancelled {
-                        docs.cancel_drag();
-                    } else {
-                        docs.drag.borrow_mut().take();
-                    }
-                    if let Some(before) = before {
-                        docs.model.borrow_mut().reorder(id, before);
-                    }
-                    if started {
-                        docs.refresh(&w);
-                    }
-                } else if started && let Some(p) = point {
-                    docs.slide_to(p);
-                }
-                if started {
-                    glib::Propagation::Stop
-                } else {
-                    glib::Propagation::Proceed
-                }
-            }
-        ));
-        w.window.add_controller(input);
-        w.window.connect_is_active_notify(glib::clone!(
-            #[weak]
-            w,
-            move |window| {
-                if !window.is_active() {
-                    w.documents.cancel_drag();
-                }
-            }
-        ));
-        self.root.connect_unmap(glib::clone!(
-            #[weak]
-            w,
-            move |_| w.documents.cancel_drag()
-        ));
     }
     pub fn new_localized(localization: &layer_ui::Localizer) -> Self {
         let root = gtk::Stack::new();
@@ -404,7 +231,7 @@ impl Documents {
             exit_ready: Cell::new(false),
             exit_flushing: Cell::new(false),
             dragging: Cell::new(false),
-            drag: Default::default(),
+            slide: Default::default(),
             close_inset: Cell::new(0),
             #[cfg(test)]
             ram_budget: Cell::new(layer_ui::DocumentBudget::default().inactive_ram),
@@ -420,7 +247,6 @@ impl Documents {
         self.draining.get() || !self.pending.borrow().is_empty()
     }
     pub fn bind(&self, w: &Rc<Workspace>) {
-        self.bind_input(w);
         self.selector.set_create_popup_func(glib::clone!(
             #[weak]
             w,
@@ -576,6 +402,7 @@ impl Documents {
         select.add_css_class("flat");
         select.add_css_class("document-tab-select");
         select.set_focus_on_click(false);
+        w.register_document_tab(&select, id);
         select.connect_state_flags_changed(glib::clone!(
             #[weak]
             row,
@@ -734,10 +561,6 @@ impl Documents {
         if let Some(id) = id { self.select(w, id, false); }
     }
     pub fn key(&self, w: &Rc<Workspace>, key: gdk::Key, modifiers: gdk::ModifierType) -> bool {
-        if key == gdk::Key::Escape && self.drag.borrow().is_some() {
-            self.cancel_drag();
-            return true;
-        }
         if !modifiers.contains(gdk::ModifierType::CONTROL_MASK)
             || modifiers.intersects(gdk::ModifierType::ALT_MASK | gdk::ModifierType::SUPER_MASK)
         {
@@ -1225,8 +1048,8 @@ impl Documents {
     }
     #[cfg(test)]
     pub fn slide(&self) -> Option<(f32, Vec<f32>)> {
-        let held = self.drag.borrow();
-        let view = &held.as_ref()?.slide.as_ref()?.view;
+        let held = self.slide.borrow();
+        let view = &held.as_ref()?.view;
         assert!(view.tabs.iter().all(|t| t.widget.opacity() == 0.));
         Some((view.bounds.x, view.tabs.iter().map(|t| t.to).collect()))
     }

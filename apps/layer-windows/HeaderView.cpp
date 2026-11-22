@@ -662,7 +662,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 throw hresult_invalid_argument(L"Title-bar layout resolution failed");
             bool resized=str(next,L"size")!=str(geometry,L"size");
             geometry=next;configuration=requested;geometryKey=key;
-            input->Configure(object(requested,L"model"),flag(requested,L"editing"),requested);
+            input->Configure(object(requested,L"model"),flag(requested,L"editing"),requested,array(next,L"roles"));
             if(!resized)break;
             applyItems();
         }
@@ -853,8 +853,9 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             float x=float(num(bounds,L"x"));controls.emplace_back(x,x+float(num(bounds,L"width")));
         };
         for(auto const& [id,item]:items){
-            auto kind=str(object(item.entry,L"item"),L"kind");
-            if(kind!=L"clock"&&kind!=L"battery"&&kind!=L"space"&&!(kind==L"document_title"&&drawings->single()))take(item.frame,item.placed);
+            bool titleBar=false;
+            for(auto value:array(geometry,L"roles"))titleBar|=num(value.GetObject(),L"id")==id&&str(value.GetObject(),L"role")==L"title_bar";
+            if(!titleBar)take(item.frame,item.placed);
         }
         for(size_t i=0;i<overflow.size();++i)take(overflow[i],overflowBounds[i]);take(recovery,recoveryBounds);
         if(flag(data->model,L"keep_zen_button")||(!hidden&&geometry.GetNamedValue(L"capy_item",JsonValue::CreateNullValue()).ValueType()==JsonValueType::Number)){

@@ -109,7 +109,7 @@ import SwiftUI
             }
         case .headerEditor: contact = .pickup
         case .control: contact = source.controlContainer ? .free : .input
-        case .row, .swatch: contact = .input
+        case .row, .swatch, .titleBar: contact = .input
         }
         let select = item.flatMap { tabSelection(item: $0, at: point, workspace: workspace, store: store) }
         return EdgeReachSource(contact: contact, select: select, containsControls: source.controlContainer)

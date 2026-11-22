@@ -122,6 +122,14 @@ pub(super) struct Header {
 }
 impl Header {
     pub(super) fn drag_active(&self) -> bool { self.drag.borrow().is_some() }
+    pub(super) fn moves_window(&self, picked: &gtk::Widget, point: [f32; 2]) -> bool {
+        let within = |widget: &gtk::Widget| picked == widget || picked.is_ancestor(widget);
+        if self.native.iter().any(|controls| within(controls.upcast_ref())) {
+            return false;
+        }
+        within(self.recovery.upcast_ref())
+            || matches!(self.geometry.borrow().role_at(point), Some(layer_ui::TitleBarRole::Control | layer_ui::TitleBarRole::Tabs))
+    }
     pub(super) fn switcher_context_at(&self, id: u32, widget: &gtk::Widget, x: f64, y: f64) -> bool {
         self.items.borrow().iter().any(|item| item.entry.id == id
             && item.entry.item == HeaderItem::Workspaces

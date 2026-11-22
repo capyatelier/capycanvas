@@ -18,6 +18,8 @@ struct HeaderInput::Impl:std::enable_shared_from_this<Impl>{
     Canvas root{nullptr};
     std::function<void()> changed;
     J model,configuration,source,beginRequest,preview,lastCancel;
+    A roles;
+    WindowDrag moving;
     hstring identity;
     weak_ref<FrameworkElement> originElement,originFocus;
     std::vector<weak_ref<UIElement>> pressedPath;
@@ -62,7 +64,7 @@ struct HeaderInput::Impl:std::enable_shared_from_this<Impl>{
         pointer.reset();contact=nullptr;pressedPath.clear();stopRecognition();
     }
     void clear(){
-        presentation.Cancel();release();++generation;starting=started=busy=ending=cancelled=dragging=dirty=held=normalContact=released=committing=false;
+        presentation.Cancel();release();moving.End();++generation;starting=started=busy=ending=cancelled=dragging=dirty=held=normalContact=released=committing=false;
         dragCursor(root,false,false);
         source=J{};beginRequest=J{};preview=J{};timer.Stop();chrome(position,false);notify();
     }
@@ -161,6 +163,18 @@ struct HeaderInput::Impl:std::enable_shared_from_this<Impl>{
         if(!accepted)busy=false;
         else if(!begin&&!finish)dirty=false;
     }
+    bool movesWindow()const{
+        auto kind=str(source,L"kind");
+        if(kind==L"background"||kind==L"capy")return true;
+        if(kind!=L"item")return false;
+        hstring role=L"control";
+        for(auto value:roles)if(num(value.GetObject(),L"id")==num(source,L"value"))role=str(value.GetObject(),L"role");
+        if(role==L"tear")return false;
+        if(role!=L"tabs")return true;
+        for(auto const& weak:pressedPath)if(auto element=weak.get().try_as<FrameworkElement>())
+            if(std::wstring_view(AutomationProperties::GetAutomationId(element)).starts_with(L"drawing-tab-"))return false;
+        return true;
+    }
     bool workspace(uint32_t id)const{
         for(auto zone:array(model,L"zones"))for(auto value:zone.GetArray()){
             auto entry=value.GetObject();
@@ -250,12 +264,20 @@ struct HeaderInput::Impl:std::enable_shared_from_this<Impl>{
     void move(PointerRoutedEventArgs const& e){
         if(!pointer||*pointer!=e.Pointer().PointerId()||ending)return;
         if(!focused()||!current()){cancel(L"source_or_focus_lost");return;}
-        if(!editable()&&device==NativeInput::PointerDeviceType::Mouse)return;
         auto next=e.GetCurrentPoint(root).Position();
         if(recognizing)recognizer.Move(root,e);
         bool moved=recognizer.Moved();
+        if(!editable()){
+            if(moving){moving.Move(root.XamlRoot(),next);e.Handled(true);return;}
+            if(!moved)return;
+            stopRecognition();
+            if(!held&&movesWindow()&&moving.Begin(root.XamlRoot(),origin)){
+                if(!claim())return;
+                hideMenu();moving.Move(root.XamlRoot(),next);e.Handled(true);
+            }
+            return;
+        }
         if(!dragging&&moved){
-            if(!editable()){stopRecognition();return;}
             if(!claim())return;
             hideMenu();stopRecognition();dragging=true;starting=true;dragCursor(root,device==NativeInput::PointerDeviceType::Touch,true);
         }
@@ -266,6 +288,7 @@ struct HeaderInput::Impl:std::enable_shared_from_this<Impl>{
         auto p=e.GetCurrentPoint(root);
         if(!focused()||!current()||p.Properties().IsCanceled()){cancel(L"release_canceled");e.Handled(true);return;}
         if(device==NativeInput::PointerDeviceType::Mouse&&p.Properties().IsLeftButtonPressed())return;
+        if(moving){clear();e.Handled(true);return;}
         if(recognizing){recognizing=false;recognizer.ProcessUpEvent(p);}
         if(dragging){
             position=p.Position();ending=true;release();pump();e.Handled(true);notify();
@@ -342,11 +365,11 @@ void HeaderInput::Choices(uint32_t id,FrameworkElement const& invoking){
     impl->hideMenu();auto box=visibleBounds(invoking,impl->root);
     impl->context(id,{box.X,box.Y+box.Height},false,invoking,O({{L"kind",S(L"tool_variants")},{L"anchor",O({{L"kind",S(L"header")},{L"id",N(id)}})}}));
 }
-void HeaderInput::Configure(J const& model,bool editing,J const& request){
+void HeaderInput::Configure(J const& model,bool editing,J const& request,A const& roles){
     auto identity=model.Stringify()+request.Stringify();
     if(!impl->committing&&(impl->identity!=identity||impl->editing!=editing)&&str(impl->source,L"kind")!=L"capy"
         &&(impl->editing!=editing||!impl->workspaceMenu||impl->active()))impl->cancel(L"configuration_changed");
-    impl->model=model;impl->configuration=request;impl->identity=identity;impl->editing=editing;
+    impl->model=model;impl->configuration=request;impl->identity=identity;impl->editing=editing;impl->roles=roles;
     impl->refreshWorkspaceMenu();
     bool found=false;for(auto zone:array(model,L"zones"))for(auto entry:zone.GetArray())found|=num(entry.GetObject(),L"id")==impl->selected;
     if(!editing||!found)impl->selected=0;

@@ -234,6 +234,8 @@ void capy_scopes_free(CapyScopes scopes);
 int32_t capy_apple_navigator_placements(CapyApple app, const char *json);
 /* Stateless [Camera, documentExtent, viewport] -> shared geometry JSON. */
 CapyText capy_apple_navigator_geometry(const char *json);
+/* Stateless title-bar request ({"op":"tab_drag","delta":[x,y]}) -> JSON. */
+CapyText capy_apple_header_frame(const char *json);
 int32_t capy_apple_attach(CapyApple app, void *metal_layer,
                          uint32_t width, uint32_t height, float scale);
 int32_t capy_apple_finish_startup_catalog(CapyApple app);

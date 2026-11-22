@@ -90,6 +90,7 @@ impl Workspace {
             tearing: false,
             device: if pending.sequence.is_some() { None } else { event.device() },
             sequence: pending.sequence,
+            press: None,
             cursor: None,
             tab: None,
             tab_grab: None,

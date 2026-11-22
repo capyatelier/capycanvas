@@ -215,7 +215,8 @@ import SwiftUI
                     item(entry, width: allocation["bounds"]["width"].number, compact: compact, inBar: barred.contains(id))
                         .modifier(WorkspaceContext(store: store, target: JSON(["kind":"header", "id":id])))
                 }
-            }.modifier(HeaderControlMeasurement(id: "header-item-\(id)"))
+            }.modifier(HeaderCaption(enabled: !editing && header.role(id) == "title_bar"))
+                .modifier(HeaderControlMeasurement(id: "header-item-\(id)"))
                 .overlay(SquircleShape(radius).stroke(editing && header.selected == id ? palette.accent : .clear, lineWidth: 2))
                 .placed(allocation["bounds"]).opacity(held ? 0 : 1).allowsHitTesting(!held)
                 .animation(reduceMotion || header.preview.isNull ? nil : .easeOut(duration: 0.12), value: allocation["bounds"].rect)
@@ -333,15 +334,14 @@ private struct HeaderItemControl: View {
                     .modifier(HeaderControlMeasurement(id: "document-title"))
             case "clock":
                 Text(editing && !store.state["fullscreen"].bool ? description["label"].string : status.time).monospacedDigit().lineLimit(1)
-                    .accessibilityIdentifier("system-clock").modifier(HeaderCaption(enabled: !editing))
+                    .accessibilityIdentifier("system-clock")
                     .modifier(HeaderControlMeasurement(id: "system-clock"))
             case "battery":
                 if let battery = status.battery, store.state["fullscreen"].bool {
                     BatteryIndicator(battery: battery, dark: store.state["theme"].string == "dark")
                         .scaleEffect(1 + (size["tile"].number - 36) / 60)
-                        .modifier(HeaderCaption(enabled: !editing))
                 } else { Text(description["label"].string).lineLimit(1) }
-            case "space": Color.clear.contentShape(Rectangle()).modifier(HeaderCaption(enabled: !editing))
+            case "space": Color.clear.contentShape(Rectangle())
             case "tool":
                 let control = description["resolved_control"].isNull ? entry["item"]["control"] : description["resolved_control"]
                 if control["kind"].string == "color" {

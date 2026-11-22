@@ -5,12 +5,12 @@ import CoreGraphics
 /// distinct from mouse, including AppKit's tablet-backed mouse events.
 enum ReorderDevice: String { case mouse, touch, pen }
 enum ReorderSurface: Equatable {
-    case tile, row, handle, headerEditor, control, swatch
+    case tile, row, handle, headerEditor, control, swatch, titleBar
     func requiresHold(_ device: ReorderDevice) -> Bool {
         switch self {
         case .tile: return true
         case .row: return device != .mouse
-        case .handle, .headerEditor, .control, .swatch: return false
+        case .handle, .headerEditor, .control, .swatch, .titleBar: return false
         }
     }
 }
@@ -29,6 +29,13 @@ enum ReorderSurface: Equatable {
     let move: (CGPoint) -> Void
     let finish: (CGPoint) -> Void
     let cancel: () -> Void
+    var movesWindow: ((CGPoint) -> Bool)?
+}
+
+func titleBarTabDragMovesWindow(_ translation: CGPoint) -> Bool {
+    guard let request = try? JSON(["op": "tab_drag", "delta": [Double(translation.x), Double(translation.y)]]).encoded(),
+          let reply = request.withCString({ takeNativeText(capy_apple_header_frame($0)) }) else { return false }
+    return (try? JSON.decode(reply))?.bool == true
 }
 
 /// One retained contact shared by the native pan and press recognizers. Native

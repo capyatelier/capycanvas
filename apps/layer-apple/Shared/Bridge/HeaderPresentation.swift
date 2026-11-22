@@ -73,6 +73,13 @@ import SwiftUI
         overflowZone = nil; overflowSources = [:]
     }
     func source(at point: CGPoint) -> ReorderTarget? {
+        #if os(macOS)
+        if available, store?.snapshot["header"]["editing"].bool != true, viewport.contains(point), menu.isNull,
+           movesWindow(at: point) {
+            return ReorderTarget(id: "window", surface: .titleBar, valid: { _ in true },
+                begin: { _ in }, move: { _ in }, finish: { _ in }, cancel: {}, movesWindow: { _ in true })
+        }
+        #endif
         guard enabled, viewport.contains(point), menu.isNull,
               let (id, source) = (overflowZone == nil ? sources : overflowSources).first(where: { $0.value.bounds.contains(point) }) else { return nil }
         let key = layoutKey
@@ -87,6 +94,18 @@ import SwiftUI
             move: { [weak self] in self?.move($0) },
             finish: { [weak self] in self?.finish($0) },
             cancel: { [weak self] in self?.cancelDrag() })
+    }
+    func role(_ id: UInt64) -> String? {
+        geometry["roles"].array.first { $0["id"].uint == id }?["role"].string
+    }
+    private func movesWindow(at point: CGPoint) -> Bool {
+        if geometry["overflow"].array.contains(where: { !$0.isNull && $0.rect.contains(point) }) { return true }
+        guard let item = geometry["items"].array.first(where: { $0["bounds"].rect.contains(point) }) else { return false }
+        switch role(item["id"].uint) {
+        case "control": return true
+        case "tabs": return store.map { !$0.drawingTabs.showsStrip(width: item["bounds"]["width"].number) } ?? false
+        default: return false
+        }
     }
     func edgeReachSource(at point: CGPoint, device: ReorderDevice) -> EdgeReachSource? {
         guard enabled, viewport.contains(point), menu.isNull,

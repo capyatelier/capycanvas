@@ -34,6 +34,12 @@ fn begin(app: &App, platform: u32, source: Value, press: Value, grab: Value) {
 }
 
 #[test]
+fn apple_tab_drags_move_the_window_from_a_vertical_start() {
+    for (delta, moves) in [([12., 2.], false), ([2., 12.], true), ([9., 9.], false)] {
+        assert_eq!(stateless(capy_apple_header_frame, json!({"op":"tab_drag","delta":delta}).to_string()), json!(moves));
+    }
+}
+#[test]
 fn apple_header_components_omit_fullscreen_and_ipad_menus() {
     for platform in [0, 1] {
         let app = App::new(platform);

@@ -80,6 +80,24 @@ inline HWND ForegroundOwner(){return GetAncestor(GetForegroundWindow(),GA_ROOTOW
 inline HWND OwnerWindow(winrt::Microsoft::UI::Xaml::XamlRoot const& xaml){
     return xaml?GetAncestor(Microsoft::UI::GetWindowFromWindowId(xaml.ContentIslandEnvironment().AppWindowId()),GA_ROOTOWNER):nullptr;
 }
+struct WindowDrag {
+    winrt::Microsoft::UI::Windowing::AppWindow window{nullptr};
+    winrt::Windows::Foundation::Point press{};
+    bool Begin(winrt::Microsoft::UI::Xaml::XamlRoot const& xaml,winrt::Windows::Foundation::Point at){
+        namespace W=winrt::Microsoft::UI::Windowing;
+        auto next=xaml?W::AppWindow::GetFromWindowId(xaml.ContentIslandEnvironment().AppWindowId()):nullptr;
+        auto overlapped=next?next.Presenter().try_as<W::OverlappedPresenter>():nullptr;
+        if(!overlapped||overlapped.State()!=W::OverlappedPresenterState::Restored)return false;
+        window=next;press=at;return true;
+    }
+    void Move(winrt::Microsoft::UI::Xaml::XamlRoot const& xaml,winrt::Windows::Foundation::Point at){
+        if(!window||!xaml)return;
+        auto scale=xaml.RasterizationScale();auto origin=window.Position();
+        window.Move({origin.X+int32_t(std::lround((at.X-press.X)*scale)),origin.Y+int32_t(std::lround((at.Y-press.Y)*scale))});
+    }
+    void End(){window=nullptr;}
+    explicit operator bool()const{return bool(window);}
+};
 inline void ReturnForeground(Primitives::FlyoutBase const& flyout){
     auto owner=OwnerWindow(flyout.XamlRoot());auto foreground=GetForegroundWindow();
     if(owner&&foreground!=owner&&!IsWindowVisible(foreground)&&GetWindowThreadProcessId(foreground,nullptr)==GetCurrentThreadId()&&ForegroundOwner()==owner)SetForegroundWindow(owner);

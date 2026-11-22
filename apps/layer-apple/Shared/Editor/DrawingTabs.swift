@@ -17,6 +17,7 @@ import UniformTypeIdentifiers
     func closeCaption(_ id: UInt64) -> String { closeCaptions[id] ?? "" }
     init(store: EditorStore) { self.store = store }
     var rows: [JSON] { view["tabs"].array }
+    func showsStrip(width: CGFloat) -> Bool { rows.count > 1 && width / CGFloat(rows.count) >= 140 }
     var selected: UInt64 { view["selected"].uint }
     @Published private(set) var selectedDescription = ""
     private var descriptionKey: [String] = []
@@ -198,6 +199,11 @@ private struct DrawingMeasure: ViewModifier {
     func source(at point: CGPoint) -> ReorderTarget? {
         guard enabled, viewport.contains(point), let (id, frame) = frames.first(where: { $0.value.body.contains(point) }), !frame.close.contains(point) else { return nil }
         menu = nil
+        #if os(macOS)
+        let movesWindow: ((CGPoint) -> Bool)? = vertical ? nil : titleBarTabDragMovesWindow
+        #else
+        let movesWindow: ((CGPoint) -> Bool)? = nil
+        #endif
         return ReorderTarget(id: String(id), surface: !vertical || frame.grip.contains(point) ? .handle : .row,
             valid: { [weak self] _ in self?.enabled == true && self?.controller?.rows.contains { $0["id"].uint == id } == true },
             openContext: { [weak self] in self?.menu = id }, closeContext: { [weak self] in self?.menu = nil },
@@ -218,7 +224,8 @@ private struct DrawingMeasure: ViewModifier {
                 dragged = nil; before = nil
                 guard viewport.contains(p) else { return }
                 controller?.drop(id: id, hits: hits, point: p, vertical: vertical, commit: true)
-            }, cancel: { [weak self] in self?.dragged = nil; self?.before = nil; self?.slide = nil; self?.motion &+= 1 })
+            }, cancel: { [weak self] in self?.dragged = nil; self?.before = nil; self?.slide = nil; self?.motion &+= 1 },
+            movesWindow: movesWindow)
     }
     private func move(_ id: UInt64, _ point: CGPoint) {
         motion &+= 1; let token = motion
@@ -246,6 +253,12 @@ private struct DrawingMeasure: ViewModifier {
     }
 }
 
+#if os(macOS)
+private let macTitleBar = true
+#else
+private let macTitleBar = false
+#endif
+
 struct DrawingTabsHeader: View {
     @ObservedObject var store: EditorStore
     @ObservedObject var tabs: DrawingTabsController
@@ -255,9 +268,13 @@ struct DrawingTabsHeader: View {
     @Environment(\.editorPalette) private var palette
     var body: some View {
         Group {
-            if tabs.rows.count > 1 && width / CGFloat(tabs.rows.count) >= 140 {
+            if tabs.showsStrip(width: width) {
                 DrawingTabList(store: store, tabs: tabs, vertical: false, tile: tile, gap: gap)
                     .glassSurface(SquircleShape(tile / 2), fill: palette.chromeSurface)
+            } else if tabs.rows.count < 2, macTitleBar {
+                Text(tabs.selectedDescription).lineLimit(1).fontWeight(.semibold).padding(.horizontal, 8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
+                    .accessibilityIdentifier("document-title").help(tabs.selectedDescription)
             } else {
                 Button { tabs.presented = true } label: {
                     HStack(spacing: 5) {

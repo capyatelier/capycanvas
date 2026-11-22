@@ -2,7 +2,7 @@ import XCTest
 
 extension XCTestCase {
     @MainActor func editorDocumentTitle(in app: XCUIApplication) -> XCUIElement {
-        app.buttons.matching(NSPredicate(format: "identifier == %@ OR (identifier BEGINSWITH %@ AND selected == YES)", "document-title", "drawing-tab-")).firstMatch
+        app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@ OR (identifier BEGINSWITH %@ AND selected == YES)", "document-title", "drawing-tab-")).firstMatch
     }
 
     @MainActor func checkNativeDrawingTabs(in app: XCUIApplication, theme: String = "light") throws {

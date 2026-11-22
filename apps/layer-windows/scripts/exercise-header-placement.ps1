@@ -48,7 +48,7 @@ function Caption-Sample([string]$phase){
     $after=$bar.Current.ItemStatus;$current=Model
     if($before-cne$after-or$modelKey-cne(Header-Key $current)){return $null}
     $width=[int][math]::Round($origin.Width,[MidpointRounding]::AwayFromZero)
-    $expected=@(Get-HeaderCaptionOracle -ActualItems $actual -Entries @($model.header.model.zones|ForEach-Object {$_}) -Overflow $overflow -Recovery $recovery -Zen $zen -SingleDocument (@($model.windows_tabs.tabs).Count-lt2) -Editing ([bool]$p.editing) -LeftInset $model.titlebar_insets[0] -RightInset $model.titlebar_insets[1] -CaptionHeight $model.titlebar_insets[2] -Height $p.height -Scale $scale -Width $width)
+    $expected=@(Get-HeaderCaptionOracle -ActualItems $actual -Entries @($model.header.model.zones|ForEach-Object {$_}) -Overflow $overflow -Recovery $recovery -Zen $zen -Roles @($p.geometry.roles) -Editing ([bool]$p.editing) -LeftInset $model.titlebar_insets[0] -RightInset $model.titlebar_insets[1] -CaptionHeight $model.titlebar_insets[2] -Height $p.height -Scale $scale -Width $width)
     $sample=@{phase=$phase;expected=$expected;actual=$p.caption_regions;header=$p;model_key=$modelKey;overflow=$overflow;recovery=$recovery;zen=$zen;scale=$scale;origin=$origin;uia_origin=$uiaOrigin;width=$width;insets=$model.titlebar_insets;pass=((Region-Key $expected)-ceq(Region-Key $p.caption_regions))}
     $samples.Add($sample);$sample
 }
@@ -72,15 +72,14 @@ function Capy-Check([string]$phase){
     Check ($button.Current.Name-eq$model.header.capy.label-and$button.Current.IsEnabled-eq[bool]$model.header.capy.enabled-and[math]::Abs($bounds.Width-$spec.tile*$scale)-le1-and$centered-and[math]::Abs($box.Width-$glyph)-le1-and[math]::Abs($box.Height-$glyph)-le1) ($phase+' Capy command, name, button and centered icon size') @{button=$bounds;image=$box;spec=$spec;name=$button.Current.Name;enabled=$button.Current.IsEnabled;expected_glyph=$glyph}
 }
 function Get-HeaderCaptionOracle {
-    param($ActualItems,$Entries,$Overflow,$Recovery,$Zen,[bool]$SingleDocument,[bool]$Editing,[double]$LeftInset,[double]$RightInset,[double]$CaptionHeight,[double]$Height,[double]$Scale,[int]$Width)
+    param($ActualItems,$Entries,$Overflow,$Recovery,$Zen,$Roles,[bool]$Editing,[double]$LeftInset,[double]$RightInset,[double]$CaptionHeight,[double]$Height,[double]$Scale,[int]$Width)
     if($Editing){return @()}
     $bottom=[int][math]::Round([single]([single]$Height*[single]$Scale),[MidpointRounding]::AwayFromZero);$top=[int][math]::Round($CaptionHeight*$Scale,[MidpointRounding]::AwayFromZero)
     $controls=[Collections.Generic.List[object]]::new()
     foreach($item in $ActualItems){
         $entry=@($Entries|Where-Object id -eq $item.id)[0]
         if(!$entry){throw "Actual header item has no model identity: $($item.id)"}
-        $kind=$entry.item.kind
-        if($kind-in@('clock','battery','space')-or($kind-eq'document_title'-and$SingleDocument)){continue}
+        if(@($Roles|Where-Object {$_.id-eq$item.id-and$_.role-eq'title_bar'}).Count){continue}
         if($item.visible-and$item.bounds.width-gt0){$controls.Add(@{left=[float]$item.bounds.x;right=[single]([single]$item.bounds.x+[single]$item.bounds.width)})}
     }
     foreach($item in @($Overflow)+@($Recovery)){

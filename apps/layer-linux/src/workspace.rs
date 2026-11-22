@@ -805,6 +805,8 @@ enum DragTarget {
     Resize(u32, ResizeEdge),
     Tear(BubbleGrab),
     Edge(u64, &'static str),
+    DocumentTab(u64),
+    Window,
 }
 impl DragTarget {
     fn action(
@@ -815,7 +817,7 @@ impl DragTarget {
         tabs: Vec<TabHit>,
     ) -> Option<UiAction> {
         Some(match self {
-            Self::Header(_) | Self::Tear(_) | Self::Edge(..) => return None,
+            Self::Header(_) | Self::Tear(_) | Self::Edge(..) | Self::DocumentTab(_) | Self::Window => return None,
             Self::Dock(item) => UiAction::DragWorkspace {
                 item,
                 phase,
@@ -856,6 +858,7 @@ struct NativeWorkspaceDrag {
     tearing: bool,
     sequence: Option<gdk::EventSequence>,
     device: Option<gdk::Device>,
+    press: Option<gdk::Event>,
     cursor: Option<(gtk::Widget, Option<gdk::Cursor>)>,
     tab: Option<NativeTabSlide>,
     tab_grab: Option<NativeTabSlide>,
@@ -2195,6 +2198,7 @@ impl Workspace {
                 self.header.cancel_drag(self);
                 self.restore_drag_cursor(&drag);
             }
+            self.documents.cancel_drag();
             self.clear_drop();
         }
         #[cfg(test)]
@@ -4088,6 +4092,36 @@ impl Workspace {
         self.register_drag(widget, DragTarget::Tear(grab));
     }
 
+    pub(crate) fn register_document_tab(&self, widget: &impl IsA<gtk::Widget>, id: u64) {
+        self.register_drag(widget, DragTarget::DocumentTab(id));
+    }
+
+    pub(crate) fn begin_window_move(&self, press: &gdk::Event) {
+        if let (Some(surface), Some(device), Some((x, y))) =
+            (self.window.surface().and_downcast::<gdk::Toplevel>(), press.device(), press.position()) {
+            self.chrome_contacts.borrow_mut().retain(|_, event| event.as_ptr() != press.as_ptr());
+            self.update_zen();
+            surface.begin_move(&device, 1, x, y, press.time());
+        }
+    }
+
+    fn window_drag_source(&self, point: [f32; 2]) -> Option<(gtk::Widget, DragTarget)> {
+        if self.header.editing.get() || self.window.is_fullscreen() || !self.header.root.can_target()
+            || self.gpu.borrow().as_ref().is_none_or(|g| g.session.phone_layout().is_some()) {
+            return None;
+        }
+        let picked = self.surface.pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT)?;
+        let within = |widget: &gtk::Widget| picked == *widget || picked.is_ancestor(widget);
+        let capy: &gtk::Widget = self.zen_capy.upcast_ref();
+        let header: &gtk::Widget = self.header.root.upcast_ref();
+        if within(capy) {
+            return Some((capy.clone(), DragTarget::Window));
+        }
+        let local = self.surface.compute_point(header, &gtk::graphene::Point::new(point[0], point[1]))?;
+        (within(header) && self.header.moves_window(&picked, [local.x(), local.y()]))
+            .then(|| (header.clone(), DragTarget::Window))
+    }
+
     fn tear_grab(&self, target: DragTarget) -> Option<(BubbleGrab, bool)> {
         match target {
             DragTarget::Tear(grab) => Some((grab, true)),
@@ -4136,11 +4170,14 @@ impl Workspace {
                 if self.header.editing.get() && !matches!(target, DragTarget::Header(_)) {
                     return None;
                 }
+                if matches!(target, DragTarget::DocumentTab(_)) && !self.documents.accepts_drag(self) {
+                    return None;
+                }
                 return Some((widget, target));
             }
             picked = widget.parent();
         }
-        None
+        self.window_drag_source(point)
     }
 
     // Every input reaches Rust. workspace_update retains models by revision and
@@ -4284,8 +4321,9 @@ impl Workspace {
     ) -> bool {
         if phase!=ContactPhase::Cancel {
             let invalidated=self.workspace_drag.borrow().as_ref().filter(|drag|
-                matches!(drag.target,DragTarget::Header(_) | DragTarget::Divider(_) | DragTarget::Resize(..))
-                    && (!drag.source.is_ancestor(&self.surface) || drag.source.parent()!=drag.parent)).cloned();
+                matches!(drag.target,DragTarget::Header(_) | DragTarget::Divider(_) | DragTarget::Resize(..) | DragTarget::DocumentTab(_))
+                    && (!drag.source.is_ancestor(&self.surface) || drag.source.parent()!=drag.parent
+                        || matches!(drag.target,DragTarget::DocumentTab(_)) && !self.documents.slide_current())).cloned();
             if let Some(drag)=invalidated {
                 let handled=self.workspace_drag_input(ContactPhase::Cancel,drag.point,drag.sequence);
                 if phase!=ContactPhase::Down {return handled;}
@@ -4315,6 +4353,7 @@ impl Workspace {
                         .display()
                         .default_seat()
                         .and_then(|seat| seat.pointer()),
+                    press: None,
                     cursor: None,
                     tab: None,
                     tab_grab: None,
@@ -4345,6 +4384,13 @@ impl Workspace {
                     self.header
                         .finish_drag(self, point, phase == ContactPhase::Cancel);
                     self.header.clear_drop();
+                } else if let DragTarget::DocumentTab(id) = drag.target {
+                    let before = (phase == ContactPhase::Up).then(|| self.documents.drop_at(point)).flatten();
+                    self.documents.cancel_drag();
+                    if let Some(before) = before {
+                        self.documents.model.borrow_mut().reorder(id, before);
+                    }
+                    self.documents.refresh(self);
                 } else if let DragTarget::Dock(item @ DockItem::Tile { .. }) = drag.target {
                     self.dragging.set(false);
                     if phase == ContactPhase::Up
@@ -4394,6 +4440,22 @@ impl Workspace {
             if !recognized {
                 return false;
             }
+            let delta = [point[0] - drag.origin[0], point[1] - drag.origin[1]];
+            if !drag.held && (drag.target == DragTarget::Window
+                || matches!(drag.target, DragTarget::DocumentTab(_)) && layer_ui::tab_drag_moves_window(delta))
+            {
+                self.workspace_drag.borrow_mut().take();
+                self.dismiss_context();
+                self.reset_drag_recognizers(&drag);
+                self.restore_drag_cursor(&drag);
+                if let Some(press) = &drag.press {
+                    self.begin_window_move(press);
+                }
+                return true;
+            }
+            if drag.target == DragTarget::Window {
+                return false;
+            }
             if drag.wait_for_hold && !drag.held {
                 let Some(grab) = drag.tear.filter(|_| drag.pull) else {
                     self.workspace_drag.borrow_mut().take();
@@ -4438,7 +4500,9 @@ impl Workspace {
                 self.set_drag_cursor(&mut drag, "grabbing");
             }
             *self.workspace_drag.borrow_mut() = Some(drag.clone());
-            if !matches!(
+            if let DragTarget::DocumentTab(id) = drag.target {
+                self.documents.begin_slide(self, id, drag.origin);
+            } else if !matches!(
                 drag.target,
                 DragTarget::Dock(DockItem::Tile { .. }) | DragTarget::Header(_)
             ) {
@@ -4456,7 +4520,9 @@ impl Workspace {
             self.bubbles.drag(self, grab, ContactPhase::Move, point);
             return true;
         }
-        if !matches!(
+        if let DragTarget::DocumentTab(_) = drag.target {
+            self.documents.slide_to(point);
+        } else if !matches!(
             drag.target,
             DragTarget::Dock(DockItem::Tile { .. }) | DragTarget::Header(_)
         ) {
@@ -4615,6 +4681,7 @@ impl Workspace {
                 if starting && let Some(drag) = w.workspace_drag.borrow_mut().as_mut() {
                     // A tablet has its own GDK device; touch has no cursor.
                     drag.device = if touch { None } else { event.device() };
+                    drag.press = Some(event.clone());
                     if drag.source.has_css_class("drag-row") {
                         drag.wait_for_hold = touch
                             || event.device_tool().is_some()

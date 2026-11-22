@@ -10,7 +10,7 @@ public:
     ~HeaderInput();
     void Source(winrt::Microsoft::UI::Xaml::FrameworkElement const& element,
         CapyUi::J const& source,winrt::hstring const& label);
-    void Configure(CapyUi::J const& model,bool editing,CapyUi::J const& geometryRequest);
+    void Configure(CapyUi::J const& model,bool editing,CapyUi::J const& geometryRequest,CapyUi::A const& roles);
     bool Key(winrt::Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const& event,bool pressed);
     void WorkspaceOptions(winrt::Microsoft::UI::Xaml::FrameworkElement const& invoking);
     void Context(uint32_t id,winrt::Microsoft::UI::Xaml::FrameworkElement const& invoking);

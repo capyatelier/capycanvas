@@ -180,6 +180,15 @@ impl HeaderItem {
         let content = if compact { short.min(full) } else { full };
         content + if editing { HEADER_GRIP } else { 0. }
     }
+    pub fn title_bar_role(self, documents: usize) -> TitleBarRole {
+        match self {
+            Self::Clock | Self::Battery | Self::Space => TitleBarRole::TitleBar,
+            Self::DocumentTitle if documents > 1 => TitleBarRole::Tabs,
+            Self::DocumentTitle => TitleBarRole::TitleBar,
+            Self::Tool { control } if crate::BubbleSource::tears_without_hold(control) => TitleBarRole::Tear,
+            _ => TitleBarRole::Control,
+        }
+    }
     pub fn joins_bar(self) -> bool {
         matches!(
             self,
@@ -241,9 +250,11 @@ impl HeaderGeometryRequest {
 pub fn header_frame(source:&str)->Result<serde_json::Value,String> {
     #[derive(Deserialize)]
     #[serde(tag="op",rename_all="snake_case")]
-    enum Request {Geometry(HeaderGeometryRequest)}
-    let Request::Geometry(request)=serde_json::from_str(source).map_err(|error|error.to_string())?;
-    request.resolve()
+    enum Request {Geometry(HeaderGeometryRequest),TabDrag {delta:[f32;2]}}
+    match serde_json::from_str(source).map_err(|error|error.to_string())? {
+        Request::Geometry(request)=>request.resolve(),
+        Request::TabDrag {delta}=>Ok(tab_drag_moves_window(delta).into()),
+    }
 }
 
 impl Default for HeaderLayout {
@@ -582,6 +593,24 @@ pub struct HeaderNativeGeometry {
     pub insets: [f32; 2],
     pub recovery: Option<Bounds>,
 }
+/// What a primary drag outside customization does. Title-bar areas keep the
+/// native caption; controls move the window past slop instead of clicking.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TitleBarRole {
+    TitleBar,
+    Control,
+    Tabs,
+    Tear,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct HeaderItemRole {
+    pub id: u32,
+    pub role: TitleBarRole,
+}
+pub fn tab_drag_moves_window(delta: [f32; 2]) -> bool {
+    delta.into_iter().all(f32::is_finite) && delta[1].abs() > delta[0].abs()
+}
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct HeaderGeometry {
     pub size: HeaderSize,
@@ -594,6 +623,7 @@ pub struct HeaderGeometry {
     pub compact: Vec<u32>,
     pub bars: Vec<HeaderBar>,
     pub native_drag_regions: Vec<Bounds>,
+    pub roles: Vec<HeaderItemRole>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct HeaderBar {
@@ -603,6 +633,13 @@ pub struct HeaderBar {
 }
 
 impl HeaderGeometry {
+    pub fn role_at(&self, point: [f32; 2]) -> Option<TitleBarRole> {
+        if self.overflow.iter().flatten().any(|b| b.contains(point[0], point[1])) {
+            return Some(TitleBarRole::Control);
+        }
+        let id = self.items.iter().find(|item| item.bounds.contains(point[0], point[1]))?.id;
+        self.roles.iter().find(|role| role.id == id).map(|role| role.role)
+    }
     fn place_zen_button(&mut self, layout: &HeaderLayout, insets: [f32; 2], editing: bool) {
         let capy = layout.entries().find(|e| e.item == HeaderItem::Capy)
             .and_then(|entry| self.items.iter().find(|item| item.id == entry.id));
@@ -820,6 +857,8 @@ impl HeaderLayout {
             geometry.expand_document(entry.id, width, insets, self.size);
             geometry.place_zen_button(self, insets, editing);
         }
+        geometry.roles = geometry.items.iter().filter_map(|item| self.entry(item.id).ok()
+            .map(|entry| HeaderItemRole { id: item.id, role: entry.item.title_bar_role(documents) })).collect();
         geometry
     }
 
@@ -1184,6 +1223,50 @@ mod tests {
                 _=>serde_json::json!([request["metrics"][0],request["metrics"][0]]),
             };
             assert!(header_frame(&invalid.to_string()).is_err(),"{invalid}");
+        }
+    }
+    #[test]
+    fn title_bar_roles_follow_items_and_drawing_count() {
+        use TitleBarRole::*;
+        let brush = HeaderItem::Tool { control: ToolbarControl::Command { command: CommandId::DrawingBrush } };
+        let adjustments = HeaderItem::Tool { control: ToolbarControl::Panel { panel: Panel::Adjustments } };
+        for (item, single, several) in [
+            (HeaderItem::Clock, TitleBar, TitleBar), (HeaderItem::Battery, TitleBar, TitleBar), (HeaderItem::Space, TitleBar, TitleBar),
+            (HeaderItem::DocumentTitle, TitleBar, Tabs), (HeaderItem::Capy, Control, Control), (HeaderItem::Menu, Control, Control),
+            (HeaderItem::MenuLabels, Control, Control), (HeaderItem::Workspaces, Control, Control), (HeaderItem::Settings, Control, Control),
+            (HeaderItem::Fullscreen, Control, Control), (brush, Tear, Tear), (adjustments, Control, Control),
+        ] {
+            assert_eq!([item.title_bar_role(1), item.title_bar_role(3)], [single, several], "{item:?}");
+        }
+        for preset in WorkspacePreset::ALL {
+            let header = preset.layout(Platform::Gtk).header;
+            for documents in [1, 3] {
+                let geometry = header.resolve_documents(1600., [80., 120.], &[], false, documents);
+                assert_eq!(geometry.roles.len(), geometry.items.len());
+                for item in &geometry.items {
+                    let entry = header.entry(item.id).unwrap();
+                    let role = entry.item.title_bar_role(documents);
+                    let center = [item.bounds.x + item.bounds.width / 2., item.bounds.y + item.bounds.height / 2.];
+                    assert_eq!(geometry.role_at(center), Some(role), "{preset:?}/{documents}/{entry:?}");
+                    assert_eq!(role == Tear, matches!(entry.item, HeaderItem::Tool { control } if crate::BubbleSource::tears_without_hold(control)));
+                }
+                assert_eq!(geometry.role_at([1., 1.]), None, "native control and gutter areas stay with the window");
+            }
+        }
+        let mut crowded = HeaderLayout::painter();
+        crowded.size = HeaderSize::Large;
+        let metrics = crowded.entries().map(|e| HeaderMetric { id: e.id, width: 200. }).collect::<Vec<_>>();
+        let geometry = crowded.resolve_documents(880., [0.; 2], &metrics, false, 1);
+        let overflow = geometry.overflow.iter().flatten().next().unwrap();
+        assert_eq!(geometry.role_at([overflow.x + 1., overflow.y + 1.]), Some(Control));
+    }
+    #[test]
+    fn tab_drags_move_the_window_only_from_a_steeper_than_diagonal_start() {
+        for (delta, moves) in [([12., 0.], false), ([0., 12.], true), ([9., 9.], false), ([-9., -9.], false),
+            ([9., 10.], true), ([-9., -10.], true), ([10., -9.], false), ([f32::NAN, 9.], false), ([0., f32::INFINITY], false)] {
+            assert_eq!(tab_drag_moves_window(delta), moves, "{delta:?}");
+            let reply = header_frame(&serde_json::json!({"op":"tab_drag","delta":delta}).to_string());
+            if delta.into_iter().all(f32::is_finite) { assert_eq!(reply, Ok(moves.into()), "{delta:?}"); }
         }
     }
     #[test]

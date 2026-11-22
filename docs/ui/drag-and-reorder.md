@@ -111,6 +111,10 @@ container it keeps its ordinary scrolling and click behavior, so this does not
 add a pickup delay or steal list scrolling. A held tile drag still reorders; when
 it is released on the canvas past the 80-pixel line it takes a bubble too.
 
+On desktop, a drag from any title-bar control moves the window after native
+slop; drawing tabs slide sideways and move the window from a steeper start
+([title bar](window-bar.md#customize-inline)).
+
 GTK's phone bars move the window after native movement slop from tiles, Capy,
 chip padding and native-control gaps, with mouse, pen or touch. Sliders scrub;
 native window buttons keep their actions. A tap activates and a hold keeps its

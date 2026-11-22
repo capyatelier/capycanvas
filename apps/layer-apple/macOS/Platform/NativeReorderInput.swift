@@ -14,6 +14,7 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
     weak var model: (any NativeReorderModel)?
     private weak var attached: NSView?
     private var downEvent: NSEvent?
+    private let partners = NSHashTable<NSGestureRecognizer>.weakObjects()
     private var cancelling = false
     private var lastPoint: CGPoint?
     private var pan: NSPanGestureRecognizer!
@@ -134,7 +135,8 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
             }
             let device: ReorderDevice = event.pointerSubtype == .tabletPoint ? .pen : .mouse
             model.contact.prepare(target, device: device, origin: point, activate: !edge.defersSelection); downEvent = event
-            lastPoint = nil
+            lastPoint = nil; partners.removeAllObjects()
+            for gesture in [pan!, press!] { gesture.delaysPrimaryMouseButtonEvents = target.surface != .titleBar }
         }
         return recognizer !== press || model.contact.requiresHold || model.contact.device != .mouse
     }
@@ -156,7 +158,9 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
         // SwiftUI's button recognizer begins on mouse-down. Keep the retained
         // row contact alive beside it; consumeClick suppresses activation after
         // pickup. Options/text editing never admit a reorder contact.
-        (recognizer === pan || recognizer === press) && model?.contact.target != nil
+        guard (recognizer === pan || recognizer === press) && model?.contact.target != nil else { return false }
+        partners.add(other)
+        return true
     }
     @objc private func context(_ recognizer: NSClickGestureRecognizer) {
         model?.context(at: recognizer.location(in: self))
@@ -172,6 +176,14 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
     @objc private func panned(_ recognizer: NSPanGestureRecognizer) {
         switch recognizer.state {
         case .began, .changed:
+            if recognizer.state == .began, let event = downEvent, model?.contact.held == false,
+               model?.contact.target?.movesWindow?(recognizer.translation(in: self)) == true {
+                model?.contact.transfer()
+                for other in partners.allObjects where other.view?.window === window { other.isEnabled = false; other.isEnabled = true }
+                window?.performDrag(with: event)
+                cancel(all: false)
+                return
+            }
             if edge.holdsMotion { model?.contact.suppressActivation(); return }
             MacEdgeReachCapture.cancel(in: window, activate: true)
             if model?.swiping == true { model?.moveSwipe(to: recognizer.location(in: self)); return }

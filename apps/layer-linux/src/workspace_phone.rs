@@ -207,12 +207,7 @@ impl Phone {
                         let (_, press) = w.phone.contact.take().unwrap();
                         w.phone.last_point.set(None);
                         w.phone.origin_point.set(None);
-                        if let (Some(surface), Some(device), Some((x, y))) =
-                            (w.window.surface().and_downcast::<gdk::Toplevel>(), press.device(), press.position()) {
-                            w.chrome_contacts.borrow_mut().retain(|_, event| event.as_ptr() != press.as_ptr());
-                            w.update_zen();
-                            surface.begin_move(&device, 1, x, y, press.time());
-                        }
+                        w.begin_window_move(&press);
                         return glib::Propagation::Stop;
                     }
                     _ => return glib::Propagation::Proceed,

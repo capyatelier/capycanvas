@@ -24,7 +24,7 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
     Canvas overlay;std::vector<SlideCopy> copies;A slideOrder,slideHits;J slideClip,slide;bool animateSlide=true;
     NativePresentation presentation;bool finishing=false;uint64_t contactGeneration=0;
     std::optional<uint32_t> pointer;Input::Pointer contact{nullptr};uint64_t source=0;Windows::Foundation::Point origin{},position{};
-    PointerGesture hold;bool recognizing=false,dragging=false,held=false,releasing=false,updating=false,showing=false;
+    PointerGesture hold;WindowDrag moving;bool recognizing=false,dragging=false,held=false,releasing=false,updating=false,showing=false;
     uint64_t selectedModel=0;weak_ref<FrameworkElement> opener;std::optional<FrameworkElement> reopen;
     hstring epoch,plainSource,plainCaption,storageError;bool storageTooltipReady=false;J model(){return branch(data->model,L"windows_tabs");}
     bool available(){return flag(model(),L"available")&&!flag(branch(data->model,L"header"),L"editing");}
@@ -134,23 +134,35 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
         }
         AutomationProperties::SetItemStatus(overlay,slide.Stringify());
     }
+    bool movesWindow()const{
+        A delta;delta.Append(N(position.X-origin.X));delta.Append(N(position.Y-origin.Y));
+        auto request=to_string(O({{L"op",S(L"tab_drag")},{L"delta",delta}}).Stringify());
+        return NativeString(capy_header_frame(data->localization.get(),request.c_str())).bytes=="true";
+    }
     bool claim(){
         if(!pointer||!contact||!tabs.contains(source))return false;
         if(PointerGesture::Captured(root,*pointer))return true;
         releasing=true;auto button=tabs.at(source).select;button.CancelDirectManipulations();button.ReleasePointerCapture(contact);
         bool accepted=root.CapturePointer(contact);releasing=false;if(!accepted)cancel();return accepted;
     }
-    void release(bool keepSlide=false){if(!pointer)return;pointer.reset();contact=nullptr;dragging=false;held=false;dragCursor(root,false,false);if(!keepSlide)endSlide();root.ReleasePointerCaptures();
+    void release(bool keepSlide=false){if(!pointer)return;pointer.reset();contact=nullptr;moving.End();dragging=false;held=false;dragCursor(root,false,false);if(!keepSlide)endSlide();root.ReleasePointerCaptures();
         if(recognizing){recognizing=false;hold.CompleteGesture();}if(!keepSlide)AutomationProperties::SetItemStatus(root,data->caption(L"header",L"ready"));}
     void cancel(){if(!pointer&&!finishing)return;auto previous=contact;bool captured=pointer.has_value();Button button=pointer&&tabs.contains(source)?tabs.at(source).select:nullptr;MenuFlyout menu=button?tabs.at(source).menu:nullptr;
         ++contactGeneration;release();if(!captured)endSlide();if(button&&previous)button.ReleasePointerCapture(previous);if(menu)menu.Hide();}
     bool cancelAll(){bool active=pointer.has_value()||finishing||reopen.has_value();reopen.reset();cancel();return (rowDrag&&rowDrag->Cancel())||active;}
     void move(PointerRoutedEventArgs const& e){if(pointer!=e.Pointer().PointerId())return;position=e.GetCurrentPoint(root).Position();
+        if(moving){moving.Move(root.XamlRoot(),position);e.Handled(true);return;}
         if(recognizing)hold.Move(root,e);
+        if(!dragging&&!held&&hold.Moved()&&tabs.contains(source)&&movesWindow()&&moving.Begin(root.XamlRoot(),origin)){
+            if(!claim())return;
+            if(recognizing){recognizing=false;hold.CompleteGesture();}
+            tabs.at(source).menu.Hide();moving.Move(root.XamlRoot(),position);e.Handled(true);return;
+        }
         if(!dragging&&hold.Moved()){if(!claim())return;dragging=true;held=false;dragCursor(root,e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Touch,true);if(tabs.contains(source))tabs.at(source).menu.Hide();beginSlide();}
         if(dragging){updateSlide();AutomationProperties::SetItemStatus(root,data->caption(L"header",L"dragging"));}if(dragging||held)e.Handled(true);
     }
     void up(PointerRoutedEventArgs const& e){if(pointer!=e.Pointer().PointerId())return;
+        if(moving){release();e.Handled(true);return;}
         auto point=e.GetCurrentPoint(root);
         position=point.Position();bool dragged=dragging,wasHeld=held;
         if(dragged)updateSlide();bool attached=dragged&&slide.Size()&&flag(slide,L"attached");auto request=slideRequest();

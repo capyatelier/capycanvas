@@ -152,10 +152,23 @@ Windows suppresses DWM window transitions while using the fullscreen presenter
 and restores normal window animations after leaving fullscreen.
 
 Removing all navigation items exposes a recovery menu; native close is always
-outside customization. Outside editing, unused caption space and informational
-items move the desktop window; while editing, item bodies move the item and
-empty space clears the keyboard selection without setting an insertion point.
-Actual controls own their clicks, holds and context menus.
+outside customization. While editing, item bodies move the item and empty space
+clears the keyboard selection without setting an insertion point.
+
+Outside editing on GTK, Windows and macOS, shared `TitleBarRole` decides what a
+primary drag on the bar does:
+
+| Role | Items | Drag | Double- and middle-click |
+| --- | --- | --- | --- |
+| Title bar | Gaps, clock, battery, space, single-drawing title | Native caption move | Desktop title-bar action |
+| Control | Capy, menus, workspace switcher, settings, non-tearable tools, overflow, drawing picker | Window move after native slop; the click is cancelled | The control's own |
+| Tabs | Drawing tabs | Sideways start slides the tab; a steeper-than-diagonal start moves the window | The tab's own |
+| Tear | Tools that take a bubble | Tear, as above | The tool's own |
+
+Native window buttons keep their actions. Controls keep their clicks, holds and
+context menus. GTK starts the move with `gdk::Toplevel::begin_move`, Windows moves
+the restored `AppWindow` with the captured contact, and macOS calls
+`NSWindow.performDrag(with:)`.
 An outside contact on the bar or a toolbar dismisses a tool drawer without
 consuming the target's normal click or drag. Another eligible tool can switch
 the drawer in one click; clicking its current opener toggles it closed. Contacts
@@ -168,7 +181,7 @@ The builder's model, validation, overflow policy, tool activation, drawer
 origins, bar membership and history are shared Rust. Web implements the same bar
 and inline editor in `header.js` with the shared `HeaderDrag`; its `#header`
 uses `touch-action: manipulation` and tracks the pressed contact itself. Hosts own native widgets,
-measurements, caption behavior and device timing, and paint the same bars,
+measurements and device timing, and paint the same bars,
 surfaces and selection roles. Hosts send measured full widths; compact widths,
 the editing grip and which items show their compact form come from the shared
 geometry. macOS has no Main Menu or menu labels because the

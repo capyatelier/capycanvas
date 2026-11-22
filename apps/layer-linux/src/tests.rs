@@ -10863,6 +10863,57 @@ fn native_window_drag_input() {
         pump(200);
         assert_eq!(saved(&w), collapsed);
     }
+    w.window.set_default_size(1400, 760);
+    until(|| w.surface.width() == 1400, "wide restored window for drawing tabs");
+    observed.set(None);
+    input.perform(serde_json::json!([{ "point": [799., 499.] }, { "point": [800., 500.] }]));
+    let (toolkit, _) = observed.get().expect("pointer inside the restored window");
+    let mut origin = [800. - toolkit[0], 500. - toolkit[1]];
+    let before = saved(&w);
+    let center = |widget: &gtk::Widget| {
+        let b = widget.compute_bounds(&w.surface).unwrap();
+        [b.x() + b.width() * 0.5, b.y() + b.height() * 0.5]
+    };
+    let header = state(&w).workspace.layout.header;
+    let item = |kind: HeaderItem| {
+        let id = header.entries().find(|e| e.item == kind).unwrap().id;
+        center(&find_named(w.header.root.upcast_ref(), &format!("header-item-{id}")).unwrap())
+    };
+    let mut sources = vec![
+        ("capy", center(w.zen_capy.upcast_ref()), [70., 40.]),
+        ("menu labels", item(HeaderItem::MenuLabels), [-70., -40.]),
+        ("workspace switcher", item(HeaderItem::Workspaces), [70., 40.]),
+        ("settings", item(HeaderItem::Settings), [-70., -40.]),
+    ];
+    glib::MainContext::default()
+        .block_on(w.documents.open(&w, (layer_ui::new_drawing(128, 128, &w.localization()).unwrap(), None)))
+        .unwrap();
+    new_photo::ready(&w);
+    pump(250);
+    assert_eq!(w.documents.root.visible_child_name().as_deref(), Some("tabs"));
+    sources.push(("vertical drawing tab", center(&find_named(w.window.upcast_ref(), "document-tab-2").unwrap()), [-30., -80.]));
+    for (name, local, step) in sources {
+        let order = w.documents.model.borrow().order().to_vec();
+        let start = [origin[0] + local[0], origin[1] + local[1]];
+        input.perform(serde_json::json!([{ "point": start }, { "down": true },
+            { "point": [start[0] + step[0] * 0.25, start[1] + step[1] * 0.25] },
+            { "point": [start[0] + step[0], start[1] + step[1]] }, { "down": false }]));
+        observed.set(None);
+        input.perform(serde_json::json!([{ "point": [799., 499.] }, { "point": [800., 500.] }]));
+        let (point, _) = observed.get().unwrap();
+        let moved = [800. - point[0], 500. - point[1]];
+        assert!(
+            (moved[0] - origin[0] - step[0]).abs() < 8. && (moved[1] - origin[1] - step[1]).abs() < 8.,
+            "dragging the {name} must move the window: {origin:?} -> {moved:?}"
+        );
+        assert!(w.workspace_drag.borrow().is_none() && w.chrome_contacts.borrow().is_empty(), "{name}");
+        assert!(!w.documents.drag_active() && w.documents.slide().is_none(), "{name}");
+        assert_eq!(w.documents.model.borrow().order(), order, "{name}");
+        assert!(w.window.visible_dialog().is_none(), "dragging the {name} must not activate it");
+        assert!(!w.popovers.borrow().iter().filter_map(|p| p.upgrade()).any(|p| p.is_visible()), "{name}");
+        assert_eq!(saved(&w), before, "{name}");
+        origin = moved;
+    }
     input.finish();
     w.window.destroy();
     pump(100);
