@@ -558,7 +558,7 @@ impl Victims {
             +self.windows.capacity()*(std::mem::size_of::<(WindowId,Share)>()+1)) as u64
     }
 }
-enum Change {Page(Key),Keys(u32,DocRect),Reset}
+enum Change {Page(Key),Keys(u32,DocRect,Option<PixelRect>),Reset}
 struct Changes {first:u64,log:std::collections::VecDeque<Change>}
 impl Default for Changes {
     fn default()->Self {
@@ -600,11 +600,12 @@ pub(in crate::scene) struct Store {
 impl Store {
     pub(super) fn within(display:&Arc<crate::residency::Tier>)->Self {Self {total:crate::residency::Tier::within(display),..Default::default()}}
     pub(super) fn tier(&self)->Arc<crate::residency::Tier> {self.total.clone()}
-    pub(in crate::scene) fn set_expected(&mut self,frame:Arc<SignatureFrame>) {
+    pub(in crate::scene) fn set_expected(&mut self,frame:Arc<SignatureFrame>) {self.set_expected_within(frame,None);}
+    pub(in crate::scene) fn set_expected_within(&mut self,frame:Arc<SignatureFrame>,bound:Option<PixelRect>) {
         if self.expected.as_ref().is_none_or(|previous|!Arc::ptr_eq(previous,&frame)) {
             self.confirm();
             match self.expected.as_ref().and_then(|previous|frame.carry(previous)) {
-                Some(regions)=>for (level,region) in regions {self.changes.push(Change::Keys(level,region));},
+                Some(regions)=>for (level,region) in regions {self.changes.push(Change::Keys(level,region,bound.filter(|_|level==0)));},
                 None=>{self.changes.push(Change::Reset);self.previous=self.expected.take();},
             }
             self.frames+=1;
@@ -1380,6 +1381,10 @@ pub(super) struct Projection {
 struct Shown {recorded:Option<Recorded>,submission:submission::Submission,exact:bool,direct:bool,predicted:bool}
 impl Shown {
     fn unnamed(&self)->bool {self.recorded.is_none() && !self.submission.discarded()}
+    fn composition(&self,template:&Key)->bool {
+        !self.exact && (self.direct || self.recorded.as_ref().is_some_and(|recorded|recorded.key.level==template.level && recorded.key.format==template.format
+            && recorded.key.color==template.color && recorded.key.blend_space==template.blend_space))
+    }
 }
 pub(super) struct Selection {pub(super) copies:Vec<(usize,Projection,bool)>,pub(super) composes:Vec<PixelRect>,pub(super) transition:bool,pub(super) waiting:bool}
 impl Selection {
@@ -1388,11 +1393,16 @@ impl Selection {
     }
 }
 #[derive(Default)]
-struct Cell {shown:Option<Shown>,current:bool,blocked:Option<crate::frame_demand::Input>,arrivals:crate::frame_demand::ArrivalToken,name:Option<ContentVersion>,refusal:Option<(crate::residency::Blocked,Option<crate::frame_demand::ArrivalToken>)>,queued:bool,derived:bool,reduced:bool,waits:Vec<super::super::object_cache::ObjectWait>}
+struct Cell {shown:Option<Shown>,current:bool,blocked:Option<crate::frame_demand::Input>,arrivals:crate::frame_demand::ArrivalToken,name:Option<ContentVersion>,refusal:Option<(crate::residency::Blocked,Option<crate::frame_demand::ArrivalToken>)>,queued:bool,derived:bool,reduced:bool,waits:Vec<super::super::object_cache::ObjectWait>,lag:Option<PixelRect>}
 impl Cell {
+    fn showing(shown:Shown)->Self {Self {shown:Some(shown),current:true,lag:Some(PixelRect::EMPTY),..Self::default()}}
     fn queue(&mut self) {if !self.derived {self.queued=true;}}
-    fn stale(&mut self) {if !self.derived {self.current=false;self.queued=true;}}
+    fn stale(&mut self) {if !self.derived {self.current=false;self.queued=true;self.lag=None;}}
     fn invalidate(&mut self) {self.stale();self.waits.clear();}
+    fn reach(&mut self,area:Option<PixelRect>,template:&Key) {
+        let lag=self.lag.zip(area).filter(|_|self.shown.as_ref().is_some_and(|shown|shown.composition(template))).map(|(lag,area)|lag.union(area));
+        self.invalidate();self.lag=lag;
+    }
     fn sleeping(&self)->bool {self.waits.iter().any(|(_,waiter)|waiter.as_ref().is_some_and(|waiter|!waiter.settled()))}
     fn written(&self)->bool {self.derived || self.shown.is_some()}
     fn pending(&self)->bool {!self.derived && (self.queued || self.shown.as_ref().is_none_or(|shown|!shown.exact))}
@@ -1453,12 +1463,12 @@ impl Cells {
                             let cell=&mut self.cells[index];
                             if !cell.current || key.format==wgpu::TextureFormat::Rgba32Float && cell.shown.as_ref().is_some_and(|shown|!shown.exact) {cell.queue();}
                         },
-                    Change::Keys(level,region) if *level==plan.level=>for index in Self::reached(plan,region.in_frame(plan.extent)) {self.cells[index].invalidate();},
+                    Change::Keys(level,region,bound) if *level==plan.level=>for index in Self::reached(plan,region.in_frame(plan.extent)) {self.cells[index].reach(*bound,template);},
                     _=>{},
                 }
             },
         }
-        if regrouped==Some(true) {for cell in &mut self.cells {cell.queue();}}
+        if regrouped==Some(true) {for cell in &mut self.cells {cell.queue();cell.lag=None;}}
         for (submission,index,previous) in self.unconfirmed.iter_mut().rev() {
             let cell=&mut self.cells[*index];
             if submission.discarded() && cell.shown.as_ref().is_some_and(|shown|shown.submission.same(submission)) {
@@ -1645,7 +1655,7 @@ impl Cache {
                 .map(|image|(key.clone(),image,false))).flatten());
             match page.and_then(|(key,image,exact)|store.recorded(&key,region).map(|recorded|(key,image,exact,recorded))) {
                 Some((key,image,exact,recorded))=>selection.copies.push((index,Projection {region,image,key,versions:vec![recorded]},exact)),
-                None if current.is_some_and(|exact|exact || presented==Accuracy::Display)=>{cell.current=true;cell.queued=false;},
+                None if current.is_some_and(|exact|exact || presented==Accuracy::Display)=>{cell.current=true;cell.queued=false;cell.lag=Some(PixelRect::EMPTY);},
                 None=>{cell.current=current.is_some();selection.composes.push(region);},
             }
         }
@@ -1685,7 +1695,7 @@ impl Cache {
         for (index,copy,exact) in copies {
             copy.image.clone().track(encoder);changed=changed.union(copy.region);
             let recorded=copy.versions.into_iter().next().expect("a copied page records its key");
-            let previous=std::mem::replace(&mut cells.cells[index],Cell {shown:Some(Shown {recorded:Some(recorded),submission:submission.clone(),exact,direct:false,predicted:false}),current:true,..Cell::default()}).shown;
+            let previous=std::mem::replace(&mut cells.cells[index],Cell::showing(Shown {recorded:Some(recorded),submission:submission.clone(),exact,direct:false,predicted:false})).shown;
             cells.unconfirmed.push((submission.clone(),index,previous));
         }
         drop(cells);
@@ -1697,8 +1707,7 @@ impl Cache {
         if write.key.level!=self.plan.level || write.accepted.is_none() && self.gesture.is_none() {return;}
         let mut cells=self.cells.lock().unwrap();
         let index=Cells::index(self.plan,write.key.coordinate);
-        let previous=std::mem::replace(&mut cells.cells[index],Cell {shown:Some(Shown {recorded:write.accepted.map(|accepted|accepted.recorded),submission:submission.clone(),exact:write.accuracy==Accuracy::Exact,direct:true,predicted:false}),
-            current:true,..Cell::default()}).shown;
+        let previous=std::mem::replace(&mut cells.cells[index],Cell::showing(Shown {recorded:write.accepted.map(|accepted|accepted.recorded),submission:submission.clone(),exact:write.accuracy==Accuracy::Exact,direct:true,predicted:false})).shown;
         cells.unconfirmed.push((submission,index,previous));
     }
     pub(super) fn commit_window(&mut self,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder)->Result<(),GpuRasterError> {
@@ -1860,7 +1869,7 @@ impl Cache {
     }
     pub(super) fn owe_exact(&self) {
         let mut cells=self.cells.lock().unwrap();
-        for cell in cells.cells.iter_mut().filter(|cell|!cell.derived && cell.shown.as_ref().is_some_and(|shown|!shown.exact)) {cell.queued=true;}
+        for cell in cells.cells.iter_mut().filter(|cell|!cell.derived && cell.shown.as_ref().is_some_and(|shown|!shown.exact)) {cell.queued=true;cell.lag=None;}
     }
     pub(super) fn displays(&self,region:PixelRect)->bool {
         self.cells().is_some_and(|(cells,_,_)|coordinates(region,self.plan.level).all(|coordinate|
@@ -1875,11 +1884,11 @@ impl Cache {
         self.cells().is_some_and(|(cells,_,_)|coordinates(region,self.plan.level).all(|coordinate|
             cells.cells.get(Cells::index(self.plan,coordinate)).is_some_and(|cell|cell.shown.as_ref().is_some_and(|shown|shown.recorded.is_none() && accept(shown)))))
     }
-    pub(super) fn unnamed_writes(&self,regions:&[PixelRect])->Vec<Option<submission::Submission>> {
-        let Some((cells,_store,_))=self.cells() else {return vec![None;regions.len()];};
+    pub(super) fn shown_writes(&self,regions:&[PixelRect])->Vec<(Option<submission::Submission>,Option<PixelRect>)> {
+        let Some((cells,_store,_))=self.cells() else {return vec![(None,None);regions.len()];};
         regions.iter().map(|region|match Cells::reached(self.plan,*region)[..] {
-            [index]=>cells.cells[index].shown.as_ref().filter(|shown|shown.unnamed()).map(|shown|shown.submission.clone()),
-            _=>None,
+            [index]=>(cells.cells[index].shown.as_ref().filter(|shown|shown.unnamed()).map(|shown|shown.submission.clone()),cells.cells[index].lag),
+            _=>(None,None),
         }).collect()
     }
     pub(super) fn contact_cells(&self)->Vec<PixelRect> {
@@ -1906,7 +1915,7 @@ impl Cache {
             drop(frame.expected_key(&Key {coordinate,..template.clone()},bounds(coordinate,self.plan.level,self.plan.extent),self.required_input_level()));
         }
     }
-    pub(super) fn key_contact_cells(&self,frame:&SignatureFrame,tips:&[PixelRect]) {
+    pub(super) fn key_contact_cells(&self,frame:&SignatureFrame,tips:&[PixelRect],tip:Option<PixelRect>) {
         let Some((mut cells,_store,template))=self.cells() else {return;};
         let (plan,input_level)=(self.plan,self.required_input_level());
         for (cell,coordinate) in cells.cells.iter_mut().zip(coordinates(plan.bounds,plan.level)) {
@@ -1915,26 +1924,20 @@ impl Cache {
             let tipped=tips.iter().any(|tip|!tip.intersect(region).is_empty());
             shown.predicted|=tipped;
             shown.recorded=(!tipped).then(||materialize(frame,&Key {coordinate,..template.clone()},region,input_level).ok()).flatten();
-            if shown.recorded.is_none() {cell.invalidate();}
+            if shown.recorded.is_none() {cell.invalidate();cell.lag=tip.filter(|_|tipped);}
         }
     }
     pub(super) fn reached_cells(&self,region:DocRect)->Vec<usize> {Cells::reached(self.plan,region.in_frame(self.plan.extent))}
-    pub(super) fn invalidate_cells(&self,indices:Vec<usize>)->Vec<usize> {
-        let Some((mut cells,_store,_))=self.cells() else {return Vec::new();};
-        indices.into_iter().filter(|index|cells.cells.get_mut(*index).is_some_and(|cell| {
-            let current=cell.current && !cell.queued && cell.shown.as_ref().is_some_and(|shown|self.shows_composition(shown));
-            cell.invalidate();current
-        })).collect()
+    pub(super) fn invalidate_cells(&self,indices:Vec<usize>,bound:Option<PixelRect>) {
+        let Some((mut cells,_store,template))=self.cells() else {return;};
+        for index in indices {if let Some(cell)=cells.cells.get_mut(index) {cell.reach(bound,&template);}}
     }
     #[cfg(test)]
     pub(super) fn projected_cells(&self)->Vec<PixelRect> {
+        let template=self.page_key(self.graph.root.clone().unwrap(),self.plan.bounds);
         let cells=self.cells.lock().unwrap();
-        cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level)).filter(|(cell,_)|cell.shown.as_ref().is_some_and(|shown|!self.shows_composition(shown)))
+        cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level)).filter(|(cell,_)|cell.shown.as_ref().is_some_and(|shown|!shown.composition(&template)))
             .map(|(_,coordinate)|bounds(coordinate,self.plan.level,self.plan.extent)).collect()
-    }
-    fn shows_composition(&self,shown:&Shown)->bool {
-        !shown.exact && (shown.direct || shown.recorded.as_ref().is_some_and(|recorded|recorded.key.level==self.plan.level && recorded.key.format==self.precision.format()
-            && recorded.key.color==self.color && recorded.key.blend_space==self.graph.blend_space()))
     }
     pub(super) fn requeue_keyless_cells(&self) {
         let mut cells=self.cells.lock().unwrap();
@@ -2380,7 +2383,7 @@ pub(super) mod query_tests {
         project(&mut r);
         {
             let cache=r.scale_display.as_ref().unwrap();let mut store=cache.pages.lock().unwrap();
-            for _ in 0..=Changes::KEPT {store.changes.push(Change::Keys(cache.plan.level+1,DocRect::default()));}
+            for _ in 0..=Changes::KEPT {store.changes.push(Change::Keys(cache.plan.level+1,DocRect::default(),None));}
         }
         assert_eq!(project(&mut r),PixelRect::EMPTY,"an overflowed log copies no unchanged cell into the window");
     }

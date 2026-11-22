@@ -2369,7 +2369,7 @@ fn a_watercolor_stroke_that_turns_back_leaves_the_tiles_it_asked_for_and_never_r
 }
 
 #[test]
-fn a_predicted_pencil_stroke_on_a_photo_at_full_size_publishes_only_what_its_dabs_and_tips_change_while_in_contact() {
+fn predicted_pencil_strokes_on_a_photo_at_full_size_publish_only_what_their_dabs_and_tips_change_from_pen_down_to_pen_up() {
     let (extent,surface,frames)=([3072,2048],[1536,1024],24);
     let photo=rgba8_source(extent,|x,y|[(x*7%256) as u8,(y*5%256) as u8,((x+y)%256) as u8,255]);
     let doc=layer_color::photo_project(Arc::unwrap_or_clone(photo),Default::default(),"Ink".into(),SampleDepth::U8).unwrap();
@@ -2396,25 +2396,27 @@ fn a_predicted_pencil_stroke_on_a_photo_at_full_size_publishes_only_what_its_dab
     assert!(presents_whole(&r),"the settled photo presents like a full repaint");
     let reach=|dab:&layer_render::Dab|crate::pixel_rect::pixel_rect(dab.bounds(),extent);
     let cells=|area:PixelRect|pages::coordinates(area,0).fold(PixelRect::EMPTY,|cells,coordinate|cells.union(pages::bounds(coordinate,0,extent)));
-    let (mut tip,mut wide,mut stale)=(PixelRect::EMPTY,Vec::new(),Vec::new());
-    for step in 0..=frames {
-        let x=1000.+16.*step as f32;
-        let dabs=[pencil(x,1020.,15.,&style),pencil(x+8.,1020.,15.,&style)];
-        let [persistent,preview]=predicted_batches(target,&style,1,&dabs,step==0);
-        let lifted=layer_render::DabBatch {stroke_end:true,..persistent.clone()};
-        let batches=if step==frames {vec![lifted]}else {vec![persistent,preview]};
-        let (revision,projected)=(r.composite_revision,r.scale_display.as_ref().unwrap().projected_cells());
-        crate::test_support::submit_ready(&mut r,FramePacket {dabs:&dabs,dab_batches:&batches,time_seconds:0.01*(step+1) as f32,..frame}).unwrap();
-        crate::test_support::complete(&r);
-        let painted=reach(&dabs[0]).union(if step==frames {PixelRect::EMPTY}else {reach(&dabs[1])}).union(tip);
-        tip=if step==frames {PixelRect::EMPTY}else {reach(&dabs[1])};
-        let allowed=if step==0 || step==frames {cells(painted)}
-            else {projected.into_iter().filter(|cell|!cell.intersect(cells(painted)).is_empty()).fold(painted,PixelRect::union)};
-        if r.composite_revision!=revision && r.composite_damage.union(allowed)!=allowed {wide.push((step,r.composite_damage,allowed));}
-        if step<frames && !presents_whole(&r) {stale.push(step);}
+    let (mut wide,mut stale)=(Vec::new(),Vec::new());
+    for (stroke,y,start,heading) in [(1,1020.,1000.,16.),(2,1040.,1384.,-16.)] {
+        let mut tip=PixelRect::EMPTY;
+        for step in 0..=frames {
+            let x=start+heading*step as f32;
+            let dabs=[pencil(x,y,15.,&style),pencil(x+heading/2.,y,15.,&style)];
+            let [persistent,preview]=predicted_batches(target,&style,stroke,&dabs,step==0);
+            let lifted=layer_render::DabBatch {stroke_end:true,..persistent.clone()};
+            let batches=if step==frames {vec![lifted]}else {vec![persistent,preview]};
+            let (revision,projected)=(r.composite_revision,r.scale_display.as_ref().unwrap().projected_cells());
+            crate::test_support::submit_ready(&mut r,FramePacket {dabs:&dabs,dab_batches:&batches,time_seconds:0.01*(step+1) as f32,..frame}).unwrap();
+            crate::test_support::complete(&r);
+            let painted=reach(&dabs[0]).union(if step==frames {PixelRect::EMPTY}else {reach(&dabs[1])}).union(tip);
+            tip=if step==frames {PixelRect::EMPTY}else {reach(&dabs[1])};
+            let allowed=projected.into_iter().filter(|cell|!cell.intersect(cells(painted)).is_empty()).fold(painted,PixelRect::union);
+            if r.composite_revision!=revision && r.composite_damage.union(allowed)!=allowed {wide.push((stroke,step,r.composite_damage,allowed));}
+            if !presents_whole(&r) {stale.push((stroke,step));}
+        }
     }
     crate::test_support::submit_settled(&mut r,frame);
-    assert!(wide.is_empty(),"a contact frame published more than its dabs and tips changed and the projected cells it recomposed, or pen-down or pen-up more than their cells (frame, published, allowed): {wide:?}");
-    assert!(stale.is_empty(),"the retained picture differs from a full repaint after frames {stale:?}");
+    assert!(wide.is_empty(),"a frame from pen-down to pen-up published more than its dabs and tips changed and the projected cells it recomposed (stroke, frame, published, allowed): {wide:?}");
+    assert!(stale.is_empty(),"the retained picture differs from a full repaint after (stroke, frame) {stale:?}");
     assert!(presents_whole(&r),"after pen-up and settling, the retained picture differs from a full repaint");
 }
