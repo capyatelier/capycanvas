@@ -892,7 +892,7 @@ mod tests {
             renderer.adopt_committed_pages(&mut reference);
             renderer.navigator=Default::default();
             crate::test_support::submit_settled(&mut renderer,FramePacket {composite_all:false,..frame});
-            let expected=crate::display_precision::DisplayPrecision::for_scene(document.scene()).format();
+            let expected=crate::display_precision::DisplayPrecision::for_scene(document.scene(), false).format();
             let navigator=renderer.navigator.view().expect("the cold Navigator commits");
             assert!(renderer.navigator.scale()>1.);
             assert_eq!(navigator.texture().format(),expected);
@@ -1441,7 +1441,7 @@ mod gpu_tests {
             assert!(renderer.moving_images.pipelines(&renderer.device).into_iter().all(|p| p.ready()));
             let mut encoder=crate::submission::CommandEncoder::new(&renderer.device,&Default::default());
             let source=document.artwork.objects.iter().next().unwrap().2.image.clone();
-            let request=crate::object_image_mips::MovingRequest {id:source.id(),source:source.storage().clone(),level:1,nearest:false,bounds:crate::PixelRect::full(source.extent),format:crate::object_image_mips::MovingImages::format(document.scene()),rank:0};
+            let request=crate::object_image_mips::MovingRequest {id:source.id(),source:source.storage().clone(),level:1,nearest:false,bounds:crate::PixelRect::full(source.extent),format:crate::object_image_mips::MovingImages::format(crate::display_precision::DisplayPrecision::for_scene(document.scene(), false)),rank:0};
             let mut images=std::mem::take(&mut renderer.moving_images);
             let plan=images.plan(&renderer,std::slice::from_ref(&request),u64::MAX,&mut encoder);
             assert!(plan.is_ok());

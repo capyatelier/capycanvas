@@ -266,7 +266,7 @@ impl Scene {
         let offset=packet.scene.evaluation_offset64();
         let global=ObjectWindow {origin:std::array::from_fn(|i|window.origin[i]-offset[i]),..window};
         CollectionJob {owner,authored:content.keys(),keys,window:global,blend:packet.blend_space,live:self.object_display||self.object_query,
-            context:r.device.working_space(),display:self.object_display,format:crate::MovingProjection::format_for(r.moving_projection.as_ref(),packet.scene)}
+            context:r.device.working_space(),display:self.object_display,format:crate::MovingProjection::format_for(r.moving_projection.as_ref(),packet.scene,r.display_precision(packet.scene))}
     }
     pub(super) fn prepare_object_pages(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, raw: Option<OccurrenceHandle>,
         pages: impl IntoIterator<Item = [u32; 2]> + Clone,

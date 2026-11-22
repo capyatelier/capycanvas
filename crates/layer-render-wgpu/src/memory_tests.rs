@@ -1327,7 +1327,7 @@ fn a_tablet_raster_demand_beside_the_display_floor_is_not_reduced_by_the_display
 }
 
 fn presented_floor(frame: FramePacket<'_>) -> u64 {
-    let format = crate::display_precision::DisplayPrecision::for_scene(frame.scene).format();
+    let format = crate::display_precision::DisplayPrecision::for_scene(frame.scene, false).format();
     let page = u64::from(PAGE_SIZE).pow(2) * u64::from(format.block_copy_size(None).unwrap());
     let visible = display_mips::view_bounds(frame.view, frame.document_extent, 0).unwrap();
     let level = display_mips::view_level(frame.view.document_to_surface, display_mips::MAX_LEVEL).unwrap();
@@ -1469,7 +1469,7 @@ fn resident_presented_cells_leave_the_floor_to_refinement() {
     frame.view = crate::test_support::view([256, 256]);
     submit_settled(&mut r, frame);
     r.begin_frame_memory(frame);
-    let cells = display_floor(frame, 0, WORKING_BYTES) - WORKING_BYTES - IN_FLIGHT_DECODE_BYTES;
+    let cells = display_floor(frame, 0, WORKING_BYTES, crate::display_precision::DisplayPrecision::for_scene(frame.scene, false)) - WORKING_BYTES - IN_FLIGHT_DECODE_BYTES;
     let presented = r.composition_memory(r.scene.as_deref())[1];
     assert!(presented >= cells, "the settled view keeps its presented cells resident: presented {presented}, cells {cells}");
     let display = r.scene_tiers.display.clone();
@@ -1875,7 +1875,7 @@ fn the_display_tier_floor_and_the_ledger_pin_hold_the_same_unit() {
     let usage = r.display_usage().pinned;
     assert_eq!(r.memory.demand.get().pinned(usage)[3] - usage[3], unit, "the ledger pin holds the unit");
     let presented = r.composition_memory(r.scene.as_deref())[1];
-    assert_eq!(r.scene_tiers.display.floor(), display_floor(frame, presented, unit), "the tier floor holds the same unit");
+    assert_eq!(r.scene_tiers.display.floor(), display_floor(frame, presented, unit, r.display_precision(frame.scene)), "the tier floor holds the same unit");
 }
 
 #[test]

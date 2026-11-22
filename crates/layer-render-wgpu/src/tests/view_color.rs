@@ -563,7 +563,8 @@ fn explicit_sdr_surfaces_transform_artwork_and_ui_without_changing_document_pixe
         let codes = [17000, 65000, 5000, 17000];
         let mut layer = source(RgbSpace::ProPhoto, codes);
         frame(&mut r, &mut layer);
-        assert_eq!(crate::test_support::document_texture(&r).format(), wgpu::TextureFormat::Rgba16Float);
+        assert_eq!(crate::test_support::document_texture(&r).format(),
+            if space == RgbSpace::Srgb { wgpu::TextureFormat::Rgba16Float } else { wgpu::TextureFormat::Rgba32Float });
         let before = crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r));
         for color in [
             SdrSurfaceColor::Srgb,
@@ -758,13 +759,10 @@ fn zero_coverage_export_and_navigator_return_black_without_mutating_the_artwork(
     let artwork = r.readback_srgb_rgba8().unwrap();
     // Unassociated export is undefined at zero coverage. Even if a custom
     // effect leaves hidden RGB, the output boundary must emit canonical zero.
-    let pixel = [0.7f32, -0.1, 1.5, 0.]
-        .into_iter()
-        .flat_map(|value| layer_core::color::f16::from_f32(value).to_bits().to_le_bytes())
-        .collect::<Vec<_>>();
-    let input = pixel.repeat(256 * 256);
     let texture = crate::test_support::document_texture(&r);
-    assert_eq!(texture.format(), wgpu::TextureFormat::Rgba16Float);
+    assert_eq!(texture.format(), wgpu::TextureFormat::Rgba32Float);
+    let pixel = [0.7f32, -0.1, 1.5, 0.].into_iter().flat_map(f32::to_le_bytes).collect::<Vec<_>>();
+    let input = pixel.repeat(256 * 256);
     r.queue.write_texture(
         texture.as_image_copy(),
         &input,

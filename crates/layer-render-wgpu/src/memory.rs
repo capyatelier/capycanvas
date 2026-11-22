@@ -122,8 +122,8 @@ fn stack_input_bytes(scene: SceneView<'_>) -> u64 {
         .map(|&owner| u64::from(scene.paint_source(owner).is_some()) + u64::from(scene.mask(owner).is_some_and(|(mask, _)| mask.enabled)))
         .sum::<u64>().saturating_mul(scene::sources::NORMALIZED_PAGE_BYTES)
 }
-fn display_floor(packet: FramePacket<'_>, presented: u64, unit: u64) -> u64 {
-    let format = crate::display_precision::DisplayPrecision::for_scene(packet.scene).format();
+fn display_floor(packet: FramePacket<'_>, presented: u64, unit: u64, precision: crate::display_precision::DisplayPrecision) -> u64 {
+    let format = precision.format();
     let page = u64::from(PAGE_SIZE).pow(2) * u64::from(format.block_copy_size(None).unwrap());
     let visible = display_mips::view_bounds(packet.view, packet.document_extent, 0).unwrap_or(PixelRect::EMPTY);
     let cells = display_mips::view_level(packet.view.document_to_surface, display_mips::MAX_LEVEL).map_or(0, |level| presented_cells(visible, level));
@@ -449,7 +449,7 @@ impl WgpuRasterizer {
         self.memory_demand(packet);
         self.memory.refused.set(self.scale_display.as_ref().map_or(0,scene::scale::Cache::refused_bytes));
         let presented=self.composition_memory(self.scene.as_deref())[1];
-        self.scene_tiers.display.set_limit(self.memory.display_limit(),display_floor(packet,presented,self.memory.unit()));
+        self.scene_tiers.display.set_limit(self.memory.display_limit(),display_floor(packet,presented,self.memory.unit(),self.display_precision(packet.scene)));
         self.publish_memory();
         self.factory.memory_budget().flush_reports();
         self.scene_tiers.display.set_grant(self.memory.retention_limit());

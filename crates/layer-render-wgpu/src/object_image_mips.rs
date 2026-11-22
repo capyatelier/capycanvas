@@ -128,8 +128,8 @@ impl MovingImages {
         crate::scene::sources::Samples::for_source(source,[0;2],RgbSpace::Srgb)
             .map_or(wgpu::TextureFormat::Rgba32Float,|samples|samples.format())
     }
-    pub(crate) fn format(scene: layer_core::SceneView<'_>) -> wgpu::TextureFormat {
-        crate::display_precision::DisplayPrecision::for_scene(scene).format()
+    pub(crate) fn format(precision: crate::display_precision::DisplayPrecision) -> wgpu::TextureFormat {
+        precision.format()
     }
 
     pub(crate) fn demand(requests: &[MovingRequest], viewport: [u32;2]) -> Result<u64,GpuRasterError> {

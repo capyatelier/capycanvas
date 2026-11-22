@@ -3786,8 +3786,9 @@ impl WgpuRasterizer {
         let available = !self.snapshot_worker;
         #[cfg(target_arch = "wasm32")]
         let available = available && self.browser_image_decoder.is_some();
+        let precision = self.display_precision(packet.scene);
         if MovingProjection::update(&mut self.moving_projection, packet.scene, packet.view,
-            self.device.working_space(), available, &mut self.failed_image_tiles,self.moving_layer)? {
+            self.device.working_space(), available, &mut self.failed_image_tiles,self.moving_layer,precision)? {
             let bytes = object_image_mips::MovingImages::demand(&self.moving_projection.as_ref().unwrap().requests, [packet.view.width_px,packet.view.height_px])?;
             if self.memory.mip_demand(bytes,[packet.view.width_px,packet.view.height_px]) {
                 self.publish_memory();

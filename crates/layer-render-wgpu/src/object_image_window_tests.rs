@@ -447,14 +447,14 @@ fn any_effect_float_source_or_hdr_keeps_the_whole_evaluation_full_precision() {
     }
     let source=layer_core::color::source::rgba8_source([16;2],|_,_|[31,73,149,255]);
     let mut plain=document(source.clone(),Default::default());
-    assert_eq!(MovingImages::format(plain.scene()),wgpu::TextureFormat::Rgba16Float);
+    assert_eq!(MovingImages::format(crate::display_precision::DisplayPrecision::for_scene(plain.scene(),false)),wgpu::TextureFormat::Rgba16Float);
     crate::artwork_sample_tests::insert_effect(&mut plain,layer_core::EffectInstance::new(crate::tests::fixture("invert").program()),0);
-    assert_eq!(MovingImages::format(plain.scene()),wgpu::TextureFormat::Rgba32Float);
+    assert_eq!(MovingImages::format(crate::display_precision::DisplayPrecision::for_scene(plain.scene(),false)),wgpu::TextureFormat::Rgba32Float);
     let hdr=document(source,DocumentColor {depth:SampleDepth::F32,..Default::default()});
-    assert_eq!(MovingImages::format(hdr.scene()),wgpu::TextureFormat::Rgba32Float);
+    assert_eq!(MovingImages::format(crate::display_precision::DisplayPrecision::for_scene(hdr.scene(),false)),wgpu::TextureFormat::Rgba32Float);
     let source=crate::test_support::depth_source([16;2],SampleDepth::F32,RgbSpace::Srgb,1<<20,|_,_|[2.,0.5,0.25,1.]);
     let float=document(source,Default::default());
-    assert_eq!(MovingImages::format(float.scene()),wgpu::TextureFormat::Rgba32Float);
+    assert_eq!(MovingImages::format(crate::display_precision::DisplayPrecision::for_scene(float.scene(),false)),wgpu::TextureFormat::Rgba32Float);
 }
 
 #[test]
@@ -572,7 +572,7 @@ fn actual_size_projection_plans_only_the_current_photo_window_and_halo() {
     let mut projection=None;let mut failures=Vec::new();
     for offset in [0.,32.,200.,-200.] {
         packet.view.document_to_surface[4]=-828.+offset;
-        crate::MovingProjection::update(&mut projection,doc.scene(),packet.view,r.device.working_space(),true,&mut failures,None).unwrap();
+        crate::MovingProjection::update(&mut projection,doc.scene(),packet.view,r.device.working_space(),true,&mut failures,None,crate::display_precision::DisplayPrecision::for_scene(doc.scene(),false)).unwrap();
         let request=&projection.as_ref().unwrap().requests[0];
         let visible=display_mips::view_bounds(packet.view,extent,0).unwrap();
         assert!(!request.bounds.is_empty());assert_eq!(request.level,1);
@@ -894,7 +894,7 @@ fn rotated_nearest_and_mixed_scale_occurrences_keep_disjoint_source_windows() {
     let doc=layer_core::Document::from_artwork(artwork).unwrap();
     let view=layer_render::ViewState {width_px:512,height_px:512,document_to_surface:[1.,0.,0.,1.,0.,0.]};
     let mut cache=None;let mut failures=Vec::new();
-    crate::MovingProjection::update(&mut cache,doc.scene(),view,r.device.working_space(),true,&mut failures,None).unwrap();
+    crate::MovingProjection::update(&mut cache,doc.scene(),view,r.device.working_space(),true,&mut failures,None,crate::display_precision::DisplayPrecision::for_scene(doc.scene(),false)).unwrap();
     let requests=&cache.as_ref().unwrap().requests;
     let demand=MovingImages::demand(requests,[512;2]).unwrap();
     assert!(demand>working_bytes());
@@ -903,7 +903,7 @@ fn rotated_nearest_and_mixed_scale_occurrences_keep_disjoint_source_windows() {
     assert_eq!(same_scale.len(),2);assert!(same_scale[0].bounds.intersect(same_scale[1].bounds).is_empty());
     assert!(requests.iter().any(|request|request.level==2));assert!(requests.iter().any(|request|request.nearest && request.level==0));
     let rotated=layer_render::ViewState {document_to_surface:[0.,0.5,-0.25,0.,512.,0.],..view};
-    crate::MovingProjection::update(&mut cache,doc.scene(),rotated,r.device.working_space(),true,&mut failures,None).unwrap();
+    crate::MovingProjection::update(&mut cache,doc.scene(),rotated,r.device.working_space(),true,&mut failures,None,crate::display_precision::DisplayPrecision::for_scene(doc.scene(),false)).unwrap();
     for request in &cache.as_ref().unwrap().requests {
         let level=if request.nearest {0} else {request.level.max(3)};
         let plan=request.allocation(&r.device,level,false).unwrap().unwrap().plan;
@@ -911,11 +911,11 @@ fn rotated_nearest_and_mixed_scale_occurrences_keep_disjoint_source_windows() {
         assert_eq!(plan.bounds.intersect(halo),halo);
     }
     let outside=layer_render::ViewState {document_to_surface:[1.,0.,0.,1.,-8192.,0.],..view};
-    crate::MovingProjection::update(&mut cache,doc.scene(),outside,r.device.working_space(),true,&mut failures,None).unwrap();
+    crate::MovingProjection::update(&mut cache,doc.scene(),outside,r.device.working_space(),true,&mut failures,None,crate::display_precision::DisplayPrecision::for_scene(doc.scene(),false)).unwrap();
     assert!(!cache.as_ref().unwrap().requests.is_empty());
     assert!(cache.as_ref().unwrap().requests.iter().all(|request|request.bounds.is_empty()));
     for view in [layer_render::ViewState {width_px:0,..view},layer_render::ViewState {document_to_surface:[0.;6],..view}] {
-        crate::MovingProjection::update(&mut cache,doc.scene(),view,r.device.working_space(),true,&mut failures,None).unwrap();
+        crate::MovingProjection::update(&mut cache,doc.scene(),view,r.device.working_space(),true,&mut failures,None,crate::display_precision::DisplayPrecision::for_scene(doc.scene(),false)).unwrap();
         assert!(cache.as_ref().unwrap().requests.is_empty());
     }
 }

@@ -23,9 +23,9 @@ pub(crate) struct MovingProjection {
     pub(crate) requests: Vec<object_image_mips::MovingRequest>,
 }
 impl MovingProjection {
-    pub(crate) fn format_for(cache:Option<&Self>,scene:SceneView<'_>)->wgpu::TextureFormat {
-        cache.filter(|projection|projection.revision==(scene.owner(),scene.revision()))
-            .map_or_else(||object_image_mips::MovingImages::format(scene),|projection|projection.format)
+    pub(crate) fn format_for(cache:Option<&Self>,scene:SceneView<'_>,precision:crate::display_precision::DisplayPrecision)->wgpu::TextureFormat {
+        cache.filter(|projection|projection.revision==(scene.owner(),scene.revision()) && projection.format==precision.format())
+            .map_or_else(||object_image_mips::MovingImages::format(precision),|projection|projection.format)
     }
     fn matches(&self, scene: SceneView<'_>, linear: [u32;4], visible: crate::PixelRect, viewport: [u32;2], format: wgpu::TextureFormat, space: layer_core::color::RgbSpace, available: bool, failures: usize, moving:Option<layer_core::authored::OccurrenceHandle>) -> bool {
         let artwork = scene.artwork();
@@ -37,12 +37,12 @@ impl MovingProjection {
             && self.viewport == viewport && self.format == format
             && self.space == space && self.available == available && self.failures == failures && self.moving==moving
     }
-    pub(crate) fn update(cache:&mut Option<Self>, scene:SceneView<'_>, view:layer_render::ViewState, space:layer_core::color::RgbSpace, available:bool, failed:&mut Vec<FailedImageTile>, moving:Option<layer_core::authored::OccurrenceHandle>) -> Result<bool,GpuRasterError> {
+    pub(crate) fn update(cache:&mut Option<Self>, scene:SceneView<'_>, view:layer_render::ViewState, space:layer_core::color::RgbSpace, available:bool, failed:&mut Vec<FailedImageTile>, moving:Option<layer_core::authored::OccurrenceHandle>, precision:crate::display_precision::DisplayPrecision) -> Result<bool,GpuRasterError> {
         use layer_core::authored::{Affine64, ImageInterpolation};
         let mapping=view.document_to_surface;
         let viewport=[view.width_px,view.height_px];
         let revision=(scene.owner(),scene.revision());
-        let format=Self::format_for(cache.as_ref(),scene);
+        let format=Self::format_for(cache.as_ref(),scene,precision);
         let extent=scene.composition().size;
         let visible=crate::display_mips::view_bounds(view,extent,0).unwrap_or(crate::PixelRect::EMPTY);
         let linear = std::array::from_fn(|i|mapping[i].to_bits());
@@ -112,25 +112,25 @@ mod tests {
         let mut doc=Document::from_artwork(artwork).unwrap();
         let mut cache=None;let mut failures=Vec::new();
         let mapping=[0.25,0.,0.,0.25,0.,0.];
-        MovingProjection::update(&mut cache,doc.scene(),layer_render::ViewState {width_px:256,height_px:256,document_to_surface:mapping},RgbSpace::Srgb,true,&mut failures,None).unwrap();
+        MovingProjection::update(&mut cache,doc.scene(),layer_render::ViewState {width_px:256,height_px:256,document_to_surface:mapping},RgbSpace::Srgb,true,&mut failures,None,crate::display_precision::DisplayPrecision::for_scene(doc.scene(),false)).unwrap();
         let before=cache.as_ref().unwrap();assert_eq!(before.requests.len(),1);assert_eq!(before.identities.len(),1);assert_eq!(before.requests[0].level,2);
         let requests=before.requests.as_ptr();let identities=before.identities.as_ptr();let capacity=[before.requests.capacity(),before.identities.capacity()];
         let mut source=doc.artwork.paint.get(paint).unwrap().clone();source.domain=[257,256];
         doc.apply(Edit::Paint(RecordChange::replace(&doc.artwork.paint,paint,Some(source)).unwrap())).unwrap();
-        MovingProjection::update(&mut cache,doc.scene(),layer_render::ViewState {width_px:256,height_px:256,document_to_surface:[0.25,0.,0.,0.25,120.,-40.]},RgbSpace::Srgb,true,&mut failures,None).unwrap();
+        MovingProjection::update(&mut cache,doc.scene(),layer_render::ViewState {width_px:256,height_px:256,document_to_surface:[0.25,0.,0.,0.25,120.,-40.]},RgbSpace::Srgb,true,&mut failures,None,crate::display_precision::DisplayPrecision::for_scene(doc.scene(),false)).unwrap();
         let painted=cache.as_ref().unwrap();assert_eq!(painted.requests.as_ptr(),requests);assert_eq!(painted.identities.as_ptr(),identities);assert_eq!([painted.requests.capacity(),painted.identities.capacity()],capacity);
         failures.push((image.id(),Arc::downgrade(image.storage()),[0;2],RgbSpace::Srgb,"Unavailable image tile".into()));
-        MovingProjection::update(&mut cache,doc.scene(),layer_render::ViewState {width_px:256,height_px:256,document_to_surface:mapping},RgbSpace::Srgb,true,&mut failures,None).unwrap();
+        MovingProjection::update(&mut cache,doc.scene(),layer_render::ViewState {width_px:256,height_px:256,document_to_surface:mapping},RgbSpace::Srgb,true,&mut failures,None,crate::display_precision::DisplayPrecision::for_scene(doc.scene(),false)).unwrap();
         let failed=cache.as_ref().unwrap();assert!(failed.requests.is_empty());assert_eq!(failed.identities.as_ptr(),identities);assert_eq!(failures.len(),1);
-        MovingProjection::update(&mut cache,doc.scene(),layer_render::ViewState {width_px:256,height_px:256,document_to_surface:mapping},RgbSpace::DisplayP3,true,&mut failures,None).unwrap();
+        MovingProjection::update(&mut cache,doc.scene(),layer_render::ViewState {width_px:256,height_px:256,document_to_surface:mapping},RgbSpace::DisplayP3,true,&mut failures,None,crate::display_precision::DisplayPrecision::for_scene(doc.scene(),false)).unwrap();
         assert!(failures.is_empty());assert_eq!(cache.as_ref().unwrap().requests.len(),1);assert_eq!(cache.as_ref().unwrap().identities.as_ptr(),identities);
-        MovingProjection::update(&mut cache,doc.scene(),layer_render::ViewState {width_px:256,height_px:256,document_to_surface:[0.125,0.,0.,0.125,0.,0.]},RgbSpace::DisplayP3,true,&mut failures,None).unwrap();
+        MovingProjection::update(&mut cache,doc.scene(),layer_render::ViewState {width_px:256,height_px:256,document_to_surface:[0.125,0.,0.,0.125,0.,0.]},RgbSpace::DisplayP3,true,&mut failures,None,crate::display_precision::DisplayPrecision::for_scene(doc.scene(),false)).unwrap();
         assert_eq!(cache.as_ref().unwrap().requests[0].level,3);
-        MovingProjection::update(&mut cache,doc.scene(),layer_render::ViewState {width_px:256,height_px:256,document_to_surface:[0.1597,0.,0.,0.1597,0.,0.]},RgbSpace::DisplayP3,true,&mut failures,None).unwrap();
+        MovingProjection::update(&mut cache,doc.scene(),layer_render::ViewState {width_px:256,height_px:256,document_to_surface:[0.1597,0.,0.,0.1597,0.,0.]},RgbSpace::DisplayP3,true,&mut failures,None,crate::display_precision::DisplayPrecision::for_scene(doc.scene(),false)).unwrap();
         assert_eq!(cache.as_ref().unwrap().requests[0].level,2);
         let mut changed=doc.artwork.stacks.get(stack).unwrap().clone();changed.entries=vec![ink];
         doc.apply(Edit::Stack(RecordChange::replace(&doc.artwork.stacks,stack,Some(changed)).unwrap())).unwrap();
-        MovingProjection::update(&mut cache,doc.scene(),layer_render::ViewState {width_px:256,height_px:256,document_to_surface:mapping},RgbSpace::DisplayP3,true,&mut failures,None).unwrap();
+        MovingProjection::update(&mut cache,doc.scene(),layer_render::ViewState {width_px:256,height_px:256,document_to_surface:mapping},RgbSpace::DisplayP3,true,&mut failures,None,crate::display_precision::DisplayPrecision::for_scene(doc.scene(),false)).unwrap();
         assert!(cache.as_ref().unwrap().requests.is_empty());
         assert_eq!(cache.as_ref().unwrap().identities.as_ptr(),identities);
     }
