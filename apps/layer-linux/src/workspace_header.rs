@@ -865,30 +865,28 @@ impl Header {
             grip: editing_grip,
         }
     }
-    fn metrics(&self, size: HeaderSize) -> Vec<HeaderMetric> {
+    fn metrics(&self, size: HeaderSize, documents: usize) -> Vec<HeaderMetric> {
         self.items
             .borrow()
             .iter()
             .map(|item| {
-                if matches!(item.entry.item, HeaderItem::Clock | HeaderItem::Battery)
+                let unavailable = matches!(item.entry.item, HeaderItem::Clock | HeaderItem::Battery)
                     && !self.editing.get()
                     && item
                         .content
                         .first_child()
                         .and_downcast::<gtk::Stack>()
-                        .is_some_and(|s| s.visible_child_name().as_deref() == Some("placeholder"))
-                {
-                    return HeaderMetric {
-                        id: item.entry.id,
-                        width: 0.,
-                        compact: 0.,
-                    };
-                }
-                let grip = if self.editing.get() { 20. } else { 0. };
-                let natural = match item.entry.item {
+                        .is_some_and(|s| s.visible_child_name().as_deref() == Some("placeholder"));
+                let width = match item.entry.item {
+                    _ if unavailable => 0.,
                     HeaderItem::Workspaces => item.full_width().max(144.),
                     HeaderItem::MenuLabels => item.full_width().max(size.tile()),
-                    HeaderItem::DocumentTitle => 180.,
+                    HeaderItem::DocumentTitle if documents > 1 => 180.,
+                    HeaderItem::DocumentTitle => item
+                        .content
+                        .downcast_ref::<gtk::Stack>()
+                        .and_then(|s| s.child_by_name("title"))
+                        .map_or(180., |title| title.measure(gtk::Orientation::Horizontal, -1).1 as f32),
                     HeaderItem::Space
                     | HeaderItem::Settings
                     | HeaderItem::Fullscreen
@@ -901,17 +899,7 @@ impl Header {
                         .1
                         .max(size.tile() as i32) as f32,
                 };
-                let compact = match item.entry.item {
-                    HeaderItem::Workspaces => 144.,
-                    HeaderItem::MenuLabels => size.tile(),
-                    HeaderItem::DocumentTitle => 80.,
-                    _ => natural,
-                };
-                HeaderMetric {
-                    id: item.entry.id,
-                    width: natural + grip,
-                    compact: compact + grip,
-                }
+                HeaderMetric { id: item.entry.id, width }
             })
             .collect()
     }
@@ -972,7 +960,7 @@ impl Header {
         }
         let insets = native.insets;
         self.insets.set(insets);
-        let geometry = model.resolve_documents(width, insets, &self.metrics(model.size), self.editing.get(), w.documents.len());
+        let geometry = model.resolve_documents(width, insets, &self.metrics(model.size, w.documents.len()), self.editing.get(), w.documents.len());
         if self
             .drag
             .borrow()
@@ -1042,15 +1030,7 @@ impl Header {
                 if item.compact.is_some()
                     && let Some(stack) = item.content.downcast_ref::<gtk::Stack>()
                 {
-                    let full = item.full_width();
-                    let grip = if self.editing.get() { 20. } else { 0. };
-                    stack.set_visible_child_name(
-                        if full > 0. && a.bounds.width - grip + 0.01 >= full {
-                            "full"
-                        } else {
-                            "compact"
-                        },
-                    );
+                    stack.set_visible_child_name(if geometry.compact.contains(&item.entry.id) { "compact" } else { "full" });
                 }
                 allocate_at(item.root.upcast_ref(), a.bounds);
             }

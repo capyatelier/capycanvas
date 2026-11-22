@@ -28,11 +28,11 @@ export async function checkTitleBarOverflow({call,evaluate,settle}) {
   try {
     const desktop=structuredClone(workspace);desktop.layout.phone=null;
     await send({type:'restore_workspace',workspace:desktop});
-    // Even the compact menu and its neighbors overflow at extreme widths.
+    // When both sides are crowded, even the compact menu and its neighbors overflow.
     // Setup uses shared edits; all pickups are native.
     for(const e of (await model()).zones.flat())await edit({type:'remove',id:e.id});
     for(const kind of ['capy','menu_labels','space'])await edit({type:'add',zone:'left',before:null,item:{kind}});
-    await edit({type:'add',zone:'right',before:null,item:{kind:'settings'}});
+    for(const kind of ['space','space','space','settings'])await edit({type:'add',zone:'right',before:null,item:{kind}});
     const menu=(await model()).zones[0][1].id,neighbor=(await model()).zones[0][2].id;
     for(const size of ['small','medium','large'])for(device of ['mouse','touch','pen']) {
       const narrow={small:360,medium:456,large:552}[size];

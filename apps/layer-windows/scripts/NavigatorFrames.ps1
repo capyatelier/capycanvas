@@ -93,6 +93,12 @@ function Navigator-CaptureArea($Bounds,[Drawing.Rectangle]$Owned){
 function Navigator-HeaderOffset($Overview,$Tab){@(($Overview.Left-$Tab.Left),($Overview.Top-$Tab.Top),$Tab.Width,$Tab.Height)}
 function Navigator-FrameRect($Rect){@(([double]$Rect.Left-$script:navArea.Left),([double]$Rect.Top-$script:navArea.Top),[double]$Rect.Width,[double]$Rect.Height)}
 function Navigator-Rgb([string]$Color){$c=[Drawing.ColorTranslator]::FromHtml($Color);@([int]$c.R,[int]$c.G,[int]$c.B)}
+function Select-NavigatorDrawing($Id) {
+  if(Find ('drawing-tab-'+$Id) -Visible){Invoke ('drawing-tab-'+$Id);return}
+  Invoke 'drawing-selector'
+  Wait-Until {Find 'drawing-list'} 'Drawing selector did not open'
+  (Control ('drawing-row-'+$Id)).SetFocus();[CapyRowPointer]::Key(0x0D)
+}
 function Navigator-Collapse {
  $b=(Control 'panel-tab-navigator' -Arranged).Current.BoundingRectangle
  [CapyRowPointer]::RightClick([int]($b.Left+$b.Width/2),[int]($b.Top+$b.Height/2));Invoke 'Collapse column' -Name
@@ -507,10 +513,10 @@ function Navigator-RetainedFrames {
   Navigator-DetachedStroke
   $contextStart=Model;$returnTab=$contextStart.windows_tabs.selected;$otherTab=@($contextStart.windows_tabs.tabs|Where-Object {$_.id -ne $returnTab})[0]
   if(!$otherTab){throw 'Closed Navigator context check requires another drawing'}
-  Invoke ('drawing-tab-'+$otherTab.id)
+  Select-NavigatorDrawing $otherTab.id
   Wait-Canvas {$current=Model;$current.windows_tabs.selected -eq $otherTab.id -and $current.brush_ready -and $current.canvas_ready} 'Closed Navigator context destination did not settle' 60
   $contextOther=Model
-  Invoke ('drawing-tab-'+$returnTab)
+  Select-NavigatorDrawing $returnTab
   Wait-Canvas {$current=Model;$current.windows_tabs.selected -eq $returnTab -and $current.brush_ready -and $current.canvas_ready} 'Closed Navigator context return did not settle' 60
   $contextEnd=Model
   $script:navClosedContext=@{drawing=$returnTab;other_drawing=$otherTab.id;generation_before=$contextStart.state.toolbar_context_generation;generation_other=$contextOther.state.toolbar_context_generation;generation_after=$contextEnd.state.toolbar_context_generation;runtime_id_before=$drawerIdentity}

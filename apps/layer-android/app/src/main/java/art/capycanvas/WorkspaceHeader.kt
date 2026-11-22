@@ -89,19 +89,17 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
     val title = tab?.let { "${it.optString("title")}${if (state.getJSONObject("document_file").optBoolean("modified")) " •" else ""} · ${it.optInt("width")} × ${it.optInt("height")}" } ?: ""
     val choices = host.workspaceManager?.array("switcher_display")?.objects() ?: emptyList()
     val workspaceWidth = (30f + choices.sumOf { (measure(it.getString("title")) + 18f).coerceAtMost(130f).toDouble() }).toFloat().coerceAtMost(480f)
+    val documents = host.drawingTabs.rows.size
     val metrics = JSONArray(entries.map { entry ->
-        val kind = entry.getJSONObject("item").getString("kind")
-        val natural = when (kind) {
+        val width = when (entry.getJSONObject("item").getString("kind")) {
             "menu_labels" -> menuWidth
             "workspaces" -> workspaceWidth.coerceAtLeast(tile)
-            "document_title" -> measure(title).coerceIn(tile, 350f) + 12f
+            "document_title" -> (if (documents > 1) measure(title).coerceIn(tile, 350f) else measure(title)) + 12f
             "clock" -> measure("00:00 PM") + 2 * HeaderTextPadding.value
             "space" -> tile * .5f
             else -> tile
         }
-        val grip = if (editing) (20f * density).roundToInt() / density else 0f
-        obj("id" to entry.getInt("id"), "width" to natural + grip,
-            "compact" to (if (kind in listOf("menu_labels", "workspaces", "document_title")) tile else natural) + grip)
+        obj("id" to entry.getInt("id"), "width" to width)
     })
     var bankHeight by remember { mutableFloatStateOf(0f) }
     var overflowMenu by remember { mutableStateOf<JSONObject?>(null) }
@@ -119,7 +117,6 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
     CompositionLocalProvider(LocalWorkspaceZ provides 300) {
     BoxWithConstraints(Modifier.fillMaxSize().zIndex(300f)) {
         val width = maxWidth.value
-        val documents = host.drawingTabs.rows.size
         val geometryKey = "$width:$modelKey:$editing:$metrics:$documents"
         LaunchedEffect(geometryKey) {
             input.finish(true)
@@ -150,6 +147,7 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
         val placements = geometry?.array("items")?.objects()?.associateBy { it.getInt("id") } ?: emptyMap()
         val bars = geometry?.optJSONArray("bars")?.objects() ?: emptyList()
         val joined = bars.flatMap { bar -> bar.array("items").values().map { (it as Number).toInt() } }.toSet()
+        val compactIds = geometry?.array("compact")?.values()?.map { (it as Number).toInt() }?.toSet() ?: emptySet()
         bars.forEach { bar ->
             val bounds = bar.getJSONObject("bounds")
             val members = bar.array("items").values().map { (it as Number).toInt() }
@@ -159,8 +157,9 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
                 nativeShape = { input.dock.drawerContainerShape(bounds, radius, sources = sources.filter { it.glass?.active == true }) }))
         }
         if (editing) geometry?.array("zones")?.objects()?.forEachIndexed { index, zone ->
-            val active = input.preview?.optJSONArray("target")?.optString(0) == listOf("left", "center", "right")[index]
-            Box(Modifier.placed(zone, density).border(1.dp, colors.divider, ControlShape)
+            val name = listOf("left", "center", "right")[index]
+            val active = input.preview?.optJSONArray("target")?.optString(0) == name
+            Box(Modifier.placed(zone, density).testTag("header-zone-$name").border(1.dp, colors.divider, ControlShape)
                 .background(if (active) colors.accent.copy(alpha = .08f) else Color.Transparent, ControlShape))
         }
         entries.forEach { entry ->
@@ -170,9 +169,8 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
                 val bounds = heldBounds ?: placements[id]?.getJSONObject("bounds")
                 if (bounds != null && (editing || entry.getJSONObject("item").getString("kind") != "capy")) {
                     val x by animateFloatAsState(bounds.number("x"), tween(if (input.preview != null && heldBounds == null) 120 else 0), label = "header-x")
-                    val natural = metrics.objects().first { it.getInt("id") == id }.number("width")
                     HeaderItem(host, snapshot, input, entry, specs.getValue(id), size, title,
-                        compact = bounds.number("width") < natural - .5f, inBar = id in joined,
+                        compact = id in compactIds, inBar = id in joined,
                         modifier = Modifier.offset { IntOffset((x * density).roundToInt(), (bounds.number("y") * density).roundToInt()) }
                             .size(bounds.number("width").dp, bounds.number("height").dp).zIndex(if (heldBounds == null) 0f else 10f),
                         editing = editing)
@@ -252,6 +250,11 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
         }
     }
     }
+}
+
+private fun CanvasHost.currentWorkspaceTitle(fallback: String): String {
+    val view = workspaceManager ?: return fallback
+    return view.array("switcher_display").objects().firstOrNull { it.getString("id") == view.optString("id") }?.getString("title") ?: fallback
 }
 
 private fun activateHeader(host: CanvasHost, entry: JSONObject) {
@@ -378,7 +381,8 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                             } else activate()
                         }
                     }) {
-                    LiveIcon(host, icon, label, Modifier.size(size.number("icon").dp))
+                    if (kind == "workspaces") Text(host.currentWorkspaceTitle(label), Modifier.padding(horizontal = 8.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    else LiveIcon(host, icon, label, Modifier.size(size.number("icon").dp))
                 }
             }
             if (!editing && spec.optBoolean("has_variants")) ToolGroupIndicator(

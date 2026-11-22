@@ -23,6 +23,7 @@ import SwiftUI
     private var geometry: JSON { header.preview.isNull ? header.geometry : header.preview["geometry"] }
     private var radius: CGFloat { size["tile"].number / 2 }
     private var barred: Set<UInt64> { Set(geometry["bars"].array.flatMap { $0["items"].array.map(\.uint) }) }
+    private var compacted: Set<UInt64> { Set(geometry["compact"].array.map(\.uint)) }
     private func drawerSources(in bar: JSON) -> [DrawerSource] {
         let items = Set(bar["items"].array.map(\.uint))
         return store.contentDrawers.sources.values.filter { $0.anchor["kind"].string == "header" && items.contains($0.anchor["id"].uint) }
@@ -40,28 +41,27 @@ import SwiftUI
     }
     private var metrics: [Any] {
         let size = requestedSize
+        let textSize = store.catalog["text_size_pt"].number > 0 ? store.catalog["text_size_pt"].number * 4 / 3 : 44.0 / 3
         return entries.map { entry in
             let kind = entry["item"]["kind"].string, tile = size["tile"].number
             let hidden = !editing && (["clock", "battery"].contains(kind) && !store.state["fullscreen"].bool
                 || kind == "battery" && status.battery == nil)
-            var width = tile, compact = tile
+            var width = tile
             switch kind {
-            case "document_title": width = max(180, min(600, Double(store.snapshot["document_tabs"]["tabs"].array.count) * 180)); compact = 80
+            case "document_title":
+                let drawings = store.snapshot["document_tabs"]["tabs"].array.count
+                if drawings > 1 { width = max(180, min(600, Double(drawings) * 180)) }
+                else { width = max(tile, ceil(EditorTextMetrics.width(store.drawingTabs.selectedDescription, size: textSize, weight: .semibold) + 16)) }
             case "workspaces":
                 width = max(144, WorkspaceSwitcher.naturalWidth(store.workspaces?.view["switcher_display"].array ?? [], textSize: 44.0 / 3))
-                compact = 144
             case "menu_labels":
-                let textSize = store.catalog["text_size_pt"].number > 0 ? store.catalog["text_size_pt"].number * 4 / 3 : 44.0 / 3
                 width = ceil(ApplicationMenus.naturalWidth(store.snapshot["application_menus"].array, textSize: textSize))
-                compact = tile
             case "clock":
                 let text = editing && !store.state["fullscreen"].bool ? metadata(entry)["label"].string : status.time
                 width = max(tile, EditorTextMetrics.width(text, size: 44.0 / 3, weight: .regular, monospacedDigits: true) + 16)
-                compact = width
             default: break
             }
-            return ["id":entry["id"].raw, "width":hidden ? 0 : width + (editing ? 20 : 0),
-                "compact":hidden ? 0 : compact + (editing ? 20 : 0)]
+            return ["id":entry["id"].raw, "width":hidden ? 0 : width]
         }
     }
     private var specification: JSON {
@@ -124,7 +124,9 @@ import SwiftUI
                 let entry = source["kind"].string == "item"
                     ? entries.first(where: { $0["id"].uint == source["value"].uint }) ?? JSON()
                     : JSON(["id":0, "item":source["kind"].string == "tools" ? ["kind":"tools"] : source["value"].raw])
-                item(entry, width: header.preview["held"]["width"].number)
+                let pickedUpCompact = Set(header.geometry["compact"].array.map(\.uint))
+                item(entry, width: header.preview["held"]["width"].number,
+                    compact: source["kind"].string != "item" || pickedUpCompact.contains(entry["id"].uint))
                     .background(palette["panel"], in: SquircleShape(radius))
                     .overlay(SquircleShape(radius).stroke(header.preview["detached"].bool ? .red : palette.accent, lineWidth: 2))
                     .placed(header.preview["held"]).allowsHitTesting(false).accessibilityHidden(true)
@@ -190,6 +192,7 @@ import SwiftUI
     @ViewBuilder private func slot(_ entry: JSON) -> some View {
         let id = entry["id"].uint
         let held = header.heldSource["kind"].string == "item" && header.heldSource["value"].uint == id
+        let compact = compacted.contains(id)
         let allocation = geometry["items"].array.first { $0["id"].uint == id }
             ?? (held ? header.geometry["items"].array.first { $0["id"].uint == id } : nil)
         if let allocation, editing || entry["item"]["kind"].string != "capy" {
@@ -199,7 +202,7 @@ import SwiftUI
                         guard !header.contact.consumeClick() else { return }
                         header.selected = id; focused = true
                     } label: {
-                        item(entry, width: allocation["bounds"]["width"].number, inBar: false).allowsHitTesting(false)
+                        item(entry, width: allocation["bounds"]["width"].number, compact: compact, inBar: false).allowsHitTesting(false)
                             .overlay(Color.clear.contentShape(Rectangle()))
                     }
                         .buttonStyle(.plain).accessibilityLabel(metadata(entry)["label"].string)
@@ -207,9 +210,9 @@ import SwiftUI
                         .accessibilityAddTraits(header.selected == id ? .isSelected : [])
                         .modifier(HeaderSourceMeasurement(source: JSON(["kind":"item", "value":id])))
                 } else if entry["item"]["kind"].string == "workspaces" {
-                    item(entry, width: allocation["bounds"]["width"].number, inBar: barred.contains(id))
+                    item(entry, width: allocation["bounds"]["width"].number, compact: compact, inBar: barred.contains(id))
                 } else {
-                    item(entry, width: allocation["bounds"]["width"].number, inBar: barred.contains(id))
+                    item(entry, width: allocation["bounds"]["width"].number, compact: compact, inBar: barred.contains(id))
                         .modifier(WorkspaceContext(store: store, target: JSON(["kind":"header", "id":id])))
                 }
             }.modifier(HeaderControlMeasurement(id: "header-item-\(id)"))
@@ -249,11 +252,11 @@ import SwiftUI
         }.frame(width: 240, height: min(360, CGFloat(geometry["hidden"][zone].array.count) * 38 + 12))
             .onPreferenceChange(HeaderSources.self) { header.overflowSources = $0 }
     }
-    private func item(_ entry: JSON, width: CGFloat, inBar: Bool = false) -> some View {
+    private func item(_ entry: JSON, width: CGFloat, compact: Bool, inBar: Bool = false) -> some View {
         HStack(spacing: 0) {
             if editing { SharedIcon(name: "grip").frame(width: 20).opacity(0.5) }
             HeaderItemControl(store: store, entry: entry, description: metadata(entry), size: size, status: status,
-                width: max(0, width - (editing ? 20 : 0)), editing: editing, inBar: inBar)
+                width: max(0, width - (editing ? 20 : 0)), compact: compact, editing: editing, inBar: inBar)
         }.frame(width: width, height: size["tile"].number)
     }
     private func overflow(_ zone: Int) -> AppleContextMenu {
@@ -290,6 +293,7 @@ private struct HeaderItemControl: View {
     let entry: JSON, description: JSON, size: JSON
     @ObservedObject var status: SystemStatus
     let width: CGFloat
+    let compact: Bool
     let editing: Bool
     let inBar: Bool
     @State private var hovering = false
@@ -316,12 +320,13 @@ private struct HeaderItemControl: View {
                     .buttonStyle(HeaderButtonStyle(hovering: hovering, inBar: inBar, radius: radius))
                     .accessibilityLabel(store.bootstrap["application_menus"].string).accessibilityIdentifier("application-menus")
                     .modifier(HeaderControlMeasurement(id: "application-menus"))
-            case "menu_labels": ApplicationMenus(store: store, iconSize: size["icon"].number, tileSize: size["tile"].number, radius: radius)
+            case "menu_labels": ApplicationMenus(store: store, compact: compact, iconSize: size["icon"].number, tileSize: size["tile"].number, radius: radius)
             case "settings": tile("settings") { store.invoke("settings") }.accessibilityIdentifier("settings-button")
                     .modifier(HeaderControlMeasurement(id: "settings-button"))
             case "workspaces":
                 if let workspaces = store.workspaces {
-                    WorkspaceSwitcher(workspaces: workspaces, palette: palette, compactTextSize: compactWorkspaceTextSize, maximumWidth: width, tile: size["tile"].number)
+                    WorkspaceSwitcher(workspaces: workspaces, palette: palette, compactTextSize: compactWorkspaceTextSize, compact: compact,
+                        maximumWidth: width, tile: size["tile"].number)
                 } else { Text(store.catalog["native_copy"]["header"]["workspaces"].string).lineLimit(1) }
             case "document_title":
                 DrawingTabsHeader(store: store, tabs: store.drawingTabs, width: width, tile: size["tile"].number, gap: size["gap"].number)

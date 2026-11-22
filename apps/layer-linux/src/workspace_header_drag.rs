@@ -115,7 +115,7 @@ impl Header {
         };
         let width = self.root.width() as f32;
         let insets = self.insets.get();
-        let metrics = self.metrics(model.size);
+        let metrics = self.metrics(model.size, w.documents.len());
         let Some(mut policy) = HeaderDrag::new(
             &model,
             HeaderDragStart {
@@ -142,11 +142,8 @@ impl Header {
             if !visible {
                 // Hidden overflow items may be revealed by closing the source
                 // slot. Capture them too, without reparenting any live control.
-                let width = metrics
-                    .iter()
-                    .find(|m| m.id == item.entry.id)
-                    .unwrap()
-                    .compact;
+                let measured = metrics.iter().find(|m| m.id == item.entry.id).map(|m| m.width);
+                let width = item.entry.item.slot_width(model.size, measured, true, true);
                 item.root.set_child_visible(true);
                 allocate_at(
                     item.root.upcast_ref(),

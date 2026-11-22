@@ -438,8 +438,8 @@ class AndroidTitleBarTest {
             assertNotEquals(2, neighbor)
             assertTrue(bounds("header-item-$neighbor").width > 0)
             shot("compact-$device")
-            drag("header-item-$neighbor", center())
-            drag("header-item-2", center())
+            drag("header-item-$neighbor", bounds("header-zone-center").center)
+            drag("header-item-2", bounds("header-zone-center").center)
             assertTrue("Menu body moves with Capy retained", model().array("zones").getJSONArray(1).objects().any { it.getInt("id") == 2 })
             assertTrue(entries().any { it.getInt("id") == 1 })
             tap("header-edit-cancel")
@@ -451,7 +451,7 @@ class AndroidTitleBarTest {
             val hidden = entries().map { it.getInt("id") }.first { id ->
                 var exists = false; instrumentation.runOnMainSync { exists = node("header-overflow-item-$id") != null }; exists
             }
-            drag("header-overflow-item-$hidden", center())
+            drag("header-overflow-item-$hidden", bounds("header-zone-center").center)
             assertTrue(model().array("zones").getJSONArray(1).objects().any { it.getInt("id") == hidden })
             tap("header-edit-done")
         }

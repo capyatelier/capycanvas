@@ -17,7 +17,7 @@ export function createHeader({app, state, paintPair, workspace, element, button,
   const copy=liveCopy(app,"catalog").native_copy.header,common=liveCopy(app,"bootstrap_view").common,labels=liveCopy(app,"header_view");
   const root = document.querySelector('#header');
   const retained = element('div'); retained.hidden = true; workspace.append(retained);
-  const title = documents.title;
+  const title = documents.title, titleText = document.querySelector('#document-title');
   const switcher = document.querySelector('.workspace-switcher');
   const status = document.querySelector('.workspace-status');
   retained.append(title, switcher, systemStatus.root);
@@ -275,7 +275,6 @@ export function createHeader({app, state, paintPair, workspace, element, button,
     if(remeasure)queue();
   }
   function measure() {
-    const extra=editing?20:0;
     const items=entries().map(entry=>{
       const r=records.get(entry.id);
       return {entry,r,hidden:r.root.hidden,full:r.full?.hidden,compact:r.compact?.hidden,
@@ -287,14 +286,14 @@ export function createHeader({app, state, paintPair, workspace, element, button,
       if(r.compact){r.full.hidden=false;r.compact.hidden=true;}
     }
     const result=items.map(({entry,r,omitted})=>{
-      if(omitted)return{id:entry.id,width:0,compact:0};
+      if(omitted)return{id:entry.id,width:0};
       const kind=entry.item.kind;
-      let width=size.tile,compact;
-      if(kind==='workspaces'){width=Math.max(144,switcher.querySelector('.workspace-switcher-choices').scrollWidth + switcher.querySelector('.workspace-switcher-options').offsetWidth + 12);compact=144;}
-      else if(kind==='document_title'){width=180;compact=80;}
-      else if(kind==='menu_labels'){width=Math.max(width,r.full.offsetWidth);compact=size.tile;}
+      let width=size.tile;
+      if(kind==='workspaces')width=Math.max(144,switcher.querySelector('.workspace-switcher-choices').scrollWidth + switcher.querySelector('.workspace-switcher-options').offsetWidth + 12);
+      else if(kind==='document_title')width=Number(title.dataset.count)>1?180:Math.max(width,Math.ceil(titleText.getBoundingClientRect().width));
+      else if(kind==='menu_labels')width=Math.max(width,r.full.offsetWidth);
       else if(['clock','battery'].includes(kind))width=Math.max(width,r.content.scrollWidth);
-      return{id:entry.id,width:width+extra,compact:(compact??width)+extra};
+      return{id:entry.id,width};
     });
     for(const {r,hidden,full,compact,omitted} of items)if(!omitted){
       if(r.compact){r.full.hidden=full;r.compact.hidden=compact;}
@@ -322,7 +321,7 @@ export function createHeader({app, state, paintPair, workspace, element, button,
       if(b) {
         place(r.root,b);
         if(r.compact) {
-          const compact=b.width+.01<metrics.find(m=>m.id===id).width;
+          const compact=g.compact.includes(id);
           const disappearing=compact?r.full:r.compact,appearing=compact?r.compact:r.full;
           if(!disappearing.hidden) {
             for(const menu of [disappearing,...disappearing.querySelectorAll('details')])if(menu.tagName==='DETAILS')menu.open=false;
@@ -471,6 +470,9 @@ export function createHeader({app, state, paintPair, workspace, element, button,
   })
     .observe(workspace,{childList:true,subtree:true});
   new MutationObserver(queue).observe(switcher,{childList:true,subtree:true,characterData:true});
+  const titleChanges=new MutationObserver(queue);
+  titleChanges.observe(titleText,{childList:true,subtree:true,characterData:true});
+  titleChanges.observe(title,{attributes:true,attributeFilter:['data-count']});
   new MutationObserver(()=>{for(const r of records.values())if(r.status)r.placeholder.hidden=!editing||!r.status.hidden;queue();})
     .observe(systemStatus.root,{subtree:true,attributes:true,attributeFilter:['hidden'],characterData:true,childList:true});
   for(const node of [systemStatus.clock,systemStatus.battery])new MutationObserver(()=>{const r=[...records.values()].find(r=>r.status===node);if(r)r.placeholder.hidden=!editing||!node.hidden;queue();})

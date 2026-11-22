@@ -6,6 +6,7 @@ struct WorkspaceSwitcher: View {
     @ObservedObject var workspaces: WorkspaceController
     let palette: EditorPalette
     let compactTextSize: Double
+    let compact: Bool
     var textSize: Double = 44.0 / 3
     var maximumWidth: CGFloat = 420
     var tile: CGFloat = 36
@@ -21,7 +22,7 @@ struct WorkspaceSwitcher: View {
     }
     var body: some View {
         Group {
-            if maximumWidth + 0.5 < naturalWidth {
+            if compact {
                 EditorMenuButton(menu: { Self.menu(workspaces) }, identifier: "workspace-switcher-menu") {
                     Text(workspaces.view["switcher_menu"]["title"].string).font(.system(size: compactTextSize, weight: .bold)).lineLimit(1)
                         .padding(.horizontal, 12).frame(width: maximumWidth, height: tile)

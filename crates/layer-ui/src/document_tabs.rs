@@ -445,7 +445,6 @@ mod tests {
                 .map(|e| HeaderMetric {
                     id: e.id,
                     width: 80.,
-                    compact: 60.,
                 })
                 .collect();
             let geometry = layout.resolve_documents(1400., [48., 100.], &metrics, false, 3);

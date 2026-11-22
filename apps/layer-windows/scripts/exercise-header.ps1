@@ -1023,7 +1023,10 @@ function Check-ZenMatrix {
         $null=Control 'zen-capy' -Arranged
         Check-CapyBounds ('custom-zone-'+$zone)
     }
-    Edit-Header;Select-HeaderItem $capy
+    Use-ZenWorkspace 'painter'
+    $capy=@(Entries|Where-Object {$_.item.kind -eq 'capy'})[0].id
+    Edit-Header;Invoke 'header-size-small';Wait-Until {(Header).size -eq 'small'} 'Header size did not update'
+    Select-HeaderItem $capy
     for($attempt=0;(Header).zones[2][-1].id -ne $capy -and $attempt -lt 128;$attempt++){$before=HeaderJson;[CapyRowPointer]::Key(0x27);Wait-Until {(HeaderJson) -ne $before} 'Native right key did not move Capy'}
     Invoke 'header-edit-done';Wait-Until {!(Model).header.editing} 'Overflow header editor did not close'
     $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.

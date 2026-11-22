@@ -130,7 +130,7 @@ function Check-Header {
     $points=@(
         @{x=$menu.Left+$menu.Width/2;y=$menu.Top+$menu.Height/2;expected=1;name='Window menu'},
         @{x=$settings.Left+$settings.Width/2;y=$settings.Top+$settings.Height/2;expected=1;name='Preferences'},
-        @{x=$menu.Right+4*$scale;y=$menu.Top+$menu.Height/2;expected=2;name='unused header space'}
+        @{x=$menu.Right+11*$scale;y=$menu.Top+$menu.Height/2;expected=2;name='unused header space'}
     )
     foreach($entry in $points){
         $x=[int]$entry.x;$y=[int]$entry.y

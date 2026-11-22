@@ -332,7 +332,6 @@ fn native_document_tabs_history_storage_and_close() {
             .unwrap()
             .is_mapped()
     );
-    let single_title_width = w.documents.root.width();
     w.documents.ram_budget.set(0);
     new_photo::invoke(&w, CommandId::AddLayer);
     assert_eq!(plain_title.text(), "• Untitled · 256 × 256");
@@ -522,7 +521,10 @@ fn native_document_tabs_history_storage_and_close() {
             .unwrap()
             .is_mapped()
     );
-    assert_eq!(w.documents.root.width(), single_title_width);
+    assert_eq!(
+        w.documents.root.width(),
+        w.documents.root.child_by_name("title").unwrap().measure(gtk::Orientation::Horizontal, -1).1
+    );
     crate::capture(&w, "/tmp/capy-single-drawing-title.png");
     w.documents.select(&w,w.documents.selected(),true);
     until(|| w.window.visible_dialog().is_some(), "final dirty close");

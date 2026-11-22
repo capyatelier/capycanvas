@@ -34,7 +34,7 @@ export async function checkMenuLabels({call,evaluate,settle}) {
       await send({type:'set_theme',theme});await edit({type:'set_size',size});
       const baseline=await model();await edit({type:'edit',editing:true});await resize(1800);
       const natural=(await rect(item(capy))).width+(await rect(item(menu))).width+6;
-      await resize(Math.ceil(2*(natural+18+160+4)));
+      await resize(Math.ceil(1.5*(natural+4))+6*{small:6,medium:8,large:10}[size]);
       assert.equal(await evaluate(`document.querySelector('${item(menu)} .header-menu-labels').hidden`),false,'Labels initially fit');
       assert.equal((await rect(`${item(menu)} .header-menu-labels`)).height,36,'Labels share the workspace switcher track');
       await evaluate(`window.__menuLabelsNode=document.querySelector('${item(menu)}')`);
@@ -59,7 +59,7 @@ export async function checkMenuLabels({call,evaluate,settle}) {
         const selector=item(id)+(id===menu&&theme==='dark'?' .header-item-grip':'');
         await pointer('down',center(await rect(selector)));await pointer('move',{x:380,y:260});
         assert.equal(await evaluate('Number(document.querySelector(".header-drag-preview")?.dataset.headerItem)'),id,'The intended body/grip owns the drag');
-        await pointer('move',id===menu?center(await rect('[data-zone="center"]')):{x:8,y:24});await pointer('up');
+        await pointer('move',id===menu?center(await rect('[data-zone="center"]')):{x:12,y:24});await pointer('up');
         const header=await model();assert.equal(id===menu?header.zones[1][0].id:header.zones[0][0].id,id);
         await visible(id);assert.ok(header.zones.flat().some(e=>e.id===capy),'Capy never needs removal');
       }

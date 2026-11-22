@@ -4,6 +4,7 @@ import SwiftUI
 /// complete menu array in EditorView would rebuild the workspace on pen down/up.
 struct ApplicationMenus: View {
     @ObservedObject var store: EditorStore
+    let compact: Bool
     var iconSize: CGFloat = 16
     var tileSize: CGFloat = 36
     var radius: CGFloat = 18
@@ -18,7 +19,7 @@ struct ApplicationMenus: View {
             + 10 + 2 * CGFloat(max(0, menus.count - 1))
     }
     var body: some View {
-        ViewThatFits(in: .horizontal) {
+        if !compact {
             HStack(spacing: 2) {
                 ForEach(store.snapshot["application_menus"].array.indices, id: \.self) { index in
                     let menu = store.snapshot["application_menus"][index]
@@ -47,13 +48,13 @@ struct ApplicationMenus: View {
             }.editorPopoverPassThrough().padding(5).frame(height: 36).glassSurface(SquircleShape.tile, fill: palette.chromeSurface).fixedSize()
                 .modifier(HeaderControlMeasurement(id: "header-menu-labels"))
                 .onDisappear { selectedMenu = nil; hoveredMenu = nil }
+        } else {
             ApplicationMenuButton(store: store) {
                 SharedIcon(name: "menu", size: iconSize).frame(width: tileSize, height: tileSize)
             }.buttonStyle(HeaderButtonStyle(radius: radius))
                 .accessibilityLabel("Menus").accessibilityIdentifier("application-menus")
                 .modifier(HeaderControlMeasurement(id: "application-menus"))
         }
-        .onDisappear { selectedMenu = nil; hoveredMenu = nil }
     }
 }
 

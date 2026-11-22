@@ -29,8 +29,8 @@ function Header-MenuState($View,$Identities){
   $geometry=@($presentation.geometry.items|Where-Object id -eq $entries[0].id)
   $actual=@($presentation.actual_items|Where-Object id -eq $entries[0].id)
   if($metric.Count -ne 1 -or $geometry.Count -ne 1 -or $actual.Count -ne 1 -or $metric[0].width -le 0){return $false}
-  $compact=[Math]::Abs($geometry[0].bounds.width-$metric[0].compact) -lt [Math]::Abs($geometry[0].bounds.width-$metric[0].width)
-  $expectedWidth=if($compact){$metric[0].compact}else{$metric[0].width}
+  $compact=@($presentation.geometry.compact) -contains $entries[0].id
+  $expectedWidth=if($compact){@($View.header.sizes|Where-Object id -eq $View.header.model.size)[0].tile}else{$metric[0].width}
   if($expectedWidth -le 0 -or [Math]::Abs($expectedWidth-$geometry[0].bounds.width) -gt 1 -or [Math]::Abs($expectedWidth-$actual[0].bounds.width) -gt 1){return $false}
   foreach($axis in @('x','y','width','height')){if([Math]::Abs($geometry[0].bounds.$axis-$actual[0].bounds.$axis) -gt 1){return $false}}
   $origin=$titlebar.Current.BoundingRectangle;$group=$actual[0].bounds

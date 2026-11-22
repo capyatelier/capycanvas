@@ -629,20 +629,19 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         A metrics;auto model=object(view,L"model");
         auto requestedSize=find(array(view,L"sizes"),L"id",str(model,L"size"));double requestedTile=num(requestedSize,L"tile");
         for(auto const& [id,native]:items){
-            auto kind=str(object(native.entry,L"item"),L"kind");double natural=requestedTile,compact=requestedTile;
+            auto kind=str(object(native.entry,L"item"),L"kind");double natural=requestedTile;
             if(kind==L"menu_labels")natural=menuWidth;
-            else if(kind==L"workspaces"){natural=std::max(144.,switchWidth);compact=144.;}
+            else if(kind==L"workspaces")natural=std::max(144.,switchWidth);
             else if(kind==L"document_title"){
-                if(drawings->single()){natural=180.;compact=80.;}
-                else{natural=std::clamp(double(count(branch(data->model,L"windows_tabs"),L"tabs"))*180.,180.,720.);compact=140.;}
+                if(drawings->single()){auto padding=drawings->plain.Padding();natural=std::max(requestedTile,textWidth(drawings->plainTitle(),false,true)+padding.Left+padding.Right);}
+                else natural=std::clamp(double(count(branch(data->model,L"windows_tabs"),L"tabs"))*180.,180.,720.);
             }
             else if(kind==L"clock"){
                 auto padding=systemStatus->Clock().Padding();
                 natural=fullscreenActive||editing?textWidth(editing&&!fullscreenActive?data->caption(L"header",L"clock"):systemStatus->Clock().Child().as<TextBlock>().Text())+padding.Left+padding.Right:0;
             }
             else if(kind==L"battery")natural=editing||(fullscreenActive&&systemStatus->HasBattery())?requestedTile:0;
-            if(kind==L"clock"||kind==L"battery")compact=natural;
-            double grip=editing?20.:0.;metrics.Append(O({{L"id",N(id)},{L"width",N(natural+grip)},{L"compact",N(compact+grip)}}));
+            metrics.Append(O({{L"id",N(id)},{L"width",N(natural)}}));
         }
         bool navigation=false;
         for(auto const& [id,native]:items){auto kind=str(object(native.entry,L"item"),L"kind");navigation|=kind==L"capy"||kind==L"menu"||kind==L"menu_labels";}
@@ -700,7 +699,8 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         bool capyVisible=flag(data->model,L"keep_zen_button")||(!hidden&&!editing&&geometry.GetNamedValue(L"capy_item",JsonValue::CreateNullValue()).ValueType()==JsonValueType::Number);
         capy.IsEnabled(capyVisible&&capyBounds.Size()&&flag(command,L"enabled"));
         if(capyBounds.Size())place(capySurface,capyBounds);capySurface.Visibility(capyVisible&&capyBounds.Size()?Visibility::Visible:Visibility::Collapsed);
-        auto placed=array(resolved,L"items");auto metrics=array(configuration,L"metrics");
+        auto placed=array(resolved,L"items");
+        auto compactIn=[](J const& frame,uint32_t id){for(auto value:array(frame,L"compact"))if(uint32_t(value.GetNumber())==id)return true;return false;};
         auto barList=array(resolved,L"bars");std::set<uint32_t> joined;std::array<bool,3> overflowJoined{};
         for(auto value:barList){
             auto bar=value.GetObject();for(auto member:array(bar,L"items"))joined.insert(uint32_t(member.GetNumber()));
@@ -723,7 +723,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             if(!preview.Size()||id==dragged)native.frame.Transitions().Clear();
             else if(!native.frame.Transitions().Size())native.frame.Transitions().Append(Media::Animation::RepositionThemeTransition());
             native.placed=bounds;place(native.frame,bounds);Canvas::SetZIndex(native.frame,id==dragged?30:5);
-            bool compact=num(bounds,L"width")<num(findId(metrics,id),L"width")-.5;
+            bool compact=compactIn(id==dragged?geometry:resolved,id);
             auto kind=str(object(native.entry,L"item"),L"kind");
             if(kind==L"menu_labels"){
                 bool focused=holdsFocus(menuGroup),switching=(menuOverflow.Visibility()==Visibility::Visible)!=compact;

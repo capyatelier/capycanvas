@@ -44,7 +44,7 @@ class AndroidTabletBridgeLayeringTest {
                     "op" to "geometry", "model" to snapshot.getJSONObject("header").getJSONObject("model"), "editing" to false,
                     "documents" to host.drawingTabs.rows.size, "width" to snapshot.getJSONObject("layout").array("viewport").getDouble(0),
                     "insets" to org.json.JSONArray(listOf(0, 0)), "metrics" to org.json.JSONArray(placements.map {
-                        obj("id" to it.getInt("id"), "width" to it.getJSONObject("bounds").number("width"), "compact" to it.getJSONObject("bounds").number("width"))
+                        obj("id" to it.getInt("id"), "width" to it.getJSONObject("bounds").number("width"))
                     })))) })
                 assertTrue("Header tool joins a glass bar", geometry.array("bars").objects().any { bar ->
                     bar.array("items").values().any { (it as Number).toInt() == headerId }

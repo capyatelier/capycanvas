@@ -48,7 +48,8 @@ designer or opening shortcut.
   determines its position. There are no Left/Center/Right insertion buttons.
   An empty center reserves up to one third of the usable width (capped at
   320 logical pixels) while editing, with visible gaps separating the regions.
-  It stays centered and never covers side items or native window controls.
+  It is centered when the sides leave room and never covers side items or
+  native window controls.
 - **Add Tools…** is a palette component, not a separate top-row action.
   Dropping it in the bar opens the same searchable, multi-select
   picker used by toolbars. No Tools placeholder is saved. Filtering preserves
@@ -108,8 +109,8 @@ distinction applies to toolbar tiles, including those inside another drawer.
 Menu labels use the workspace selector's track: one continuous 36px bar with
 a 5px inset and 26px capsule items, 2px apart. Text keeps its size, so these
 tracks and the clock stay 36px tall and centered in Medium and Large bars.
-Text items use 8px side padding, so the full menu still fits beside a centered
-title in a 1200px-wide window.
+Text items use 8px side padding, so the full menu still fits beside the title
+in a 1200px-wide window.
 Outer title-bar padding and the gap between separate items scale with the tile:
 6px at Small (36px tiles), 8px at Medium (48px) and 10px at Large (60px).
 The bar is 48/64/80px tall, including equal top and bottom padding. GTK's native
@@ -128,8 +129,13 @@ Tall menus scroll below the labels so the neighboring headings stay reachable.
 Hosts keep menu focus and popup placement native and use the shared Rust hover
 decision for custom menu rows. macOS uses its system menu bar.
 
-Menu Labels compacts to an icon-sized menu inside its own item when space is
-short. At narrow widths, each region overflows whole items into a More menu. Tools
+Items keep their full width while they fit. The middle region is centered when
+the sides leave room and otherwise slides toward the emptier side. When the bar
+is still too narrow, items shrink one at a time: the drawing title shortens, then
+the workspace switcher becomes its menu, then Menu Labels becomes one menu
+button. Only when everything has shrunk does a region move whole items into its
+More menu, last first. Each region then gets an equal share of the bar, and space
+one region does not need goes to the others. Tools
 still open their normal drawers, anchored to the visible overflow control;
 grouped tools keep their decorative markers and secondary-click menus. GTK
 reserves scrollbar width in scrolling overflow lists and dismisses the overflow
@@ -163,7 +169,9 @@ origins, bar membership and history are shared Rust. Web implements the same bar
 and inline editor in `header.js` with the shared `HeaderDrag`; its `#header`
 uses `touch-action: manipulation` and tracks the pressed contact itself. Hosts own native widgets,
 measurements, caption behavior and device timing, and paint the same bars,
-surfaces and selection roles. macOS has no Main Menu or menu labels because the
+surfaces and selection roles. Hosts send measured full widths; compact widths,
+the editing grip and which items show their compact form come from the shared
+geometry. macOS has no Main Menu or menu labels because the
 system menu bar owns them. Zen hides the title bar like other chrome; see
 [shared UI](shared-ui.md#window-chrome-and-zen-mode).
 The Capy button keeps its header position and dimensions through Zen, including

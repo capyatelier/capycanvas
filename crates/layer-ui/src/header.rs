@@ -67,6 +67,9 @@ impl HeaderSize {
     }
 }
 
+const HEADER_GRIP: f32 = 20.;
+const HEADER_COLLAPSE_ORDER: [HeaderItem; 2] = [HeaderItem::Workspaces, HeaderItem::MenuLabels];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HeaderZone {
@@ -166,6 +169,17 @@ impl HeaderItem {
     pub fn singleton(self) -> bool {
         !matches!(self, Self::Tool { .. } | Self::Space)
     }
+    pub fn slot_width(self, size: HeaderSize, measured: Option<f32>, compact: bool, editing: bool) -> f32 {
+        let full = measured.map_or(size.tile(), |w| if w.is_nan() { 1. } else { w.clamp(1., 4096.) });
+        let short = match self {
+            Self::MenuLabels => size.tile(),
+            Self::Workspaces => 144.,
+            Self::DocumentTitle => 80.,
+            _ => full,
+        };
+        let content = if compact { short.min(full) } else { full };
+        content + if editing { HEADER_GRIP } else { 0. }
+    }
     pub fn joins_bar(self) -> bool {
         matches!(
             self,
@@ -210,7 +224,7 @@ impl HeaderGeometryRequest {
         model.validate()?;
         let measured=|value:f32|value.is_finite()&&(0.0..1_000_000.0).contains(&value);
         if !measured(width)||width<=0.||!insets.into_iter().all(measured)||!caption_insets.into_iter().all(measured)||metrics.len()>128
-            ||metrics.iter().enumerate().any(|(index,metric)|!measured(metric.width)||!measured(metric.compact)
+            ||metrics.iter().enumerate().any(|(index,metric)|!measured(metric.width)
                 ||metrics[..index].iter().any(|previous|previous.id==metric.id)) {
             return Err("Invalid title-bar measurements".into());
         }
@@ -561,7 +575,6 @@ pub struct HeaderItemBounds {
 pub struct HeaderMetric {
     pub id: u32,
     pub width: f32,
-    pub compact: f32,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HeaderNativeGeometry {
@@ -578,6 +591,7 @@ pub struct HeaderGeometry {
     pub zones: [Bounds; 3],
     pub overflow: [Option<Bounds>; 3],
     pub hidden: [Vec<u32>; 3],
+    pub compact: Vec<u32>,
     pub bars: Vec<HeaderBar>,
     pub native_drag_regions: Vec<Bounds>,
 }
@@ -809,8 +823,6 @@ impl HeaderLayout {
         geometry
     }
 
-    /// Whole-item overflow, a truly centered middle region and protected native
-    /// caption areas. Hosts measure text; the allocation/overflow policy is shared.
     pub fn resolve(
         &self,
         width: f32,
@@ -822,142 +834,138 @@ impl HeaderLayout {
         if !width.is_finite() || width <= 0. {
             return result;
         }
-        let tile = self.size.tile();
-        let item_gap = self.size.item_gap();
+        let size = self.size;
+        let tile = size.tile();
+        let item_gap = size.item_gap();
         let left = (insets[0].max(0.) + item_gap).min(width);
         let right = (width - insets[1].max(0.) - item_gap).max(left);
         let mid = (width / 2.).floor();
         let gap = 2. * item_gap;
-        let bar_gap = self.size.gap();
+        let bar_gap = size.gap();
         let joins = |e: &HeaderEntry| !editing && e.item.joins_bar();
         let spacing = |a: &HeaderEntry, b: &HeaderEntry| {
             if joins(a) && joins(b) { bar_gap } else { item_gap }
         };
-        // Zero-width native metrics denote unavailable informational items
-        // (e.g. a desktop without a battery), not overflowed interactive items.
-        let visible = |e: &&HeaderEntry| !metrics.iter().any(|m| m.id == e.id && m.width == 0.);
-        let metric = |e: &HeaderEntry, compact: bool| {
-            let m = metrics.iter().find(|m| m.id == e.id);
-            let width = m.map_or(tile, |m| if compact { m.compact } else { m.width });
-            // Invalid native measurements must not introduce NaN into geometry.
-            if width.is_nan() {
-                1.
-            } else {
-                width.clamp(1., 4096.)
+        let measured = |e: &HeaderEntry| metrics.iter().find(|m| m.id == e.id).map(|m| m.width);
+        let entries: [Vec<&HeaderEntry>; 3] = std::array::from_fn(|zone| {
+            self.zones[zone].iter().filter(|e| measured(e) != Some(0.)).collect()
+        });
+        let full = |e: &HeaderEntry| e.item.slot_width(size, measured(e), false, editing);
+        let short = |e: &HeaderEntry| e.item.slot_width(size, measured(e), true, editing);
+        let available = (right - left - 2. * gap).max(0.);
+        let drop_target = if editing {
+            2. * ((available / 3.).min(2. * (mid - left).min(right - mid)).min(320.) / 2.).floor()
+        } else {
+            0.
+        };
+        let widths = |collapsed: usize, title_cut: f32| -> [Vec<f32>; 3] {
+            std::array::from_fn(|zone| {
+                entries[zone]
+                    .iter()
+                    .map(|e| {
+                        if e.item == HeaderItem::DocumentTitle {
+                            (full(e) - title_cut).max(short(e))
+                        } else if HEADER_COLLAPSE_ORDER[..collapsed].contains(&e.item) {
+                            short(e)
+                        } else {
+                            full(e)
+                        }
+                    })
+                    .collect()
+            })
+        };
+        let demand = |widths: &[Vec<f32>; 3]| -> [f32; 3] {
+            std::array::from_fn(|zone| {
+                if zone == 1 && entries[1].is_empty() {
+                    return drop_target;
+                }
+                widths[zone].iter().sum::<f32>()
+                    + entries[zone].windows(2).map(|p| spacing(p[0], p[1])).sum::<f32>()
+            })
+        };
+        let need = |widths: &[Vec<f32>; 3]| demand(widths).iter().sum::<f32>();
+        let fit = (0..=HEADER_COLLAPSE_ORDER.len())
+            .find(|&collapsed| need(&widths(collapsed, f32::INFINITY)) <= available + 0.01);
+        let (collapsed, title_cut) = match fit {
+            Some(collapsed) => (collapsed, (need(&widths(collapsed, 0.)) - available).max(0.)),
+            None => (HEADER_COLLAPSE_ORDER.len(), f32::INFINITY),
+        };
+        let widths = widths(collapsed, title_cut);
+        let demand = demand(&widths);
+        let mut share = demand;
+        if fit.is_none() {
+            let claim = [demand[0] + gap, demand[1], demand[2] + gap];
+            let mut order = [0, 1, 2];
+            order.sort_by(|a, b| claim[*a].total_cmp(&claim[*b]));
+            let mut remaining = (right - left).max(0.);
+            for (i, zone) in order.into_iter().enumerate() {
+                share[zone] = claim[zone].min((remaining / (3 - i) as f32).floor());
+                remaining -= share[zone];
             }
-        };
-        let span = |zone: usize, compact: bool| {
-            let entries: Vec<_> = self.zones[zone].iter().filter(visible).collect();
-            entries.iter().map(|e| metric(e, compact)).sum::<f32>()
-                + entries.windows(2).map(|p| spacing(p[0], p[1])).sum::<f32>()
-        };
-        let center_limit = ((right - left) / 3.)
-            .min(2. * (mid - left).min(right - mid))
-            .max(0.);
-        let center_width = span(1, false)
-            .min(center_limit)
-            .max(span(1, true).min(center_limit));
-        let center_left = (mid - center_width / 2.).floor().max(left);
-        let center_right = (center_left + center_width).min(right);
+            share[0] = (share[0] - gap).max(0.);
+            share[2] = (share[2] - gap).max(0.);
+        }
+        let mut shown: [Vec<(&HeaderEntry, f32, f32)>; 3] = Default::default();
+        let mut used = [0f32; 3];
+        let mut overflow = [None; 3];
+        for zone in 0..3 {
+            if entries[zone].is_empty() {
+                used[zone] = share[zone];
+                continue;
+            }
+            let over = demand[zone] > share[zone] + 0.01;
+            let overflow_width = tile.min(share[zone]);
+            let room = share[zone] - if over { overflow_width + item_gap } else { 0. };
+            let mut hiding = false;
+            for (entry, &w) in entries[zone].iter().zip(&widths[zone]) {
+                let gap = shown[zone].last().map_or(0., |p| spacing(p.0, entry));
+                if hiding || used[zone] + gap + w > room + 0.01 {
+                    hiding = true;
+                    result.hidden[zone].push(entry.id);
+                } else {
+                    shown[zone].push((*entry, w, gap));
+                    used[zone] += gap + w;
+                }
+            }
+            if over && overflow_width > 0. {
+                let overflow_gap = match shown[zone].last() {
+                    None => 0.,
+                    Some(p) if joins(p.0) => bar_gap,
+                    Some(_) => item_gap,
+                };
+                overflow[zone] = Some((overflow_gap, overflow_width));
+                used[zone] += overflow_gap + overflow_width;
+            }
+        }
+        let center = (mid - used[1] / 2.)
+            .floor()
+            .min((right - used[2] - gap - used[1]).floor())
+            .max((left + used[0] + gap).ceil());
         let y = item_gap;
         result.zones = [
+            Bounds { x: left, y, width: (center - gap - left).max(0.), height: tile },
+            Bounds { x: center, y, width: used[1], height: tile },
             Bounds {
-                x: left,
+                x: center + used[1] + gap,
                 y,
-                width: (center_left - gap - left).max(0.),
-                height: tile,
-            },
-            Bounds {
-                x: center_left,
-                y,
-                width: center_width,
-                height: tile,
-            },
-            Bounds {
-                x: center_right + gap,
-                y,
-                width: (right - center_right - gap).max(0.),
+                width: (right - center - used[1] - gap).max(0.),
                 height: tile,
             },
         ];
-        if self.zones[1].is_empty() {
-            let split = (mid).clamp(left, right);
-            // Reserve a generous visible drop target, not a tiny fixed slot.
-            // Scale with the usable width, retaining true centering and room
-            // for both side regions and protected native window controls.
-            let half = if editing {
-                (center_limit.min(320.) / 2.).floor()
-            } else {
-                gap
-            };
-            let spacing = if editing { gap } else { 0. };
-            result.zones[0].width = (split - half - spacing - left).max(0.);
-            result.zones[1] = Bounds {
-                x: split - half,
-                y,
-                width: 2. * half,
-                height: tile,
-            };
-            result.zones[2].x = (split + half + spacing).min(right);
-            result.zones[2].width = (right - result.zones[2].x).max(0.);
-        }
+        let collapsed = &HEADER_COLLAPSE_ORDER[..collapsed];
         for zone in 0..3 {
-            let bounds = result.zones[zone];
-            let entries: Vec<_> = self.zones[zone].iter().filter(visible).collect();
-            let compacting = span(zone, false) > bounds.width;
-            let widths: Vec<_> = entries.iter().map(|e| metric(e, compacting)).collect();
-            let overflow = span(zone, compacting) > bounds.width;
-            let overflow_width = tile.min(bounds.width);
-            let available = (bounds.width
-                - if overflow {
-                    overflow_width + item_gap
-                } else {
-                    0.
-                })
-            .max(0.);
-            let mut used = 0.;
-            let mut shown: Vec<(&HeaderEntry, f32, f32)> = Vec::new();
-            let mut full = false;
-            for (entry, w) in entries.into_iter().zip(widths) {
-                let gap = shown.last().map_or(0., |p| spacing(p.0, entry));
-                if full || used + gap + w > available + 0.01 {
-                    full = true;
-                    result.hidden[zone].push(entry.id);
-                } else {
-                    shown.push((entry, w, gap));
-                    used += gap + w;
-                }
-            }
-            let overflow_joins = shown.last().is_some_and(|p| joins(p.0));
-            let overflow_gap = match shown.last() {
-                None => 0.,
-                Some(_) if overflow_joins => bar_gap,
-                Some(_) => item_gap,
-            };
-            let total = used
-                + if overflow {
-                    overflow_width + overflow_gap
-                } else {
-                    0.
-                };
-            let mut x = match zone {
-                1 => (mid - total / 2.).floor().max(bounds.x),
-                2 => bounds.x + bounds.width - total,
-                _ => bounds.x,
-            };
+            let mut x = [left, center, right - used[2]][zone];
             let mut bar: Option<HeaderBar> = None;
             let mut previous: Option<&HeaderEntry> = None;
-            for (entry, w, gap) in shown {
+            for &(entry, w, gap) in &shown[zone] {
                 x += gap;
                 result.items.push(HeaderItemBounds {
                     id: entry.id,
-                    bounds: Bounds {
-                        x,
-                        y,
-                        width: w,
-                        height: tile,
-                    },
+                    bounds: Bounds { x, y, width: w, height: tile },
                 });
+                if collapsed.contains(&entry.item) && w < full(entry) {
+                    result.compact.push(entry.id);
+                }
                 x += w;
                 if !previous.is_some_and(|p| joins(p) && joins(entry)) {
                     result.bars.extend(bar.take());
@@ -965,21 +973,15 @@ impl HeaderLayout {
                 previous = Some(entry);
                 if joins(entry) {
                     bar.get_or_insert_default().items.push(entry.id);
-                }
-                if !joins(entry) {
+                } else {
                     result.bars.extend(bar.take());
                 }
             }
-            if overflow && overflow_width > 0. {
+            if let Some((overflow_gap, overflow_width)) = overflow[zone] {
                 x += overflow_gap;
-                result.overflow[zone] = Some(Bounds {
-                    x,
-                    y,
-                    width: overflow_width,
-                    height: tile,
-                });
+                result.overflow[zone] = Some(Bounds { x, y, width: overflow_width, height: tile });
                 if !editing {
-                    if !overflow_joins {
+                    if !previous.is_some_and(joins) {
                         result.bars.extend(bar.take());
                     }
                     bar.get_or_insert_default().overflow = Some(zone);
@@ -1307,7 +1309,6 @@ mod tests {
                             &[HeaderMetric {
                                 id,
                                 width: value,
-                                compact: value,
                             }],
                             editing,
                         )
@@ -1338,7 +1339,6 @@ mod tests {
         let metrics = [HeaderMetric {
             id,
             width: 0.,
-            compact: 0.,
         }];
         let hidden = h.resolve(1600., [0.; 2], &metrics, false);
         h.remove(id).unwrap();
@@ -1451,70 +1451,155 @@ mod tests {
             .unwrap();
         assert!(h.entries().any(|e| e.item == HeaderItem::MenuLabels));
     }
+    fn measured(h: &HeaderLayout) -> Vec<HeaderMetric> {
+        h.entries()
+            .filter_map(|e| {
+                let width = match e.item {
+                    HeaderItem::MenuLabels => 455.,
+                    HeaderItem::Workspaces => 300.,
+                    HeaderItem::DocumentTitle => 180.,
+                    HeaderItem::Clock | HeaderItem::Battery => 0.,
+                    _ => return None,
+                };
+                Some(HeaderMetric { id: e.id, width })
+            })
+            .collect()
+    }
+    fn content_edges(g: &HeaderGeometry, h: &HeaderLayout, zone: usize) -> Option<(f32, f32)> {
+        g.items
+            .iter()
+            .filter(|m| h.zones[zone].iter().any(|e| e.id == m.id))
+            .map(|m| m.bounds)
+            .chain(g.overflow[zone])
+            .map(|b| (b.x, b.x + b.width))
+            .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)))
+    }
     #[test]
     fn every_item_has_one_visible_or_overflow_destination_at_every_size() {
-        for size in HeaderSize::ALL {
-            for width in [320., 640., 800., 1200., 1600., 3200.] {
-                for insets in [[0., 36.], [96., 0.], [80., 120.]] {
-                    for editing in [false, true] {
-                        let mut h = HeaderLayout::painter();
-                        h.size = size;
-                        let metrics = h
-                            .entries()
-                            .map(|e| HeaderMetric {
-                                id: e.id,
-                                width: if e.item == HeaderItem::Workspaces {
-                                    420.
-                                } else {
-                                    size.tile()
-                                },
-                                compact: if e.item == HeaderItem::Workspaces {
-                                    144.
-                                } else {
-                                    size.tile()
-                                },
-                            })
-                            .collect::<Vec<_>>();
-                        let g = h.resolve(width, insets, &metrics, editing);
-                        for e in h.entries() {
-                            assert_eq!(
-                                g.items.iter().filter(|m| m.id == e.id).count()
-                                    + g.hidden.iter().flatten().filter(|id| **id == e.id).count(),
-                                1
-                            );
-                        }
-                        let rects: Vec<_> = g
-                            .items
-                            .iter()
-                            .map(|m| m.bounds)
-                            .chain(g.overflow.into_iter().flatten())
-                            .collect();
-                        for (i, b) in rects.iter().enumerate() {
-                            assert!(
-                                b.x >= insets[0] && b.x + b.width <= width - insets[1] + 0.01,
-                                "{b:?}"
-                            );
-                            for other in &rects[..i] {
-                                assert!(
-                                    b.intersection(*other).is_none(),
-                                    "overlap {b:?} {other:?}"
+        for layout in [HeaderLayout::painter(), HeaderLayout::default()] {
+            for size in HeaderSize::ALL {
+                for width in (320..=3200).step_by(40).map(|w| w as f32) {
+                    for insets in [[0., 36.], [96., 0.], [80., 120.]] {
+                        for editing in [false, true] {
+                            let mut h = layout.clone();
+                            h.size = size;
+                            let g = h.resolve(width, insets, &measured(&h), editing);
+                            for e in h.entries().filter(|e| !matches!(e.item, HeaderItem::Clock | HeaderItem::Battery)) {
+                                assert_eq!(
+                                    g.items.iter().filter(|m| m.id == e.id).count()
+                                        + g.hidden.iter().flatten().filter(|id| **id == e.id).count(),
+                                    1
                                 );
                             }
-                        }
-                        if let Some(center) = g.items.iter().find(|m| m.id == h.zones[1][0].id) {
-                            assert!(
-                                (center.bounds.x + center.bounds.width / 2. - width / 2.).abs()
-                                    <= 0.5
-                            );
-                        }
-                        for b in &rects {
-                            assert_eq!(b.x.fract(), 0., "whole-pixel item {b:?}");
+                            let rects: Vec<_> = g
+                                .items
+                                .iter()
+                                .map(|m| m.bounds)
+                                .chain(g.overflow.into_iter().flatten())
+                                .collect();
+                            for (i, b) in rects.iter().enumerate() {
+                                assert!(
+                                    b.x >= insets[0] && b.x + b.width <= width - insets[1] + 0.01,
+                                    "{b:?}"
+                                );
+                                for other in &rects[..i] {
+                                    assert!(b.intersection(*other).is_none(), "overlap {b:?} {other:?}");
+                                }
+                                assert_eq!(b.x.fract(), 0., "whole-pixel item {b:?}");
+                            }
+                            let middle = g.zones[1];
+                            let centered = (width / 2. - middle.width / 2.).floor();
+                            if middle.x != centered {
+                                let gap = 2. * size.item_gap();
+                                let left = content_edges(&g, &h, 0).map_or(insets[0] + size.item_gap(), |e| e.1);
+                                let right = content_edges(&g, &h, 2).map_or(width - insets[1] - size.item_gap(), |e| e.0);
+                                assert!(
+                                    (middle.x - left - gap).abs() <= 1. || (right - gap - middle.x - middle.width).abs() <= 1.,
+                                    "an off-centre middle touches the side it moved away from: {middle:?} {left} {right}"
+                                );
+                            }
                         }
                     }
                 }
             }
         }
     }
+    #[test]
+    fn narrowing_shrinks_items_in_order_before_hiding_any() {
+        for layout in [HeaderLayout::painter(), HeaderLayout::default()] {
+            for size in HeaderSize::ALL {
+                let mut h = layout.clone();
+                h.size = size;
+                let metrics = measured(&h);
+                let id = |item| h.entries().find(|e| e.item == item).map(|e| e.id);
+                let mut previous: Option<HeaderGeometry> = None;
+                for width in (300..=3200).rev().map(|w| w as f32) {
+                    let g = h.resolve(width, [0., 42.], &metrics, false);
+                    let compact = |item| id(item).is_some_and(|id| g.compact.contains(&id));
+                    if compact(HeaderItem::MenuLabels) {
+                        assert!(id(HeaderItem::Workspaces).is_none_or(|w| g.compact.contains(&w) || g.hidden.iter().flatten().any(|h| *h == w)));
+                    }
+                    if g.hidden.iter().any(|zone| !zone.is_empty()) {
+                        for item in [HeaderItem::Workspaces, HeaderItem::MenuLabels] {
+                            assert!(id(item).is_none_or(|i| g.compact.contains(&i) || g.hidden.iter().flatten().any(|h| *h == i)),
+                                "{item:?} shrinks before anything hides at {width}");
+                        }
+                    }
+                    if let Some(p) = &previous {
+                        for id in &p.compact {
+                            assert!(g.compact.contains(id) || g.hidden.iter().flatten().any(|h| h == id), "{id} expands while narrowing to {width}");
+                        }
+                        for (zone, ids) in p.hidden.iter().enumerate() {
+                            assert!(ids.iter().all(|id| g.hidden[zone].contains(id)), "an item returns while narrowing to {width}");
+                        }
+                    }
+                    previous = Some(g);
+                }
+            }
+        }
+    }
+    #[test]
+    fn the_middle_slides_before_the_menu_labels_collapse() {
+        let h = HeaderLayout::default();
+        let metrics = measured(&h);
+        let id = |item| h.entries().find(|e| e.item == item).unwrap().id;
+        let (labels, title, workspaces) = (id(HeaderItem::MenuLabels), id(HeaderItem::DocumentTitle), id(HeaderItem::Workspaces));
+        let title_at = |g: &HeaderGeometry| g.items.iter().find(|m| m.id == title).unwrap().bounds;
+        let g = h.resolve(1100., [0., 42.], &metrics, false);
+        assert!(g.compact.is_empty());
+        assert_eq!(title_at(&g).width, 180.);
+        assert!(title_at(&g).x > 550. - 90., "the title moves right to make room: {:?}", title_at(&g));
+        let g = h.resolve(1000., [0., 42.], &metrics, false);
+        assert!(g.compact.is_empty());
+        assert!(title_at(&g).width < 180. && title_at(&g).width > 80., "the title shortens first");
+        let g = h.resolve(900., [0., 42.], &metrics, false);
+        assert_eq!(g.compact, vec![workspaces], "the switcher collapses before the menu labels");
+        let g = h.resolve(700., [0., 42.], &metrics, false);
+        assert!(g.compact.contains(&labels) && g.compact.contains(&workspaces));
+        assert!(g.hidden.iter().all(Vec::is_empty));
+    }
+    #[test]
+    fn a_crowded_middle_keeps_a_third_of_the_bar() {
+        use HeaderItem::*;
+        let tool = Tool { control: ToolbarControl::Command { command: CommandId::DrawingBrush } };
+        let h = HeaderLayout::from_items(HeaderSize::Large, [vec![Capy, tool, tool, tool, tool], vec![Workspaces], vec![tool; 8]]);
+        let workspaces = h.zones[1][0].id;
+        let g = h.resolve(480., [0., 0.], &[HeaderMetric { id: workspaces, width: 300. }], false);
+        assert_eq!(g.compact, vec![workspaces]);
+        assert_eq!(g.items.iter().find(|m| m.id == workspaces).unwrap().bounds.width, 144.);
+    }
+    #[test]
+    fn a_crowded_region_borrows_space_its_neighbours_do_not_need() {
+        use HeaderItem::*;
+        let tool = Tool { control: ToolbarControl::Command { command: CommandId::DrawingBrush } };
+        let h = HeaderLayout::from_items(HeaderSize::Small, [vec![Capy], vec![], vec![tool; 40]]);
+        let g = h.resolve(800., [0., 0.], &[], false);
+        let right = content_edges(&g, &h, 2).unwrap();
+        assert!(right.0 < 400. - 100., "the tools use most of the empty left half: {right:?}");
+        assert!(!g.hidden[2].is_empty() && g.overflow[2].is_some());
+        assert!(g.hidden[0].is_empty());
+    }
+
     #[test]
     fn adjacent_icon_controls_share_bars_outside_customization() {
         use HeaderItem::*;
@@ -1600,7 +1685,7 @@ mod tests {
 
         let editing = h.resolve(1600., [0.; 2], &[], true);
         assert!(editing.bars.is_empty());
-        assert_eq!(at(&editing, id(0, 2)).x, at(&editing, id(0, 1)).x + 42.);
+        assert_eq!(at(&editing, id(0, 2)).x, at(&editing, id(0, 1)).x + 42. + HEADER_GRIP);
 
         let mut overflow_joined = false;
         for width in (300..900).step_by(12) {
@@ -1633,9 +1718,14 @@ mod tests {
                     h.zones[1].clear();
                     let g = h.resolve(width, insets, &[], true);
                     let b = g.zones[1];
-                    assert!((b.x + b.width / 2. - width / 2.).abs() <= 0.5);
+                    if (b.x + b.width / 2. - width / 2.).abs() > 0.5 {
+                        let gap = 2. * size.item_gap();
+                        let left = content_edges(&g, &h, 0).map_or(0., |e| e.1);
+                        let right = content_edges(&g, &h, 2).map_or(width, |e| e.0);
+                        assert!((b.x - left - gap).abs() <= 1. || (right - gap - b.x - b.width).abs() <= 1., "{b:?}");
+                    }
                     assert_eq!(b.x.fract(), 0.);
-                    let usable = width - insets[0] - insets[1] - 2. * size.item_gap();
+                    let usable = width - insets[0] - insets[1] - 6. * size.item_gap();
                     let centered =
                         2. * (width / 2. - insets[0] - size.item_gap()).min(width / 2. - insets[1] - size.item_gap());
                     let expected = (usable / 3.).min(centered).min(320.);
@@ -1658,10 +1748,7 @@ mod tests {
                         );
                     }
                     let normal = h.resolve(width, insets, &[], false);
-                    assert_eq!(
-                        normal.zones[1].width, 4. * size.item_gap(),
-                        "extra space is only reserved while editing"
-                    );
+                    assert_eq!(normal.zones[1].width, 0., "extra space is only reserved while editing");
                 }
             }
         }

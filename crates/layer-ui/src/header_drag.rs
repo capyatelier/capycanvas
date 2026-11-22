@@ -252,7 +252,6 @@ impl HeaderDrag {
                 .map(|e| e.id);
         }
         let mut layout = self.layout.clone();
-        let mut metrics = self.metrics.clone();
         let action = match (self.source, target) {
             (HeaderDragSource::Item(id), Some((zone, before))) => {
                 layout.move_item(id, zone, before).ok()?;
@@ -268,15 +267,6 @@ impl HeaderDrag {
                     _ => HeaderItem::Space,
                 };
                 layout.add(zone, before, &[item]).ok()?;
-                let id = layout
-                    .entries()
-                    .find(|e| self.layout.entry(e.id).is_err())?
-                    .id;
-                metrics.push(HeaderMetric {
-                    id,
-                    width: self.layout.size.tile() + 20.,
-                    compact: self.layout.size.tile() + 20.,
-                });
                 Some(match source {
                     HeaderDragSource::Component(item) => HeaderAction::Add { zone, before, item },
                     _ => HeaderAction::InsertTools { zone, before },
@@ -299,7 +289,7 @@ impl HeaderDrag {
             ..self.grab
         };
         Some(HeaderDragPreview {
-            geometry: layout.resolve(self.width, self.insets, &metrics, true),
+            geometry: layout.resolve(self.width, self.insets, &self.metrics, true),
             held,
             detached: self.detached,
             target,
@@ -318,8 +308,7 @@ mod tests {
             .entries()
             .map(|e| HeaderMetric {
                 id: e.id,
-                width: 68.,
-                compact: 68.,
+                width: 48.,
             })
             .collect::<Vec<_>>();
         let geometry = layout.resolve(1800., [0., 72.], &metrics, true);
@@ -433,7 +422,6 @@ mod tests {
                 .map(|e| HeaderMetric {
                     id: e.id,
                     width: 200.,
-                    compact: 200.,
                 })
                 .collect::<Vec<_>>();
             let geometry = layout.resolve(880., [0.; 2], &metrics, true);

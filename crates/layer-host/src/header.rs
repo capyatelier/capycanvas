@@ -119,8 +119,7 @@ mod tests {
             .entries()
             .map(|e| HeaderMetric {
                 id: e.id,
-                width: 56.,
-                compact: 56.,
+                width: 36.,
             })
             .collect();
         let geometry = model.resolve(1400., [0., 0.], &metrics, true);

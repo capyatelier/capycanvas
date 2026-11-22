@@ -37,7 +37,7 @@ saved list stays empty, and the tablet arrangement is independent.
   correction). A delivered command that is unavailable in the
   current state is disabled and publishes its reason.
 - **Menus.** The application menus are **File, Edit, Image, Layer, Select, Filter,
-  View, Window**, in that order, and fit beside a centered title in a
+  View, Window**, in that order, and fit beside the title in a
   1200px-wide window. File owns documents, windows, open, save and export; Edit
   owns document undo and editing; Layer projects the layer context menu's
   actions; Select owns selection commands; Filter has one submenu per filter

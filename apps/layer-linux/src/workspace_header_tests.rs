@@ -3443,6 +3443,7 @@ fn native_header_compact_switcher_input() {
         },
     });
 
+    let mut overflowed = false;
     for theme in [Theme::Dark, Theme::Light] {
         d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         for (input, size) in HeaderSize::ALL.into_iter().enumerate() {
@@ -3498,7 +3499,7 @@ fn native_header_compact_switcher_input() {
                     );
                 }
             }
-            assert!(overflow_count > 0);
+            overflowed |= overflow_count > 0;
             d.click(&selector);
             let popup = d.named("workspace-switcher-popup");
             let model = popup
@@ -3578,6 +3579,7 @@ fn native_header_compact_switcher_input() {
             assert!(!popup.is_visible());
         }
     }
+    assert!(overflowed, "a 640px bar overflows at some header size");
 
     // A switcher moved into a crowded zone uses the same choices from overflow.
     let mut workspace = state(&d.w).workspace;
