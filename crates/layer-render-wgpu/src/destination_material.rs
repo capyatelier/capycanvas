@@ -229,9 +229,9 @@ impl WgpuRasterizer {
             let wet_intent=(operation==MaterialOperation::Watercolor).then(||self.raster_intent(batch.target,RasterPlane::WatercolorWetness,job.coordinate)).transpose()?;
             Ok((intent,wet_intent))
         }).collect::<Result<Vec<_>,GpuRasterError>>()?;
-        let source_bindings=jobs.iter().zip(&intents).map(|(job,(intent,_))|self.transport_sources(encoder,batch_index,batch,job.coordinate,target,intent))
+        let source_keys=jobs.iter().zip(&intents).map(|(job,(intent,_))|self.transport_sources(encoder,batch_index,batch,job.coordinate,target,intent))
             .collect::<Result<Vec<_>,_>>()?;
-        for (((index,job),sources),(intent,wet_intent)) in jobs.iter().enumerate().zip(source_bindings).zip(intents) {
+        for (((index,job),sources),(intent,wet_intent)) in jobs.iter().enumerate().zip(source_keys).zip(intents) {
             let color_ticket=preview.then(||self.preview_material_version(batch,batch_index,RasterPlane::Color,job.coordinate,scene::PreviewPass::Color,&intent)).transpose()?;
             let coverage_ticket=(preview && job.coverage_index.is_some()).then(||self.preview_material_version(batch,batch_index,RasterPlane::Color,job.coordinate,scene::PreviewPass::Coverage,&intent)).transpose()?;
             let wetness_ticket=wet_intent.as_ref().filter(|_|preview).map(|wet_intent|self.preview_material_version(batch,batch_index,RasterPlane::WatercolorWetness,job.coordinate,scene::PreviewPass::Wetness,wet_intent)).transpose()?;
@@ -261,6 +261,7 @@ impl WgpuRasterizer {
             }else {None};
             destination.value().preview.set(None);
             let output=self.pipelines.destination_material.output(&self.device,&self.style_buffer,&destination,coverage.as_ref(),wetness.as_ref());
+            let (sources,_)=coverage.as_ref().unwrap_or(&destination).value().material.inputs(sources,|key|create_material_inputs(&self.device,&self.material_layout,self.material_records.binding().size,key));
             let entry=if wetness.is_some() {Entry::Watercolor}else if coverage.is_some() {Entry::Coverage}else {Entry::Color};
             let next_publications=[
                 Some(MaterialPublication {kind:MaterialOutputKind::Color,coordinate:job.coordinate,preview:color_ticket.clone(),input:intent.clone(),
@@ -282,6 +283,7 @@ impl WgpuRasterizer {
             let destination=if self.reservoir.active_secondary {&mut self.reservoir.primary}else {&mut self.reservoir.secondary};
             let write=destination.overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
             let output=self.pipelines.destination_material.output(&self.device,&self.style_buffer,&write,None,None);
+            let (sources,_)=write.value().material.inputs(sources,|key|create_material_inputs(&self.device,&self.material_layout,self.material_records.binding().size,key));
             let publication=MaterialPublication {kind:MaterialOutputKind::Reservoir,coordinate,preview:None,input:intent,
                 encoding:write.encoded(layer_core::raster::ContentName::fresh())};
             dispatches.push(Dispatch {entry:Entry::Reservoir,output,sources,coordinate,record_offset:self.material_records.offset(first_record)});
@@ -302,10 +304,10 @@ impl WgpuRasterizer {
         coordinate: [u32; 2],
         target: BrushEncodingTarget,
         intent: &crate::raster::contents::Intent,
-    ) -> Result<wgpu::BindGroup, GpuRasterError> {
+    ) -> Result<crate::bindings::MaterialSources, GpuRasterError> {
         let timing = self.telemetry.enabled;
         let started = timing.then(web_time::Instant::now);
-        let (sources, _) = self.material_bind_group(batch,batch_index, coordinate, target, intent, MaterialInputs::Neighborhood, None, encoder)?;
+        let sources = self.material_bind_group(batch,batch_index, coordinate, target, intent, MaterialInputs::Neighborhood, None, encoder)?;
         self.metrics.material_cpu_ms[4] += elapsed(started);
         Ok(sources)
     }

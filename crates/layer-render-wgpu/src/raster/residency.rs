@@ -219,7 +219,7 @@ impl WgpuRasterizer {
                 let coordinate = layer.pages[index].coordinate;
                 if take((layer.id, coordinate, Offered::Color)) {
                     take((layer.id, coordinate, Offered::Spare));
-                    for coverage in layer.coverage_pages.iter().filter(|p| p.coordinate == coordinate) { coverage.release_color_bindings(); }
+                    for coverage in layer.coverage_pages.iter().filter(|p| p.coordinate == coordinate) { coverage.release_bindings(); }
                     let page = layer.pages.swap_remove(index);
                     retired.push(page.primary.retire());retired.extend(page.secondary.map(resident::Resident::retire));
                     continue;
@@ -235,6 +235,7 @@ impl WgpuRasterizer {
                 retired.push(page.primary.retire());retired.push(page.secondary.retire());
             }
         }
+        if !retired.is_empty() { self.release_preview_bindings(); }
         (retired, evicted)
     }
 }

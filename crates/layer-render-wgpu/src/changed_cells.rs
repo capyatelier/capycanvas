@@ -42,16 +42,10 @@ impl ChangedCells {
         let retired:BTreeSet<_>=self.pages.keys().copied().filter(|key|side!=self.side || !wanted.contains(key)).collect();
         for layer in &r.paint_layers {
             for page in &layer.pages {
-                if retired.contains(&(layer.id,page.coordinate)) {
-                    page.primary.clear_bindings();
-                    if let Some(secondary)=&page.secondary {secondary.clear_bindings();}
-                }
+                if retired.contains(&(layer.id,page.coordinate)) {page.release_bindings();}
             }
         }
-        if !retired.is_empty() {for page in &r.preview_pages {
-            page.primary.clear_bindings();
-            if let Some(secondary)=&page.secondary {secondary.clear_bindings();}
-        }}
+        if !retired.is_empty() {r.release_preview_bindings();}
         self.retired.extend(self.pages.extract_if(..,|key,_|retired.contains(key)).map(|(_,buffer)|buffer));
         self.recharge(r);
     }

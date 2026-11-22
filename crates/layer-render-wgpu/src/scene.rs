@@ -3380,7 +3380,6 @@ impl<K: std::hash::Hash + Eq + Clone> RecentBindings<K> {
     }
 }
 pub(super) type ResourceBindingKey<const B: usize, const V: usize> = ([wgpu::Buffer; B], [wgpu::TextureView; V]);
-pub(super) type MaterialBindingKey = ResourceBindingKey<2, 11>;
 pub(super) type TransportBindingKey = ResourceBindingKey<1, 12>;
 pub(super) trait ResourceBinding<const B: usize, const V: usize> {
     fn parts(&self) -> ([&wgpu::Buffer; B], [&wgpu::TextureView; V]);

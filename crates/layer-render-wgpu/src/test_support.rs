@@ -551,7 +551,10 @@ pub(crate) fn dry_display(r: &mut WgpuRasterizer, batch: &DabBatch, neighborhood
         r.dry_display_inputs.push(inputs);
     }
     let inputs = &r.dry_display_inputs[0];
-    Some(crate::dry_material::DisplayJob { gather: inputs.gather(&r.device, &r.style_buffer, r.pipelines.dry_material.in_place(), r.pipelines.dry_material.gather_layout(), output), inputs: inputs.inputs(r, neighborhood) })
+    let held = &output.value().material;
+    let key = inputs.key(r, neighborhood);
+    Some(crate::dry_material::DisplayJob { gather: inputs.gather(&r.device, &r.style_buffer, r.pipelines.dry_material.in_place(), r.pipelines.dry_material.gather_layout(), output, held),
+        inputs: held.display.get(key, |key| create_material_inputs(&r.device, &r.material_layout, r.material_records.binding().size, key)) })
 }
 
 pub(crate) fn dry_output(r: &WgpuRasterizer, write: &resident::RasterWrite<'_, PageSurface>) -> wgpu::BindGroup {

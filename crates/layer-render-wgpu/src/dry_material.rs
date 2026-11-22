@@ -204,8 +204,6 @@ pub(super) fn material_source(space:layer_core::color::RgbSpace,float_sampling:&
 /// and starting paint.
 pub(super) struct DisplayInputs {
     views: [wgpu::TextureView; 3],
-    inputs: bindings::MaterialInput,
-    gather: bindings::CachedBinding<(wgpu::Buffer, wgpu::TextureView)>,
 }
 
 impl DisplayInputs {
@@ -214,8 +212,6 @@ impl DisplayInputs {
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
             views: Self::FORMATS.map(|format| create_target(device, [PAGE_SIZE / 2; 2], format, "dry display inputs").1),
-            inputs: Default::default(),
-            gather: Default::default(),
         }
     }
 
@@ -225,28 +221,25 @@ impl DisplayInputs {
 
     /// The evaluator's inputs: the job's own neighborhood around the averaged
     /// page, coverage and starting paint.
-    pub fn inputs(&self, r: &WgpuRasterizer, neighborhood: [&wgpu::TextureView; 9]) -> wgpu::BindGroup {
-        let mut views = neighborhood;
-        views[4] = &self.views[0];
-        let bound = std::array::from_fn(|i| match i { 9 => &self.views[1], 10 => &self.views[2], _ => views[i] }.clone());
-        self.inputs.get(([r.dab_buffer.clone(), r.material_records.binding().buffer.clone()], bound), || create_material_bind_group(
-            &r.device, &r.material_layout, &views, &r.dab_buffer,
-            &self.views[1], &self.views[2], wgpu::BindingResource::Buffer(r.material_records.binding())))
+    pub fn key(&self, r: &WgpuRasterizer, neighborhood: [&wgpu::TextureView; 9]) -> bindings::MaterialKey {
+        r.material_key(std::array::from_fn(|i| match i { 4 => &self.views[0], 9 => &self.views[1], 10 => &self.views[2], _ => neighborhood[i] }))
     }
 
     /// The gather pass's outputs. Where the start is stored, the averaged
     /// starting paint goes straight to the prediction's output.
-    pub fn gather(&self,device:&PipelineDevice,style:&wgpu::Buffer,in_place:bool,layout:&wgpu::BindGroupLayout,output:&resident::RasterWrite<'_,PageSurface>)->wgpu::BindGroup {
+    pub fn gather(&self,device:&PipelineDevice,style:&wgpu::Buffer,in_place:bool,layout:&wgpu::BindGroupLayout,
+        output:&resident::RasterWrite<'_,PageSurface>,bindings:&bindings::MaterialBindings)->wgpu::BindGroup {
         let original = if in_place { &output.value().view } else { &self.views[0] };
-        self.gather.get((style.clone(), original.clone()), || {
+        bindings.gather.get((style.clone(), [original, &self.views[1], &self.views[2]].map(Clone::clone)), |(_, views)| {
             let entries = [wgpu::BindGroupEntry {
                 binding: 0,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: style, offset: 0, size: NonZeroU64::new(mem::size_of::<StyleGpu>() as u64),
                 }),
-            }].into_iter().chain([original, &self.views[1], &self.views[2]].into_iter().zip(4..).map(|(view, binding)| wgpu::BindGroupEntry {
+            }].into_iter().chain(views.iter().zip(4..).map(|(view, binding)| wgpu::BindGroupEntry {
                 binding, resource: wgpu::BindingResource::TextureView(view),
             })).collect::<Vec<_>>();
+            #[cfg(test)] crate::test_support::PassCounts {material_bind_groups:1,..Default::default()}.record();
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("dry display input gather"),
                 layout,
@@ -393,9 +386,9 @@ pub(super) fn output_binding(device:&PipelineDevice,style_buffer:&wgpu::Buffer,l
         (3, wetness.map(|page| wgpu::BindingResource::TextureView(&page.view))), (3, changed.map(wgpu::Buffer::as_entire_binding))]
         .into_iter().filter_map(|(binding, resource)| resource.map(|resource| wgpu::BindGroupEntry { binding, resource }))
         .collect::<Vec<_>>();
-    coverage.unwrap_or(color).material_output.get(
+    coverage.unwrap_or(color).material.output.get(
         (style_buffer.clone(), color.view.clone(), [coverage, wetness].map(|p| p.map(|p| p.view.clone())), changed.cloned()),
-        || device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("destination material page output"), layout, entries: &entries }),
+        |_| device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("destination material page output"), layout, entries: &entries }),
     )
 }
 

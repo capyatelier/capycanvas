@@ -136,7 +136,7 @@ fn compact_contribution_omits_unused_paint_and_matches_bound_source() {
         });
         let key=( [r.dab_buffer.clone(),r.material_records.binding().buffer.clone()],
             std::array::from_fn(|i|if i==9 {coverage.as_ref().map_or(&r.empty_scalar_view,|read|&read.value().view).clone()}else {r.empty_view.clone()}) );
-        r.material_bindings.get(&key,||panic!("{preset:?} {name} {blend:?}: actual contribution must bind empty paint"));
+        prediction_color(&r,target,[0,0]).value().material.input.get(key,|_|panic!("{preset:?} {name} {blend:?}: actual contribution must bind empty paint"));
         let actual=crate::layer_tests::page_bytes(&r,&prediction_color(&r,target,[0,0]).value().texture);
         let mut reference=resident::Resident::unwritten(create_page_surface(&r.device,&r.float_texture_layout,&r.sampler,[PAGE_SIZE>>r.preview_level;2],r.device.working_format(),"bound paint contribution oracle",&r.raster_tiers.paint));
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
@@ -150,9 +150,11 @@ fn compact_contribution_omits_unused_paint_and_matches_bound_source() {
         r.preview_contribution=false;
         r.brush_inputs=Some(r.prepare_brush_inputs(Some(target),None).unwrap());
         let intent=r.raster_intent(target,RasterPlane::Color,[0,0]).unwrap();
-        let (source,display)=r.material_source_binding(&preview,0,[0,0],BrushEncodingTarget::Persistent,&intent,display,&mut encoder).unwrap();
+        let sources=r.material_source_binding(&preview,0,[0,0],BrushEncodingTarget::Persistent,&intent,display,&mut encoder).unwrap();
         r.preview_contribution=true;
-        let display=display.map(|inputs|crate::dry_material::DisplayJob {gather:r.dry_display_inputs[0].gather(&r.device,&r.style_buffer,r.pipelines.dry_material.in_place(),r.pipelines.dry_material.gather_layout(),&write),inputs});
+        let held=&write.value().material;
+        let (source,display)=held.inputs(sources,|key|create_material_inputs(&r.device,&r.material_layout,r.material_records.binding().size,key));
+        let display=display.map(|inputs|crate::dry_material::DisplayJob {gather:r.dry_display_inputs[0].gather(&r.device,&r.style_buffer,r.pipelines.dry_material.in_place(),r.pipelines.dry_material.gather_layout(),&write,held),inputs});
         let reference_output=write.encoded(reference_version);
         r.encode_dry_material_jobs(&mut encoder,0,&preview,&[crate::dry_material::Job {output,source,display,coordinate:[0,0],coverage:false,
                 record_offset: 0,
@@ -170,7 +172,7 @@ fn compact_contribution_omits_unused_paint_and_matches_bound_source() {
             let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
             r.brush_inputs=Some(r.prepare_brush_inputs(Some(target),None).unwrap());
             let intent=r.raster_intent(target,RasterPlane::Color,[0,0]).unwrap();
-            r.material_source_binding(&fallback,0,[0,0],BrushEncodingTarget::Persistent,&intent,None,&mut encoder).unwrap();
+            let sources=r.material_source_binding(&fallback,0,[0,0],BrushEncodingTarget::Persistent,&intent,None,&mut encoder).unwrap();
             let receipt=encoder.submission();let intent=r.raster_intent(target,RasterPlane::Color,[0,0]).unwrap();
             let color=r.read_layer_color(target,[0,0],intent.version(),Some(&receipt)).unwrap();
             let layer=r.paint_layers.iter().find(|layer|layer.id==target).unwrap();
@@ -178,7 +180,7 @@ fn compact_contribution_omits_unused_paint_and_matches_bound_source() {
             let state=page.state.as_ref().filter(|state|state.matches(persistent.stroke_id,&intent)).unwrap();
             let coverage=page.active().read(&state.version,Some(&receipt)).unwrap();
             let key=([r.dab_buffer.clone(),r.material_records.binding().buffer.clone()],std::array::from_fn(|i|match i {4=>color.value().view.clone(),9=>coverage.value().view.clone(),_=>r.empty_view.clone()}));
-            r.material_bindings.get(&key,||panic!("{name} {blend:?}: fallback {level} {contribution} {preset:?} must retain paint and coverage"));
+            assert!(sources.key==key,"{name} {blend:?}: fallback {level} {contribution} {preset:?} must retain paint and coverage");
             r.uploads.finish(&encoder);encoder.submit(&r.queue);r.wait_idle().unwrap();
         }}
     }}}
@@ -485,8 +487,8 @@ fn native_alpha_reuse_real_unchanged_stores_leave_gpu_flags_clear() {
                 let page=r.preview_page([0,0]).expect("real enabled prediction must remain live");
                 let read=prediction_color(r,target,[0,0]);let written=read.value();
                 assert_eq!(written.preview.get(),Some((target,[0,0])));assert!(!page.active_secondary);
-                written.material_output.get((r.style_buffer.clone(),written.view.clone(),[None, None],Some(flags.clone())),
-                    ||panic!("real warm Engine prediction must execute actual tracked display output"));
+                written.material.output.get((r.style_buffer.clone(),written.view.clone(),[None, None],Some(flags.clone())),
+                    |_|panic!("real warm Engine prediction must execute actual tracked display output"));
                 let bytes = pollster::block_on(crate::local_tone::read_buffer_async(&r.device, &r.queue, flags)).unwrap();
                 let changed = bytes[16..].as_chunks::<4>().0.iter().filter(|cell| u32::from_le_bytes(**cell) != 0).count();
                 assert_eq!(changed, 0, "{name} unchanged warm real stores must leave every GPU dirty-cell flag clear: candidates={}, forced={}",
@@ -1064,8 +1066,8 @@ fn fused_prediction_tracks_actual_warm_primary_and_forces_relocated_pages() {
             let flags=cells.buffer(target,coordinate).unwrap();
             let tracked=step==1 || step==2 || step==3;
             let expected=if tracked {flags.clone()} else {cells.disabled.clone()};
-            written.material_output.get((r.style_buffer.clone(),written.view.clone(),[None, None],Some(expected)),
-                ||panic!("{name} {blend:?} level{level} step{step}: actual kernel/output binding must have expected tracking"));
+            written.material.output.get((r.style_buffer.clone(),written.view.clone(),[None, None],Some(expected)),
+                |_|panic!("{name} {blend:?} level{level} step{step}: actual kernel/output binding must have expected tracking"));
             let data=pollster::block_on(crate::local_tone::read_buffer_async(&r.device,&r.queue,flags)).unwrap();
             let dirty=data[16..].as_chunks::<4>().0.iter().filter(|v|u32::from_le_bytes(**v)!=0).count();
             if step==1 {assert_eq!(dirty,0,"identical retained prediction must leave every cell clear");assert_eq!(Some(written.view.clone()),previous);}
