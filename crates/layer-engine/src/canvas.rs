@@ -966,8 +966,12 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 .any(raster_edit_batch)
     }
     pub fn frame_demand(&self) -> layer_render::FrameDemand {
+        let canvas = self.canvas_demand();
+        if self.waits_on_backend() { canvas } else { canvas.sooner(self.correction_demand()) }
+    }
+    pub fn canvas_demand(&self) -> layer_render::FrameDemand {
         use layer_render::FrameDemand;
-        if self.backend.waits_for_frame_slot() || self.pending_frame.is_some() && self.backend.stroke_waits_for_memory() { return self.backend.next_frame(); }
+        if self.waits_on_backend() { return self.backend.next_frame(); }
         let engine = if self.has_pending_input() || self.has_active_stroke() || self.editor.document().has_animated_effects() {
             FrameDemand::Animate
         } else if self.document_edits_queued() || (self.can_park() && self.editor.memory_report_pending()) {
@@ -976,6 +980,17 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             FrameDemand::Wait
         };
         engine.sooner(self.backend.next_frame())
+    }
+    fn waits_on_backend(&self) -> bool {
+        self.backend.waits_for_frame_slot() || self.pending_frame.is_some() && self.backend.stroke_waits_for_memory()
+    }
+    fn correction_demand(&self) -> layer_render::FrameDemand {
+        use layer_render::FrameDemand;
+        match self.completed_at.map(|at| at + CORRECTION_WINDOW) {
+            Some(deadline) if deadline > web_time::Instant::now() => FrameDemand::WaitUntil(deadline),
+            Some(_) if self.corrections_expired() => FrameDemand::Work,
+            _ => FrameDemand::Wait,
+        }
     }
     pub fn has_pending_input(&self) -> bool {
         !self.input.is_empty()
@@ -1096,6 +1111,24 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         }
     }
 
+    fn capture_pending(&self) -> bool {
+        !self.backend.can_capture_raster()
+            && (self.input.peek().is_some_and(|e| e.phase == PenPhase::Up || e.flags.contains(SampleFlags::CORRECTION))
+                || self.document().artwork.paint.iter().any(|(_, _, source)| source.raster.try_data().is_none())
+                || self.document().artwork.coverage.iter().any(|(_, _, source)| source.raster.try_data().is_none()))
+    }
+    fn corrections_expired(&self) -> bool {
+        self.completed_at.is_some_and(|at| at.elapsed() >= CORRECTION_WINDOW) && !self.corrections_held_by_retouch()
+    }
+    pub fn poll_corrections(&mut self) {
+        if self.settings.retouch.is_none() && self.corrections_expired() && self.backend.can_submit()
+            && self.pending_frame.is_none() && !self.capture_pending() {
+            self.end_corrections();
+        }
+    }
+    fn corrections_held_by_retouch(&self) -> bool {
+        self.completed_stroke.as_ref().map(|stroke| stroke.id) == self.backend.retouch_waiting()
+    }
     /// The completed stroke can no longer be corrected or replayed.
     fn end_corrections(&mut self) {
         self.completed_stroke = None;
@@ -1580,21 +1613,13 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if let Some(frame) = self.pending_frame.take() {
             return self.submit_prepared_frame(frame);
         }
-        if !self.backend.can_capture_raster()
-            && (self.input.peek().is_some_and(|e| {
-                e.phase == PenPhase::Up || e.flags.contains(SampleFlags::CORRECTION)
-            }) || self.document().artwork.paint.iter().any(|(_, _, source)| source.raster.try_data().is_none())
-                || self.document().artwork.coverage.iter().any(|(_, _, source)| source.raster.try_data().is_none()))
-        {
+        if self.capture_pending() {
             return Ok(());
         }
         self.replay_retouch_misses().map_err(EngineError::Document)?;
-        if self
-            .completed_at
-            .is_some_and(|at| at.elapsed() >= CORRECTION_WINDOW)
-            && self.completed_stroke.as_ref().map(|stroke| stroke.id) != self.backend.retouch_waiting()
-        {
+        if self.corrections_expired() {
             self.end_corrections();
+            if self.canvas_demand() == layer_render::FrameDemand::Wait { return Ok(()); }
         }
         if self.settings.retouch.is_some() {
             self.refresh_retouch();
@@ -3720,6 +3745,49 @@ mod tests {
     }
 
     #[test]
+    fn an_idle_canvas_wakes_when_corrections_end_and_retires_stroke_sources() {
+        let (mut input, mut engine) =
+            engine_with(RecordingRenderer::default(), retouch_document(), view(64, 64), TRANSFORM);
+        engine.render_frame().unwrap();
+        for (sequence, phase, x) in [(1, PenPhase::Down, 8.), (2, PenPhase::Move, 20.), (3, PenPhase::Up, 30.)] {
+            input.push(event(sequence, phase, x)).unwrap();
+            engine.render_frame().unwrap();
+        }
+        engine.render_frame().unwrap();
+        let opened = engine.completed_at.expect("a published stroke opens its correction window");
+        assert_eq!(engine.frame_demand(), layer_render::FrameDemand::WaitUntil(opened + CORRECTION_WINDOW),
+            "with no other work, the canvas sleeps until the correction window ends");
+        let retired = engine.backend().retired_sources;
+        engine.completed_at = Some(web_time::Instant::now() - CORRECTION_WINDOW);
+        assert_eq!(engine.frame_demand(), layer_render::FrameDemand::Work, "an expired window asks for the frame that ends it");
+        engine.backend_mut().fail_submit = true;
+        engine.render_frame().expect("ending the window submits no canvas frame");
+        engine.backend_mut().fail_submit = false;
+        assert_eq!(engine.backend().retired_sources, retired + 1, "the woken frame retires the stroke's sources");
+        assert!(engine.completed_at.is_none());
+        assert_eq!(engine.frame_demand(), layer_render::FrameDemand::Wait);
+    }
+
+    #[test]
+    fn a_host_poll_ends_an_expired_window_without_a_frame() {
+        let (mut input, mut engine) =
+            engine_with(RecordingRenderer::default(), retouch_document(), view(64, 64), TRANSFORM);
+        engine.render_frame().unwrap();
+        for (sequence, phase, x) in [(1, PenPhase::Down, 8.), (2, PenPhase::Move, 20.), (3, PenPhase::Up, 30.)] {
+            input.push(event(sequence, phase, x)).unwrap();
+            engine.render_frame().unwrap();
+        }
+        engine.render_frame().unwrap();
+        let retired = engine.backend().retired_sources;
+        engine.poll_corrections();
+        assert_eq!(engine.backend().retired_sources, retired, "an open window keeps its sources");
+        engine.completed_at = Some(web_time::Instant::now() - CORRECTION_WINDOW);
+        engine.poll_corrections();
+        assert_eq!(engine.backend().retired_sources, retired + 1, "the poll retires the stroke's sources");
+        assert_eq!(engine.frame_demand(), layer_render::FrameDemand::Wait, "the host need not draw to end the window");
+    }
+
+    #[test]
     fn a_stroke_waiting_for_source_pixels_stays_correctable_until_it_replays() {
         let (mut input, mut engine) =
             engine_with(RecordingRenderer::default(), retouch_document(), view(64, 64), TRANSFORM);
@@ -3735,6 +3803,7 @@ mod tests {
         engine.completed_at = Some(web_time::Instant::now() - CORRECTION_WINDOW * 2);
         engine.render_frame().unwrap();
         assert!(engine.completed_stroke.is_some(), "a stroke waiting for its source stays replayable");
+        assert_eq!(engine.frame_demand(), layer_render::FrameDemand::Wait, "an expired window waiting on its source does not keep waking");
         engine.backend_mut().saw_reset = false;
         engine.backend_mut().retouch_waiting = None;
         engine.backend_mut().retouch_misses.push(stroke);

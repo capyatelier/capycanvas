@@ -1452,12 +1452,12 @@ void CanvasWindow::Run() {
                     SaveAfterGpuFailure(error.what());break;
                 }
             }
-            bool pollServices=false,pollSurface=false,resized=false;
+            bool pollServices=false,pollSurface=false,resized=false,deadlineDue=false;
             {
                 std::unique_lock lock(mutex);
                 wake.wait_until(lock,frameDeadline.Wake(surfacePoll.Wake(navigatorDirty?std::min(nextServices,navigatorWake):nextServices)),[&]{return closing||resize||dirty||!navigatorWork.empty()||servicesReady||transportFailed||!work.Empty()||pendingHover.has_value()||!previewWork.Empty();});
                 if(closing) break;
-                dirty|=frameDeadline.Take(std::chrono::steady_clock::now());
+                deadlineDue=frameDeadline.Take(std::chrono::steady_clock::now());
                 if(resize) {
                     auto next=desired;resize=false;probeReady=false;
                     lock.unlock();
@@ -1469,6 +1469,11 @@ void CanvasWindow::Run() {
                 }
                 pollServices=std::exchange(servicesReady,false)||std::chrono::steady_clock::now()>=nextServices;
                 pollSurface=!pollServices&&!dirty&&!transportFailed&&work.Empty()&&!pendingHover.has_value()&&surfacePoll.Due(std::chrono::steady_clock::now());
+            }
+            if(deadlineDue){
+                auto requested=capy_needs_frame(host);
+                if(requested<0){if(capy_device_lost(host))continue;Fail(NativeString(capy_error()).get());break;}
+                dirty|=requested!=CAPY_FRAME_IDLE;
             }
             if(pollSurface){
                 bool pending=false;auto surfaceResult=capy_poll_surface(host,&pending);

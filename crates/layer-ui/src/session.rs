@@ -2491,6 +2491,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn engine(&self) -> &CanvasEngine<R> {
         &self.engine
     }
+    pub fn poll_corrections(&mut self) {
+        self.engine.poll_corrections();
+    }
     /// Surface lifecycle/presentation only; UI document edits use dispatch.
     pub fn renderer_mut(&mut self) -> &mut R {
         self.engine.backend_mut()

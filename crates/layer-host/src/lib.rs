@@ -285,6 +285,7 @@ impl NativeHost {
         else {self.preparation.retire();}
     }
     pub fn poll_preparation(&mut self)->layer_render::FrameDemand {
+        self.session.poll_corrections();
         if self.preparation.take() {
             self.warm.retain(|_, gpu| gpu.keeps_warm());
             if !self.startup.complete && let Some(Ok(progress)) = self.session.renderer_mut().0.as_mut().map(|gpu| gpu.poll_startup()) {

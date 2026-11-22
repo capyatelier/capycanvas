@@ -94,7 +94,7 @@ fn a_held_contact_asks_for_no_frame_until_painting_is_ready() {
     assert_ne!(s.frame_demand(), layer_render::FrameDemand::Wait, "painting becoming ready resumes the held contact");
     settle(&mut s);
     assert!(!s.holding_input() && s.deferred_edits.is_empty());
-    assert_eq!(s.frame_demand(), layer_render::FrameDemand::Wait);
+    assert!(matches!(s.frame_demand(), layer_render::FrameDemand::WaitUntil(_)), "the painted stroke only waits for its correction window to end");
 }
 
 #[test]
