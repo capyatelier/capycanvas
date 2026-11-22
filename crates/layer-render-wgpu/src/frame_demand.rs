@@ -61,7 +61,7 @@ impl WgpuRasterizer {
             ("effect analysis", self.analysis_dirty.then_some(Runnable)),
             ("transform damage", (!self.transform_damage.is_empty()).then_some(Runnable)),
             ("document damage", (!self.document_damage.is_empty()).then_some(Runnable)),
-            ("settling", self.settling.is_some().then_some(Runnable)),
+            ("settling", self.settling.is_some().then_some(if self.settling_ready() { Runnable } else { Blocked(Input::Gpu) })),
             ("retouch sources", gated(self.retouch.as_ref().is_some_and(|retouch| retouch.pending()))),
             ("navigator", self.navigator.outstanding(self).map(|state| match objects { Some(Blocked(input)) => Blocked(input), _ => state })),
             ("canonical names", (self.navigator.waiting_for_name()
@@ -110,7 +110,7 @@ impl WgpuRasterizer {
     fn unwoken(&self) -> impl Iterator<Item = (&'static str, Outstanding)> + '_ {
         let slot = self.frame_slot_blocked();
         self.outstanding().into_iter().filter_map(move |(term, state)| match state? {
-            Outstanding::Runnable => (!slot).then_some((term, Outstanding::Runnable)),
+            Outstanding::Runnable => (!slot || term == "settling").then_some((term, Outstanding::Runnable)),
             Outstanding::Blocked(input) => (!self.wakes(input)).then_some((term, Outstanding::Blocked(input))),
         })
     }
@@ -120,8 +120,7 @@ impl WgpuRasterizer {
         self.device.on_next_completion(wake) != self.observed_completions.load(std::sync::atomic::Ordering::Acquire) && self.frame_results_ready()
     }
     fn frame_results_ready(&self) -> bool {
-        self.settling.is_some() && self.background_ready.load(std::sync::atomic::Ordering::Acquire) && self.raster_ready()
-            || self.color_sample_ready() || self.selection_paint_ready() || self.region_pending()
+        self.color_sample_ready() || self.selection_paint_ready() || self.region_pending()
             || self.filter_previews_ready() || self.effect_validation_pending() || self.brush_stamp_ready()
     }
     pub(crate) fn frame_demand(&self) -> FrameDemand {
@@ -138,7 +137,7 @@ impl WgpuRasterizer {
             || self.bake_preflight.as_ref().is_some_and(|state| state.waiting());
         let lost: Vec<_> = self.outstanding().into_iter().filter(|(_, state)| match state {
             Some(Outstanding::Blocked(Input::Decode)) => !decodes,
-            Some(Outstanding::Blocked(Input::Gpu)) => self.fill_preview_done.is_none(),
+            Some(Outstanding::Blocked(Input::Gpu)) => self.fill_preview_done.is_none() && self.settling.is_none(),
             _ => false,
         }).collect();
         debug_assert!(lost.is_empty(), "an idle renderer waits on inputs that are not outstanding: {lost:?}");

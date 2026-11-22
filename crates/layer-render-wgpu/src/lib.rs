@@ -3591,6 +3591,7 @@ impl WgpuRasterizer {
     pub(crate) fn arrival_token(&self) -> frame_demand::ArrivalToken { frame_demand::ArrivalToken(self.arrivals.load(std::sync::atomic::Ordering::Acquire)) }
     pub(crate) fn arrived_since(&self, token: frame_demand::ArrivalToken) -> bool { self.arrivals.load(std::sync::atomic::Ordering::Acquire)!=token.0 }
     fn gpu_results_pending(&self) -> bool { self.frame_results_pending() || self.thumbnails_pending() }
+    fn settling_ready(&self) -> bool { self.background_ready.load(std::sync::atomic::Ordering::Acquire) && self.raster_ready() }
     fn frame_results_pending(&self) -> bool {
         self.settling.is_some() || !self.background_ready.load(std::sync::atomic::Ordering::Acquire)
             || self.color_sample_pending() || self.selection_paint_pending() || self.region_pending()
@@ -3980,7 +3981,7 @@ impl CanvasRenderer for WgpuRasterizer {
         let Some(mut pending) = self.settling.take() else { return Ok(()); };
         let moving = pending.view != view;
         pending.view = view;
-        if moving || !self.background_ready.load(std::sync::atomic::Ordering::Acquire) || !self.raster_ready() {
+        if moving || !self.settling_ready() {
             self.settling = Some(pending);
             return Ok(());
         }

@@ -366,22 +366,23 @@ fn fill_lane(r: &mut WgpuRasterizer) -> Vec<crate::residency::Reservation> {
 #[test]
 fn a_committed_edit_captures_its_pages_while_pinned_data_fills_the_lane() {
     use crate::layer_tests::{dab, placement};
+    use layer_render::{CanvasRenderer, FrameDemand};
     let paint = |full: bool| {
-        let extent = [2048, 1024];
+        let extent = [4096, 2048];
         let mut doc = placement::paint_document(extent, "Capture without room");
         let mut r = crate::memory::memory_tests::renderer(doc.composition().color,
-            layer_core::DeviceMemoryFacts { budget_bytes: Some(512 << 20), ..Default::default() }).unwrap();
+            layer_core::DeviceMemoryFacts { budget_bytes: Some(1024 << 20), ..Default::default() }).unwrap();
         let target = placement::target(&doc);
         crate::test_support::submit_settled(&mut r, crate::test_support::packet(doc.scene(), extent));
         let style = crate::tests::test_style(BrushExecution::Dry);
         let stroke = |step: usize| {
             let mut stamp = dab([0.2, 0.4, 0.6, 0.8]);
-            stamp.center = layer_core::Point { x: 200. + 300. * step.min(5) as f32, y: 500. };stamp.radii = [120.; 2];
+            stamp.center = layer_core::Point { x: 512. + 1024. * (step.min(7) % 4) as f32, y: 512. + 1024. * (step.min(7) / 4) as f32 };stamp.radii = [700.; 2];
             let mut batch = crate::test_support::dab_batch(target, style.clone(), stamp.bounds());
-            batch.stroke_id = StrokeId(77);batch.stroke_start = step == 0;batch.stroke_end = step == 6;
+            batch.stroke_id = StrokeId(77);batch.stroke_start = step == 0;batch.stroke_end = step == 8;
             (stamp, batch)
         };
-        for step in 0..6 {
+        for step in 0..8 {
             let (stamp, batch) = stroke(step);
             crate::test_support::submit_ready(&mut r, FramePacket { dabs: &[stamp], dab_batches: &[batch], composite_all: false, ..crate::test_support::packet(doc.scene(), extent) }).unwrap();
         }
@@ -389,27 +390,31 @@ fn a_committed_edit_captures_its_pages_while_pinned_data_fills_the_lane() {
         let held = if full { fill_lane(&mut r) } else { Vec::new() };
         placement::paint_mut(&mut doc).raster = layer_core::raster::RasterRevision::pending();
         let revision = placement::paint(&doc).raster.clone();
-        let (stamp, batch) = stroke(6);
+        let (signal, woken) = std::sync::mpsc::channel();
+        r.set_preparation_wake(Arc::new(move || { let _ = signal.send(()); }));
+        let (stamp, batch) = stroke(8);
         crate::test_support::submit_ready(&mut r, FramePacket { dabs: &[stamp], dab_batches: &[batch], composite_all: false, ..crate::test_support::packet(doc.scene(), extent) })
             .expect("the committing frame submits");
         let idle = FramePacket { composite_all: false, ..crate::test_support::packet(doc.scene(), extent) };
-        let captured = (0..SETTLE_FRAMES).any(|_| {
-            crate::test_support::submit_ready(&mut r, idle).unwrap();
-            r.wait_idle().unwrap();
-            revision.try_data().is_some()
-        });
-        assert!(captured, "the committed pages must be captured while pinned data fills the lane (full {full})");
+        let drive = |r: &mut WgpuRasterizer, done: &dyn Fn(&WgpuRasterizer) -> bool| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !done(r) {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                assert!(!remaining.is_zero(), "the capture must finish within its deadline (full {full})");
+                let _screen_check = r.next_frame();
+                if r.next_frame() == FrameDemand::Wait {
+                    assert!(woken.recv_timeout(remaining).is_ok(), "the renderer stopped asking for frames (full {full}) while {:?} were outstanding", r.outstanding_terms());
+                    continue;
+                }
+                r.poll_pending(idle.view).unwrap();
+                if r.can_submit() && let std::task::Poll::Ready(result) = r.submit_when_ready(idle, None) { result.unwrap(); }
+            }
+        };
+        drive(&mut r, &|_| revision.try_data().is_some());
         drop(held);
-        crate::test_support::submit_settled(&mut r, idle);
-        let waits = (0..SETTLE_FRAMES).any(|_| {
-            if r.next_frame() == layer_render::FrameDemand::Wait { return true; }
-            crate::test_support::submit_ready(&mut r, idle).unwrap();
-            r.wait_idle().unwrap();
-            false
-        });
-        assert!(waits, "once the capture lands the renderer waits (full {full}), not on {:?}", r.outstanding_terms());
+        drive(&mut r, &|r| r.next_frame() == FrameDemand::Wait && r.settled());
         revision.wait_data().unwrap().tiles.iter().map(|(key, tile)| (*key, tile.wait_backing().unwrap().decode_on_worker().unwrap())).collect::<Contents>()
     };
     let (pressed, roomy) = (paint(true), paint(false));
-    assert!(!roomy.is_empty() && pressed == roomy, "an edit captured past a full lane stores the pixels of one captured with room");
+    assert!(roomy.len() >= 100 && pressed == roomy, "an edit captured past a full lane stores the pixels of one captured with room ({} tiles)", roomy.len());
 }
