@@ -93,8 +93,12 @@ pub(super) fn image_grid(output: display_mips::Plan, front: display_mips::Plan, 
     data
 }
 
+fn level_radius(pass: &layer_core::EffectPass, effect: EffectView<'_>, level: u32) -> Option<u32> {
+    pass.sampling.radius(effect)?.checked_next_multiple_of(1 << level)
+}
+
 pub(super) fn pass_radius(pass: &layer_core::EffectPass, effect: EffectView<'_>, level: u32) -> Option<u32> {
-    effect.spatial_radius(pass.sampling.radius(effect)?)?.checked_add((1 << level) - 1)
+    effect.spatial_radius(level_radius(pass, effect, level)?)?.checked_add((1 << level) - 1)
 }
 
 fn pass_expansion(effect: EffectView<'_>, pass: &layer_core::EffectPass, level: u32) -> Option<[u32; 2]> {
@@ -106,7 +110,7 @@ fn pass_expansion(effect: EffectView<'_>, pass: &layer_core::EffectPass, level: 
         else { None };
     let Some(column) = direction else { return Some([pass_radius(pass, effect, level)?; 2]); };
     let linear = effect.spatial.map_or([1., 0., 0., 1., 0., 0.], |spatial| spatial.mapping.0);
-    let radius = f64::from(pass.sampling.radius(effect)?);
+    let radius = f64::from(level_radius(pass, effect, level)?);
     let values = std::array::from_fn::<_, 2, _>(|axis| (linear[column + axis].abs() * radius).ceil() + f64::from((1 << level) - 1));
     if values.iter().any(|value| !value.is_finite() || *value > f64::from(u32::MAX)) { return None; }
     Some(values.map(|value| value as u32))

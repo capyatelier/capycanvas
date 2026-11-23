@@ -1053,6 +1053,59 @@ fn spatial_graph_keeps_masks_clipping_global_dependencies_and_scale_preparation(
 }
 
 #[test]
+fn a_stroke_beyond_the_declared_radius_refreshes_a_cell_its_stretched_reduced_gaussian_reads() {
+    let extent = [2048, 512];
+    let mut doc = document_at(extent);
+    composition_mut(&mut doc).blend = layer_core::BlendSpace::Linear;
+    paint_mut(&mut doc, 0).base = Some(layer_core::authored::PaintBase::new(rgba8_source(extent, |_, _| [0, 0, 0, 255]).into()));
+    let paint = source_at(&doc, 0);
+    let blur = effect(&mut doc, "gaussian_blur");
+    let sigma = 17f32 / 3.;
+    set_effect_value(&mut doc, blur, "sigma", EffectValue::Number(sigma));
+    let stretch = 8.;
+    let application = effect_handle(&doc, blur);
+    doc.artwork.effects.get_mut(application).unwrap().spatial.as_mut().unwrap().mapping = layer_core::authored::Affine64([stretch, 0., 0., 1., 0., 0.]);
+    insert_occurrence(&mut doc, blur, 0);
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut frame = packet(doc.scene(), extent);
+    frame.blend_space = layer_core::BlendSpace::Linear;
+    frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+    submit_published(&mut r, frame);
+    let plan = r.scale_display.as_ref().unwrap().plan;
+    assert_eq!((plan.level, plan.bounds), (2, PixelRect::full(extent)));
+    let side = 4.;
+    let scaled = f64::from(sigma / 4.);
+    let radius = (scaled * 3.).ceil() as usize;
+    let weights: Vec<f64> = (0..=radius).map(|i| (-0.5 * (i as f64 / scaled).powi(2)).exp()).collect();
+    let total = 1. + 2. * weights[1..].iter().sum::<f64>();
+    let taps: Vec<(f64, f64)> = (1..=radius).step_by(2).map(|j| {
+        let (a, b) = (weights[j], if j < radius { weights[j + 1] } else { 0. });
+        ((j as f64 + b / (a + b)) * side * stretch, (a + b) / total)
+    }).collect();
+    let stripe = 295.;
+    let column = 255u32;
+    let center = (f64::from(column) + 0.5) * side;
+    let level_value = |q: f64| {
+        let t = q / side - 0.5;
+        let k = t.floor();
+        let lit = |k: f64| if k == stripe { 1. } else { 0. };
+        lit(k) * (1. - (t - k)) + lit(k + 1.) * (t - k)
+    };
+    let expected = level_value(center) / total + taps.iter().map(|(offset, weight)| weight * (level_value(center - offset) + level_value(center + offset))).sum::<f64>();
+    assert!(expected > 1e-4, "the outermost reduced tap must reach the stroke: {expected}");
+    let width = plan.size[0];
+    let mut dab = crate::tests::test_dab([((stripe + 0.5) * side) as f32, 256.], [1.; 4], 1.);
+    dab.radii = [6., 200.];
+    let batch = dab_batch(paint, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+    crate::test_support::submit_ready(&mut r, FramePacket { composite_all: false, dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
+    let display = display_pixels(&r);
+    for row in 48..80 {
+        let pixel = display[(row * width + column) as usize];
+        assert!((f64::from(pixel[0]) - expected).abs() <= expected * 2e-3 && (pixel[3] - 1.).abs() < 1e-5, "row {row}: {pixel:?} != {expected}");
+    }
+}
+
+#[test]
 fn pointwise_curve_edits_reuse_sources_and_bound_window_passes_with_masked_coordinates() {
     for space in layer_core::BlendSpace::ALL {
         let mut doc=document_at([2053,1541]);
