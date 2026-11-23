@@ -50,7 +50,7 @@ impl DocumentMemory {
     }
     pub fn package_failure(&self)->Option<String> {
         if !self.has_package() {return None;}
-        self.owner.inventories.lock().unwrap().current.check_integrity().err()
+        self.owner.inventories.lock().unwrap().current.check_stored_bytes().err()
     }
     pub fn release_package_wait(&self) {self.owner.package_pending.store(false,Ordering::Release);}
     pub fn package_pending(&self)->bool {self.owner.package_pending.load(Ordering::Acquire)}

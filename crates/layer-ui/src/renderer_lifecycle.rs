@@ -819,6 +819,67 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_arch="wasm32"))]
+    fn package_drawing(damaged:bool)->UiSession<Recorder> {
+        use layer_core::{SourceTarget,raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey,TILE_SIZE},package::{ImmutableBacking,codec::{self,OpenOutcome}}};
+        use std::sync::{Arc,atomic::AtomicBool};
+        let mut document=Document::new(layer_core::PortableId::random(),TILE_SIZE,TILE_SIZE,layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+        let blob=TileBlob::encode(document.composition().color.paint_descriptor(),&[12,34,56,255].repeat((TILE_SIZE*TILE_SIZE) as usize)).unwrap();
+        let encoded=blob.memory_compressed().unwrap().unwrap();
+        let SourceTarget::Paint(paint)=document.working.target.unwrap() else {unreachable!()};
+        document.artwork.paint.get_mut(paint).unwrap().raster=RasterRevision::backed(RasterData {
+            tiles:[(TileKey {plane:RasterPlane::Color,coordinate:[0,0]},RasterTile::backed(blob))].into(),..Default::default()});
+        let mut bytes=package_bytes(&layer_core::Editor::new(document).capture(0,Default::default()).unwrap());
+        if damaged {let at=bytes.windows(encoded.len()).position(|window|window==&*encoded).unwrap();bytes[at+encoded.len()/2]^=1;}
+        let backing=ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap();
+        let OpenOutcome::Candidate {artwork,memory,..}=codec::open(backing,Default::default(),&AtomicBool::new(false)).unwrap() else {panic!("the package must open lazily")};
+        let mut document=Document::from_artwork(artwork).unwrap().with_memory(memory);
+        document.apply(document.select_occurrence_edit(document.scene().order()[0]).unwrap()).unwrap();
+        assert_eq!(document.working.target,Some(SourceTarget::Paint(paint)));
+        if damaged {
+            let tile=document.artwork.paint.get(paint).unwrap().raster.wait_data().unwrap().tiles.values().next().unwrap().wait_backing().unwrap();
+            assert!(std::thread::spawn(move||tile.decode_on_worker()).join().unwrap().is_err());
+        }
+        let mut drawing=UiSession::new(Recorder {showing_drawing:true,..sources()},document,[1000,1000],Platform::Gtk).unwrap();
+        drawing.state.workspace=WorkspaceState::default();
+        let mut drawing=launched(drawing);
+        drawing.dispatch(UiAction::SelectBrush {id:DefaultBrushPreset::GPen as u32}).unwrap();
+        drawing.frame(0,0).unwrap();
+        drawing
+    }
+
+    #[cfg(not(target_arch="wasm32"))]
+    fn fail_stroke_capture(drawing:&mut UiSession<Recorder>)->Vec<String> {
+        const FAILURE:&str="Invalid canonical comparison result";
+        drawing.engine.backend_mut().capture_failure=Some(FAILURE);
+        pen_at(drawing,1,PenPhase::Down,[40.,40.]);pen_at(drawing,2,PenPhase::Move,[120.,40.]);pen_at(drawing,3,PenPhase::Up,[200.,40.]);
+        for frame in 1..=8 {drawing.frame(frame*8_000_000,frame*8_000_000).unwrap();}
+        assert_eq!(drawing.engine.metrics().committed_strokes,1);
+        let pending=drawing.engine.document().artwork.paint.iter().filter_map(|(_,_,paint)|paint.raster.try_data()?.ok())
+            .flat_map(|data|data.tiles.values().filter(|tile|tile.try_backing().is_none()).cloned().collect::<Vec<_>>()).collect::<Vec<_>>();
+        assert!(!pending.is_empty(),"the committed stroke waits for its capture");
+        for tile in pending {tile.publish(Err(FAILURE.into())).unwrap();}
+        let failures=(9..=12).filter_map(|frame|drawing.frame(frame*8_000_000,frame*8_000_000).err()).collect::<Vec<_>>();
+        assert!(!failures.is_empty(),"a frame fails after the capture fails");
+        failures
+    }
+
+    #[cfg(not(target_arch="wasm32"))]
+    #[test]
+    fn a_failed_capture_is_reported_as_file_damage_only_when_package_bytes_are_damaged() {
+        for damaged in [false,true] {
+            let mut drawing=package_drawing(damaged);
+            let failures=fail_stroke_capture(&mut drawing);
+            let damage=drawing.localization().text(MessageId::DOCUMENTS_PACKAGE_DAMAGED_BODY).to_string();
+            if damaged {
+                assert_eq!(failures[0],damage);assert_eq!(notice_text(&drawing),Some(damage.as_str()));
+            } else {
+                assert!(failures.iter().all(|failure|failure.contains("Invalid canonical comparison result")),"a failed capture is reported as {failures:?}");
+                assert_ne!(notice_text(&drawing),Some(damage.as_str()));
+            }
+        }
+    }
+
     #[test]
     fn a_released_queued_stroke_allows_switch_preparation_but_not_parking() {
         for settling in [false,true] {
