@@ -1,6 +1,6 @@
 fn dry_block_result(id: vec2<u32>) -> MaterialOutput {
-    let block = style.operation.z;
-    return material_result(vec4<f32>(vec2<f32>(id * block) + 0.5 * f32(block), 0.0, 1.0));
+    let start = vec2<i32>(id * style.operation.z);
+    return material_result(vec4<f32>(vec2<f32>(start) + 0.5 * vec2<f32>(preview_size(start)), 0.0, 1.0));
 }
 
 fn cropped_color() -> bool {

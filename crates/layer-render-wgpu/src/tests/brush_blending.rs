@@ -586,7 +586,7 @@ fn cropped_display_restores_hdr_blocks_at_partial_document_edges() {
                 }}
                 let count=f64::from((end[0]-start[0])*(end[1]-start[1]));for v in &mut expected {*v/=count;}
             }
-            let center=[start[0]+block/2,start[1]+block/2];
+            let center=[start[0]+end[0].saturating_sub(start[0])/2,start[1]+end[1].saturating_sub(start[1])/2];
             if center[0]>=dirty.min_x() && center[0]<dirty.max_x() && center[1]>=dirty.min_y() && center[1]<dirty.max_y() {
                 let remaining=flat_dry_remaining(&dab,expected[3],mode);
                 expected=if mode==DabMode::Erase {expected.map(|v|v*remaining)} else {
@@ -1218,8 +1218,8 @@ fn saturated_dry_retraces_preserve_exact_rgba_with_varying_pressure() {
 
 #[test]
 fn partial_analytic_display_averages_current_and_stroke_start_over_the_same_footprint() {
-    let extent=[131,129];let pigment=[0.8f32,0.1,0.4,0.7];
-    for space in BlendSpace::ALL {
+    let pigment=[0.8f32,0.1,0.4,0.7];
+    for extent in [[131,129],[130,130]] {for space in BlendSpace::ALL {
         let mut canvas=Canvas::at(DocumentColor {depth:if space==BlendSpace::Linear {SampleDepth::F32} else {SampleDepth::U8},..Default::default()},space,None,extent);
         let r=&mut canvas.r;
         let convert=|mut p:[f64;4],encode:bool| {
@@ -1287,8 +1287,8 @@ fn partial_analytic_display_averages_current_and_stroke_start_over_the_same_foot
                             for c in 0..4 {original[c]+=f64::from(b[i][c]);painted[c]+=f64::from(f[i][c]);}
                         }}let n=f64::from((end[0]-start[0])*(end[1]-start[1]));for c in 0..4 {original[c]/=n;painted[c]/=n;}
                     }
-                    let center=[start[0]+block/2,start[1]+block/2];let mut expected=painted;
-                    if center[0]<extent[0] && center[1]<extent[1] {
+                    let mut expected=painted;
+                    if start[0]<extent[0] && start[1]<extent[1] {
                         let bg=convert(original,true);let old=convert(painted,true);
                         let q=f64::from(dab.flow*dab.color_rgba_linear[3]);
                         expected=convert(std::array::from_fn(|c| {
@@ -1297,11 +1297,11 @@ fn partial_analytic_display_averages_current_and_stroke_start_over_the_same_foot
                         }),false);
                     }
                     let a=actual[(y*size[0]+x) as usize];for c in 0..4 {assert!((f64::from(a[c])-expected[c]).abs()<0.000002,
-                        "{space:?}/{mode:?} O={opacity} block={block} ({x},{y}) channel{c}: {a:?} expected={expected:?}");}
+                        "{extent:?} {space:?}/{mode:?} O={opacity} block={block} ({x},{y}) channel{c}: {a:?} expected={expected:?}");}
                 }}
             }
         }}
-    }
+    }}
 }
 
 #[test]
