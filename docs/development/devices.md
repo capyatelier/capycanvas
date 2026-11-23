@@ -15,7 +15,7 @@ without disturbing anyone else. Shared machine resources are in
 | `movinkpad11` | Wacom MovinkPad 11 (DTHA116) | Mid tier reference | Mali-G57 MC2 |
 | `movinkpad14` | Wacom MovinkPad Pro 14 (DTHA140) | Top tier reference | Adreno 735 |
 | `huion` | Huion Kamvas Pad 12 (KP1202) | Pen input testing | Mali-G57 |
-| `xppen` | XP-Pen Magic Note Pad (MNP1095) | Pen input testing | Mali-G57 |
+| `xppen` | XP-Pen Magic Note Pad (MNP1095) | Mid tier, same SoC as its reference; pen input testing | Mali-G57 |
 | `sm_t878u` | Samsung Galaxy Tab S7 (SM-T878U) | Android 13 without shared presentation | Adreno 650 |
 
 [Tier hardware](../performance/hardware.md) has the full specifications.
@@ -55,7 +55,8 @@ tools/devices/devices.py release
   the worktree directory by default, and expires after `--hours` (4 by default).
   Subagents working in the same worktree share it. Release a disconnected tablet
   by its serial.
-- **Pick by tier, not by name**, unless you were assigned a tablet. If the user
+- **Pick by tier, not by name**, unless you were assigned a tablet. `--tier`
+  hands out the tier's reference tablet first; target measurements run on it. If the user
   assigns one, use only that one. If they say a tablet belongs to someone else,
   leave it alone even when `list` shows it free.
 - **Run every device command through `run`.** It holds the tablet's lock

@@ -13,6 +13,7 @@ import unittest
 SCRIPT = Path(__file__).resolve().parent / "devices.py"
 LISTING = """List of devices attached
 LOW0001                device usb:1-1 product:Ares model:9465X device:Ares transport_id:1
+PEN0001                device usb:1-5 product:xppen model:MNP1095 device:xppen transport_id:5
 MID0001                device usb:1-2 product:RosePlus model:DTHA116 device:RosePlus transport_id:2
 TOP0001                device usb:1-3 product:pro model:DTHA140 device:pro transport_id:3
 OFF0001                unauthorized usb:1-4 transport_id:4
@@ -47,6 +48,7 @@ class DevicesTest(unittest.TestCase):
         output = self.devices("alpha", "list").stdout
         self.assertRegex(output, r"tcl\s+9465X\s+low tier\s+LOW0001\s+free")
         self.assertRegex(output, r"movinkpad11\s+DTHA116\s+mid tier")
+        self.assertRegex(output, r"xppen\s+MNP1095\s+mid tier")
         self.assertRegex(output, r"movinkpad14\s+DTHA140\s+top tier")
         self.assertNotIn("OFF0001", output)
 
@@ -73,9 +75,10 @@ class DevicesTest(unittest.TestCase):
         self.assertFalse((self.state / "capy-TOP0001.reservation.json").exists())
         self.assertEqual((self.state / "capy-MID0001.reservation.json").read_text(), other)
 
-    def test_tier_reservation_picks_a_free_tablet_of_that_tier(self):
+    def test_tier_reservation_picks_the_reference_tablet_first(self):
         self.assertIn("movinkpad11", self.devices("alpha", "reserve", "--tier", "mid").stdout)
-        refused = self.devices("beta", "reserve", "--tier", "mid")
+        self.assertIn("xppen", self.devices("beta", "reserve", "--tier", "mid").stdout)
+        refused = self.devices("gamma", "reserve", "--tier", "mid")
         self.assertNotEqual(refused.returncode, 0)
         self.assertIn("No free mid tier tablet", refused.stderr)
 

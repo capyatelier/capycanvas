@@ -29,6 +29,9 @@ reachable.
 | GFXBench Aztec Ruins Normal, offscreen | 9.2 fps | 16 fps | 122 fps |
 | Comparable hardware | Snapdragon 680 phones; GPU about a third of an Apple A10 | Snapdragon 720G class (Adreno 618); GPU about half an Apple A10 | Intel Iris Xe (96 EU) laptop; GPU about 65% of an M1 iPad Pro |
 
+The XP-Pen Magic Note Pad (MNP1095: MT8781, 6 GB, 1200 × 1920, Android 15)
+has the mid tier's SoC and CPU and counts as mid tier.
+
 **How to place your hardware in a tier:**
 
 - **Compare memory bandwidth and GPU throughput first.** Large brushes,

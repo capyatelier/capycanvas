@@ -25,7 +25,7 @@ TABLETS = {
     "DTHA116": ("movinkpad11", "mid"),
     "DTHA140": ("movinkpad14", "top"),
     "KP1202": ("huion", None),
-    "MNP1095": ("xppen", None),
+    "MNP1095": ("xppen", "mid"),
 }
 TIERS = ("low", "mid", "top")
 AUTOMATION_HINT = ("UI tests failed. If the log says 'Timed out while enabling automation mode', unlock the device and "
@@ -170,7 +170,7 @@ def reserve(args):
         choices = [device for device in devices if device.tier == args.tier and claimable(device, args.owner)]
         if not choices:
             sys.exit(f"No free {args.tier} tier tablet.")
-        device = choices[0]
+        device = min(choices, key=lambda device: list(TABLETS).index(device.model))
     record = {"owner": args.owner, "note": args.note or "", "expires": time.time() + args.hours * 3600}
     device.reservation_path.write_text(json.dumps(record))
     print(f"{device.name} ({device.serial}) {describe(record)}.")
