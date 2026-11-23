@@ -94,7 +94,9 @@ fn a_retouch_source_keeps_its_accepted_view_until_submission() {
     crate::test_support::complete(&r);
     let mut sources=RetouchSources::new(&mut r);
     let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
-    let view=sources.target_page(&mut r,PHOTO,None,[0,0],&mut encoder).unwrap().unwrap();
+    let mut complete=true;
+    let view=sources.target_page(&mut r,PHOTO,None,[0,0],&mut encoder).unwrap().unwrap().take(&mut complete);
+    assert!(complete,"the live photo page is complete");
     assert_eq!([view.texture().width(),view.texture().height()],[PAGE_SIZE;2]);
     crate::test_support::evict_sources(&mut r);
     let validation=r.device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -685,6 +687,127 @@ fn a_clone_preview_from_persistent_accepts_the_captured_inputs_before_submit() {
             assert!(close(pixels(r,PHOTO)(96,96),source[96*256+96]),"the committed clone must use the same captured source");
         }
     }
+}
+
+#[test]
+fn a_live_clone_preview_never_certifies_a_cold_donor_and_its_first_ready_frame_matches_the_warm_donor() {
+    let retouch=Retouch {source:RetouchSource::References,references:Arc::new([PHOTO_USE].into()),offset:[384.,0.],..Default::default()};
+    let mut style=crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::CloneStamp);
+    style.retouch=Some(retouch.clone());
+    let mut dab=crate::layer_tests::dab([0.,0.,0.,1.]);
+    dab.center=Point {x:96.,y:96.};dab.radii=[24.;2];
+    let batch=DabBatch {kind:DabBatchKind::Preview,stroke_end:false,..crate::test_support::dab_batch(TARGET,style,dab.bounds())};
+    let shown=|cold:bool| {
+        let mut fixture=Fixture::new(document(SIZE));
+        let (r,packet)=fixture.frame();
+        r.prepare_retouch(Some(&RetouchPreparation {execution:layer_core::BrushExecution::Clone,target:TARGET,retouch:retouch.clone(),points:Vec::new()}));
+        crate::test_support::submit_settled(r,packet);
+        if cold {crate::test_support::evict_sources(r);}
+        let frame=FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),composite_all:false,..packet};
+        let misses=r.retouch.as_ref().unwrap().counts.misses;
+        crate::test_support::submit_ready(r,frame).unwrap();
+        let missed=r.retouch.as_ref().unwrap().counts.misses>misses;
+        assert_eq!(missed,cold,"only the evicted donor is cold under the live preview");
+        if cold {
+            let page=r.preview_page([0,0]).unwrap();
+            assert!(r.read_color_page(TARGET,page,true,None).is_err(),"a preview drawn over a cold donor is not readable as the prediction's final page");
+            crate::test_support::settle_decodes(r);
+            let misses=r.retouch.as_ref().unwrap().counts.misses;
+            crate::test_support::submit_ready(r,frame).unwrap();
+            assert_eq!(r.retouch.as_ref().unwrap().counts.misses,misses,"the released donor is ready");
+        }
+        let page=r.preview_page([0,0]).unwrap();
+        crate::test_support::float_pixels(r,&r.read_color_page(TARGET,page,true,None).expect("the ready prediction is readable as its final page").value().texture)
+    };
+    let warm=shown(false);
+    let released=shown(true);
+    let error=crate::test_support::max_error(&released,&warm);
+    assert!(error<1e-4,"the first frame after the donor is released shows the warm donor: maximum error {error}");
+}
+
+fn cold_clone(offset:[f32;2])->(Fixture,layer_render::DabStyle) {
+    let retouch=Retouch {source:RetouchSource::References,references:Arc::new([PHOTO_USE].into()),offset,..Default::default()};
+    let mut style=crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::CloneStamp);
+    style.retouch=Some(retouch.clone());
+    let mut fixture=Fixture::new(document(SIZE));
+    let (r,packet)=fixture.frame();
+    r.prepare_retouch(Some(&RetouchPreparation {execution:layer_core::BrushExecution::Clone,target:TARGET,retouch,points:Vec::new()}));
+    crate::test_support::submit_settled(r,packet);
+    crate::test_support::evict_sources(r);
+    (fixture,style)
+}
+
+fn clone_dab(x:f32,y:f32)->Dab {
+    let mut dab=crate::layer_tests::dab([0.,0.,0.,1.]);
+    dab.center=Point {x,y};dab.radii=[24.;2];dab
+}
+
+#[test]
+fn a_cold_clone_donor_withholds_only_the_preview_page_that_read_it() {
+    let (mut fixture,style)=cold_clone([0.,256.]);
+    let (r,packet)=fixture.frame();
+    let (_,complete)=sample(r,[1,0],[0.,256.]);
+    assert!(complete,"the donor below the second page is warm");
+    let dabs=[clone_dab(128.,128.),clone_dab(384.,128.)];
+    let batch=DabBatch {kind:DabBatchKind::Preview,stroke_end:false,damage:dabs[0].bounds().union(dabs[1].bounds()),dab_count:2,
+        ..crate::test_support::dab_batch(TARGET,style,dabs[0].bounds())};
+    let misses=r.retouch.as_ref().unwrap().counts.misses;
+    crate::test_support::submit_ready(r,FramePacket {dabs:&dabs,dab_batches:std::slice::from_ref(&batch),composite_all:false,..packet}).unwrap();
+    assert!(r.retouch.as_ref().unwrap().counts.misses>misses,"the donor below the first page is cold");
+    assert!(!final_preview(r,[0,0]),"the page drawn over the cold donor is not readable as the prediction's final page");
+    assert!(final_preview(r,[1,0]),"the page drawn over the warm donor stays the prediction's final page");
+}
+
+fn committed_miss(fixture:&mut Fixture,style:&layer_render::DabStyle) {
+    let (r,packet)=fixture.frame();
+    let dab=clone_dab(96.,96.);
+    let persistent=DabBatch {kind:DabBatchKind::Persistent,stroke_start:true,stroke_end:false,..crate::test_support::dab_batch(TARGET,style.clone(),dab.bounds())};
+    let misses=r.retouch.as_ref().unwrap().counts.misses;
+    crate::test_support::submit_ready(r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&persistent),composite_all:false,..packet}).unwrap();
+    assert!(r.retouch.as_ref().unwrap().counts.misses>misses,"the committed dab reads a cold donor");
+    crate::test_support::settle_decodes(r);
+}
+
+fn final_preview(r:&WgpuRasterizer,coordinate:[u32;2])->bool {r.read_color_page(TARGET,r.preview_page(coordinate).unwrap(),true,None).is_ok()}
+
+#[test]
+fn a_preview_over_pixels_a_cold_donor_left_behind_is_not_final() {
+    let (mut fixture,style)=cold_clone([384.,0.]);
+    committed_miss(&mut fixture,&style);
+    let (r,packet)=fixture.frame();
+    let dab=clone_dab(160.,96.);
+    let preview=DabBatch {kind:DabBatchKind::Preview,stroke_start:false,stroke_end:false,..crate::test_support::dab_batch(TARGET,style,dab.bounds())};
+    let misses=r.retouch.as_ref().unwrap().counts.misses;
+    crate::test_support::submit_ready(r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&preview),composite_all:false,..packet}).unwrap();
+    assert_eq!(r.retouch.as_ref().unwrap().counts.misses,misses,"the predicted dab reads a warm donor");
+    assert!(!final_preview(r,[0,0]),"a prediction that carries the committed dab's missing pixels forward is not readable as its final page");
+}
+
+#[test]
+fn a_clone_preview_from_pixels_a_cold_donor_left_behind_is_not_final() {
+    let (mut fixture,style)=cold_clone([384.,0.]);
+    committed_miss(&mut fixture,&style);
+    let (r,packet)=fixture.frame();
+    let retouch=Retouch {source:RetouchSource::Editing,offset:[-256.,0.],..Default::default()};
+    r.prepare_retouch(Some(&RetouchPreparation {execution:layer_core::BrushExecution::Clone,target:TARGET,retouch:retouch.clone(),points:Vec::new()}));
+    let style=layer_render::DabStyle {retouch:Some(retouch),..style};
+    let dab=clone_dab(352.,96.);
+    let preview=DabBatch {kind:DabBatchKind::Preview,stroke_id:layer_core::StrokeId(2),stroke_end:false,..crate::test_support::dab_batch(TARGET,style,dab.bounds())};
+    crate::test_support::submit_ready(r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&preview),composite_all:false,..packet}).unwrap();
+    assert!(!final_preview(r,[1,0]),"a clean page cloned from the committed dab's missing pixels is not readable as the prediction's final page");
+}
+
+#[test]
+fn a_liquify_preview_over_pixels_a_cold_donor_left_behind_is_not_final() {
+    let (mut fixture,style)=cold_clone([384.,0.]);
+    committed_miss(&mut fixture,&style);
+    let (r,packet)=fixture.frame();
+    let mut deform=crate::layer_tests::dab([0.;4]);
+    deform.center=Point {x:96.,y:96.};deform.radii=[24.;2];deform.material=[0.,0.,0.,0.6];
+    let liquify=crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::LiquifyPush);
+    let preview=DabBatch {kind:DabBatchKind::Preview,stroke_id:layer_core::StrokeId(2),stroke_end:false,..crate::test_support::dab_batch(TARGET,liquify,deform.bounds())};
+    crate::test_support::submit_ready(r,FramePacket {dabs:std::slice::from_ref(&deform),dab_batches:std::slice::from_ref(&preview),composite_all:false,..packet}).unwrap();
+    assert!(!final_preview(r,[0,0]),"a Liquify prediction over the committed dab's missing pixels is not readable as its final page");
 }
 
 #[test]

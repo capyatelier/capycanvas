@@ -1252,7 +1252,7 @@ pub struct WgpuRasterizer {
     transport_records: material_sources::TileRecords,
     transport_regions: Vec<[PixelRect; 2]>,
     preview_names: std::cell::RefCell<Option<IdMap<(SourceTarget,usize,[u32;2],scene::PreviewStage),scene::PreviewVersion>>>,
-    material_reads: Option<IdMap<(SourceTarget,[u32;2],Option<(scene::PreviewStage,Option<(scene::PreviewPass,u32)>)>),Option<source_access::RawTile>>>,
+    material_reads: Option<IdMap<(SourceTarget,[u32;2],Option<(scene::PreviewStage,Option<(scene::PreviewPass,u32)>)>),Option<(source_access::RawTile,bool)>>>,
     transport_jobs: Vec<WatercolorTransportJob>,
     gathered_taps: Option<resident::Resident<PageSurface>>,
     /// Pages whose wetness the current watercolor update has written.
@@ -2462,7 +2462,7 @@ impl WgpuRasterizer {
                     self.accepted_raster_output(batch.target,RasterOutput::StrokeStart(coordinate,batch.stroke_id,reads_preview))?;
                     let start=prepared_raster_output(self.take_prepared_stroke_start(batch.target, coordinate, batch.stroke_id, reads_preview))?;
                     let shared=start.holds_texture(&self.empty_start.texture);
-                    if shared && (reads_preview || !self.empty_color(batch.target,coordinate,intent.version())) {
+                    if shared && (reads_preview || !self.empty_page(batch.target,RasterPlane::Color,coordinate,intent.version())) {
                         return Err(GpuRasterError::Invariant("a shared empty stroke start was prepared for painted pixels"));
                     }
                     Some((start,shared))
@@ -2475,7 +2475,7 @@ impl WgpuRasterizer {
                         else {return Err(GpuRasterError::Invariant("stroke start input is not prepared"));};
                     let witness=neighborhood.witnesses(batch.target,RasterPlane::Color,coordinate).into_iter().next()
                         .ok_or(GpuRasterError::Invariant("stroke start input witness is not prepared"))?;
-                    Some((read.tile,witness))
+                    Some((read.sampled(),witness))
                 }else {None};
                 let page = if reads_preview {
                     (!committed_start).then(|| self.preview_pages.iter_mut().find(|p| p.coordinate == coordinate)).flatten()
@@ -2485,8 +2485,9 @@ impl WgpuRasterizer {
                 };
                 if let (Some(page),Some((mut start,shared)))=(page,start) {
                     let expected=preview_expected.as_ref().unwrap_or_else(||intent.version());
-                    let (read,witness)=start_read.as_ref().ok_or(GpuRasterError::Invariant("stroke start input is not prepared"))?;
-                    let write=start.initialize(&receipt).ok_or(GpuRasterError::Invariant("prepared output was already initialized"))?;
+                    let (read,witness)=start_read.ok_or(GpuRasterError::Invariant("stroke start input is not prepared"))?;
+                    let mut copied=true;let read=read.take(&mut copied);
+                    let write=start.initialize(&receipt).ok_or(GpuRasterError::Invariant("prepared output was already initialized"))?.completed(copied);
                     if let Some(declaration)=accepting {
                         declaration.accept_inputs(batch.target,RasterPlane::Color,coordinate,scene::PreviewStage::Seed,scene::PreviewPass::StrokeStart,vec![witness.clone()])?;
                         history.push(witness.clone());
@@ -2496,7 +2497,9 @@ impl WgpuRasterizer {
                     page.stroke_start=Some(StrokeStart {state:MaterialState {stroke:batch.stroke_id,input:intent.clone(),version},preview:start_context,surface:start});
                 }
             }
-            let selected=self.brush_layer_neighborhood(&mut neighborhood,batch.target,coordinate,offsets,source_preview,collecting.then_some(&mut history),encoder)?;
+            let mut complete=true;
+            let selected=self.brush_layer_neighborhood(&mut neighborhood,batch.target,coordinate,offsets,source_preview,collecting.then_some(&mut history),encoder)?
+                .map(|view|view.map(|view|view.take(&mut complete)));
             let layer = self
                 .paint_layers
                 .iter()
@@ -2513,6 +2516,7 @@ impl WgpuRasterizer {
                     let at = [x as u32, y as u32];
                     if let Some((start,predicted))=self.stroke_start_at(batch,at,&intent,reads_preview,declaration.as_ref()) {
                         let (tile,witness)=neighborhood.brush_state(batch.target,at,scene::sources::BrushState::Start(batch.stroke_id),predicted,&start.state.version,&receipt)?;
+                        let tile=tile.take(&mut complete);
                         if let Some(declaration)=accepting {
                             declaration.accept_inputs(batch.target,RasterPlane::Color,at,scene::PreviewStage::Seed,scene::PreviewPass::StrokeStart,vec![witness.clone()])?;
                             history.push(witness);
@@ -2545,15 +2549,16 @@ impl WgpuRasterizer {
                 let expected=if predicted_coverage.is_some() {self.preview_pass_expected(batch.target,RasterPlane::Color,coordinate,scene::PreviewStage::BeforeBatch(batch_index),scene::PreviewPass::Coverage)?}
                     else {state.version.clone()};
                 let (tile,witness)=neighborhood.brush_state(batch.target,coordinate,scene::sources::BrushState::Coverage(stroke_coverage_slabs(&batch.style),retained),predicted_coverage.is_some(),&expected,&receipt)?;
+                let tile=tile.take(&mut complete);
                 if collecting {history.push(witness);}Ok(tile.view)
             }).transpose()?;
             let coverage = coverage_page.as_ref().map_or(if retained { &self.empty_view } else { &self.empty_scalar_view }, |view|view);
             let wetness=if !donating && BrushPassPlan::for_device(&batch.style,&self.device).state.watercolor_wetness {
                 let stage=reads_preview.then_some((scene::PreviewStage::BeforeBatch(batch_index),None));
                 let read=neighborhood.brush_wetness(self,batch.target,coordinate,stage,&receipt)?
-                    .ok_or(GpuRasterError::Invariant("material wetness input is not prepared"))?;
+                    .ok_or(GpuRasterError::Invariant("material wetness input is not prepared"))?.take(&mut complete);
                 if collecting {history.extend(neighborhood.witnesses(batch.target,RasterPlane::WatercolorWetness,coordinate));}
-                Some(read.tile.view)
+                Some(read)
             }else {None};
             let mut auxiliary_state=None;
             let auxiliary = if matches!(inputs, MaterialInputs::Donors(_)) {&self.empty_view
@@ -2564,6 +2569,7 @@ impl WgpuRasterizer {
                 if batch.style.opacity<1. {
                     if let Some((start,predicted))=self.stroke_start_at(batch,coordinate,&intent,reads_preview,declaration.as_ref()) {
                         let (tile,witness)=neighborhood.brush_state(batch.target,coordinate,scene::sources::BrushState::Start(batch.stroke_id),predicted,&start.state.version,&receipt)?;
+                        let tile=tile.take(&mut complete);
                         if let Some(declaration)=accepting {
                             declaration.accept_inputs(batch.target,RasterPlane::Color,coordinate,scene::PreviewStage::Seed,scene::PreviewPass::StrokeStart,vec![witness.clone()])?;
                             history.push(witness);
@@ -2580,6 +2586,7 @@ impl WgpuRasterizer {
                 match incoming {
                     Some((expected,predicted))=>{
                         let (tile,witness)=neighborhood.brush_state(batch.target,coordinate,scene::sources::BrushState::Reservoir,predicted,&expected,&receipt)?;
+                        let tile=tile.take(&mut complete);
                         if collecting {history.push(witness);}
                         auxiliary_state.insert(tile.view)
                     },
@@ -2603,7 +2610,7 @@ impl WgpuRasterizer {
             let display = display.map(|slot| self.dry_display_inputs[slot].key(self, views));
             let key=self.material_key(std::array::from_fn(|i|match i {9=>coverage,10=>auxiliary,_=>views[i]}));
             let page_local=!retained && matches!(inputs,MaterialInputs::Neighborhood) && offsets.iter().enumerate().all(|(i,offset)|i==4 || offset.is_none());
-            self.brush_inputs=Some(neighborhood);Ok(bindings::MaterialSources {key,display,page_local})
+            self.brush_inputs=Some(neighborhood);Ok(bindings::MaterialSources {key,display,page_local,complete})
         })();
         result.map_err(prepared_brush_error)
     }
@@ -2891,7 +2898,7 @@ impl WgpuRasterizer {
             && !held.in_contact() && held.matches_metadata(candidate)?
             && held.matches_history(|plane,coordinate,pass|self.preview_seed_versions(held,plane,coordinate,pass,from_persistent)
                 .map(|(versions,_)|scene::PreviewDeclaration::captured_version(pass,&versions)))
-            && held.reservoir_seed_matches(self.preview_reservoir_seed(held)) {
+            && held.reservoir_seed_matches(self.preview_reservoir_seed(held)) && held.complete() {
             return Ok(true);
         }
         self.preview_declaration=declaration.map(|declaration| {
@@ -2901,6 +2908,16 @@ impl WgpuRasterizer {
             declaration.with_seed_inputs(seeds).map(|declaration|Arc::new(declaration.with_reservoir_seed(reservoir)))
         }).transpose()?;
         Ok(false)
+    }
+
+    fn withdraw_incomplete_preview(&mut self,receipt:&submission::Submission) {
+        if self.preview_declaration.as_ref().is_none_or(|declaration|declaration.complete()) {return;}
+        let incomplete=|derived:&Option<scene::PreviewVersion>|derived.as_ref().filter(|ticket|!ticket.complete()).map(|ticket|ticket.version().clone());
+        let colors=self.preview_pages.iter_mut().map(|page|(incomplete(&page.derived),page.active_mut()));
+        let wetness=self.preview_watercolor_wetness_pages.iter_mut().map(|page|(incomplete(&page.derived),page.surface_mut(page.active_secondary)));
+        for (version,surface) in colors.chain(wetness) {
+            if let Some(write)=version.and_then(|version|surface.revise(&version,receipt)) {write.publish(layer_core::raster::ContentName::fresh());}
+        }
     }
 
     pub(crate) fn preview_expected(&self,target:SourceTarget,plane:RasterPlane,coordinate:[u32;2],stage:scene::PreviewStage)
@@ -3060,6 +3077,7 @@ impl WgpuRasterizer {
             let page=prepared_raster_output(pages.iter_mut().find(|page|page.coordinate==tile.coordinate))?;
             let write=if let Some(expected)=&expected {page.active_mut().revise(expected,&receipt)}else {page.active_mut().write(&intent,&receipt)}
                 .ok_or(GpuRasterError::Invariant("prepared encode brush batch state is inconsistent"))?;
+            let ticket=ticket.map(|ticket|ticket.written(write.complete()));
             let target=write.value().view.clone();
             let output=write.encoded(ticket.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|ticket|ticket.version().clone()))
                 .certified(resident::Delta::InPlace(tile.local));
@@ -3113,7 +3131,7 @@ impl WgpuRasterizer {
         batch_index:usize,
         step:u32,
         encoder:&mut submission::CommandEncoder,
-    ) -> Result<IdMap<[u32;2],[wgpu::TextureView;2]>, GpuRasterError> {
+    ) -> Result<IdMap<[u32;2],([wgpu::TextureView;2],bool)>, GpuRasterError> {
         let result=(|| {
             let receipt=encoder.submission();
             let mut inputs=self.brush_inputs.take().ok_or(GpuRasterError::Invariant("brush inputs are not prepared"))?;
@@ -3125,19 +3143,21 @@ impl WgpuRasterizer {
             let mut reads=IdMap::with_capacity_and_hasher(tiles.len(),Default::default());
             for (at,color) in tiles.iter().zip(colors) {
                 #[cfg(test)] for plane in [RasterPlane::Color,RasterPlane::WatercolorWetness] {crate::test_support::record_transport_read((raster::contents::index(plane),*at,batch_index,step));}
-                let wetness=inputs.brush_wetness(self,layer_id,*at,stage(scene::PreviewPass::Wetness,*at),&receipt)?;
-                reads.insert(*at,[color.unwrap_or_else(||self.empty_view.clone()),wetness.map_or_else(||self.empty_scalar_view.clone(),|read|read.tile.view)]);
+                let mut complete=true;
+                let color=color.map(|color|color.take(&mut complete));
+                let wetness=inputs.brush_wetness(self,layer_id,*at,stage(scene::PreviewPass::Wetness,*at),&receipt)?.map(|wetness|wetness.take(&mut complete));
+                reads.insert(*at,([color.unwrap_or_else(||self.empty_view.clone()),wetness.unwrap_or_else(||self.empty_scalar_view.clone())],complete));
             }
             self.brush_inputs=Some(inputs);Ok(reads)
         })();
         result.map_err(prepared_brush_error)
     }
 
-    fn transport_bind_group(&mut self,reads:&IdMap<[u32;2],[wgpu::TextureView;2]>,coordinate:[u32;2],quadrant:PixelRect,color_output:&wgpu::TextureView,wetness_output:&wgpu::TextureView)->wgpu::BindGroup {
+    fn transport_bind_group(&mut self,reads:&IdMap<[u32;2],([wgpu::TextureView;2],bool)>,coordinate:[u32;2],quadrant:PixelRect,color_output:&wgpu::TextureView,wetness_output:&wgpu::TextureView)->wgpu::BindGroup {
         let [x,y]=[quadrant.min_x(),quadrant.min_y()].map(|at|if at==0 {-1} else {1});
         let views=[[0,0],[x,0],[0,y],[x,y]].map(|offset|source_access::neighborhood(coordinate,[Some(offset)]).next().and_then(|at|reads.get(&at)));
-        let colors=views.map(|read|read.map_or(&self.empty_view,|[color,_]|color));
-        let wetness=views.map(|read|read.map_or(&self.empty_scalar_view,|[_,wetness]|wetness));
+        let colors=views.map(|read|read.map_or(&self.empty_view,|([color,_],_)|color));
+        let wetness=views.map(|read|read.map_or(&self.empty_scalar_view,|([_,wetness],_)|wetness));
         let records=self.transport_records.binding();
         let query:([&wgpu::Buffer;1],[&wgpu::TextureView;10])=([records.buffer],std::array::from_fn(|index|match index {0..4=>colors[index],4..8=>wetness[index-4],8=>color_output,_=>wetness_output}));
         let (device,layout,size)=(&self.device,&self.transport_layout,records.size);
@@ -3286,6 +3306,7 @@ impl WgpuRasterizer {
                     .map(|ticket|if step+1==WATERCOLOR_TRANSPORT_STEPS {ticket}else {ticket.intermediate(scene::PreviewPass::Transport,step)})).transpose()?;
                 let wetness_ticket=preview.then(||self.preview_version(batch.target,RasterPlane::WatercolorWetness,job.coordinate,scene::PreviewStage::AfterBatch(batch_index))
                     .map(|ticket|if step+1==WATERCOLOR_TRANSPORT_STEPS {ticket}else {ticket.intermediate(scene::PreviewPass::Transport,step)})).transpose()?;
+                let complete=source_access::neighborhood(job.coordinate,TRANSPORT_OFFSETS.map(Some)).all(|at|reads.get(&at).is_none_or(|(_,complete)|*complete));
                 let (colors,wetness)=if preview {(&mut self.preview_pages,&mut self.preview_watercolor_wetness_pages)}else {
                     let layer=self.paint_layers.iter_mut().find(|layer|layer.id==batch.target).ok_or(GpuRasterError::MissingPaintLayer(batch.target))?;
                     (&mut layer.pages,&mut layer.watercolor_wetness_pages)
@@ -3296,6 +3317,9 @@ impl WgpuRasterizer {
                     else {color.write(job.color_destination_secondary,&color_intent,&receipt)}.ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
                 let wetness_write=if preview {wetness.surface_mut(job.wetness_destination_secondary).overwrite(&receipt)}
                     else {wetness.write(job.wetness_destination_secondary,&wetness_intent,&receipt)}.ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
+                let complete=complete && color_write.complete() && wetness_write.complete();
+                let (color_write,wetness_write)=(color_write.completed(complete),wetness_write.completed(complete));
+                let (color_ticket,wetness_ticket)=(color_ticket.map(|ticket|ticket.written(complete)),wetness_ticket.map(|ticket|ticket.written(complete)));
                 let color_view=color_write.value().view.clone();let wetness_view=wetness_write.value().view.clone();
                 let color_encoding=color_write.encoded(color_ticket.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|ticket|ticket.version().clone()));
                 let wetness_encoding=wetness_write.encoded(wetness_ticket.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|ticket|ticket.version().clone()));
@@ -5205,9 +5229,10 @@ impl WgpuRasterizer {
                             .pages.iter().find(|page|page.coordinate==coordinate).map(|page|page.active().read(intent.version(),Some(&receipt))
                                 .map(|read|(read.value().texture.clone(),read.input())).ok_or(GpuRasterError::Invariant("prepared submit frame inner state is inconsistent"))).transpose()?
                     }else {None};
-                    let ticket=self.preview_version(layer_id,RasterPlane::Color,coordinate,scene::PreviewStage::Seed)?;
+                    let complete=source.as_ref().is_none_or(|(_,committed)|committed.complete());
+                    let ticket=self.preview_version(layer_id,RasterPlane::Color,coordinate,scene::PreviewStage::Seed)?.written(complete);
                     let preview=prepared_raster_output(self.preview_pages.iter_mut().find(|page|page.coordinate==coordinate))?;
-                    let write=preview.primary.overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
+                    let write=preview.primary.overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?.completed(complete);
                     let copied=if let Some((texture,committed))=&source {write.value().copy_from(texture,texture.size(),&mut encoder);resident::Delta::seeded(committed,PixelRect::EMPTY)}
                     else {write.value().clear(&self.zero_pages,&mut encoder);resident::Delta::Unknown};
                     write.encoded(ticket.version().clone()).certified(copied).publish(&receipt);preview.derived=Some(ticket);
@@ -5238,7 +5263,8 @@ impl WgpuRasterizer {
                 let ticket=self.preview_declaration.as_ref().ok_or(GpuRasterError::Invariant("prepared submit frame inner state is inconsistent"))?
                     .ticket_for(layer_id,RasterPlane::Color,coordinate,scene::PreviewStage::Seed,scene::PreviewPass::Coverage,intent.clone(),proofs)?;
                 let coverage=&mut self.preview_coverage_pages[index];
-                let write=coverage.primary.overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
+                let write=coverage.primary.overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?
+                    .completed(source.as_ref().is_none_or(|(_,committed)|committed.complete()));
                 if let Some((texture,_))=source {write.value().copy_from(&texture,texture.size(),&mut encoder);}
                 else {write.value().clear(&self.zero_pages,&mut encoder);}
                 let written=write.publish(ticket.version());
@@ -5249,10 +5275,12 @@ impl WgpuRasterizer {
                 let index=prepared_raster_output(self.preview_watercolor_wetness_pages.iter().position(|page|page.coordinate==coordinate))?;
                 let source=self.paint_layers.iter().find(|layer|layer.id==layer_id).ok_or(GpuRasterError::MissingPaintLayer(layer_id))?
                     .watercolor_wetness_pages.iter().find(|page|page.coordinate==coordinate)
-                    .map(|page|self.read_wetness(layer_id,page,Some(&receipt)).map(|read|(read.value().texture.clone(),read.version().clone()))).transpose()?;
-                let ticket=self.preview_version(layer_id,RasterPlane::WatercolorWetness,coordinate,scene::PreviewStage::Seed)?;
+                    .map(|page|self.read_wetness(layer_id,page,Some(&receipt)).map(|read|(read.value().texture.clone(),read.complete()))).transpose()?;
+                let complete=source.as_ref().map_or_else(||self.current_raster_version(layer_id,RasterPlane::WatercolorWetness,coordinate)
+                    .is_ok_and(|version|self.empty_page(layer_id,RasterPlane::WatercolorWetness,coordinate,&version)),|(_,complete)|*complete);
+                let ticket=self.preview_version(layer_id,RasterPlane::WatercolorWetness,coordinate,scene::PreviewStage::Seed)?.written(complete);
                 let page=&mut self.preview_watercolor_wetness_pages[index];
-                let write=page.primary.overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
+                let write=page.primary.overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?.completed(complete);
                 if let Some((texture,_))=source {write.value().copy_from(&texture,texture.size(),&mut encoder);}
                 else {write.value().clear(&self.zero_pages,&mut encoder);}
                 write.publish(ticket.version());page.derived=Some(ticket);
@@ -5288,6 +5316,7 @@ impl WgpuRasterizer {
         self.fill_preview_shown=fill_preview.as_ref().map(layer_render::FillPreview::key);
         if fill_changed {self.fill_preview_done=None;}
         if preview_is_watercolor { self.canonicalize_preview_watercolor(&mut encoder)?; }
+        self.withdraw_incomplete_preview(&encoder.submission());
         if let Some(started) = started { cpu_phases[3] = started.elapsed().as_secs_f64() * 1000.; }
         trace_phase.next(c"capy.composition");
         self.telemetry.phase_end(1, encoder.diagnostics());

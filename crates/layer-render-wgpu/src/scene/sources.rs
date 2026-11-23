@@ -156,9 +156,9 @@ fn written_choices(r:&WgpuRasterizer,scene:SceneView<'_>,target:SourceTarget,pla
 fn resolve(leases:&[Lease],choices:&[Option<Selected>;2])->Result<[Option<source_access::SourceRead>;2],GpuRasterError> {
     let resolve=|choice:&Option<Selected>|match choice {
         None=>Ok(None),
-        Some(Selected::Resident(tile,_))=>{
+        Some(Selected::Resident(tile,witness))=>{
             #[cfg(test)] if ACCEPTED_READ_RESULTS.with(|results|results.borrow().is_some()) {RESIDENT_READS.with(|reads|reads.borrow_mut().push(tile.view.clone()));}
-            Ok(Some(source_access::SourceRead {tile:tile.clone(),pending:Vec::new(),assembly:None}))
+            Ok(Some(source_access::SourceRead {tile:tile.clone(),pending:Vec::new(),assembly:None,complete:witness.complete()}))
         },
         Some(Selected::Decoded(key))=>accepted(leases,key.clone()).map(Some),
     };
@@ -688,8 +688,8 @@ impl AcceptedInputs {
     }
     pub(crate) fn brush_wetness(&mut self,r:&WgpuRasterizer,target:SourceTarget,coordinate:[u32;2],
         preview:Option<(PreviewStage,Option<(PreviewPass,u32)>)>,receipt:&crate::submission::Submission,
-    )->Result<Option<source_access::SourceRead>,GpuRasterError> {
-        self.brush_plane(r,(target,RasterPlane::WatercolorWetness,coordinate),preview,receipt).map(|[base,_]|base)
+    )->Result<Option<source_access::Sampled<wgpu::TextureView>>,GpuRasterError> {
+        self.brush_plane(r,(target,RasterPlane::WatercolorWetness,coordinate),preview,receipt).map(|[base,_]|base.map(|read|read.sampled().map(|tile|tile.view)))
     }
     fn brush_plane(&mut self,r:&WgpuRasterizer,address:Address,
         preview:Option<(PreviewStage,Option<(PreviewPass,u32)>)>,receipt:&crate::submission::Submission,
@@ -713,14 +713,14 @@ impl AcceptedInputs {
     }
     pub(crate) fn brush_state(&self,target:SourceTarget,coordinate:[u32;2],state:BrushState,preview:bool,
         expected:&layer_core::raster::ContentVersion,receipt:&crate::submission::Submission,
-    )->Result<(RawTile,crate::resident::Input),GpuRasterError> {
+    )->Result<(source_access::Sampled<RawTile>,crate::resident::Input),GpuRasterError> {
         let input=self.brush_state.as_ref().and_then(|inputs|inputs.get(&(target,coordinate,state)))
             .ok_or(GpuRasterError::Invariant("brush state input is not prepared"))?;
         let family=if preview {input.preview.as_ref().unwrap_or(&input.persistent)}else {&input.persistent};
         let read=family.iter().find_map(|resident|resident.read(expected,Some(receipt)))
             .ok_or(GpuRasterError::Invariant("prepared brush state version is not readable"))?;
         #[cfg(test)] if ACCEPTED_READ_RESULTS.with(|results|results.borrow().is_some()) {RESIDENT_READS.with(|reads|reads.borrow_mut().push(read.value().view.clone()));}
-        Ok((read.value().clone(),read.input()))
+        Ok((source_access::Sampled::new(read.value().clone(),read.complete()),read.input()))
     }
     pub(crate) fn for_unit(mut self,unit:InputUnit)->Result<Self,GpuRasterError> {merge_unit(&mut self.unit,Some(unit))?;Ok(self)}
     pub(crate) fn unit(&self)->Option<InputUnit> {self.unit}
@@ -745,7 +745,7 @@ impl AcceptedInputs {
     fn placeholder(r:&WgpuRasterizer,plane:RasterPlane)->source_access::SourceRead {
         let tile=if plane==RasterPlane::Color {RawTile {texture:r.empty_texture.clone().into(),view:r.empty_view.clone()}}
             else {RawTile {texture:r.empty_scalar_texture.clone().into(),view:r.empty_scalar_view.clone()}};
-        source_access::SourceRead {tile,pending:Vec::new(),assembly:None}
+        source_access::SourceRead {tile,pending:Vec::new(),assembly:None,complete:true}
     }
     fn decide(&mut self,r:&WgpuRasterizer,address:Address,raw:Option<bool>,decide:impl FnOnce(&mut Inputs,&Declaration)->Result<(),GpuRasterError>)
         ->Result<[Option<source_access::SourceRead>;2],GpuRasterError> {
@@ -973,13 +973,13 @@ fn plan_paint_base(r: &WgpuRasterizer, base: &layer_core::authored::PaintBase, c
         let source_coordinate = std::array::from_fn(|i| coordinate[i] - base.offset[i] / PAGE_SIZE);
         let (tile, pending) = cache.plan_exact(r, base.image.storage(), source_coordinate)?;
         let (tile, promotion) = cache.promote(r, tile)?;
-        return Ok(Some(source_access::SourceRead { tile, pending: pending.into_iter().chain(promotion).collect(), assembly: None }));
+        return Ok(Some(source_access::SourceRead { tile, pending: pending.into_iter().chain(promotion).collect(), assembly: None, complete: true }));
     }
     let (tile, write) = cache.plan_base(r, base, coordinate)?;
     let Some(write)=write else {
         let assembly=cache.base_pending(&tile.view);
         let pending=assembly.as_ref().map_or_else(Vec::new,|assembly|assembly.dependencies.clone());
-        return Ok(Some(source_access::SourceRead {tile,pending,assembly}));
+        return Ok(Some(source_access::SourceRead {tile,pending,assembly,complete:true}));
     };
     let _target=cache.lease(&tile.view).unwrap();
     let mut leases=Vec::new();
@@ -1000,13 +1000,13 @@ fn plan_paint_base(r: &WgpuRasterizer, base: &layer_core::authored::PaintBase, c
     }
     let assembly=Arc::new(PaintBaseAssembly {tile:RawTile {texture:tile.texture.clone(),view:tile.view.clone()},copies,write,dependencies:pending.clone(),_leases:leases});
     cache.remember_base(&tile.view,assembly.clone());
-    Ok(Some(source_access::SourceRead {tile,pending,assembly:Some(assembly)}))
+    Ok(Some(source_access::SourceRead {tile,pending,assembly:Some(assembly),complete:true}))
 }
 
 struct Read {key:Key,tile:RawTile,pending:Vec<Arc<PendingTile>>,assembly:Option<Arc<PaintBaseAssembly>>}
 impl Read {
     fn source(&self)->source_access::SourceRead {
-        source_access::SourceRead {tile:RawTile {texture:self.tile.texture.clone(),view:self.tile.view.clone()},pending:self.pending.clone(),assembly:self.assembly.clone()}
+        source_access::SourceRead {tile:RawTile {texture:self.tile.texture.clone(),view:self.tile.view.clone()},pending:self.pending.clone(),assembly:self.assembly.clone(),complete:true}
     }
 }
 impl std::ops::Deref for Lease {type Target=Arc<dyn Send+Sync>;fn deref(&self)->&Self::Target {&self.owner}}

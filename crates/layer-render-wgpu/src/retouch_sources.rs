@@ -38,9 +38,9 @@ impl Page {
         self.pixels.read(expected,consumer)
             .ok_or(GpuRasterError::NotReady)
     }
-    fn destination(&mut self,capture:layer_core::raster::ContentVersion,receipt:&submission::Submission)
+    fn destination(&mut self,capture:layer_core::raster::ContentVersion,complete:bool,receipt:&submission::Submission)
         ->Result<(wgpu::Texture,wgpu::TextureView,resident::Encoding),GpuRasterError> {
-        let write=self.pixels.overwrite(receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
+        let write=self.pixels.overwrite(receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?.completed(complete);
         let texture=write.value().texture.clone();let view=write.value().view.clone();
         let encoding=write.encoded(capture);
         Ok((texture,view,encoding))
@@ -479,7 +479,7 @@ impl RetouchSources {
             let expected=self.stroke.as_ref().unwrap().versions.tile(layer_core::raster::RasterPlane::Color,coordinate);
             let Some(input)=r.read_layer_color(layer,coordinate,&expected,Some(&encoder.submission())) else {self.miss();return;};
             let slot=self.pool_page(r);
-            let Ok((texture,_,encoding))=self.pool[slot].destination(input.version().clone(),&encoder.submission()) else {self.miss();return;};
+            let Ok((texture,_,encoding))=self.pool[slot].destination(input.version().clone(),input.complete(),&encoder.submission()) else {self.miss();return;};
             let source=&input.value().texture;
             encoder.copy_texture_to_texture(source.as_image_copy(),texture.as_image_copy(),source.size());
             encoding.publish(&encoder.submission());self.counts.copies+=1;Some((slot,input.version().clone()))
@@ -522,7 +522,7 @@ impl RetouchSources {
             return Ok(None);
         }
         let slot = self.cache.claim(r, coordinate)?;
-        let (texture,_,encoding)=self.cache.slots[slot].page.destination(self.cache.pages[&coordinate].1.clone(),&encoder.submission())?;
+        let (texture,_,encoding)=self.cache.slots[slot].page.destination(self.cache.pages[&coordinate].1.clone(),true,&encoder.submission())?;
         let previous = self.cache.analyses.as_ref().and_then(|result| result.as_ref().ok())
             .map(|candidate| std::mem::replace(&mut r.effect_analyses, candidate.entries.clone()));
         let result = self.capture.region_into(r, packet, region, &texture, encoder);
@@ -552,17 +552,19 @@ impl RetouchSources {
             let packet=frame.packet(r.document_extent);let region=page_rect(coordinate).intersect(PixelRect::full(r.document_extent));
             if !wait && self.capture.would_block(r,packet,region) {return Ok(None);}
             let slot=self.cache.claim(r,coordinate)?;
-            let (texture,_,encoding)=self.cache.slots[slot].page.destination(self.cache.pages[&coordinate].1.clone(),&encoder.submission())?;
+            let (texture,_,encoding)=self.cache.slots[slot].page.destination(self.cache.pages[&coordinate].1.clone(),true,&encoder.submission())?;
             if let Err(error)=self.capture.region_into(r,packet,region,&texture,encoder) {self.cache.release(slot);return Err(error);}
             encoding.publish(&encoder.submission());self.counts.captures+=1;return Ok(Some(slot));
         }
         let versions=&self.cache.key.as_ref().unwrap().versions[&layer];
-        let view=match accepted_raw_page(r,layer,coordinate,Some(versions),encoder) {
+        let view=match r.raw_page(layer,coordinate,Some(versions),encoder) {
             Err(error) if error.is_preparation_pending() && !wait=>return Ok(None),
             result=>result?,
         };
+        let mut complete=true;
+        let view=view.map(|view|view.take(&mut complete));
         let slot = self.cache.claim(r, coordinate)?;
-        let (_,destination,encoding)=self.cache.slots[slot].page.destination(self.cache.pages[&coordinate].1.clone(),&encoder.submission())?;
+        let (_,destination,encoding)=self.cache.slots[slot].page.destination(self.cache.pages[&coordinate].1.clone(),complete,&encoder.submission())?;
         match view {
             Some(view) => {
                 let mut sources = [&r.empty_view; 8];
@@ -611,14 +613,14 @@ impl RetouchSources {
         stroke: Option<StrokeId>,
         coordinate: [u32; 2],
         encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<Option<wgpu::TextureView>, GpuRasterError> {
+    ) -> Result<Option<source_access::Sampled<wgpu::TextureView>>, GpuRasterError> {
         if let Some(pages) = self.stroke.as_ref().filter(|s| s.target == target && stroke.is_none_or(|id| id == s.id))
             && let Some(copy) = pages.pages.get(&coordinate)
         {
-            return copy.as_ref().map(|(slot,expected)|self.pool[*slot].read(expected,Some(&encoder.submission())).map(|read|read.value().view.clone())).transpose();
+            return copy.as_ref().map(|(slot,expected)|self.pool[*slot].read(expected,Some(&encoder.submission())).map(|read|source_access::Sampled::read(&read))).transpose();
         }
         let expected=self.stroke.as_ref().filter(|pages|pages.target==target && stroke.is_none_or(|id|id==pages.id)).map(|pages|&pages.versions);
-        match accepted_raw_page(r,target,coordinate,expected,encoder) {
+        match r.raw_page(target,coordinate,expected,encoder) {
             Err(error) if error.is_preparation_pending() && self.live.is_some()=>{self.miss();Ok(None)},
             result=>result,
         }
@@ -630,7 +632,7 @@ impl RetouchSources {
         coordinate: [u32; 2],
         stroke: Option<StrokeId>,
         encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<Option<wgpu::TextureView>, GpuRasterError> {
+    ) -> Result<Option<source_access::Sampled<wgpu::TextureView>>, GpuRasterError> {
         if page_rect(coordinate).intersect(PixelRect::full(r.document_extent)).is_empty() {
             return Ok(None);
         }
@@ -638,7 +640,7 @@ impl RetouchSources {
             Some(slot) => slot,
             None => {
                 if let Some((layer,versions))=self.lone_reference(r,coordinate)? {
-                    return match accepted_raw_page(r,layer,coordinate,Some(versions),encoder) {
+                    return match r.raw_page(layer,coordinate,Some(versions),encoder) {
                         Err(error) if error.is_preparation_pending() && self.live.is_some()=>{self.miss();Ok(None)},
                         result=>result,
                     };
@@ -654,7 +656,7 @@ impl RetouchSources {
                 slot
             }
         };
-        let view = self.cache.slots[slot].page.read(&self.cache.pages[&coordinate].1,Some(&encoder.submission()))?.value().view.clone();
+        let view = source_access::Sampled::read(&self.cache.slots[slot].page.read(&self.cache.pages[&coordinate].1,Some(&encoder.submission()))?);
         self.cache.slots[slot].bound = true;
         Ok(Some(view))
     }
@@ -727,18 +729,19 @@ impl RetouchSources {
             return Ok((views, true));
         }
         let misses = self.counts.misses;
+        let mut complete = true;
         let [targets, references] = mapping.blocks.map(block_pages);
         for i in 0..4 {
             if let Some(coordinate) = targets[i] {
-                views[i] = self.target_page(r, mapping.target, mapping.stroke, coordinate, encoder)?;
+                views[i] = self.target_page(r, mapping.target, mapping.stroke, coordinate, encoder)?.map(|view| view.take(&mut complete));
             }
             if mapping.references.is_some()
                 && let Some(coordinate) = references[i]
             {
-                views[4 + i] = self.reference_page(r, coordinate, mapping.stroke, encoder)?;
+                views[4 + i] = self.reference_page(r, coordinate, mapping.stroke, encoder)?.map(|view| view.take(&mut complete));
             }
         }
-        Ok((views, self.counts.misses == misses))
+        Ok((views, complete && self.counts.misses == misses))
     }
 
     /// Draw the source of `gather` into `destination`. Returns whether every
@@ -828,14 +831,6 @@ fn block_pages(block: [i64; 2]) -> [Option<[u32; 2]>; 4] {
         (x >= 0 && y >= 0 && x < i64::from(u32::MAX / PAGE_SIZE) && y < i64::from(u32::MAX / PAGE_SIZE))
             .then_some([x as u32, y as u32])
     })
-}
-
-fn accepted_raw_page(r:&mut WgpuRasterizer,layer:SourceTarget,coordinate:[u32;2],expected:Option<&raster::contents::Versions>,
-    encoder:&mut submission::CommandEncoder,
-)->Result<Option<wgpu::TextureView>,GpuRasterError> {
-    let mut inputs=r.accept_raw_neighborhood(layer,coordinate,[Some([0,0])],None,expected,encoder)?;
-    let [view]=r.raw_layer_neighborhood(&mut inputs,layer,coordinate,[Some([0,0])],None,encoder)?;
-    inputs.track(encoder);Ok(view)
 }
 
 impl WgpuRasterizer {
@@ -1063,11 +1058,12 @@ impl WgpuRasterizer {
         &mut self,
         mapping: &Mapping,
         encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<[wgpu::TextureView; 8], GpuRasterError> {
+    ) -> Result<([wgpu::TextureView; 8], bool), GpuRasterError> {
         let mut retouch = self.retouch_sources();
         let pages = retouch.pages(self, mapping, encoder);
         self.retouch = Some(retouch);
-        Ok(pages?.0.map(|view| view.unwrap_or_else(|| self.empty_view.clone())))
+        let (pages, complete) = pages?;
+        Ok((pages.map(|view| view.unwrap_or_else(|| self.empty_view.clone())), complete))
     }
 
     /// Draw what the latest retouching stroke samples into `destination`, a

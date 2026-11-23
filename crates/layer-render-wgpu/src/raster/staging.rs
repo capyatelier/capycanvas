@@ -237,7 +237,7 @@ impl TargetRestore {
                 _=>unreachable!(),
             };
             if !present {
-                if let Output::StrokeStart(_,id,false)=output && fresh_starts.binary_search(&(self.target,c,*id)).is_ok() && r.empty_color(self.target,c,&name) {
+                if let Output::StrokeStart(_,id,false)=output && fresh_starts.binary_search(&(self.target,c,*id)).is_ok() && r.empty_page(self.target,RasterPlane::Color,c,&name) {
                     self.empty_starts.insert((c,*id));
                 }
                 self.pending.push(SourcePage::Output(output.clone()));
@@ -496,6 +496,7 @@ impl WgpuRasterizer {
                 },_=>{},
             }
         }
+        for page in self.preview_watercolor_wetness_pages.iter_mut().filter(|page|!outputs.contains(&Output::PreviewWetness(page.coordinate))) {page.derived=None;}
         let missing=outputs.into_iter().filter(|output|!output.preview_present(self,level)).collect::<Vec<_>>();
         let bytes=missing.iter().map(|output|output.bytes(self,level)).sum();
         if bytes==0 {self.preview_working=reserved;self.preview_pages.retain(|page|page.primary.size().width==PAGE_SIZE>>level);return Ok(());}
@@ -598,14 +599,16 @@ impl WgpuRasterizer {
             let damage=pixel_rect(fill.operation.bounds(packet.scene.target_extent(fill.target)),packet.scene.target_extent(fill.target));
             for coordinate in page_coordinates(damage) {outputs.insert((fill.target,Output::PreviewColor(coordinate)));}
         }
+        let mut radii=crate::IdMap::default();
         for (batch,_) in packet.dab_batches.iter().zip(&previews).filter(|(batch,coordinates)|!coordinates.is_empty()
             && BrushPassPlan::for_device(&batch.style,&self.device).state.watercolor_wetness) {
+            let radius=WatercolorLayerStyle::from_dab_style(&batch.style).radius();
+            radii.entry(batch.target).and_modify(|widest|*widest=radius.max(*widest)).or_insert(radius);
+        }
+        for ((batch,tiles),_) in packet.dab_batches.iter().zip(plans).zip(&previews).filter(|(_,coordinates)|!coordinates.is_empty()) {
+            let Some(&radius)=radii.get(&batch.target) else {continue;};
             let extent=packet.scene.target_extent(batch.target);
-            let damage=packet.dab_batches.iter().zip(plans).zip(&previews).filter(|((other,_),coordinates)|!coordinates.is_empty() && other.target==batch.target)
-                .fold(PixelRect::EMPTY,|damage,((other,tiles),_)|damage.union(Self::brush_display_damage(other,tiles,extent)));
-            for coordinate in page_coordinates(damage.expand(WatercolorLayerStyle::from_dab_style(&batch.style).radius(),extent)) {
-                outputs.insert((batch.target,Output::PreviewWetness(coordinate)));
-            }
+            outputs.extend(page_coordinates(Self::brush_display_damage(batch,tiles,extent).expand(radius,extent)).map(|coordinate|(batch.target,Output::PreviewWetness(coordinate))));
         }
         for (target,c) in self.destination_pages(packet.dab_batches,plans) {
             outputs.insert((target,Output::Color(c)));
@@ -644,8 +647,8 @@ impl WgpuRasterizer {
         let retired={drop((pages,starts));charge};
         self.device.on_queue_done(&self.queue,move|| {#[cfg(not(target_arch="wasm32"))] retired.complete();#[cfg(target_arch="wasm32")] drop(retired);});
     }
-    pub(crate) fn empty_color(&self,target:SourceTarget,coordinate:[u32;2],version:&layer_core::raster::ContentVersion)->bool {
-        matches!(target,SourceTarget::Paint(_)) && version.matches(&super::contents::empty_color(self.target_extent(target),coordinate))==Some(true)
+    pub(crate) fn empty_page(&self,target:SourceTarget,plane:RasterPlane,coordinate:[u32;2],version:&layer_core::raster::ContentVersion)->bool {
+        matches!(target,SourceTarget::Paint(_)) && version.matches(&super::contents::empty_page(self.target_extent(target),plane,coordinate))==Some(true)
     }
     pub(crate) fn take_prepared_stroke_start(&mut self,target:SourceTarget,coordinate:[u32;2],stroke:layer_core::StrokeId,preview:bool)->Option<resident::Resident<PageSurface>> {
         let starts=&mut self.restore_preflight.as_mut()?.starts;

@@ -1,6 +1,6 @@
 use super::*;
 use layer_core::raster::{ContentStamp, ContentVersion, RasterPlane};
-use std::{hash::{Hash, Hasher}, sync::Mutex};
+use std::{hash::{Hash, Hasher}, sync::{Mutex, atomic::{AtomicBool, Ordering}}};
 use crate::{IdMap, IdSet};
 
 #[derive(Clone, Default)]
@@ -752,10 +752,16 @@ pub(crate) struct PreviewVersion {
     stage:PreviewStage,
     pass:PreviewPass,
     step:Option<(PreviewPass,u32)>,
+    complete:bool,
 }
 impl PreviewVersion {
     pub fn input(&self)->&raster::contents::Intent {&self.input}
     pub fn version(&self)->&ContentVersion {&self.version}
+    pub fn complete(&self)->bool {self.complete}
+    pub fn written(mut self,complete:bool)->Self {
+        if !complete {self.declaration.incomplete.store(true,Ordering::Relaxed);}
+        self.complete=complete;self
+    }
     pub fn same_declaration(&self,declaration:&Arc<PreviewDeclaration>)->bool {Arc::ptr_eq(&self.declaration.accepted,&declaration.accepted)}
     pub fn intermediate(&self,pass:PreviewPass,step:u32)->Self {
         if !matches!(self.plane,RasterPlane::Color|RasterPlane::WatercolorWetness) || !self.declaration.transport_output(self.coordinate,self.stage) {return self.clone();}
@@ -791,6 +797,7 @@ pub(crate) struct PreviewDeclaration {
     reservoir_inputs:Arc<Mutex<IdMap<usize,CapturedInputs>>>,
     memo:Arc<Mutex<IdMap<PreviewRequest,ContentVersion>>>,
     stamps:Option<(Arc<PreviewStamps>,ContentStamp)>,
+    incomplete:Arc<AtomicBool>,
 }
 #[derive(Default)]
 pub(crate) struct PreviewStamps {accepted:Mutex<IdSet<[u32;2]>>}
@@ -860,7 +867,7 @@ impl PreviewDeclaration {
         }).collect();
         let mut context=Recipe::new();context.add(&(packet.document_extent,packet.scene.composition().color,packet.scene.color_mode(target)));context.tag(&packet.blend_space);
         Ok(Some(Self {source:packet.scene.snapshot(),target,versions,inputs,commands,fill,quality,wetness_before,transport_outputs,seed_inputs:IdMap::default(),reservoir_seed:None,selection:None,context:context.0,accepted:Arc::default(),reservoir_inputs:Arc::default(),memo:Arc::default(),
-            stamps:stamps.map(|stamps|(stamps,layer_core::raster::ContentName::fresh().stamp()))}))
+            stamps:stamps.map(|stamps|(stamps,layer_core::raster::ContentName::fresh().stamp())),incomplete:Arc::default()}))
     }
     pub fn captured_version(pass:PreviewPass,versions:&[ContentVersion])->ContentVersion {
         let mut distinct=versions.to_vec();distinct.sort_unstable_by_key(ContentVersion::identity);distinct.dedup_by_key(|version|version.identity());
@@ -892,7 +899,7 @@ impl PreviewDeclaration {
     pub(crate) fn level(&self)->u32 {self.quality.level}
     pub fn in_contact(&self)->bool {self.stamps.is_some()}
     pub fn finishes(&self,ticket:&PreviewVersion,target:SourceTarget,plane:RasterPlane,coordinate:[u32;2])->bool {
-        if target!=self.target || !Arc::ptr_eq(&ticket.declaration.accepted,&self.accepted) || ticket.plane!=plane || ticket.coordinate!=coordinate
+        if target!=self.target || !Arc::ptr_eq(&ticket.declaration.accepted,&self.accepted) || !ticket.complete || ticket.plane!=plane || ticket.coordinate!=coordinate
             || ticket.pass!=plane_pass(plane) || ticket.step.is_some() {return false;}
         match ticket.stage {
             PreviewStage::Final=>true,
@@ -904,6 +911,7 @@ impl PreviewDeclaration {
             PreviewStage::BeforeBatch(_)|PreviewStage::BeforeFill=>false,
         }
     }
+    pub fn complete(&self)->bool {!self.incomplete.load(Ordering::Relaxed)}
     pub fn accepted(&self,coordinate:[u32;2])->bool {self.stamps.as_ref().is_some_and(|(stamps,_)|stamps.accepted.lock().unwrap().contains(&coordinate))}
     pub fn accepts(&self,coordinate:[u32;2])->bool {self.stamps.as_ref().is_none_or(|(stamps,_)|stamps.accepted.lock().unwrap().insert(coordinate))}
     pub fn affects(&self,region:PixelRect)->bool {self.fill.is_some() || self.commands.iter().any(|command|command.intersects(region))}
@@ -1036,14 +1044,14 @@ impl PreviewDeclaration {
         self.region_version_for(plane,page_rect(coordinate).intersect(PixelRect::full(self.source.view().target_extent(target))),stage,pass)
     }
     pub fn ticket(self:&Arc<Self>,target:SourceTarget,plane:RasterPlane,coordinate:[u32;2],stage:PreviewStage,input:raster::contents::Intent)->Result<PreviewVersion,GpuRasterError> {
-        Ok(PreviewVersion {declaration:self.clone(),version:self.version(target,plane,coordinate,stage)?,input,plane,coordinate,stage,pass:plane_pass(plane),step:None})
+        Ok(PreviewVersion {declaration:self.clone(),version:self.version(target,plane,coordinate,stage)?,input,plane,coordinate,stage,pass:plane_pass(plane),step:None,complete:false})
     }
     pub fn ticket_for_accepted(self:&Arc<Self>,target:SourceTarget,plane:RasterPlane,coordinate:[u32;2],stage:PreviewStage,pass:PreviewPass,input:raster::contents::Intent)->Result<PreviewVersion,GpuRasterError> {
-        Ok(PreviewVersion {declaration:self.clone(),version:self.version_for(target,plane,coordinate,stage,pass)?,input,plane,coordinate,stage,pass,step:None})
+        Ok(PreviewVersion {declaration:self.clone(),version:self.version_for(target,plane,coordinate,stage,pass)?,input,plane,coordinate,stage,pass,step:None,complete:false})
     }
     pub fn ticket_for(self:&Arc<Self>,target:SourceTarget,plane:RasterPlane,coordinate:[u32;2],stage:PreviewStage,pass:PreviewPass,input:raster::contents::Intent,proofs:Vec<resident::Input>)->Result<PreviewVersion,GpuRasterError> {
         self.accept_inputs(target,plane,coordinate,stage,pass,proofs)?;
-        Ok(PreviewVersion {declaration:self.clone(),version:self.version_for(target,plane,coordinate,stage,pass)?,input,plane,coordinate,stage,pass,step:None})
+        Ok(PreviewVersion {declaration:self.clone(),version:self.version_for(target,plane,coordinate,stage,pass)?,input,plane,coordinate,stage,pass,step:None,complete:false})
     }
     pub fn region_version(&self,plane:RasterPlane,region:PixelRect,stage:PreviewStage)->Result<ContentVersion,GpuRasterError> {self.region_version_for(plane,region,stage,plane_pass(plane))}
     fn region_version_for(&self,plane:RasterPlane,region:PixelRect,stage:PreviewStage,pass:PreviewPass)->Result<ContentVersion,GpuRasterError> {
@@ -1545,6 +1553,20 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_stamped_final_ticket_finishes_only_with_its_producers_bound_inputs() {
+        let (document,target)=document();let style=layer_render::DabStyle::for_brush(&layer_core::BrushSnapshot::default(),layer_core::StrokeTool::Brush);
+        let mut batch=dab_batch(target,style,layer_core::Rect::from_extent([64;2]));batch.kind=DabBatchKind::Preview;
+        let stamps=Arc::new(PreviewStamps::default());
+        let first=Arc::new(contact_declaration(&document,std::slice::from_ref(&batch),&[preview_dab(32.)],None,Some(stamps.clone())));
+        assert!(first.accepts([0;2]),"the first stamped frame visits the page");
+        let second=Arc::new(contact_declaration(&document,std::slice::from_ref(&batch),&[preview_dab(32.)],None,Some(stamps)));
+        assert!(!second.accepts([0;2]),"the next stamped frame finds the page visited and gathers no proofs");
+        let contents=raster::contents::Contents::new(Arc::new(RasterData::default()));
+        let ticket=second.ticket(target,RasterPlane::Color,[0;2],PreviewStage::AfterBatch(0),contents.intent(TileKey {plane:RasterPlane::Color,coordinate:[0;2]})).unwrap();
+        assert!(!second.finishes(&ticket,target,RasterPlane::Color,[0;2]),"a stamped page whose producer bound no inputs cannot finish");
+    }
+
+    #[test]
     fn producer_indices_distinguish_duplicate_batches_and_ignore_unrelated_damage_hints() {
         let (document,target)=document();let style=layer_render::DabStyle::for_brush(&layer_core::BrushSnapshot::default(),layer_core::StrokeTool::Brush);
         let mut first=dab_batch(target,style,layer_core::Rect::from_extent([64;2]));first.kind=DabBatchKind::Preview;
@@ -1601,7 +1623,7 @@ pub(super) mod tests {
         let program=Arc::new(declaration(&document,&[first,second],&[preview_dab(32.),preview_dab(288.)],None));
         let contents=raster::contents::Contents::new(Arc::new(RasterData::default()));let version=ContentVersion::derive(12,&[]);
         for coordinate in [[0,0],[1,0],[2,0]] {
-            let ticket=PreviewVersion {declaration:program.clone(),input:contents.intent(TileKey {plane:RasterPlane::Color,coordinate}),version:version.clone(),plane:RasterPlane::Color,coordinate,stage:PreviewStage::AfterBatch(1),pass:PreviewPass::Color,step:None};
+            let ticket=PreviewVersion {declaration:program.clone(),input:contents.intent(TileKey {plane:RasterPlane::Color,coordinate}),version:version.clone(),plane:RasterPlane::Color,coordinate,stage:PreviewStage::AfterBatch(1),pass:PreviewPass::Color,step:None,complete:false};
             assert_eq!(ticket.intermediate(PreviewPass::Transport,0).version().matches(ticket.version()),Some(coordinate==[2,0]));
         }
         assert!(!program.transport_output([0,0],PreviewStage::AfterBatch(0)));

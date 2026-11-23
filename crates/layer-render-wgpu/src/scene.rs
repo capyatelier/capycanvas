@@ -694,16 +694,17 @@ impl Scene {
             let Some(read)=read else {continue;};
             accepted.clone().track(encoder);
             if !read.encode(r,encoder,Class::Authored)? {return Err(GpuRasterError::NotReady);}
-            let view=read.tile.view;
+            let mut complete=true;
+            let view=read.sampled().take(&mut complete).view;
             accepted.track(encoder);
-            let ticket=preview.then(||r.preview_version(target,RasterPlane::Color,coordinate,PreviewStage::Seed)).transpose()?;
+            let ticket=preview.then(||r.preview_version(target,RasterPlane::Color,coordinate,PreviewStage::Seed)).transpose()?.map(|ticket|ticket.written(complete));
             let expected=match &ticket {Some(ticket)=>ticket.version().clone(),None=>r.raster_version_for(scene,target,RasterPlane::Color,coordinate)?};
             let pages=if preview {&mut r.preview_pages}else {
                 &mut r.paint_layers.iter_mut().find(|layer|layer.id==target).ok_or(GpuRasterError::MissingPaintLayer(target))?.pages
             };
             let page=pages.iter_mut().find(|page|page.coordinate==coordinate).ok_or(GpuRasterError::Invariant("prepared copy source pages state is inconsistent"))?;
             let receipt=encoder.submission();
-            let write=page.primary.overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
+            let write=page.primary.overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?.completed(complete);
             let output=write.value().view.clone();
             let publication=write.encoded(expected);
             if let Some(ticket)=ticket {page.derived=Some(ticket);}
@@ -1068,7 +1069,7 @@ impl Scene {
                 .flat_map(|y|(c[0].saturating_sub(1)..=c[0]+1).map(move|x|[x,y]))
                 .any(|coordinate|versions.authored(layer_core::raster::RasterPlane::WatercolorWetness,coordinate)))
                 || preview && r.preview_watercolor_wetness_pages.iter()
-                    .any(|page|page.coordinate[0].abs_diff(c[0])<=1 && page.coordinate[1].abs_diff(c[1])<=1)))
+                    .any(|page|page.derived.is_some() && page.coordinate[0].abs_diff(c[0])<=1 && page.coordinate[1].abs_diff(c[1])<=1)))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1816,6 +1817,7 @@ impl Scene {
             let receipt=encoder.submission();
             let write=if let Some(input)=input {page.active_mut().revise(&input,&receipt)}else {page.active_mut().write(&intent,&receipt)}
                 .ok_or(GpuRasterError::Invariant("prepared apply operation state is inconsistent"))?;
+            let ticket=ticket.map(|ticket|ticket.written(write.complete()));
             let source=write.value().view.clone();let destination=write.value().texture.clone();
             let name=ticket.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|ticket|ticket.version().clone());
             let publication=write.encoded(name);

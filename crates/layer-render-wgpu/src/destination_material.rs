@@ -405,6 +405,7 @@ impl WgpuRasterizer {
             let color_ticket=preview.then(||self.preview_material_version(batch,batch_index,RasterPlane::Color,job.coordinate,scene::PreviewPass::Color,&intent)).transpose()?;
             let coverage_ticket=(preview && job.coverage_index.is_some()).then(||self.preview_material_version(batch,batch_index,RasterPlane::Color,job.coordinate,scene::PreviewPass::Coverage,&intent)).transpose()?;
             let wetness_ticket=wet_intent.as_ref().filter(|_|preview).map(|wet_intent|self.preview_material_version(batch,batch_index,RasterPlane::WatercolorWetness,job.coordinate,scene::PreviewPass::Wetness,wet_intent)).transpose()?;
+            let read=sources.complete && gathers.iter().all(|gather|gather.complete);
             let receipt=encoder.submission();
             if far[index].is_some() {
                 let size=[taps*PAGE_SIZE,rows*PAGE_SIZE];
@@ -449,6 +450,9 @@ impl WgpuRasterizer {
                 }else if preview {page.surface_mut(secondary).overwrite(&receipt)}else {page.write(secondary,wet_intent,&receipt)};
                 Some(write.ok_or(GpuRasterError::Invariant("prepared encode transport jobs state is inconsistent"))?)
             }else {None};
+            let complete=read && destination.complete() && wetness.as_ref().is_none_or(|write|write.complete());
+            let (destination,coverage,wetness)=(destination.completed(complete),coverage.map(|write|write.completed(complete)),wetness.map(|write|write.completed(complete)));
+            let [color_ticket,coverage_ticket,wetness_ticket]=[color_ticket,coverage_ticket,wetness_ticket].map(|ticket|ticket.map(|ticket|ticket.written(complete)));
             destination.value().preview.set(None);
             let output=self.pipelines.destination_material.output(&self.device,&self.style_buffer,&destination,coverage.as_ref(),wetness.as_ref());
             let held=&coverage.as_ref().unwrap_or(&destination).value().material;
@@ -478,6 +482,7 @@ impl WgpuRasterizer {
             let gathers=gathered.iter().flat_map(|pages|pages.chunks(DONOR_SLOTS)).map(|chunk|
                 self.transport_sources(encoder,batch_index,batch,coordinate,target,&intent,MaterialInputs::Donors(chunk),Vec::new(),collecting.then_some(&mut donors))
             ).collect::<Result<Vec<_>,_>>()?;
+            let complete=sources.complete && gathers.iter().all(|gather|gather.complete);
             if let Some(declaration)=&declaration {declaration.accept_reservoir_inputs(batch_index,donors)?;}
             let receipt=encoder.submission();
             if gathered.is_some() {
@@ -506,7 +511,7 @@ impl WgpuRasterizer {
                 let [first,second]=self.reservoir.predicted.as_mut().ok_or(GpuRasterError::Invariant("predicted reservoir is not prepared"))?;
                 if incoming.as_ref().is_some_and(|incoming|first.has_name(incoming)) {second}else {first}
             }else if self.reservoir.active_secondary {&mut self.reservoir.primary}else {&mut self.reservoir.secondary}
-                .overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
+                .overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?.completed(complete);
             let output=self.pipelines.destination_material.output(&self.device,&self.style_buffer,&write,None,None);
             let (sources,_)=write.value().material.inputs(sources,|key|create_material_inputs(&self.device,&self.material_layout,self.material_records.binding().size,key));
             dispatches.push(Dispatch {entry:Entry::Reservoir,output,sources,coordinate,record_offset:self.material_records.offset(first_record),extent:[RESERVOIR_SIZE;2]});

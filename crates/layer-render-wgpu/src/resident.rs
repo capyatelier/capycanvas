@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, Weak};
 struct Version {
     name: ContentVersion,
     submission: Submission,
+    complete: bool,
 }
 impl Version {
     fn same(&self,other:&Self)->bool {self.name.identity()==other.name.identity() && self.submission.same(&other.submission)}
@@ -105,6 +106,7 @@ pub(crate) struct Input {
 
 impl Input {
     pub fn version(&self)->&ContentVersion {&self.version.name}
+    pub(crate) fn complete(&self)->bool {self.version.complete}
     pub(crate) fn same(&self,other:&Self)->bool {Arc::ptr_eq(&self.names,&other.names) && self.version.same(&other.version)}
     pub(crate) fn live(&self)->bool {self.names.lock().unwrap().held().is_some_and(|held|held.same(&self.version))}
     pub(crate) fn seed(&self)->Option<(Self,PixelRect)> {
@@ -126,6 +128,7 @@ pub(crate) struct RasterWrite<'a, T> {
     resident: &'a mut Resident<T>,
     submission: &'a Submission,
     intent: Option<Intent>,
+    complete: bool,
 }
 
 pub(crate) struct Encoding {
@@ -170,32 +173,32 @@ impl<T> Resident<T> {
     }
 
     pub fn write<'a>(&'a mut self, intent: &Intent, submission: &'a Submission) -> Option<RasterWrite<'a, T>> {
-        if self.read(intent.version(), Some(submission)).is_none() {
+        let Some(complete) = self.read(intent.version(), Some(submission)).map(|read| read.version.complete) else {
             write_refused();
             return None;
-        }
-        Some(RasterWrite { resident: self, submission, intent: Some(intent.clone()) })
+        };
+        Some(RasterWrite { resident: self, submission, intent: Some(intent.clone()), complete })
     }
 
     pub fn revise<'a>(&'a mut self,expected:&ContentVersion,submission:&'a Submission)->Option<RasterWrite<'a,T>> {
-        self.read(expected,Some(submission))?;
-        Some(RasterWrite {resident:self,submission,intent:None})
+        let complete=self.read(expected,Some(submission))?.version.complete;
+        Some(RasterWrite {resident:self,submission,intent:None,complete})
     }
 
     pub fn continue_written<'a>(&'a mut self,written:&Written,submission:&'a Submission)->Option<RasterWrite<'a,T>> {
         let intent=written.intent.as_ref()?;
-        self.read(&written.version.name,Some(submission))?;
-        Some(RasterWrite {resident:self,submission,intent:Some(intent.clone())})
+        let complete=self.read(&written.version.name,Some(submission))?.version.complete;
+        Some(RasterWrite {resident:self,submission,intent:Some(intent.clone()),complete})
     }
 
     pub fn initialize<'a>(&'a mut self, submission: &'a Submission) -> Option<RasterWrite<'a, T>> {
         let unwritten = self.names.lock().unwrap().held().is_none();
-        unwritten.then_some(RasterWrite { resident: self, submission, intent: None })
+        unwritten.then_some(RasterWrite { resident: self, submission, intent: None, complete: true })
     }
 
     pub fn overwrite<'a>(&'a mut self,submission:&'a Submission)->Option<RasterWrite<'a,T>> {
         let ordered=self.names.lock().unwrap().held().is_none_or(|version|version.submission.submitted() || version.submission.same(submission));
-        ordered.then_some(RasterWrite {resident:self,submission,intent:None})
+        ordered.then_some(RasterWrite {resident:self,submission,intent:None,complete:true})
     }
 
     pub fn overwrite_from<'a>(&'a mut self,intent:&Intent,input:&Input,submission:&'a Submission)->Option<RasterWrite<'a,T>> {
@@ -203,19 +206,20 @@ impl<T> Resident<T> {
             || !(input.version.submission.submitted() || input.version.submission.same(submission))
             || !input.names.lock().unwrap().held().is_some_and(|held|held.name.matches(&input.version.name)==Some(true)
                 && (held.submission.submitted() || held.submission.same(submission))) {write_refused();return None;}
-        let mut write=self.overwrite(submission)?;write.intent=Some(intent.clone());Some(write)
+        let mut write=self.overwrite(submission)?;write.intent=Some(intent.clone());write.complete=input.version.complete;Some(write)
     }
 
     pub fn retire(self) -> T { self.value }
 
-    fn publish(&mut self, name: ContentVersion, submission: Submission) {
-        self.names.lock().unwrap().publish(Version { name, submission }, Delta::Unknown);
+    fn publish(&mut self, version: Version) {
+        self.names.lock().unwrap().publish(version, Delta::Unknown);
     }
 }
 
 impl<'a, T> Read<'a, T> {
     pub fn value(&self) -> &'a T { self.value }
     pub fn input(&self)->Input {Input {version:self.version.clone(),names:self.names.clone()}}
+    pub(crate) fn complete(&self)->bool {self.version.complete}
     pub(crate) fn witnessed_by(&self,input:&Input)->bool {Arc::ptr_eq(&self.names,&input.names) && self.version.same(&input.version)}
     pub fn version(&self) -> &ContentVersion { &self.version.name }
     #[cfg(test)]
@@ -233,13 +237,15 @@ impl<T:TextureStorage> Read<'_,T> {
 
 impl<T> RasterWrite<'_, T> {
     pub fn value(&self) -> &T { &self.resident.value }
+    pub fn complete(&self) -> bool { self.complete }
+    pub fn completed(mut self,complete:bool)->Self {self.complete&=complete;self}
     pub fn encoded(self,name:impl Into<ContentVersion>)->Encoding {
-        Encoding {names:self.resident.names.clone(),version:Version {name:name.into(),submission:self.submission.clone()},intent:self.intent,delta:Delta::Unknown}
+        Encoding {names:self.resident.names.clone(),version:Version {name:name.into(),submission:self.submission.clone(),complete:self.complete},intent:self.intent,delta:Delta::Unknown}
     }
     pub fn publish(self, name: impl Into<ContentVersion>) -> Written {
-        let name = name.into();
-        self.resident.publish(name.clone(), self.submission.clone());
-        Written { version: Version { name, submission: self.submission.clone() }, intent: self.intent, submission:self.submission.clone() }
+        let version = Version { name: name.into(), submission: self.submission.clone(), complete: self.complete };
+        self.resident.publish(version.clone());
+        Written { version, intent: self.intent, submission:self.submission.clone() }
     }
 }
 

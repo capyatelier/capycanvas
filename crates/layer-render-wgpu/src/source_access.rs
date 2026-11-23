@@ -64,12 +64,26 @@ impl resident::TextureStorage for RawTile {
     fn view(&self)->&wgpu::TextureView {&self.view}
 }
 
+#[must_use]
+#[derive(Clone)]
+pub(super) struct Sampled<T> {value:T,complete:bool}
+impl<T> Sampled<T> {
+    pub fn new(value:T,complete:bool)->Self {Self {value,complete}}
+    pub fn take(self,complete:&mut bool)->T {*complete&=self.complete;self.value}
+    pub fn map<U>(self,map:impl FnOnce(T)->U)->Sampled<U> {Sampled {value:map(self.value),complete:self.complete}}
+}
+impl Sampled<wgpu::TextureView> {
+    pub fn read<U:resident::TextureStorage>(read:&resident::Read<'_,U>)->Self {Self {value:read.value().view().clone(),complete:read.complete()}}
+}
+
 pub(super) struct SourceRead {
     pub tile: RawTile,
     pub pending: Vec<Arc<scene::sources::PendingTile>>,
     pub assembly: Option<Arc<scene::sources::PaintBaseAssembly>>,
+    pub complete: bool,
 }
 impl SourceRead {
+    pub fn sampled(self)->Sampled<RawTile> {Sampled::new(self.tile,self.complete)}
     pub fn ready(&self)->bool {self.pending.iter().all(|pending|pending.ready())}
     pub fn encode(&self,r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder,class:crate::residency::Class)->Result<bool,GpuRasterError> {
         if !self.ready() && (!r.snapshot_worker || cfg!(target_arch="wasm32")) {return Ok(false);}
@@ -107,7 +121,7 @@ impl WgpuRasterizer {
 
     pub(super) fn preview_wetness_page(&self, target: SourceTarget, coordinate: [u32; 2]) -> Option<&WatercolorWetnessPage> {
         if self.preview_layer_id != Some(target) || self.preview_damage.intersect(page_rect(coordinate)).is_empty() {return None;}
-        self.preview_watercolor_wetness_pages.iter().find(|page| page.coordinate == coordinate)
+        self.preview_watercolor_wetness_pages.iter().find(|page| page.coordinate == coordinate && page.derived.is_some())
     }
 
     pub(super) fn preview_input_tiles(&self, target: SourceTarget) -> std::collections::BTreeSet<[u32; 2]> {
@@ -131,26 +145,34 @@ impl WgpuRasterizer {
         Ok(accepted)
     }
 
+    pub(super) fn raw_page(&mut self,layer:SourceTarget,coordinate:[u32;2],expected:Option<&raster::contents::Versions>,
+        encoder:&mut crate::submission::CommandEncoder,
+    )->Result<Option<Sampled<wgpu::TextureView>>,GpuRasterError> {
+        let mut inputs=self.accept_raw_neighborhood(layer,coordinate,[Some([0,0])],None,expected,encoder)?;
+        let [view]=self.raw_layer_neighborhood(&mut inputs,layer,coordinate,[Some([0,0])],None,encoder)?;
+        inputs.track(encoder);Ok(view)
+    }
+
     pub(super) fn raw_layer_neighborhood<const N:usize>(
         &mut self,inputs:&mut scene::sources::AcceptedInputs,layer:SourceTarget,coordinate:[u32;2],offsets:[Option<[i32;2]>;N],
         captured:Option<&mut Vec<resident::Input>>,encoder:&mut crate::submission::CommandEncoder,
-    )->Result<[Option<wgpu::TextureView>;N],GpuRasterError> {
+    )->Result<[Option<Sampled<wgpu::TextureView>>;N],GpuRasterError> {
         self.layer_neighborhood(inputs,layer,coordinate,offsets,captured,encoder,|inputs,r,layer,at,_|inputs.raw_color(r,layer,at))
     }
 
     pub(super) fn brush_layer_neighborhood<const N:usize>(
         &mut self,inputs:&mut scene::sources::AcceptedInputs,layer:SourceTarget,coordinate:[u32;2],offsets:[Option<[i32;2]>;N],
         preview:Option<(scene::PreviewStage,Option<(scene::PreviewPass,u32)>)>,captured:Option<&mut Vec<resident::Input>>,encoder:&mut crate::submission::CommandEncoder,
-    )->Result<[Option<wgpu::TextureView>;N],GpuRasterError> {
+    )->Result<[Option<Sampled<wgpu::TextureView>>;N],GpuRasterError> {
         let read=std::cell::RefCell::new(Vec::new());
         let views=self.layer_neighborhood(inputs,layer,coordinate,offsets,captured,encoder,|inputs,r,layer,at,receipt| {
             if let Some(tile)=r.material_reads.as_ref().and_then(|reads|reads.get(&(layer,at,preview))) {
-                return Ok([tile.clone().map(|tile|SourceRead {tile,pending:Vec::new(),assembly:None}),None]);
+                return Ok([tile.clone().map(|(tile,complete)|SourceRead {tile,pending:Vec::new(),assembly:None,complete}),None]);
             }
             #[cfg(test)] crate::test_support::record_material_read((at,preview.map(|(stage,_)|stage)));
             let choices=inputs.brush_color(r,layer,at,preview,receipt)?;
             if r.material_reads.is_some() && let [base,None]=&choices && base.as_ref().is_none_or(|base|base.pending.is_empty() && base.assembly.is_none()) {
-                read.borrow_mut().push(((layer,at,preview),base.as_ref().map(|base|base.tile.clone())));
+                read.borrow_mut().push(((layer,at,preview),base.as_ref().map(|base|(base.tile.clone(),base.complete))));
             }
             Ok(choices)
         })?;
@@ -161,7 +183,7 @@ impl WgpuRasterizer {
     pub(super) fn brush_layer_tiles(
         &mut self,inputs:&mut scene::sources::AcceptedInputs,layer:SourceTarget,tiles:&[[u32;2]],
         preview:impl Fn([u32;2])->Option<(scene::PreviewStage,Option<(scene::PreviewPass,u32)>)>,encoder:&mut crate::submission::CommandEncoder,
-    )->Result<Vec<Option<wgpu::TextureView>>,GpuRasterError> {
+    )->Result<Vec<Option<Sampled<wgpu::TextureView>>>,GpuRasterError> {
         let mut views=vec![None;tiles.len()];
         self.layer_tiles(inputs,layer,tiles.iter().copied().enumerate(),&mut views,None,encoder,|inputs,r,layer,at,receipt|inputs.brush_color(r,layer,at,preview(at),receipt))?;
         Ok(views)
@@ -171,7 +193,7 @@ impl WgpuRasterizer {
         &mut self,inputs:&mut scene::sources::AcceptedInputs,layer:SourceTarget,coordinate:[u32;2],offsets:[Option<[i32;2]>;N],
         captured:Option<&mut Vec<resident::Input>>,encoder:&mut crate::submission::CommandEncoder,
         read:impl Fn(&mut scene::sources::AcceptedInputs,&Self,SourceTarget,[u32;2],&submission::Submission)->Result<[Option<SourceRead>;2],GpuRasterError>,
-    )->Result<[Option<wgpu::TextureView>;N],GpuRasterError> {
+    )->Result<[Option<Sampled<wgpu::TextureView>>;N],GpuRasterError> {
         let mut views=std::array::from_fn(|_|None);
         let tiles=offsets.into_iter().enumerate().filter_map(|(index,offset)|Some((index,neighborhood(coordinate,[offset]).next()?)));
         self.layer_tiles(inputs,layer,tiles,&mut views,captured,encoder,read)?;
@@ -179,7 +201,7 @@ impl WgpuRasterizer {
     }
 
     fn layer_tiles(
-        &mut self,inputs:&mut scene::sources::AcceptedInputs,layer:SourceTarget,tiles:impl Iterator<Item=(usize,[u32;2])>,views:&mut [Option<wgpu::TextureView>],
+        &mut self,inputs:&mut scene::sources::AcceptedInputs,layer:SourceTarget,tiles:impl Iterator<Item=(usize,[u32;2])>,views:&mut [Option<Sampled<wgpu::TextureView>>],
         mut captured:Option<&mut Vec<resident::Input>>,encoder:&mut crate::submission::CommandEncoder,
         read:impl Fn(&mut scene::sources::AcceptedInputs,&Self,SourceTarget,[u32;2],&submission::Submission)->Result<[Option<SourceRead>;2],GpuRasterError>,
     )->Result<(),GpuRasterError> {
@@ -191,7 +213,7 @@ impl WgpuRasterizer {
             if let Some(captured)=captured.as_mut() {captured.extend(inputs.witnesses(layer,RasterPlane::Color,at));}
             debug_assert!(overlay.is_none(),"raw neighborhood has a composite preview");
             if let Some(read)=&base && !read.encode(self,encoder,crate::residency::Class::Authored)? {return Err(GpuRasterError::NotReady);}
-            views[index]=base.map(|read|read.tile.view);
+            views[index]=base.map(|read|read.sampled().map(|tile|tile.view));
         }
         if !inputs.declaring() {self.source_tiles.borrow_mut().flush_retired(encoder);}
         Ok(())
@@ -253,7 +275,8 @@ mod tests {
             encoder:&mut crate::submission::CommandEncoder,
         )->Result<(scene::sources::AcceptedInputs,[Option<wgpu::TextureView>;N]),GpuRasterError> {
             let mut accepted=self.accept_raw_neighborhood(layer,coordinate,offsets,None,None,encoder)?;
-            let views=self.raw_layer_neighborhood(&mut accepted,layer,coordinate,offsets,None,encoder)?;
+            let mut complete=true;
+            let views=self.raw_layer_neighborhood(&mut accepted,layer,coordinate,offsets,None,encoder)?.map(|view|view.map(|view|view.take(&mut complete)));
             Ok((accepted,views))
         }
     }

@@ -928,6 +928,36 @@ fn a_watercolor_prediction_draws_water_from_an_authored_neighbor_it_does_not_pre
 }
 
 #[test]
+fn a_watercolor_prediction_on_far_pages_keeps_the_authored_wetness_between_them() {
+    use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, RasterWatercolor, TileBlob, TileKey};
+    let extent = [2048, 256];
+    let wash = |x: u32, y: u32| (64..192).contains(&x) && (64..192).contains(&y);
+    let texels = || (0..PAGE_SIZE * PAGE_SIZE).map(|index| (index % PAGE_SIZE, index / PAGE_SIZE));
+    let color: Vec<u8> = texels().flat_map(|(x, y)| if wash(x, y) { [255, 0, 0, 255] } else { [0; 4] }).collect();
+    let wetness: Vec<u8> = texels().map(|(x, y)| if wash(x, y) { 255 } else { 0 }).collect();
+    let mut data = RasterData { watercolor: Some(RasterWatercolor { wet_edge: 1., burnt_edge: 0.6, edge_width: 4. }), ..Default::default() };
+    for (plane, bytes) in [(RasterPlane::Color, color), (RasterPlane::WatercolorWetness, wetness)] {
+        data.tiles.insert(TileKey { plane, coordinate: [4, 0] }, RasterTile::backed(TileBlob::encode(plane.descriptor(Default::default()), &bytes).unwrap()));
+    }
+    let mut layer = paint_document(extent, "authored wetness between predicted pages");
+    paint_mut(&mut layer).raster = RasterRevision::backed(data);
+    let contacts = [watercolor_contact(384., 128., 20., [0.1, 0.3, 0.8, 1.]), watercolor_contact(1920., 128., 20., [0.1, 0.3, 0.8, 1.])];
+    let between = |kind: DabBatchKind| {
+        let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        crate::test_support::submit_ready(&mut r, FramePacket { reset_layers: true, ..packet(layer.scene(), extent) }).unwrap();
+        crate::test_support::submit_ready(&mut r, FramePacket { dabs: &contacts, composite_all: false,
+            dab_batches: &watercolor_stroke(&layer, &still_watercolor(), 2, &contacts, 0, true, kind), ..packet(layer.scene(), extent) }).unwrap();
+        let texture = crate::test_support::document_texture(&r);
+        let (width, pixels) = (texture.width() as usize, crate::test_support::float_pixels(&r, texture));
+        (0..256).flat_map(|y| (1024..1280).map(move |x| (x, y))).map(|(x, y)| pixels[y * width + x]).collect::<Vec<_>>()
+    };
+    let persistent = between(DabBatchKind::Persistent);
+    assert!(persistent.iter().any(|pixel| pixel[0] > 0.1), "the authored wash shows between the batches");
+    let error = crate::test_support::max_error(&between(DabBatchKind::Preview), &persistent);
+    assert!(error < 1e-4, "a prediction on far pages shows the authored wash between them as its persistent twin does: maximum error {error}");
+}
+
+#[test]
 fn grouped_watercolor_prediction_transports_each_page_from_its_own_last_deposit() {
     let extent = [512, 256];
     let pages = |kind: DabBatchKind| {

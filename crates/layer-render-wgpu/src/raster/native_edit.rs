@@ -209,7 +209,7 @@ impl WgpuRasterizer {
         let depth=self.document_color().depth.coverage();
         if self.native_edit.is_none() {return Ok(());}
         let target=self.preview_declaration.as_ref().ok_or(GpuRasterError::Invariant("prepared canonicalize preview watercolor state is inconsistent"))?.target();
-        let coordinates=self.preview_watercolor_wetness_pages.iter().filter(|page|!self.preview_damage.intersect(page_rect(page.coordinate)).is_empty())
+        let coordinates=self.preview_watercolor_wetness_pages.iter().filter(|page|page.derived.is_some() && !self.preview_damage.intersect(page_rect(page.coordinate)).is_empty())
             .map(|page|page.coordinate).collect::<Vec<_>>();
         let mut outputs=Vec::with_capacity(coordinates.len());
         for coordinate in coordinates {
@@ -218,6 +218,7 @@ impl WgpuRasterizer {
             let page=self.preview_watercolor_wetness_pages.iter_mut().find(|page|page.coordinate==coordinate).unwrap();
             let active=page.active_secondary;
             let write=page.surface_mut(active).revise(ticket.version(),&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
+            let ticket=ticket.written(write.complete());
             let texture=write.value().texture.clone();
             outputs.push((coordinate,texture,ticket.clone(),write.encoded(ticket.version())));
         }

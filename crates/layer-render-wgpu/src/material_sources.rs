@@ -266,8 +266,9 @@ impl WgpuRasterizer {
         display: Option<usize>,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<crate::bindings::MaterialSources, GpuRasterError> {
-        let pages = self.retouch_pages(mapping, encoder)?;
-        self.material_bind_group(batch,batch_index, coordinate, target, intent, MaterialInputs::Retouch(&pages), display, Vec::new(), None, encoder)
+        let (pages,complete) = self.retouch_pages(mapping, encoder)?;
+        let sources = self.material_bind_group(batch,batch_index, coordinate, target, intent, MaterialInputs::Retouch(&pages), display, Vec::new(), None, encoder)?;
+        Ok(crate::bindings::MaterialSources {complete:sources.complete && complete,..sources})
     }
 }
 

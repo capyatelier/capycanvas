@@ -172,11 +172,14 @@ impl WgpuRasterizer {
                 let layer=&mut self.paint_layers[layer_index];(&mut layer.pages,&mut layer.coverage_pages)};
             let page=&mut pages[job.page_index];
             let write=if preview {page.surface_mut(job.destination_secondary).overwrite(&receipt)}
-                else {page.write(job.destination_secondary,&intent,&receipt)}.ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
+                else {page.write(job.destination_secondary,&intent,&receipt)}.ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?
+                .completed(sources.complete);
+            let complete=write.complete();
             let coverage=job.coverage_index.zip(job.coverage_destination_secondary).map(|(index,secondary)| {
                 let page=&mut coverage_pages[index];let destination=if secondary {&mut page.secondary}else {&mut page.primary};
-                destination.overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))
+                destination.overwrite(&receipt).map(|write|write.completed(complete)).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))
             }).transpose()?;
+            let (color_ticket,coverage_ticket)=(color_ticket.map(|ticket|ticket.written(complete)),coverage_ticket.map(|ticket|ticket.written(complete)));
             let output=pipelines.output(&self.device,&self.style_buffer,&write,coverage.as_ref(),changed);
             let held=&coverage.as_ref().unwrap_or(&write).value().material;
             self.material_holders.hold((!preview).then_some(batch.target),job.coordinate,held);

@@ -530,7 +530,7 @@ impl Liquify {
         }
         let receipt=encoder.submission();
         let source=if let Some(read)=r.read_layer_color(target,coordinate,&capture,Some(&receipt)) {
-            Some(source_access::RawTile {texture:read.value().texture.clone().into(),view:read.value().view.clone()})
+            Some(source_access::Sampled::new(source_access::RawTile {texture:read.value().texture.clone().into(),view:read.value().view.clone()},read.complete()))
         }else {
             let data=stroke.original.raster.try_data().ok_or(GpuRasterError::NotReady)?.map_err(GpuRasterError::Effect)?;
             let declared=data.tiles.get(&key).map_or_else(||crate::raster::contents::fallback(
@@ -547,7 +547,7 @@ impl Liquify {
         };
         let extent=r.target_extent(target);
         let mut room=r.original_room();
-        let stored=Self::store(r,&mut room,&mut stroke.field.originals.lock().expect("liquify sources"),coordinate,extent,capture,prior,source.as_ref(),encoder,pending,writes);
+        let stored=Self::store(r,&mut room,&mut stroke.field.originals.lock().expect("liquify sources"),coordinate,extent,capture,prior,source,encoder,pending,writes);
         r.keep_original_room(room);
         stored
     }
@@ -560,7 +560,7 @@ impl Liquify {
         if originals.readable(coordinate) {return Ok(());}
         let prior=originals.tiles.get(&coordinate).cloned();
         let (mut pending,mut writes)=(Vec::new(),Vec::new());
-        Self::store(r,room,&mut originals,coordinate,extent,capture,prior,Some(source),encoder,&mut pending,&mut writes)?;
+        Self::store(r,room,&mut originals,coordinate,extent,capture,prior,Some(source_access::Sampled::new(source.clone(),true)),encoder,&mut pending,&mut writes)?;
         display_mips::CompleteUpdates::flush_all(&mut pending,encoder);
         let actual=encoder.submission();
         for (_,encoding) in writes {encoding.publish(&actual);}
@@ -568,7 +568,7 @@ impl Liquify {
     }
 
     fn store(r:&WgpuRasterizer,room:&mut Option<crate::residency::Reservation>,originals:&mut Originals,coordinate:[u32;2],extent:[u32;2],
-        capture:layer_core::raster::ContentVersion,prior:Option<Arc<OriginalTile>>,source:Option<&source_access::RawTile>,encoder:&mut submission::CommandEncoder,
+        capture:layer_core::raster::ContentVersion,prior:Option<Arc<OriginalTile>>,source:Option<source_access::Sampled<source_access::RawTile>>,encoder:&mut submission::CommandEncoder,
         pending:&mut Vec<display_mips::CompleteUpdates>,writes:&mut Vec<(Arc<OriginalTile>,resident::Encoding)>)->Result<Arc<OriginalTile>,GpuRasterError> {
         let receipt=encoder.submission();
         let chunk=original_chunk(coordinate,extent);
@@ -601,7 +601,9 @@ impl Liquify {
         let mut surface=prior.as_ref().map_or_else(||resident::Resident::unwritten(source_access::RawTile {
             texture:source_access::TileTexture::layer_of(texture.clone(),layer),view:texture.create_view(&descriptor),
         }),|tile|tile.surface.clone());
-        let write=surface.overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
+        let mut complete=true;
+        let source=source.map(|source|source.take(&mut complete));
+        let write=surface.overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?.completed(complete);
         if let Some(source)=source {
             let mut destination=write.value().texture.as_image_copy();destination.origin.z=layer;
             encoder.copy_texture_to_texture(source.texture.as_image_copy(),destination,source.texture.size());
@@ -796,7 +798,7 @@ impl Liquify {
         let mut current_tiles = BTreeMap::new();
         if preview {
             for (coordinate, _) in &outputs {
-                if let Some(tile) = r.raw_layer_tile(batch.target, *coordinate, encoder)? { current_tiles.insert(*coordinate, tile); }
+                if let Some(view) = r.raw_page(batch.target, *coordinate, None, encoder)? { current_tiles.insert(*coordinate, view); }
             }
         }
         let originals = stroke.field.originals.lock().expect("liquify sources");
@@ -812,12 +814,14 @@ impl Liquify {
         r.uploads.write(encoder, &index_buffer, &bytes)?;
         let resident=originals.atlases.iter().flatten().next().ok_or(GpuRasterError::Invariant("Liquify original has no atlas"))?;
         for (coordinate, field) in &outputs {
+            let mut complete=true;
+            let current=current_tiles.remove(coordinate).map(|view|view.take(&mut complete));
             let prior_view=stroke.colored(coordinate).and_then(|tile|tile.read(&receipt).ok()).map(|read|read.value().view.clone());
             let field_view=field.read(&receipt)?.value().view.clone();
             let mut chunks=std::collections::BTreeSet::new();
             for at in page_coordinates(field.source_bounds(extent,preview)) {
                 if let Some(tile)=originals.tiles.get(&at) {
-                    let read=tile.read(&receipt)?;
+                    let read=tile.read(&receipt)?;complete&=read.complete();
                     if originals.atlases[tile.index as usize/ORIGINAL_LAYERS as usize].as_ref().is_none_or(|atlas|read.value().texture.raw()!=&atlas.texture) {return Err(GpuRasterError::InvalidExtent);}
                     chunks.insert(tile.index as usize/(ORIGINAL_BINDINGS*ORIGINAL_LAYERS as usize));
                 }
@@ -831,7 +835,7 @@ impl Liquify {
                         [local.min_x(), local.min_y(), local.max_x(), local.max_y()],
                         [field.bounds.min.x.to_bits(), field.bounds.min.y.to_bits(), field.bounds.max.x.to_bits(), field.bounds.max.y.to_bits()]])
             }), encoder)?;
-            let original_view=originals.tiles.get(coordinate).ok_or(GpuRasterError::Invariant("Liquify original is not prepared"))?.read(&receipt)?.value().view.clone();
+            let original_view=source_access::Sampled::read(&originals.tiles.get(coordinate).ok_or(GpuRasterError::Invariant("Liquify original is not prepared"))?.read(&receipt)?).take(&mut complete);
             r.accepted_raster_output(batch.target,if preview {RasterOutput::PreviewColor(*coordinate)}else {RasterOutput::Color(*coordinate)})?;
             let preview_version=if preview {Some(r.preview_version(batch.target,layer_core::raster::RasterPlane::Color,*coordinate,scene::PreviewStage::AfterBatch(batch_index))?)}else {None};
             let intent=match &preview_version {Some(version)=>version.input().clone(),None=>r.raster_intent(batch.target,layer_core::raster::RasterPlane::Color,*coordinate)?};
@@ -841,13 +845,14 @@ impl Liquify {
                 let committed=r.raster_intent(batch.target,layer_core::raster::RasterPlane::Color,*coordinate).ok()?;
                 let read=r.paint_layers[layer].pages.iter().find(|page|page.coordinate==*coordinate)?.active().read(committed.version(),Some(&receipt))?;
                 let predicted=context.tiles.iter().find(|tile|tile.coordinate==*coordinate)?.local;
-                (current_tiles.get(coordinate)?.view==read.value().view)
+                (*current.as_ref()?==read.value().view)
                     .then(||resident::Delta::seeded(&read.input(),predicted.union(stroke.dirty_at(coordinate).unwrap_or(PixelRect::EMPTY))))
             }).flatten();
             let pages=if preview {&mut r.preview_pages}else {&mut r.paint_layers[layer].pages};
             let page=prepared_raster_output(pages.iter_mut().find(|p|p.coordinate==*coordinate))?;
             let write=if preview {page.active_mut().overwrite(&receipt)}else {page.active_mut().write(&intent,&receipt)}
-                .ok_or(GpuRasterError::Invariant("prepared encode state is inconsistent"))?;
+                .ok_or(GpuRasterError::Invariant("prepared encode state is inconsistent"))?.completed(complete);
+            let preview_version=preview_version.map(|ticket|ticket.written(write.complete()));
             let destination=write.value().view.clone();
             let version=preview_version.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|preview|preview.version().clone());
             if preview {preview_versions.insert(*coordinate,version.clone());}
@@ -855,7 +860,7 @@ impl Liquify {
                 encoding:write.encoded(version).certified(if preview {copied_outside.unwrap_or_default()}else {resident::Delta::InPlace(local)})});
             for (index, &chunk) in chunks.iter().enumerate() {
                 let current = if preview {
-                    current_tiles.get(coordinate).map_or(&r.empty_view, |tile| &tile.view)
+                    current.as_ref().unwrap_or(&r.empty_view)
                 } else { &original_view };
                 let output_view = if index + 1 == chunks.len() { &destination } else { &self.scratch_color[index % 2].view };
                 let output_binding = bindings::group(&r.device, "liquify color output", &self.pipelines.color_layout, [

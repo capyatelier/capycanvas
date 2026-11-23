@@ -43,6 +43,7 @@ pub(super) struct MaterialSources {
     pub key: MaterialKey,
     pub display: Option<MaterialKey>,
     pub page_local: bool,
+    pub complete: bool,
 }
 
 #[derive(Default)]
