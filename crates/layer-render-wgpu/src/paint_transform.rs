@@ -272,6 +272,9 @@ impl PaintTransforms {
     pub fn has_preview(&self) -> bool {
         self.0.iter().any(ImageTransformState::has_preview)
     }
+    pub fn drawn(&self, requested: &layer_render::TransformPreview) -> Option<&layer_render::TransformPreview> {
+        self.0[0].preview.as_ref().filter(|drawn| drawn.transaction == requested.transaction && drawn.target == requested.target && drawn.selection == requested.selection)
+    }
 
     pub fn discard_preview(&mut self) {
         for t in &mut self.0 {

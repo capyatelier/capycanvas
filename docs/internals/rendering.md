@@ -953,7 +953,9 @@ operations and whole-layer Apply plans refuse a pose beyond it, so Distort keeps
 the last pose short of collapsing a corner onto its neighbours' line. Native
 previews read moved pixels only within the selection's bounds and plan every job
 for a layer and its linked mask before changing a page. A plan that still
-exceeds the binding keeps the last drawn pose without a frame error.
+exceeds the binding keeps the last drawn pose without a frame error, and so does
+a preview whose input the memory grant refuses; neither pose is prepared again
+until it changes.
 
 Move's Leave Copy retains the original under the moved selection. Selected and
 unselected captures reconstruct that original without another image allocation.

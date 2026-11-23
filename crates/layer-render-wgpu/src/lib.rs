@@ -3873,6 +3873,15 @@ impl WgpuRasterizer {
         }
         Ok(())
     }
+    fn drawable_transform(&self,requested:Option<&layer_render::TransformPreview>)->Option<layer_render::TransformPreview> {
+        let requested=requested?;
+        if self.refused_transform.as_ref()!=Some(requested) {return Some(requested.clone());}
+        self.transforms.as_ref()?.drawn(requested).cloned()
+    }
+    fn refuse_transform(&mut self,preview:layer_render::TransformPreview) {
+        self.refused_transform=Some(preview);
+        self.transform_preview=self.drawable_transform(self.refused_transform.as_ref());
+    }
     fn motion(&self,packet:FramePacket<'_>)->bool {
         !packet.dab_batches.is_empty() || self.moving_layer.is_some() || self.transform_preview.as_ref().is_some_and(|preview|preview.moving)
             || self.artwork_frame.as_ref().is_none_or(|old|old.view!=packet.view)
@@ -4098,7 +4107,7 @@ impl CanvasRenderer for WgpuRasterizer {
             && self.bake_vectors_ready(packet) && self.prepare_bakes(packet) && self.prepare_fill_edges(packet) && self.prepare_operation_masks(packet) && self.prepare_transform_cancel(packet) && self.prepare_transform_preview(packet,preview);
         let ready=ready || self.lane_exhausted();
         if !ready {self.upload_window_open(residency::Class::Visible);}
-        if let Some(installed) = installed { self.transform_preview = installed; }
+        if let Some(installed) = installed { self.transform_preview = self.drawable_transform(installed.as_ref()); }
         ready
     }
     fn has_pending_submission(&self) -> bool { self.settling.is_some() }
@@ -4231,9 +4240,7 @@ impl CanvasRenderer for WgpuRasterizer {
                 "Invalid preview transform",
             ));
         }
-        if self.transform_preview.as_ref() != preview {
-            self.transform_preview = preview.cloned();
-        }
+        self.transform_preview = self.drawable_transform(preview);
         Ok(())
     }
     fn set_fill_preview(&mut self,preview:Option<layer_render::FillPreview>) {self.fill_preview=preview;}
@@ -5333,7 +5340,7 @@ impl WgpuRasterizer {
                 .all(|batch| dry_material::dry_flow(&batch.style) && pointwise(&batch.style));
 
         self.transform_sources_pending = false;
-        if let Some(preview) = self.transform_preview.clone().filter(|preview| self.refused_transform.as_ref() != Some(preview)) {
+        if let Some(preview) = self.transform_preview.clone() {
             let level = self.scale_display.as_ref().filter(|cache| cache.evaluation != scene::scale::Evaluation::Native).map(|cache| cache.plan.level).filter(|level| *level > 0);
             let mut transforms = self.transforms.take().expect("retained transform renderer");
             let result = transforms.update_preview(self, &mut encoder, &preview, packet.scene, level);
@@ -5342,7 +5349,7 @@ impl WgpuRasterizer {
             match result {
                 Err(GpuRasterError::TransformReach) => {
                     self.metrics.transform_reach_refusals += 1;
-                    self.refused_transform = Some(preview);
+                    self.refuse_transform(preview);
                 }
                 Err(error) if error.is_preparation_pending() => {}
                 result => {

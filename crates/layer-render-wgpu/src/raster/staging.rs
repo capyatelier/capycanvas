@@ -792,6 +792,7 @@ impl WgpuRasterizer {
         let Some(preview)=preview else {
             self.transforms.as_mut().unwrap().cancel_preparation();return true;
         };
+        if self.refused_transform.as_ref()==Some(preview) {return true;}
         let request=match scene::scale::request(self,packet) {Ok(request)=>request,Err(_)=>return true};
         if request.plan.level==0 || request.evaluation==scene::scale::Evaluation::Native {self.transforms.as_mut().unwrap().cancel_preparation();return true;}
         let pipelines=if request.evaluation.fine_capacity().is_some() {&self.scene_pipelines.fine_resample} else {&self.scene_pipelines.resample};
@@ -804,6 +805,7 @@ impl WgpuRasterizer {
         self.transforms=Some(transforms);
         match result {
             Ok(())=>true,
+            Err(GpuRasterError::SourceWorkingSetExceeded)=>{self.refuse_transform(preview.clone());true},
             Err(error) if error.is_preparation_pending()=>false,
             Err(error)=>{if let Some(restore)=&mut self.restore_preflight {restore.failure=Some(error);}true},
         }

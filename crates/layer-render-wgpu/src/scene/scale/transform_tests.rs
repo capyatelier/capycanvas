@@ -731,3 +731,82 @@ fn selection_standby_waits_for_cold_samples_without_deferring_the_ready_frame() 
     assert_eq!(r.test.source_captures.get(),captures);assert_eq!(r.test.reduced_pages.get(),reduced);
     assert_eq!(r.artwork_revision,revision);assert_eq!(display_pixels(&r),original);
 }
+
+struct Refusing {engine:layer_engine::CanvasEngine<WgpuRasterizer>,wakes:std::sync::mpsc::Receiver<()>,layer:SourceTarget,_held:Option<layer_core::MemoryOwner>}
+impl Refusing {
+    fn filled() -> Self {
+        let extent=[9504,6336];let viewport=[2560u32,1600];
+        let mut artwork=Artwork::new(extent).unwrap();
+        let (occurrence,layer)=crate::test_support::add_paint(&mut artwork,"Paint",extent);
+        let mut doc=Document::from_artwork(artwork).unwrap();
+        doc.working.target=Some(layer);doc.working.occurrence=Some(occurrence);
+        let mut r=crate::memory::memory_tests::renderer(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(4<<30),..Default::default()}).unwrap();
+        let (woken,wakes)=std::sync::mpsc::channel();
+        r.set_preparation_wake(Arc::new(move||{let _=woken.send(());}));
+        let zoom=(viewport[0] as f32/extent[0] as f32).min(viewport[1] as f32/extent[1] as f32);
+        let view=layer_render::ViewState {width_px:viewport[0],height_px:viewport[1],document_to_surface:[zoom,0.,0.,zoom,0.,0.]};
+        let input=layer_engine::ViewTransform {revision:1,surface_to_document:[1./zoom,0.,0.,1./zoom,0.,0.]};
+        let engine=layer_engine::CanvasEngine::new(r,doc,layer_engine::input_queue(8).1,view,input).unwrap();
+        let mut refusing=Self {engine,wakes,layer,_held:None};
+        let mut coverage=crate::layer_tests::placement::reveal_all(extent,[0;2]);coverage.source.default_coverage=1.;
+        refusing.engine.append_raster_operation(layer,layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,
+            kind:layer_core::RasterOperationKind::Fill {color:[0.8,0.2,0.1,1.],texture:Default::default(),alpha_locked:false,edges:None,underfill:None}}).unwrap();
+        refusing.settle().expect("the filled layer settles");
+        assert!(refusing.engine.backend().scale_display.as_ref().is_some_and(|cache|cache.plan.level>0 && cache.evaluation==Evaluation::Display));
+        refusing
+    }
+    fn until(&mut self,done:impl Fn(&layer_engine::CanvasEngine<WgpuRasterizer>)->bool)->Result<(),String> {
+        use layer_render::FrameDemand;
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(30);
+        while std::time::Instant::now()<deadline {
+            let woke=self.wakes.try_iter().count()>0;
+            self.engine.backend().device().poll(wgpu::PollType::Poll).unwrap();
+            let due=match self.engine.frame_demand() {FrameDemand::Wait=>woke,FrameDemand::WaitUntil(at)=>woke || at<=web_time::Instant::now(),_=>true};
+            if due {self.engine.render_frame().unwrap();}
+            if done(&self.engine) {return Ok(());}
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let r=self.engine.backend();
+        Err(format!("pending edits {}, settled {}, terms {:?}, refused {:?}",self.engine.has_pending_document_edits(),r.settled(),r.outstanding_terms(),r.refused_transform))
+    }
+    fn settle(&mut self)->Result<(),String> {
+        self.until(|engine|!engine.has_pending_document_edits() && engine.backend().settled() && engine.frame_demand()==layer_render::FrameDemand::Wait)
+    }
+    fn leave(&mut self,headroom:u64) {
+        let r=self.engine.backend_mut();
+        let budget=r.factory.memory_budget().clone();
+        let device=budget.snapshot().devices[0];
+        let held=device.limit_bytes.saturating_sub(device.pinned_bytes).saturating_sub(headroom);
+        let other=budget.register_owner(layer_core::MemoryOwnerKind::Other,layer_core::MemoryClass::Pinned,Some(device.device));
+        other.report(layer_core::MemoryReport {gpu_bytes:held,pinned_gpu_bytes:held,..Default::default()});
+        budget.flush_reports();r.memory.invalidate_limits();r.refresh_memory_limits();
+        self._held=Some(other);
+        self.settle().expect("the canvas settles under the smaller grant");
+    }
+    fn pose(&self,moving:bool,x:f32)->layer_render::TransformPreview {
+        layer_render::TransformPreview {transaction:1,moving,target:self.layer,selection:None,
+            transform:ImageTransform::affine(Affine::translation(Point {x,y:-x/2.}))}
+    }
+    fn show(&mut self,pose:layer_render::TransformPreview) {
+        self.engine.set_transform_preview(Some(pose)).unwrap();
+        self.engine.render_frame().unwrap();
+    }
+}
+
+#[test]
+fn a_preview_the_grant_refuses_lets_the_canvas_settle() {
+    let mut canvas=Refusing::filled();
+    let inputs=canvas.engine.backend().transforms.as_ref().unwrap().storage_bytes();
+    canvas.leave(128<<20);
+    canvas.show(canvas.pose(false,0.));
+    canvas.settle().expect("a preview the grant refuses must not hold the canvas");
+    for step in 1..=6 {
+        canvas.show(canvas.pose(true,step as f32*200.));
+        canvas.settle().expect("each refused pose of a drag lets the canvas settle");
+    }
+    canvas.show(canvas.pose(false,1200.));
+    canvas.settle().expect("the released pose lets the canvas settle");
+    assert_eq!(canvas.engine.backend().refused_transform,Some(canvas.pose(false,1200.)),"the grant refused the released pose");
+    assert_eq!(canvas.engine.backend().transforms.as_ref().unwrap().storage_bytes(),inputs,"a refused preview allocates no input");
+}
+
