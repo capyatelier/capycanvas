@@ -1,6 +1,6 @@
 use super::{InstantFeedbackConfig, PredictionState, TipSource};
 use crate::brush::{
-    CurvePreview, DabGenerator, LiftPreview, PositionField, has_completions, lock_dab_tail,
+    CurvePreview, DabGenerator, HeldStroke, LiftPreview, PositionField, has_completions, lock_dab_tail,
     taper_prediction,
 };
 use layer_core::{BrushSnapshot, StrokePoint};
@@ -24,6 +24,8 @@ pub(crate) struct TipInput<'a> {
     pub now: u32,
     pub requested: u32,
     pub ending: Option<u32>,
+    pub boundary: bool,
+    pub held: Option<&'a HeldStroke>,
 }
 
 pub(crate) fn tip_times(feedback: InstantFeedbackConfig, latest: StrokePoint, elapsed: impl Fn(u64) -> u32,
@@ -50,7 +52,13 @@ impl PreviewTip {
             lift,
             start,
             output,
-            |tip, output| self.build_main(generator, tip, &input, start, output),
+            |tip, output| {
+                let source = self.build_main(generator, tip, &input, start, output);
+                if let Some(held) = input.held {
+                    held.present(tip, input.brush, input.transform[0].hypot(input.transform[1]), start, output);
+                }
+                source
+            },
         )
     }
 
@@ -67,7 +75,7 @@ impl PreviewTip {
             return None;
         }
         let latest = *input.real.last()?;
-        let estimate = if input.ending.is_none() {
+        let estimate = if input.ending.is_none() && !input.boundary {
             self.prediction.estimate_for(input.real, input.platform, input.requested, input.now, input.transform, input.feedback)
         } else { None };
         let predicted: Vec<_> = if input.ending.is_none() {

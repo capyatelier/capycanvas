@@ -277,6 +277,8 @@ mod tests {
                 now: 30_000,
                 requested: 46_000,
                 ending: None,
+                boundary: false,
+                held: None,
             },
             0,
             &mut output,

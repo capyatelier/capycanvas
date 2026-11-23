@@ -23,6 +23,7 @@ mod rest_tests;
 #[cfg(test)]
 mod taper_tests;
 pub(crate) use smoothing::{CurveModel, PositionField, CurvePreview, pen_up_settlement_micros};
+pub use taper::can_taper;
 pub(crate) use taper::{tapers, HeldStroke, Release};
 use taper::{ContactRecord, TaperPlan, Transfer};
 
@@ -844,7 +845,7 @@ impl DabGenerator {
         let start = output.len();
         let damage = generator.append_points(&stroke.points, &stroke.brush, stroke.pen_up, output);
         let damage = damage.union(generator.finish(&stroke.brush, output));
-        if generator.shape_final(&stroke.brush, &mut output[start..]) {
+        if generator.shape_final(&stroke.brush, output, start) {
             return damage.union(damage_for_dabs(&output[start..]));
         }
         damage
@@ -1197,7 +1198,7 @@ impl DabGenerator {
                 ],
                 previous: [0.0; 4],
                 contact: dry_relief.map_or([
-                    transfer.map_or(point.point.pressure, |transfer| transfer.apply(point.point.pressure, transfer.pressure)),
+                    transfer.map_or(point.point.pressure, |transfer| transfer.apply(point.point.pressure, |pressure| pressure)),
                     contact_tilt,
                     point.stroke_distance / brush.diameter.max(0.01),
                     (self.stroke_seed & 65535) as f32,
@@ -1333,7 +1334,7 @@ impl DabGenerator {
         dab.center.x += cos.mul_add(along, -sin * across);
         dab.center.y += sin.mul_add(along, cos * across);
 
-        let size = 1.0 + signed_unit(hash32(variant ^ 0x31e7_9db5)) * brush.shape.size_jitter;
+        let size = size_jitter(brush, variant);
         dab.radii[0] *= size;
         dab.radii[1] *= size;
 
@@ -1613,6 +1614,10 @@ impl DabGenerator {
         self.rng = random_variant(self.rng);
         self.rng
     }
+}
+
+fn size_jitter(brush: &BrushSnapshot, variant: u32) -> f32 {
+    1.0 + signed_unit(hash32(variant ^ 0x31e7_9db5)) * brush.shape.size_jitter
 }
 
 fn random_variant(mut value: u32) -> u32 {

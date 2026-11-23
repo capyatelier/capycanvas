@@ -110,8 +110,7 @@ impl SelectionStroke {
                 generator.flush_contact(&stroke.brush, &mut dabs);
             }
         }
-        generator.shape_final(&stroke.brush, &mut dabs);
-        Some(dabs)
+        generator.shape_final(&stroke.brush, &mut dabs, 0).then_some(dabs)
     }
     pub fn cursor(&self, event: PenEvent) -> Vec<Dab> {
         let mut point = to_stroke_point(event, self.transform, self.curve.clone(), self.start_ns);
@@ -333,6 +332,20 @@ mod tests {
         }
     }
     #[test]
+    fn masks_replay_at_release_only_when_the_taper_changes_them() {
+        for (taper, x, replays) in [([2., 0.], 200., true), ([0., 2.], 200., true), ([2., 2.], 32., false)] {
+            let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+            brush.taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: taper, ..Default::default() };
+            let mut stroke = SelectionStroke::new(1, brush, ViewTransform::IDENTITY, PressureCurve::default(), None);
+            let mut live = Vec::new();
+            for (sequence, phase, at) in [(1, PenPhase::Down, 32.), (2, PenPhase::Move, (32. + x) / 2.), (3, PenPhase::Up, x)] {
+                stroke.push(crate::test_support::event(sequence, phase, at), &mut live);
+            }
+            assert_eq!(stroke.finished_replay().is_some(), replays, "{taper:?} over {x}");
+        }
+    }
+
+    #[test]
     fn large_gpen_publishes_every_real_endpoint_and_replays_the_same_path() {
         let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
         brush.diameter = 800.;
@@ -382,10 +395,9 @@ mod tests {
             assert_eq!(live.len(), real_count);
         }
         let replay = stroke.finished_replay().unwrap();
-        assert_eq!(
-            live.iter().map(|d| d.center).collect::<Vec<_>>(),
-            replay.iter().map(|d| d.center).collect::<Vec<_>>()
-        );
+        let mut replayed = replay.iter().map(|dab| dab.center);
+        assert!(live.iter().all(|dab| replayed.any(|center| center == dab.center)), "the replay keeps every live contact");
+        assert!(replay.iter().all(|dab| dab.center.y == 100. && (100.0..=120.).contains(&dab.center.x)), "on the same path");
         assert!(
             replay.last().unwrap().radii[0] < live.last().unwrap().radii[0],
             "end taper is still resolved on lift"

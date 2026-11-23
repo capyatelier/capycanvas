@@ -34,17 +34,17 @@ fn tiles(engine: &CanvasEngine<WgpuRasterizer>) -> BTreeMap<TileKey, Vec<u8>> {
         .collect()
 }
 
-fn engine(doc: Document, brush: BrushSnapshot) -> (InputProducer<PenEvent>, CanvasEngine<WgpuRasterizer>) {
+fn engine(doc: Document, brush: BrushSnapshot, extent: [u32; 2], feedback: bool) -> (InputProducer<PenEvent>, CanvasEngine<WgpuRasterizer>) {
     let r = crate::memory::memory_tests::renderer(
         doc.composition().color,
         layer_core::DeviceMemoryFacts { budget_bytes: Some(2 << 30), ..Default::default() },
     )
     .unwrap();
     let (input, consumer) = input_queue(256);
-    let mut engine = CanvasEngine::new(r, doc, consumer, view(EXTENT), ViewTransform::IDENTITY).unwrap();
+    let mut engine = CanvasEngine::new(r, doc, consumer, view(extent), ViewTransform::IDENTITY).unwrap();
     engine.set_brush(brush).unwrap();
     engine
-        .set_instant_feedback(InstantFeedbackConfig { enabled: false, use_platform_prediction: false, ..Default::default() })
+        .set_instant_feedback(InstantFeedbackConfig { enabled: feedback, use_platform_prediction: false, ..Default::default() })
         .unwrap();
     settle(&mut engine);
     (input, engine)
@@ -117,7 +117,7 @@ fn tapered_strokes_publish_what_their_replay_from_the_accepted_cuts_paints() {
         let underlay = stroke(1, 60, |t| ([60. + 640. * t, 384.], 0.9));
         let mut results = Vec::new();
         for replayed in [false, true] {
-            let (mut input, mut engine) = engine(doc.clone(), BrushSnapshot { taper: BrushTaper::default(), ..brush.clone() });
+            let (mut input, mut engine) = engine(doc.clone(), BrushSnapshot { taper: BrushTaper::default(), ..brush.clone() }, EXTENT, false);
             if base {
                 draw(&mut engine, &mut input, &underlay, 4);
             }
@@ -144,4 +144,40 @@ fn tapered_strokes_publish_what_their_replay_from_the_accepted_cuts_paints() {
         }
         assert!(results[0] == results[1], "{name}: live slices and the replay from accepted cuts differ");
     }
+}
+
+#[test]
+fn a_wide_taper_over_its_last_stroke_keeps_that_stroke_on_the_gpu() {
+    let extent = [4248, 2832];
+    let arc = |first: u64| {
+        stroke(first, 1001, |t| {
+            let angle = t * 2.5 * std::f32::consts::PI;
+            ([1998.6 + 759.5 * angle.cos(), 1294.8 + 759.5 * angle.sin()], 0.7 + 0.3 * (t * 30.).sin())
+        })
+    };
+    let run = |replayed: bool| {
+        let mut doc = paint_document(extent, "wide taper");
+        let select = doc.select_occurrence_edit(occurrence_id(&doc)).unwrap();
+        doc.apply(select).unwrap();
+        let mut brush = default_brush(DefaultBrushPreset::GPen);
+        brush.diameter = 256.;
+        brush.stabilization.strength = 0.;
+        brush.taper = BrushTaper { mode: TaperMode::Fixed, ..Default::default() };
+        let (mut input, mut engine) = engine(doc, brush, extent, true);
+        draw(&mut engine, &mut input, &arc(1000), 4);
+        let before = engine.backend().source_sample_cache().stats();
+        if replayed {
+            let (estimated, correction) = corrected(&arc(3000), 500);
+            draw(&mut engine, &mut input, &estimated, 4);
+            input.push(correction).unwrap();
+            settle(&mut engine);
+        } else {
+            draw(&mut engine, &mut input, &arc(3000), 4);
+        }
+        let after = engine.backend().source_sample_cache().stats();
+        ((after.hits + after.misses) - (before.hits + before.misses), tiles(&engine))
+    };
+    let (lookups, live) = run(false);
+    assert_eq!(lookups, 0, "the second stroke reads its pages from the GPU, not from decoded tiles");
+    assert!(live == run(true).1, "the live stroke paints what its replay paints");
 }

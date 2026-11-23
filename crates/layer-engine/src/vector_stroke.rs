@@ -112,6 +112,8 @@ impl VectorStroke {
                     now,
                     requested,
                     ending: builder.ending().then_some(latest.elapsed_micros),
+                    boundary: false,
+                    held: None,
                 },
                 0,
                 &mut tail,
@@ -757,6 +759,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tapered_vector_lines_fit_pointed_ends() {
+        for (preset, strength, feedback) in [
+            (layer_core::DefaultBrushPreset::GPen, 0., false),
+            (layer_core::DefaultBrushPreset::GPen, 0.38, true),
+            (layer_core::DefaultBrushPreset::Monoline, 0.38, true),
+        ] {
+            let mut brush = layer_core::default_brush(preset);
+            brush.diameter = 24.;
+            brush.stabilization.strength = strength;
+            brush.taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: [2., 3.], pointiness: 1., ..Default::default() };
+            let feedback = InstantFeedbackConfig { enabled: feedback, use_platform_prediction: false, ..Default::default() };
+            let mut stroke = VectorStroke::new(1, brush, PressureCurve::default(), [0.; 2], feedback, [1., 0., 0., 1., 0., 0.], 0.5);
+            for i in 0..=60 {
+                let phase = if i == 0 { PenPhase::Down } else if i == 60 { PenPhase::Up } else { PenPhase::Move };
+                let mut pen = crate::test_support::event(i + 1, phase, 20. + i as f32 * 4.);
+                pen.timestamp_ns = 1_000_000_000 + i * 4_000_000;
+                stroke.push(pen, ViewTransform::IDENTITY);
+            }
+            let (_, profile, _) = stroke.fitted().unwrap();
+            let profile = profile.expect("tapered ends vary the width");
+            let knots = profile.knots();
+            assert!(knots.first().unwrap().left() < 0.2 && knots.last().unwrap().left() < 0.2, "{preset:?} {strength}: {knots:?}");
+        }
+    }
+
+    #[test]
     fn dry_vector_preview_freezes_without_samples_and_keeps_a_later_real_move() {
         for feedback in [false, true] {
             let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::Pencil);
@@ -795,7 +823,6 @@ mod tests {
                 stroke.preview(Some(3_000_000_000), Some(3_016_000_000)),
                 frozen
             );
-            stroke.brush.taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: [0., 2.], ..Default::default() };
             let mut pen = crate::test_support::event(15, PenPhase::Move, 240.);
             pen.timestamp_ns = 4_000_000_000;
             pen.pressure = 0.6;

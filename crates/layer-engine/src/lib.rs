@@ -18,7 +18,7 @@ pub use vector_stroke::{VectorStroke, Sample as VectorSample, polyline, fit_poly
 pub mod prediction_bench;
 pub mod recording;
 
-pub use brush::DabGenerator;
+pub use brush::{DabGenerator, can_taper};
 pub use canvas::{CanvasEngine, EngineError, EngineMetrics, ScenePreview, StrokeRefusal};
 pub use feedback::{FeedbackConfigError, InstantFeedbackConfig};
 pub use input::{

@@ -96,6 +96,69 @@ replay use the same completion path, including Smudge.
 The [input policy](input.md#prediction-and-corrections) keeps smoothing preview
 available for mouse and screenless tablets without adding input prediction lead.
 
+## Tapers
+
+Taper narrows a line's ends. Off, Fixed and Proportional are one choice that opens
+the Taper section, after Tip:
+- Fixed measures each end in full line widths: the slider reaches 50 and typed
+  values reach 200 (`BrushTaper::MAX_FIXED_WIDTHS`).
+- Proportional measures each end as a share of the line (0–50 %), at most 50
+  full widths.
+- Where the ends overlap on a short line, the narrower one wins. A Fixed line
+  shorter than its end length, or than its start length when it has no end, fades
+  its taper in with its length, so a tap stays a full dot and short lines stay
+  blunt.
+- The start grows towards the highest pressure drawn so far, and the end towards
+  the highest pressure inside it, so a light touch-down or a fading lift does not
+  shorten either.
+- Pointiness shapes the end: 0 is a round, blunt bullet, 0.5 a soft point and 1 a
+  sharp point with straight sides. The outline is `(1 − (1 − u)²)^(0.5 + 0.5 ×
+  pointiness)` of the end's reference, with `u` the distance from the tip in end
+  lengths; the pen's own value blends back in over the outer half, never below
+  the line's value where the end begins, so a fading lift leaves the end's shape
+  unchanged (`brush::taper::shaped`).
+
+Taper acts on the output of the brush's Pressure → size curve and on the ink's
+contact pressure, so size ranges and floors still apply. It never moves or drops a
+contact or changes its random values. Inside an end, it adds contacts between
+neighbours whose widths differ by more than 2 % of the wider one (at least
+0.05 px), most densely at the tip, so round ends are not drawn as cones. The Pen tools show the
+controls. The engine tapers any Uniform contact brush without dry media or bristles
+whose size follows one rising Pressure mapping (`layer_engine::can_taper`); other
+brushes ignore it.
+
+While the pen is down, contacts that a later lift could still change are held:
+the last end length of the line and, for Proportional, the whole line until its
+start reaches 50 widths. A Fixed start is final as it is drawn; without an end,
+the line is held until it reaches the start length.
+
+Held contacts are drawn in the preview, shaped as if the pen lifted at the visible
+tip, together with the tip's own contacts. The preview draws within half a screen
+pixel or 4 % of the width, and its work per frame follows the contacts it draws,
+not the held length: the path's kept contacts are chosen once as contacts arrive,
+fixed points along the end's outline are added each frame, and only those are
+shaped. Contacts are kept per brush width along the stroke, so the chain does not
+change as the held start moves. Brushes whose contacts vary in size or position at
+random keep every tapered contact, because the contacts added before each one
+share its random values.
+
+Each frame's accepted input is one slice. Slices are saved in order, in one batch
+per pass, once no later input can change them. If the held region passes 16,384
+contacts, 4 MiB or its page allowance, its oldest slices are saved early, and the
+stroke is replayed once at lift. The page allowance counts the pages a held path
+of that length can cross, measured with the same dab bounds as the held pages,
+capped at 64 but never below the pages one full-width contact covers. Replays and
+late corrections regenerate the stroke from its real samples and recorded release
+batch ends (`Stroke::taper_cuts`), so every path produces the same pixels. Masks
+taper once, at release. Vector lines fit the shaped widths.
+
+When changing taper, keep:
+- taper Off byte-identical (compare the dabs of a fixed stroke set before and
+  after the change);
+- live slices equal to the replay, batch for batch
+  (`canvas::tests::live_taper_slices_match_the_replay_batch_for_batch`);
+- the `layer-render-wgpu` GPU check `taper_tests` passing.
+
 ## GPU execution
 
 Ordinary ink and erase contacts use coverage and GPU blending. Textured brushes
