@@ -38,7 +38,7 @@ const ERASER: Brush = Brush { preset: DefaultBrushPreset::Eraser, radius: 60., c
 const WIDE_PASTEL: Brush = Brush { preset: DefaultBrushPreset::PastelBlock, radius: 1000., color: [0.9, 0.7, 0.1, 1.], flow: 0.8 };
 
 #[derive(Clone, Copy, Debug)]
-struct Case { seed: u64, brush: Brush, zoom: Zoom, pan: bool, layered: bool, budget: Option<u64> }
+struct Case { seed: u64, brush: Brush, zoom: Zoom, pan: bool, surround: bool, layered: bool, budget: Option<u64> }
 
 macro_rules! cases {
     ($($name:ident: $case:expr,)*) => {$(
@@ -48,13 +48,14 @@ macro_rules! cases {
 }
 
 cases! {
-    g_pen_fit: Case { seed: 1, brush: G_PEN, zoom: Zoom::Fit, pan: false, layered: false, budget: None },
-    g_pen_quarter_pan: Case { seed: 2, brush: G_PEN, zoom: Zoom::Quarter, pan: true, layered: false, budget: None },
-    wide_g_pen_half_pan: Case { seed: 3, brush: WIDE_G_PEN, zoom: Zoom::Half, pan: true, layered: false, budget: None },
-    wide_g_pen_fit_layered: Case { seed: 4, brush: WIDE_G_PEN, zoom: Zoom::Fit, pan: false, layered: true, budget: None },
-    pencil_actual_layered: Case { seed: 5, brush: PENCIL, zoom: Zoom::Actual, pan: true, layered: true, budget: None },
-    eraser_quarter_layered: Case { seed: 6, brush: ERASER, zoom: Zoom::Quarter, pan: false, layered: true, budget: None },
-    wide_pastel_fit: Case { seed: 7, brush: WIDE_PASTEL, zoom: Zoom::Fit, pan: false, layered: false, budget: None },
+    g_pen_fit: Case { seed: 1, brush: G_PEN, zoom: Zoom::Fit, pan: false, surround: false, layered: false, budget: None },
+    g_pen_quarter_pan: Case { seed: 2, brush: G_PEN, zoom: Zoom::Quarter, pan: true, surround: false, layered: false, budget: None },
+    wide_g_pen_half_pan: Case { seed: 3, brush: WIDE_G_PEN, zoom: Zoom::Half, pan: true, surround: false, layered: false, budget: None },
+    wide_g_pen_fit_layered: Case { seed: 4, brush: WIDE_G_PEN, zoom: Zoom::Fit, pan: false, surround: false, layered: true, budget: None },
+    pencil_actual_layered: Case { seed: 5, brush: PENCIL, zoom: Zoom::Actual, pan: true, surround: false, layered: true, budget: None },
+    eraser_quarter_layered: Case { seed: 6, brush: ERASER, zoom: Zoom::Quarter, pan: false, surround: false, layered: true, budget: None },
+    wide_pastel_fit: Case { seed: 7, brush: WIDE_PASTEL, zoom: Zoom::Fit, pan: false, surround: false, layered: false, budget: None },
+    g_pen_fit_from_surround: Case { seed: 9, brush: G_PEN, zoom: Zoom::Fit, pan: false, surround: true, layered: false, budget: None },
 }
 
 struct Frame { dabs: Vec<Dab>, batches: Vec<DabBatch>, pan: [u32; 2] }
@@ -98,14 +99,15 @@ fn strokes(case: Case, target: SourceTarget, style: &layer_render::DabStyle) -> 
     let centre = [(visible.min_x() + visible.max_x()) as f32 * 0.5, (visible.min_y() + visible.max_y()) as f32 * 0.5];
     let reach = [visible.width() as f32, visible.height() as f32].map(|side| (side * 0.45).min(case.brush.radius * 6.));
     let phase = rng.unit() * std::f32::consts::TAU;
-    let at = |t: f32| [(centre[0] + reach[0] * (t + phase).sin()).clamp(0., EXTENT[0] as f32), (centre[1] + reach[1] * 0.8 * (2. * t).sin()).clamp(0., EXTENT[1] as f32)];
+    let path = |t: f32| [(centre[0] + reach[0] * (t + phase).sin()).clamp(0., EXTENT[0] as f32), (centre[1] + reach[1] * 0.8 * (2. * t).sin()).clamp(0., EXTENT[1] as f32)];
+    let at = |t: f32| if t < 0. { [case.brush.radius * (t * 0.5 - 2.), path(0.)[1]] } else { path(t) };
     let step = 2.6 * std::f32::consts::PI / (FRAMES as f32 * 1.5);
     let dab = |point: [f32; 2], rng: &mut Rng| {
         let mut dab = crate::tests::test_dab(point, case.brush.color, case.brush.flow);
         dab.radii = [case.brush.radius * (0.85 + 0.15 * rng.unit()); 2];
         dab
     };
-    let (mut t, mut stroke, mut started, mut pan) = (0., 1, false, [0, 0]);
+    let (mut t, mut stroke, mut started, mut pan) = (if case.surround { -1. } else { 0. }, 1, false, [0, 0]);
     let interruption = FRAMES / 3 + rng.below(3) as usize;
     (0..FRAMES).map(|index| {
         let ends = index + 1 == FRAMES || index == interruption;
@@ -317,6 +319,9 @@ fn run(name: &str, case: Case) {
     let (doc, target) = document(case.layered);
     let style = layer_render::DabStyle { blend_space: doc.composition().blend, ..crate::layer_tests::preset_style(case.brush.preset) };
     let sequence = strokes(case, target, &style);
+    let outside = |dab: &Dab| dab.bounds().max.x < 0.;
+    assert!(!case.surround || sequence.iter().any(|frame| batch_dabs(frame, DabBatchKind::Preview).next().is_some() && batch_dabs(frame, DabBatchKind::Preview).all(outside)),
+        "{name}: the stream predicts a stroke wholly in the surround");
     let level = case.zoom.level();
     let base = FramePacket { composite_all: false, blend_space: doc.composition().blend, view: case.zoom.view([0, 0]), ..packet(doc.scene(), EXTENT) };
     let mut oracle = Oracle::new(&doc, case.budget);
@@ -378,4 +383,69 @@ fn run(name: &str, case: Case) {
     let retained = retained_keys(&oracle.subject);
     let evicted = seen.iter().filter(|key| !retained.contains(key)).count();
     assert!(case.budget.is_none() || evicted > EVICTED, "{name}: the tight budget evicts more than {EVICTED} pages, not {evicted}");
+}
+
+#[test]
+fn a_prediction_that_touches_no_shown_cell_publishes_at_once_and_leaves_the_renderer_idle() {
+    let (doc, target) = document(false);
+    let style = layer_render::DabStyle { blend_space: doc.composition().blend, ..crate::layer_tests::preset_style(DefaultBrushPreset::GPen) };
+    let scene = Some((doc.scene().owner(), doc.scene().revision()));
+    let between = ViewState { width_px: VIEW[0], height_px: VIEW[1], document_to_surface: [0.55, 0., 0., 0.55, 0., 0.] };
+    for (view, x) in [(Zoom::Fit.view([0, 0]), -90.), (Zoom::Actual.view([0, 0]), -90.), (Zoom::Actual.view([0, 0]), 100.), (between, -90.)] {
+        let scale = view.document_to_surface[0];
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        layer_render::CanvasRenderer::set_working_layer(&mut r, doc.working.occurrence);
+        let base = FramePacket { composite_all: false, blend_space: doc.composition().blend, view, ..packet(doc.scene(), EXTENT) };
+        crate::test_support::submit_settled(&mut r, FramePacket { composite_all: true, ..base });
+        let cache = r.scale_display.as_ref().unwrap();
+        assert!(cache.content_revision() == scene && (view != between || cache.pixels.committed_next().is_some()),
+            "at scale {scale} the settled view presents the scene{}", if view == between { " through its half level" } else { "" });
+        let mut dab = crate::tests::test_dab([x, 700.], G_PEN.color, 1.);
+        dab.radii = [36.; 2];
+        let batch = DabBatch { kind: DabBatchKind::Preview, stroke_end: false, ..crate::test_support::dab_batch(target, style.clone(), dab.bounds()) };
+        let frame = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), time_seconds: 0.01, ..base };
+        for held in 0..3 {
+            crate::test_support::submit_ready(&mut r, frame).unwrap();
+            assert!(!publication_pending(&r) && r.scale_display.as_ref().unwrap().content_revision() == scene,
+                "at scale {scale}: a prediction at x {x} that touches no shown cell publishes and presents the scene in held frame {held}");
+            r.wait_idle().unwrap();
+        }
+        let mut withdrawn = 0;
+        while withdrawn < PUBLISH_FRAMES && r.next_frame() == layer_render::FrameDemand::Work { crate::test_support::submit_ready(&mut r, base).unwrap(); r.wait_idle().unwrap(); withdrawn += 1; }
+        assert!(withdrawn < PUBLISH_FRAMES, "at scale {scale}: the renderer still asks for work {withdrawn} frames after the prediction at x {x} is withdrawn: {:?}", r.outstanding_terms());
+    }
+}
+
+#[test]
+fn a_root_a_blocked_prediction_left_unstamped_publishes_while_the_stroke_continues_off_view() {
+    let (doc, target) = document(false);
+    let style = layer_render::DabStyle { blend_space: doc.composition().blend, ..crate::layer_tests::preset_style(DefaultBrushPreset::GPen) };
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    layer_render::CanvasRenderer::set_working_layer(&mut r, doc.working.occurrence);
+    let base = FramePacket { composite_all: false, blend_space: doc.composition().blend, view: Zoom::Actual.view([0, 0]), ..packet(doc.scene(), EXTENT) };
+    crate::test_support::submit_settled(&mut r, FramePacket { composite_all: true, ..base });
+    let predicted = page_rect([4, 2]);
+    {
+        let cache = r.scale_display.as_ref().unwrap();
+        evict_composite_pages(cache, &[predicted]);
+        cache.invalidate_cells(cache.reached_cells(DocRect::from(predicted)), None);
+        let display = r.scene_tiers.display.clone();
+        cache.refuse(None, predicted, &display.blocked(crate::residency::Class::Visible, display.limit() + 1).expect("a unit larger than the display grant is refused"));
+    }
+    let stroke = |r: &mut WgpuRasterizer, x: f32, kind: DabBatchKind, step: usize| {
+        let mut dab = crate::tests::test_dab([x, 640.], G_PEN.color, 1.);
+        dab.radii = [36.; 2];
+        let batch = DabBatch { kind, stroke_start: step == 0, stroke_end: false, ..crate::test_support::dab_batch(target, style.clone(), dab.bounds()) };
+        crate::test_support::submit_ready(r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), time_seconds: 0.01 * (step + 1) as f32, ..base }).unwrap();
+        r.wait_idle().unwrap();
+    };
+    stroke(&mut r, 1150., DabBatchKind::Preview, 0);
+    let cache = r.scale_display.as_ref().unwrap();
+    assert!(cache.contact_id().is_none() && !cache.displays(predicted) && cache.pixels.committed_root().is_some_and(|root| root.authored().is_none()),
+        "the predicted cell keeps its old record, which leaves the root unstamped");
+    for step in 1..4 {
+        stroke(&mut r, 100. + 8. * step as f32, DabBatchKind::Persistent, step);
+        let cache = r.scale_display.as_ref().unwrap();
+        assert!(cache.contact_id().is_none() && !publication_pending(&r), "frame {step} of the stroke continuing off view publishes once the prediction is withdrawn");
+    }
 }

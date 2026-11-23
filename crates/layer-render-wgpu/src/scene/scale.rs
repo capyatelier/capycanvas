@@ -321,8 +321,7 @@ pub(crate) struct Cache {
     pivot_pending: bool,
     pivot_edit: Option<(OccurrenceHandle,layer_core::raster::ContentStamp,bool)>,
     pointer: Option<[f32;2]>,
-    underived: PixelRect,
-    derivations: Vec<(submission::Submission,PixelRect)>,
+    underived: pages::Backlog,
 }
 
 fn requires_native_effects(scene:SceneView<'_>,level:u32)->bool {
@@ -708,7 +707,7 @@ impl Cache {
             layer_count: layers,
             overview, preparing: false, declaring: false, exact_tile: None,
             graph: Default::default(), transform: r.transform_preview.clone(), retired: None, previous: None, standing: None, complete: false, contact: false, gesture: None, stroked: None, presented: pages::Accuracy::Display, asked: None,
-            streaming: Default::default(), pivot_waiting: None, pivot_refusal: None, reduction_refusal: None, pivot_pending: false, pivot_edit: None, pointer: None, underived: PixelRect::EMPTY, derivations: Vec::new(),
+            streaming: Default::default(), pivot_waiting: None, pivot_refusal: None, reduction_refusal: None, pivot_pending: false, pivot_edit: None, pointer: None, underived: Default::default(),
         }
     }
     fn geometry(r: &WgpuRasterizer, plan: display_mips::Plan) -> wgpu::Buffer {
@@ -1028,29 +1027,25 @@ impl Cache {
         let with=|memory:u64|retained+memory;
         let rendered=|scene:&mut Scene,result|match result {Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>{scene.clear_unencoded_jobs();Ok(PixelRect::EMPTY)},result=>result};
         let mut stand_in=PixelRect::EMPTY;
-        let underived=&mut self.underived;
-        self.derivations.retain(|(submission,area)| {if submission.discarded() {*underived=underived.union(*area);} submission.pending()});
         if first && let Some(overview)=overview.as_deref_mut() {
             encoding.retained=with(self.window_memory());
-            let result=overview.render_graph(scene,r,packet,encoding,Destination::Overview(self,self.underived));
+            let result=overview.render_graph(scene,r,packet,encoding,Destination::Overview(self,self.underived.region()));
             if result.is_ok() {self.derived_overview(encoding.encoder);}
             stand_in=rendered(scene,result)?;
         }
         encoding.retained=with(overview.as_deref().map_or(0,Cache::window_memory));
         let result=self.render_graph(scene,r,packet,encoding,Destination::View);
         let view=rendered(scene,result)?;
-        self.underived=self.underived.union(view);
+        self.underived.add(view);
         if !first && let Some(overview)=overview.filter(|overview|!overview.held(r)) {
             encoding.retained=with(self.window_memory());
-            let result=overview.render_graph(scene,r,packet,encoding,Destination::Overview(self,self.underived));
+            let result=overview.render_graph(scene,r,packet,encoding,Destination::Overview(self,self.underived.region()));
             if result.is_ok() {self.derived_overview(encoding.encoder);}
             stand_in=stand_in.union(rendered(scene,result)?);
         }
         Ok(self.presented(view,stand_in))
     }
-    fn derived_overview(&mut self,encoder:&mut submission::CommandEncoder) {
-        if !self.underived.is_empty() {self.derivations.push((encoder.submission(),std::mem::replace(&mut self.underived,PixelRect::EMPTY)));}
-    }
+    fn derived_overview(&mut self,encoder:&mut submission::CommandEncoder) {self.underived.take(encoder.submission());}
 
     fn presented(&self,view:PixelRect,stand_in:PixelRect)->PixelRect {if self.complete && self.pixels.committed_root().is_some() {view} else {view.union(stand_in)}}
 
@@ -1061,7 +1056,7 @@ impl Cache {
         let finer=match destination {Destination::Overview(finer,changed)=>Some((finer,changed)),_=>None};
         let view=matches!(destination,Destination::View);
         self.ask(pages::Asked {view:packet.view,moving:view && budget.motion});
-        self.derive_cells(finer.map(|(finer,_)|finer));
+        self.derive_cells(finer);
         if let Some(mut previous)=self.retired.take() {previous.write_back(r,scene,encoder)?;}
         if let Some(previous)=self.previous.as_deref_mut() {previous.write_back(r,scene,encoder)?;}
         let stroking=!packet.dab_batches.is_empty();
@@ -1120,7 +1115,7 @@ impl Cache {
             if !written.is_empty() || self.pixels.committed_root().is_none() {self.commit_window(r,encoder)?;}
             for region in blocked {self.hide(region);self.block(arrivals,region,waiting_input(scene,r,false));}
             composed=done.into_iter().map(|(region,_)|region).collect();
-        } else if !composes.is_empty() || !copies.is_empty() || !streamed.is_empty() || !halves.is_empty() || self.graph.prepared.is_some() {
+        } else if !composes.is_empty() || !copies.is_empty() || !streamed.is_empty() || !halves.is_empty() || self.graph.prepared.is_some() || transition {
             let root = self.graph.root.clone().expect("prepared composition graph");
             let input = input_plan(self.plan, packet.scene,Some(self.graph.objects()));
             let tiled = use_tiles(r, self.plan, packet, Some(scene)) && !(self.plan.level > 0 && root.fused_transform(r));
@@ -1301,7 +1296,8 @@ impl Cache {
                 written=written.union(texels(region));
             }
             shown=shown.union(texels(copied));
-            if !held && (!written.is_empty() || transition || self.pixels.committed_root().is_none()) {self.commit_window(r,encoder)?;}
+            if !held && (!written.is_empty() || transition || self.pixels.committed_root().is_none())
+                && !(written.is_empty() && self.current_authored().is_some_and(|(frame,authored)|self.pixels.restamp(&frame,authored))) {self.commit_window(r,encoder)?;}
             if presented==pages::Accuracy::Exact {blocks.extend(composed.iter().map(|region|(*region,waiting_input(scene,r,false))));}
             for (region,input) in blocks {self.block(arrivals,region,input);}
             if !matches!(destination,Destination::Navigator) {for (region,waits) in sleeping {self.sleep(region,waits);}}
@@ -1371,7 +1367,7 @@ impl Cache {
         let reduced=PixelRect::new(x,y,x+width,y+height).intersect(finer.pixels.unreduced()).is_empty();
         let input=finer.pixels.committed_next().filter(|_|reduced).map_or(root,pages::CommittedImage::image);
         let Some(written)=self.reduce_from(scene,r,encoder,commands,input,region)? else {return Ok(PixelRect::EMPTY);};
-        self.cells.lock().unwrap().reduced(self.plan,region,encoder.submission());
+        self.cells.lock().unwrap().reduced(self.plan,region,changed,encoder.submission(),finer.pixels.committed_root().and_then(pages::CommittedImage::authored));
         self.pixels.derived(written,encoder.submission());
         Ok(region)
     }

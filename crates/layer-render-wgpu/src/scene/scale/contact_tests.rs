@@ -324,6 +324,41 @@ fn a_contact_ended_under_a_predicted_tip_draws_the_tip_away_like_a_twin_that_com
 }
 
 #[test]
+fn a_contact_ended_under_a_refused_predicted_tip_labels_no_picture_current_while_the_tip_shows() {
+    let extent=[2048,512];let style=crate::layer_tests::preset_style(DefaultBrushPreset::Pencil);
+    let bytes=(0..PAGE_SIZE*PAGE_SIZE).flat_map(|_|[0.1f32,0.8,0.2,1.]).flat_map(f32::to_le_bytes).collect::<Vec<_>>();
+    let mut doc=document_at(extent);let owner=doc.working.occurrence.unwrap();let target=primary_target(&doc);
+    let other=paint_occurrence(&mut doc,"Other",None);set_root_entries(&mut doc,vec![other,owner]);
+    let other_target=doc.scene().source_target(other).unwrap();
+    let (ink,tip)=(300.,1080.);let at=(200*extent[0]+1080) as usize;let tipped=PixelRect::new(1080,200,1081,201);
+    let inked=|step:usize|sized_dab([if step==0 {tip-24.}else {ink+12.*step as f32},200.],4.5,&style);
+    let drawn=|composite_all:bool| {
+        let mut frame=packet(doc.scene(),extent);frame.composite_all=composite_all;frame.view=view_at(extent,1);
+        let mut r=renderer(&doc);crate::test_support::submit_settled(&mut r,frame);
+        let mut below=stroke_dab(100.,400.);below.radii=[60.;2];
+        crate::test_support::submit_ready(&mut r,FramePacket {dabs:std::slice::from_ref(&below),dab_batches:std::slice::from_ref(&stroke_batch(other_target,&below,true,true)),..frame}).unwrap();
+        crate::test_support::submit_settled(&mut r,frame);
+        stroke_frame(&mut r,frame,target,&style,&[inked(0)],true,0);
+        for step in 1..3 {stroke_frame(&mut r,frame,target,&style,&[inked(step),sized_dab([tip,200.],4.5,&style)],true,step);}
+        let held=r.scale_display.as_ref().unwrap().contact_id();
+        if !composite_all {
+            let cache=r.scale_display.as_ref().unwrap();
+            let display=r.scene_tiers.display.clone();
+            cache.refuse(None,tipped,&display.blocked(crate::residency::Class::Visible,display.limit()+1).expect("a unit larger than the display grant is refused"));
+            assert!(held.is_some() && cache.keyless(tipped) && cache.refused(&r,tipped),"the contact writes the tip's cell without a key, and its next composition is refused");
+        }
+        crate::test_support::upload_layer_page(&mut r,doc.scene(),other_target,[0,1],&bytes);
+        stroke_frame(&mut r,frame,target,&style,&[inked(3)],true,3);
+        let cache=r.scale_display.as_ref().unwrap();
+        (held.is_some() && cache.contact_id()!=held,display_pixels(&r)[at],cache.current_picture().is_some())
+    };
+    let [(ended,shown,labelled),(_,twin,_)]=[false,true].map(drawn);
+    assert!(ended,"the write to another layer ends the contact");
+    assert!(max_error(&[shown],&[twin])>0.05,"the refused tip's cell still shows the prediction: {shown:?} against {twin:?}");
+    assert!(!labelled,"the picture is labelled current while the cell under the refused tip shows {shown:?}, a twin {twin:?}");
+}
+
+#[test]
 fn a_prediction_a_blur_spreads_into_the_next_cell_is_drawn_away_at_pen_up_like_a_twin_that_never_predicted_it() {
     let extent=[1024,512];let mut doc=document_at(extent);let ink=doc.working.occurrence.unwrap();let target=primary_target(&doc);
     let blur=effect_occurrence(&mut doc,layer_core::EffectInstance::new(crate::tests::fixture("gaussian_blur").program()),"Blur");

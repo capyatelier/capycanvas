@@ -5,7 +5,21 @@ use layer_core::raster::ContentVersion;
 pub(super) struct Pixels {
     root: Option<Box<Window>>,
     next: Option<Box<Window>>,
-    unreduced: PixelRect,
+    unreduced: Backlog,
+}
+#[derive(Default)]
+pub(super) struct Backlog {region:PixelRect,taken:Vec<(submission::Submission,PixelRect)>}
+impl Backlog {
+    pub(super) fn add(&mut self,region:PixelRect) {self.region=self.region.union(region);}
+    pub(super) fn region(&self)->PixelRect {
+        self.taken.iter().filter(|(submission,_)|submission.discarded()).fold(self.region,|region,(_,taken)|region.union(*taken))
+    }
+    pub(super) fn take(&mut self,submission:submission::Submission) {
+        let region=self.region();
+        self.taken.retain(|(submission,_)|submission.pending());
+        if !region.is_empty() {self.taken.push((submission,region));}
+        self.region=PixelRect::EMPTY;
+    }
 }
 struct Window {image:Image,_charge:crate::residency::Charge,newest:Option<CommittedImage>,good:Option<CommittedImage>,changed:PixelRect,taken:u64}
 fn new_take()->u64 {static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed)}
@@ -18,6 +32,7 @@ pub(super) struct CommittedImage {
     authored:Option<layer_core::raster::ContentStamp>,
     complete:bool,
     whole:Option<layer_core::BlendSpace>,
+    keyed:bool,
 }
 #[derive(Clone)]
 struct Current {frame:Arc<SignatureFrame>,derived:bool}
@@ -45,7 +60,7 @@ impl Window {
     fn committed_mut(&mut self)->Option<&mut CommittedImage> {self.newest.iter_mut().chain(&mut self.good).find(|image|!image.submission.discarded())}
     fn commit(&mut self,submission:submission::Submission,pages:Vec<Held>,versions:Vec<Recorded>,current:Option<Current>,authored:Option<layer_core::raster::ContentStamp>) {
         if let Some(replaced)=self.newest.take().filter(|newest|!newest.submission.discarded() && !newest.submission.same(&submission)) {self.good=Some(replaced);}
-        self.newest=Some(CommittedImage {image:self.image.clone(),submission,pages,versions,current,authored,complete:false,whole:None});
+        self.newest=Some(CommittedImage {image:self.image.clone(),submission,pages,versions,current,authored,complete:false,whole:None,keyed:false});
     }
     fn take_changes(&mut self,since:Option<u64>)->(u64,PixelRect) {
         let (plan,changed)=(self.image.plan,std::mem::replace(&mut self.changed,PixelRect::EMPTY));
@@ -87,17 +102,29 @@ impl Pixels {
         let root=self.committed_root().unwrap();let pages=root.pages.clone();let versions=root.versions.clone();let current=root.current.clone();let authored=root.authored;let whole=root.whole;
         let next=self.next.as_mut().unwrap();
         let whole=whole.filter(|_|covered || reduced==PixelRect::new(0,0,next.image.plan.size[0],next.image.plan.size[1]));
-        next.commit(submission,pages,versions,current,authored);next.changed=next.changed.union(reduced);self.unreduced=PixelRect::EMPTY;
+        self.unreduced.take(submission.clone());
+        next.commit(submission,pages,versions,current,authored);next.changed=next.changed.union(reduced);
         if let Some(image)=&mut next.newest {image.complete=whole.is_some();image.whole=whole;}
     }
-    pub(super) fn commit_whole(&mut self,submission:submission::Submission,authored:Option<layer_core::raster::ContentStamp>,blend:layer_core::BlendSpace) {
-        self.commit_root(submission,Vec::new(),Vec::new(),None,authored);self.certify_root(true,Some(blend));
+    fn carry_to_next(&mut self,submission:submission::Submission) {
+        if self.unreduced.region().is_empty() && self.committed_next().is_some() {self.commit_next(submission,PixelRect::EMPTY);}
     }
-    fn certify_root(&mut self,complete:bool,whole:Option<layer_core::BlendSpace>) {
-        if let Some(image)=self.root.as_mut().and_then(|window|window.newest.as_mut()) {image.complete=complete;image.whole=whole;}
+    pub(super) fn restamp(&mut self,frame:&SignatureFrame,authored:layer_core::raster::ContentStamp)->bool {
+        let reduced=self.unreduced.region().is_empty();
+        let Some(root)=self.root.as_deref_mut().and_then(Window::committed_mut)
+            .filter(|root|root.keyed && root.versions.iter().all(|recorded|authored_matches(std::slice::from_ref(recorded),frame,authored,recorded.written))) else {return false;};
+        root.authored=Some(authored);
+        if reduced && let Some(next)=self.next.as_deref_mut().and_then(Window::committed_mut) {next.authored=Some(authored);}
+        true
+    }
+    pub(super) fn commit_whole(&mut self,submission:submission::Submission,authored:Option<layer_core::raster::ContentStamp>,blend:layer_core::BlendSpace) {
+        self.commit_root(submission,Vec::new(),Vec::new(),None,authored);self.certify_root(true,Some(blend),false);
+    }
+    fn certify_root(&mut self,complete:bool,whole:Option<layer_core::BlendSpace>,keyed:bool) {
+        if let Some(image)=self.root.as_mut().and_then(|window|window.newest.as_mut()) {image.complete=complete;image.whole=whole;image.keyed=keyed;}
     }
     pub(super) fn wrote(&mut self,region:PixelRect) {
-        self.unreduced=self.unreduced.union(region);
+        self.unreduced.add(region);
         if let Some(root)=&mut self.root {root.changed=root.changed.union(region);}
     }
     pub(super) fn take_changes(&mut self,source:&WindowSource,since:Option<u64>)->(u64,PixelRect) {
@@ -112,8 +139,9 @@ impl Pixels {
         if self.committed_root().is_none() {self.commit_root(submission,Vec::new(),Vec::new(),None,None);}
     }
     pub(super) fn unreduced(&self)->PixelRect {
-        if self.unreduced.is_empty() || self.committed_next().is_some() {return self.unreduced;}
-        self.root().map_or(self.unreduced,|root|PixelRect::new(0,0,root.plan.size[0],root.plan.size[1]))
+        let unreduced=self.unreduced.region();
+        if unreduced.is_empty() || self.committed_next().is_some() {return unreduced;}
+        self.root().map_or(unreduced,|root|PixelRect::new(0,0,root.plan.size[0],root.plan.size[1]))
     }
     pub fn ensure_root(&mut self, r: &WgpuRasterizer, plan: display_mips::Plan, format:wgpu::TextureFormat, _label: &'static str, charge: crate::residency::Charge) {
         self.root.get_or_insert_with(|| Window::new(Image::with_format(r,plan,format),charge));
@@ -125,7 +153,7 @@ impl Pixels {
     pub fn storage_bytes(&self) -> u64 { self.root.iter().chain(&self.next).map(|window|window.image.bytes()).sum() }
     pub(super) fn release_next(&mut self)->bool {
         let (Some(root),Some(_))=(self.root().map(|root|root.plan.size),self.next.take()) else {return false;};
-        self.unreduced=PixelRect::new(0,0,root[0],root[1]);
+        self.unreduced.add(PixelRect::new(0,0,root[0],root[1]));
         true
     }
     pub(super) fn take(&mut self)->Vec<Image> {
@@ -1441,7 +1469,7 @@ impl Asked {
     fn no_higher_than(self,earlier:Self)->bool {self.view==earlier.view && (self.moving || !earlier.moving)}
 }
 #[derive(Default)]
-struct Cell {shown:Option<Shown>,current:bool,blocked:Option<crate::frame_demand::Input>,arrivals:crate::frame_demand::ArrivalToken,name:Option<ContentVersion>,refusal:Option<(crate::residency::Blocked,Option<crate::frame_demand::ArrivalToken>)>,queued:bool,derived:bool,reduced:bool,waits:Vec<super::super::object_cache::ObjectWait>,lag:Option<PixelRect>}
+struct Cell {shown:Option<Shown>,current:bool,blocked:Option<crate::frame_demand::Input>,arrivals:crate::frame_demand::ArrivalToken,name:Option<ContentVersion>,refusal:Option<(crate::residency::Blocked,Option<crate::frame_demand::ArrivalToken>)>,queued:bool,derived:bool,reduced:bool,reduced_from:Option<layer_core::raster::ContentStamp>,waits:Vec<super::super::object_cache::ObjectWait>,lag:Option<PixelRect>}
 impl Cell {
     fn showing(shown:Shown)->Self {Self {shown:Some(shown),current:true,lag:Some(PixelRect::EMPTY),..Self::default()}}
     fn queue(&mut self) {if !self.derived {self.queued=true;}}
@@ -1453,6 +1481,8 @@ impl Cell {
     }
     fn sleeping(&self)->bool {self.waits.iter().any(|(_,waiter)|waiter.as_ref().is_some_and(|waiter|!waiter.settled()))}
     fn written(&self)->bool {self.derived && self.reduced || self.shown.is_some()}
+    fn owed(&self,area:PixelRect,changed:PixelRect)->PixelRect {if !self.derived {PixelRect::EMPTY}else if self.reduced {area.intersect(changed)}else {area}}
+    fn keyed(&self,area:PixelRect)->Option<&Recorded> {self.shown.as_ref()?.recorded.as_ref().filter(|recorded|recorded.written.intersect(area)==area)}
     fn pending(&self)->bool {!self.derived && (self.queued || self.shown.as_ref().is_none_or(|shown|!shown.exact))}
     fn refusal_applies(&self,refusal:&crate::residency::Blocked)->bool {
         refusal.class()!=Class::Refinement || self.current && self.shown.as_ref().is_some_and(|shown|!shown.exact)
@@ -1531,17 +1561,17 @@ impl Cells {
         self.template=Some(template.clone());self.input_level=input_level;self.position=store.changes.end();self.frames=store.frames;
     }
     pub(super) fn derivations(&self,plan:display_mips::Plan,changed:PixelRect)->PixelRect {
-        self.cells.iter().zip(coordinates(plan.bounds,plan.level)).filter(|(cell,_)|cell.derived)
-            .map(|(cell,coordinate)|{let area=bounds(coordinate,plan.level,plan.extent).intersect(plan.bounds);if cell.reduced {area.intersect(changed)}else {area}})
+        self.cells.iter().zip(coordinates(plan.bounds,plan.level))
+            .map(|(cell,coordinate)|cell.owed(bounds(coordinate,plan.level,plan.extent).intersect(plan.bounds),changed))
             .fold(PixelRect::EMPTY,PixelRect::union)
     }
-    pub(super) fn reduced(&mut self,plan:display_mips::Plan,region:PixelRect,submission:submission::Submission) {
+    pub(super) fn reduced(&mut self,plan:display_mips::Plan,region:PixelRect,changed:PixelRect,submission:submission::Submission,source:Option<layer_core::raster::ContentStamp>) {
         for (index,(cell,coordinate)) in self.cells.iter_mut().zip(coordinates(plan.bounds,plan.level)).enumerate() {
-            let area=bounds(coordinate,plan.level,plan.extent).intersect(plan.bounds);
-            if cell.derived && region.intersect(area)==area {
-                self.unconfirmed_reductions.push((submission.clone(),index));
-                cell.reduced=true;
-            }
+            let owed=cell.owed(bounds(coordinate,plan.level,plan.extent).intersect(plan.bounds),changed);
+            if owed.is_empty() {continue;}
+            let whole=region.intersect(owed)==owed;
+            if whole {self.unconfirmed_reductions.push((submission.clone(),index));}
+            cell.reduced=whole;cell.reduced_from=source.filter(|_|whole);
         }
     }
 }
@@ -1781,13 +1811,17 @@ impl Cache {
         let authored=frame.authored_revision(&template.expression)?;
         let mut written=vec![0u32;(self.geometry.size() as usize-32)/4];
         for (index,cell) in cells.cells.iter().enumerate() {if cell.written() {written[index/32]|=1<<(index%32);}}
+        if written.iter().all(|word|*word==0) {return Ok(());}
         let versions=cells.cells.iter().filter_map(|cell|cell.shown.as_ref().and_then(|shown|shown.recorded.clone())).collect::<Vec<_>>();
         let cell_count=cells.cells.len();
         let current=self.gesture.as_ref().filter(|_|cells.cells.iter().all(|cell|cell.derived || !cell.queued && cell.shown.is_some()))
             .map(|_|Current {frame:frame.clone(),derived:false});
-        let same=current.is_some() || !versions.is_empty() && versions.iter().all(|recorded|recorded.authored==authored || authored_matches(std::slice::from_ref(recorded),&frame,authored,recorded.written));
+        let plan=self.plan;
+        let mut shown=cells.cells.iter().zip(coordinates(plan.bounds,plan.level)).filter(|(cell,_)|cell.written()).map(|(cell,coordinate)|(cell,bounds(coordinate,plan.level,plan.extent).intersect(plan.bounds)));
+        let keyed=shown.clone().all(|(cell,area)|cell.keyed(area).is_some());
+        let same=current.is_some() || shown.all(|(cell,area)|if cell.derived {cell.reduced_from==Some(authored)}
+            else {cell.keyed(area).is_some_and(|recorded|authored_matches(std::slice::from_ref(recorded),&frame,authored,recorded.written))});
         drop((cells,store));
-        if written.iter().all(|word|*word==0) {return Ok(());}
         let count=written.iter().map(|word|word.count_ones()).sum::<u32>();
         self.complete=count as usize==cell_count;
         let level=self.plan.level;let window=self.plan.bounds;
@@ -1796,7 +1830,8 @@ impl Cache {
         let observed_written=written.clone();
         r.uploads.write_at(encoder,&self.geometry,12,&data.into_iter().chain(written).flat_map(u32::to_le_bytes).collect::<Vec<_>>())?;
         self.pixels.commit_root(encoder.submission(),Vec::new(),versions,current,same.then_some(authored));
-        self.pixels.certify_root(self.complete,(self.complete && self.graph.motion.is_none()).then(||self.graph.blend_space()));
+        self.pixels.certify_root(self.complete,(self.complete && self.graph.motion.is_none()).then(||self.graph.blend_space()),keyed);
+        self.pixels.carry_to_next(encoder.submission());
         #[cfg(test)]
         {
             let root=self.pixels.committed_root().unwrap();
@@ -2031,12 +2066,13 @@ impl Cache {
         self.cells().is_some_and(|(cells,_,_)|cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level))
             .any(|(cell,coordinate)|!cell.written() && !bounds(coordinate,self.plan.level,self.plan.extent).intersect(visible).is_empty()))
     }
-    pub(super) fn derive_cells(&self,finer:Option<&Cache>) {
-        let Some(finer)=finer.filter(|finer|finer.plan.level<self.plan.level) else {
+    pub(super) fn derive_cells(&self,finer:Option<(&Cache,PixelRect)>) {
+        let Some((finer,changed))=finer.filter(|(finer,_)|finer.plan.level<self.plan.level) else {
             let mut cells=self.cells.lock().unwrap();
             for cell in &mut cells.cells {cell.derive(false);}
             return;
         };
+        let source=finer.pixels.committed_root().and_then(CommittedImage::authored);
         let presented={
             let cells=finer.cells.lock().unwrap();
             let sized=cells.cells.len()==coordinates(finer.plan.bounds,finer.plan.level).count();
@@ -2048,8 +2084,9 @@ impl Cache {
         };
         let Some((mut cells,_store,_))=self.cells() else {return;};
         for (cell,coordinate) in cells.cells.iter_mut().zip(coordinates(self.plan.bounds,self.plan.level)) {
-            let derived=cell.derived;
-            cell.derive(presented(bounds(coordinate,self.plan.level,self.plan.extent).intersect(self.plan.bounds),derived));
+            let (area,derived)=(bounds(coordinate,self.plan.level,self.plan.extent).intersect(self.plan.bounds),cell.derived);
+            cell.derive(presented(area,derived));
+            if cell.reduced && area.intersect(changed).is_empty() {cell.reduced_from=source;}
         }
     }
     pub(super) fn current_window(&self,reader:&Cache)->Option<WindowSource> {
@@ -2912,10 +2949,10 @@ pub(super) mod query_tests {
         pixels.ensure_root(&renderer,display_mips::Plan::at([256;2],0),wgpu::TextureFormat::Rgba16Float,"coverage records",renderer.scene_tiers.windows.charge(0));
         let mut partial=submission::CommandEncoder::new(&renderer.device,&Default::default());
         let receipt=partial.submission();
-        pixels.commit_root(receipt.clone(),Vec::new(),Vec::new(),None,None);pixels.certify_root(false,None);
+        pixels.commit_root(receipt.clone(),Vec::new(),Vec::new(),None,None);pixels.certify_root(false,None,false);
         partial.submit(&renderer.queue);
         let mut completing=submission::CommandEncoder::new(&renderer.device,&Default::default());
-        pixels.commit_root(completing.submission(),Vec::new(),Vec::new(),None,None);pixels.certify_root(true,Some(layer_core::BlendSpace::Linear));
+        pixels.commit_root(completing.submission(),Vec::new(),Vec::new(),None,None);pixels.certify_root(true,Some(layer_core::BlendSpace::Linear),false);
         assert!(pixels.committed_root().is_some_and(|image|image.complete() && image.whole().is_some()));
         drop(completing);
         let image=pixels.committed_root().unwrap();
@@ -2946,6 +2983,176 @@ pub(super) mod query_tests {
         let (overview,index)=overview_cell(&r);
         let cells=table(overview);
         assert!(cells.cells[index].derived && cells.cells[index].reduced,"a later frame reduces the cell again");
+    }
+
+    fn half_view(document:&layer_core::Document)->FramePacket<'_> {
+        let mut frame=packet(document.scene(),document.composition().size);frame.composite_all=false;
+        frame.view=layer_render::ViewState {width_px:1280,height_px:1024,document_to_surface:[0.5,0.,0.,0.5,0.,0.]};
+        frame
+    }
+    fn dabs_at(pages:&[[u32;2]],color:[f32;4])->Vec<layer_render::Dab> {
+        pages.iter().map(|page|{let mut dab=crate::tests::test_dab(page.map(|value|(value*PAGE_SIZE+PAGE_SIZE/2) as f32),color,1.);dab.radii=[8.;2];dab}).collect()
+    }
+    fn batch_over(document:&layer_core::Document,dabs:&[layer_render::Dab],kind:layer_render::DabBatchKind)->layer_render::DabBatch {
+        let style=crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::GPen);
+        let damage=dabs.iter().map(|dab|dab.bounds()).reduce(layer_core::Rect::union).unwrap();
+        layer_render::DabBatch {kind,dab_count:dabs.len() as u32,..crate::test_support::dab_batch(document.working.target.unwrap(),style,damage)}
+    }
+    fn paged(document:&layer_core::Document)->WgpuRasterizer {
+        let frame=half_view(document);
+        let mut r=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        crate::test_support::submit_settled(&mut r,frame);
+        let dabs=dabs_at(&[[2,2],[14,6]],[1.,0.,0.,1.]);
+        let batch=batch_over(document,&dabs,layer_render::DabBatchKind::Persistent);
+        crate::test_support::submit_ready(&mut r,FramePacket {dabs:&dabs,dab_batches:std::slice::from_ref(&batch),..frame}).unwrap();
+        crate::test_support::submit_settled(&mut r,frame);
+        r
+    }
+    fn blue_page(r:&mut WgpuRasterizer,document:&layer_core::Document,page:[u32;2]) {
+        let blue=(0..PAGE_SIZE*PAGE_SIZE).flat_map(|_|[0.1f32,0.2,0.9,1.]).flat_map(f32::to_le_bytes).collect::<Vec<_>>();
+        crate::test_support::upload_layer_page(r,document.scene(),document.working.target.unwrap(),page,&blue);
+    }
+    fn shown_at(r:&WgpuRasterizer,image:&Image,page:[u32;2])->[f32;4] {
+        let [x,y]=page.map(|value|(value*PAGE_SIZE+PAGE_SIZE/2)>>image.plan.level);
+        super::super::tests::window_pixels(r,image,image.plan)[(y*image.plan.size[0]+x) as usize]
+    }
+    fn refuse_cell(r:&WgpuRasterizer,area:PixelRect) {
+        let main=r.scale_display.as_ref().unwrap();let display=r.scene_tiers.display.clone();
+        main.invalidate_cells(main.reached_cells(DocRect::from(area)),None);
+        main.refuse(None,area,&display.blocked(Class::Visible,display.limit()+1).expect("a unit larger than the display grant is refused"));
+    }
+    fn release_cell(r:&WgpuRasterizer,area:PixelRect) {
+        let main=r.scale_display.as_ref().unwrap();let mut cells=table(main);
+        for index in Cells::reached(main.plan,area) {cells.cells[index].refusal=None;}
+    }
+    fn changed_overview(document:&layer_core::Document,page:[u32;2])->[f32;4] {
+        let mut fresh=paged(document);blue_page(&mut fresh,document,page);
+        crate::test_support::submit_settled(&mut fresh,half_view(document));
+        shown_at(&fresh,overview_cell(&fresh).0.pixels.root().unwrap(),page)
+    }
+
+    #[test]
+    fn an_overview_whose_derived_cell_still_reduces_the_views_old_pixels_is_no_current_picture() {
+        let document=super::super::tests::document_at([4096,2048]);let frame=half_view(&document);
+        let (derived,direct)=([2,2],[14,6]);
+        let shown=|r:&WgpuRasterizer,image:&Image|shown_at(r,image,derived);
+        let expected=changed_overview(&document,derived);
+        for direct_changed in [false,true] {
+            let mut r=paged(&document);
+            {
+                let (overview,index)=overview_cell(&r);
+                let cells=overview.cells.lock().unwrap();
+                assert!(cells.cells[index].derived && cells.cells[index].reduced && cells.cells.iter().any(|cell|!cell.derived && cell.shown.is_some()),
+                    "the overview derives its first cell from the view and composes another");
+            }
+            refuse_cell(&r,page_rect(derived));
+            blue_page(&mut r,&document,derived);
+            if direct_changed {blue_page(&mut r,&document,direct);}
+            for _ in 0..4 {crate::test_support::submit_ready(&mut r,frame).unwrap();crate::test_support::complete(&r);}
+            let main=r.scale_display.as_ref().unwrap();let (overview,index)=overview_cell(&r);
+            assert!(!main.displays(page_rect(derived)) && overview.cells.lock().unwrap().cells[index].derived,"the view cell under the change keeps its old pixels, and the overview derives from it");
+            let old=shown(&r,overview.pixels.root().unwrap());
+            assert!(crate::test_support::max_error(&[old],&[expected])>0.05,"the overview still shows the old pixels: {old:?} against {expected:?}");
+            let labelled=main.current_picture().map(|picture|shown(&r,picture.image()));
+            assert!(labelled.is_none_or(|labelled|crate::test_support::max_error(&[labelled],&[expected])<1e-3),
+                "with its composed cell {}, the overview labels a picture current that shows {labelled:?} where the change shows {expected:?}",if direct_changed {"changed too"}else {"unchanged"});
+        }
+    }
+
+    #[test]
+    fn an_overview_cell_reduced_in_parts_labels_no_picture_current_while_one_part_shows_a_withdrawn_preview() {
+        let document=super::super::tests::document_at([4096,2048]);let frame=half_view(&document);
+        let (restored,refused)=([2,2],[5,5]);
+        let mut fresh=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        crate::test_support::submit_settled(&mut fresh,frame);
+        let expected=shown_at(&fresh,overview_cell(&fresh).0.pixels.root().unwrap(),refused);
+        let mut r=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        crate::test_support::submit_settled(&mut r,frame);
+        let dabs=dabs_at(&[restored,refused],[0.,1.,0.,1.]);
+        let batch=batch_over(&document,&dabs,layer_render::DabBatchKind::Preview);
+        for _ in 0..4 {
+            crate::test_support::submit_ready(&mut r,FramePacket {dabs:&dabs,dab_batches:std::slice::from_ref(&batch),..frame}).unwrap();
+            crate::test_support::complete(&r);
+            let main=r.scale_display.as_ref().unwrap();
+            if main.displays(page_rect(restored)) && main.displays(page_rect(refused)) && main.pixels.committed_root().and_then(CommittedImage::authored)==main.current_authored().map(|(_,authored)|authored) {break;}
+        }
+        refuse_cell(&r,page_rect(refused));
+        let withdrawn=layer_render::DabBatch {kind:layer_render::DabBatchKind::Persistent,dab_count:0,stroke_start:false,..batch};
+        for _ in 0..2 {crate::test_support::submit_ready(&mut r,FramePacket {dabs:&[],dab_batches:std::slice::from_ref(&withdrawn),..frame}).unwrap();crate::test_support::complete(&r);}
+        let main=r.scale_display.as_ref().unwrap();let (overview,index)=overview_cell(&r);
+        assert!(main.displays(page_rect(restored)) && !main.displays(page_rect(refused)) && overview.cells.lock().unwrap().cells[index].derived,
+            "the view restores one previewed cell and keeps the other, and the overview derives both");
+        let previewed=shown_at(&r,overview.pixels.root().unwrap(),refused);
+        assert!(crate::test_support::max_error(&[previewed],&[expected])>0.05,"the overview still shows the withdrawn preview: {previewed:?} against {expected:?}");
+        let labelled=main.current_picture().map(|picture|shown_at(&r,picture.image(),refused));
+        assert!(labelled.is_none_or(|labelled|crate::test_support::max_error(&[labelled],&[expected])<1e-3),
+            "the overview labels a picture current that shows the withdrawn preview {labelled:?} where the scene shows {expected:?}");
+    }
+
+    #[test]
+    fn an_overview_reduces_a_view_cell_that_refinement_copied_before_taking_its_stamp() {
+        let document=super::super::tests::document_at([4096,2048]);let frame=half_view(&document);
+        let changed=[2,2];
+        let expected=changed_overview(&document,changed);
+        let mut r=paged(&document);
+        refuse_cell(&r,page_rect(changed));
+        blue_page(&mut r,&document,changed);
+        for _ in 0..4 {crate::test_support::submit_ready(&mut r,frame).unwrap();crate::test_support::complete(&r);}
+        {
+            let main=r.scale_display.as_ref().unwrap();
+            assert!(!main.displays(page_rect(changed)),"the refused view cell keeps its old pixels");
+            evict_composite_pages_where(main,&[page_rect(changed)],|key|key.level<=main.plan.level);
+        }
+        release_cell(&r,page_rect(changed));
+        for _ in 0..8 {
+            if r.scale_display.as_ref().unwrap().displays(page_rect(changed)) {break;}
+            refine(&mut r,frame);
+        }
+        assert!(r.scale_display.as_ref().unwrap().displays(page_rect(changed)),"refinement copies the changed cell into the view");
+        let dabs=dabs_at(&[[14,6]],[0.,1.,0.,1.]);
+        let batch=batch_over(&document,&dabs,layer_render::DabBatchKind::Persistent);
+        crate::test_support::submit_ready(&mut r,FramePacket {dabs:&dabs,dab_batches:std::slice::from_ref(&batch),..frame}).unwrap();
+        crate::test_support::submit_settled(&mut r,frame);
+        let labelled=r.scale_display.as_ref().unwrap().current_picture().map(|picture|shown_at(&r,picture.image(),changed));
+        assert!(labelled.is_none_or(|labelled|crate::test_support::max_error(&[labelled],&[expected])<1e-3),
+            "the overview labels a picture current that shows {labelled:?} where the refined change shows {expected:?}");
+    }
+
+    #[test]
+    fn a_discarded_half_level_reduction_leaves_the_root_changes_it_took_unreduced() {
+        let document=super::super::tests::document_at([4096,2048]);let frame=half_view(&document);
+        let (changed,hole)=([2,2],PixelRect::new(2048,0,2560,512));
+        let mut fresh=paged(&document);blue_page(&mut fresh,&document,changed);
+        crate::test_support::submit_settled(&mut fresh,frame);
+        let expected=shown_at(&fresh,fresh.scale_display.as_ref().unwrap().pixels.next().unwrap(),changed);
+        let mut r=paged(&document);
+        {
+            let main=r.scale_display.as_ref().unwrap();
+            assert!(main.pixels.committed_next().is_some(),"the view reduces its half level");
+            main.evict_window(hole);
+        }
+        refuse_cell(&r,hole);
+        blue_page(&mut r,&document,changed);
+        for _ in 0..6 {
+            crate::test_support::submit_ready(&mut r,frame).unwrap();crate::test_support::complete(&r);
+            if r.scale_display.as_ref().unwrap().displays(page_rect(changed)) {break;}
+        }
+        let main=r.scale_display.as_ref().unwrap();
+        assert!(main.displays(page_rect(changed)) && !main.coverage_complete(),"the changed cell composes while the hole defers the half level");
+        release_cell(&r,hole);
+        r.test.discard_frame=true;
+        crate::test_support::submit_ready(&mut r,frame).unwrap();
+        assert!(!r.test.discard_frame,"the frame that fills the hole and reduces the half level is dropped");
+        let mut labelled=false;
+        for _ in 0..4 {
+            crate::test_support::submit_ready(&mut r,frame).unwrap();crate::test_support::complete(&r);
+            let main=r.scale_display.as_ref().unwrap();
+            let Some(next)=main.pixels.committed_next().filter(|next|next.authored().is_some() && next.authored()==main.current_authored().map(|(_,authored)|authored)) else {continue;};
+            let shown=shown_at(&r,next.image(),changed);
+            assert!(crate::test_support::max_error(&[shown],&[expected])<1e-3,"the half level is labelled current while it shows {shown:?} where the change shows {expected:?}");
+            labelled=true;
+        }
+        assert!(labelled,"the half level is labelled current once the hole fills");
     }
 
     #[test]
