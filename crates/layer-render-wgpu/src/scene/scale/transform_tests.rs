@@ -790,6 +790,27 @@ impl Refusing {
         }
         panic!("fixture failed: the renderer kept releasing pinned memory under the smaller grant");
     }
+    fn pyramid_bytes(&self,pose:&layer_render::TransformPreview)->u64 {
+        let r=self.engine.backend();let scene=self.engine.document().scene();
+        let level=paint_transform::input_level(r.scale_display.as_ref().unwrap().plan.level,pose,scene.target_extent(pose.target));
+        paint_transform::display_plans(scene,pose.target,level,r.transforms.as_ref().unwrap().input_requirements(pose,level,scene).1)
+            .map(|plan|plan.pixel_bytes_through(display_mips::MAX_LEVEL)).sum()
+    }
+    fn grant(&self)->u64 {let r=self.engine.backend();r.memory.display_grant()+r.memory.raster_grant()}
+    fn grant_below(&mut self,bytes:u64) {
+        let budget=self.engine.backend().factory.memory_budget().clone();
+        let other=budget.register_owner(layer_core::MemoryOwnerKind::Other,layer_core::MemoryClass::Pinned,Some(budget.snapshot().devices[0].device));
+        let mut held=0;
+        for _ in 0..8 {
+            if self.grant()<bytes {self._held=Some(other);return;}
+            held+=self.grant()-bytes/2;
+            other.report(layer_core::MemoryReport {gpu_bytes:held,pinned_gpu_bytes:held,..Default::default()});
+            budget.flush_reports();
+            let r=self.engine.backend_mut();r.memory.invalidate_limits();r.refresh_memory_limits();
+            self.settle().expect("the canvas settles under the smaller grant");
+        }
+        panic!("fixture failed: the renderer's floors keep its grant at {} bytes, not below {bytes}",self.grant());
+    }
     fn pose(&self,moving:bool,x:f32)->layer_render::TransformPreview {
         layer_render::TransformPreview {transaction:1,moving,target:self.layer,selection:None,
             transform:ImageTransform::affine(Affine::translation(Point {x,y:-x/2.}))}
@@ -805,10 +826,11 @@ fn a_preview_the_grant_refuses_lets_the_canvas_settle() {
     let mut canvas=Refusing::filled();
     assert!(canvas.engine.backend().scale_display.as_ref().is_some_and(|cache|cache.plan.level>0 && cache.evaluation==Evaluation::Display));
     let inputs=canvas.engine.backend().transforms.as_ref().unwrap().storage_bytes();
-    canvas.leave(32<<20);
+    let pyramid=canvas.pyramid_bytes(&canvas.pose(false,0.));
+    canvas.grant_below(pyramid*3/4);
     canvas.show(canvas.pose(false,0.));
     canvas.settle().expect("a preview the grant refuses must not hold the canvas");
-    assert_eq!(canvas.engine.backend().refused_transform,Some(canvas.pose(false,0.)),"fixture failed: the smaller grant admitted the first pose");
+    assert_eq!(canvas.engine.backend().refused_transform,Some(canvas.pose(false,0.)),"the grant refused the first pose");
     for step in 1..=6 {
         canvas.show(canvas.pose(true,step as f32*200.));
         canvas.settle().expect("each refused pose of a drag lets the canvas settle");
