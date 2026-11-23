@@ -459,14 +459,22 @@ impl PaintTransforms {
                 & r.compilation.require(r.selection_clip.pipelines(), startup::OTHER);
             if !ready { return Ok(false); }
         }
+        let local = sampling::selection_level(level, Some(selection), r.target_extent(id));
+        let standby = Standby::of(scene, id, selection);
+        if state.standby.as_ref() != Some(&standby) {
+            let projected = display_plans(scene, id, local, scene_windows(scene, id, Some(selection)))
+                .try_fold(0u64, |bytes, plan| bytes.checked_add(plan.pixel_bytes_through(display_mips::MAX_LEVEL))).ok_or(GpuRasterError::SizeOverflow)?;
+            let preparation = [r.projected_restore_bytes(), r.bake_preflight.as_ref().map_or(0, |bake| bake.projected_bytes())].into_iter()
+                .try_fold(projected, u64::checked_add).ok_or(GpuRasterError::SizeOverflow)?;
+            if !r.preparation_fits(preparation, Some(self))? { return Ok(true); }
+        }
+        let state = &mut self.0[0];
         let result=(|| {
             let extent = r.target_extent(id);
-            let standby = Standby::of(scene, id, selection);
             if state.standby.as_ref() != Some(&standby) {
                 state.capture_source(r, encoder, id, None, Some(selection), (extent,None), None)?;
                 state.standby = Some(standby);
             }
-            let local = sampling::selection_level(level, Some(selection), extent);
             state.prepare_reduced(r, encoder, Some(selection), Some((scene, id)), extent, local)
         })();
         match result {Err(error) if error.is_preparation_pending()=>Ok(false),result=>result.map(|()|true)}

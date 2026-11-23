@@ -112,6 +112,39 @@ fn reduced_selection_standby_prepares_its_pipelines_without_encoding_on_the_fram
 }
 
 #[test]
+fn a_standby_beyond_the_preparation_grant_is_skipped_without_allocating() {
+    let mut r = crate::memory::memory_tests::renderer(Default::default(), layer_core::DeviceMemoryFacts { budget_bytes: Some(64 << 20), ..Default::default() }).unwrap();
+    let extent = [4096; 2];
+    let mut document = paint_document(extent, "Selection standby");
+    let descriptor = document.composition().color.paint_descriptor();
+    let tile = layer_core::raster::RasterTile::backed(layer_core::raster::TileBlob::encode(descriptor, &vec![96; descriptor.byte_len([PAGE_SIZE; 2]).unwrap()]).unwrap());
+    *document.target_raster_mut(target(&document)).unwrap() = layer_core::raster::RasterRevision::backed(layer_core::raster::RasterData {
+        tiles: (0..16 * 16).map(|index| (layer_core::raster::TileKey { plane: layer_core::raster::RasterPlane::Color, coordinate: [index % 16, index / 16] }, tile.clone())).collect(),
+        watercolor: None });
+    let selection = Selection::polygon(vec![Point { x: 0., y: 0. }, Point { x: 4096., y: 0. },
+        Point { x: 4096., y: 4096. }, Point { x: 0., y: 4096. }]).unwrap();
+    document.working.selection = Some(selection.clone());
+    let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+    r.prepare_startup(&document, &brush, false).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    crate::test_support::wait_startup(&mut r, deadline, |p| p.complete, format_args!("Selection startup timed out"));
+    crate::test_support::submit_ready(&mut r, packet(document.scene(), extent)).unwrap();
+    let mut transforms = r.transforms.take().unwrap();
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    r.shader_idle(true, false);
+    let bytes = transforms.storage_bytes();
+    crate::test_support::wait_until("Standby compilation timed out", || {
+        if transforms.prepare_standby(&mut r, &mut encoder, document.scene(), target(&document), &selection, 1).unwrap() { return Ok(()); }
+        r.poll_startup().unwrap();
+        Err(())
+    });
+    assert_eq!(transforms.storage_bytes(), bytes, "a standby the grant cannot hold allocates nothing");
+    r.transforms = Some(transforms);
+    r.uploads.finish(&encoder);
+    encoder.submit(&r.queue);
+}
+
+#[test]
 fn deleting_a_transform_preview_target_discards_it_without_restoring_missing_pixels() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let extent = [128; 2];

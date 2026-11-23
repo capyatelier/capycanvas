@@ -685,12 +685,19 @@ impl WgpuRasterizer {
             .ok_or(GpuRasterError::SizeOverflow)?;
         Ok(bytes.saturating_add(self.staged_restore_bytes()))
     }
+    fn preparation_limit(&mut self)->Result<u64,GpuRasterError> {
+        self.refresh_preparation_memory();
+        Ok(self.memory.display_grant().checked_add(self.memory.raster_grant()).ok_or(GpuRasterError::SizeOverflow)?
+            .saturating_sub(self.retired_display_bytes.used()))
+    }
+    pub(crate) fn preparation_fits(&mut self,projected:u64,transforms:Option<&paint_transform::PaintTransforms>)->Result<bool,GpuRasterError> {
+        if self.native_edit.is_none() {return Ok(true);}
+        let limit=self.preparation_limit()?;
+        Ok(projected.checked_add(self.retained_preparation_bytes(transforms)?).ok_or(GpuRasterError::SizeOverflow)?<=limit)
+    }
     pub(crate) fn admit_preparation_with_transforms(&mut self,restore:u64,bake:u64,transforms:Option<&paint_transform::PaintTransforms>)->Result<(),GpuRasterError> {
         if self.native_edit.is_none() {return Ok(());}
-        self.refresh_preparation_memory();
-        let [scene, paint] = [self.memory.display_grant(), self.memory.raster_grant()];
-        let limit=scene.checked_add(paint).ok_or(GpuRasterError::SizeOverflow)?
-            .saturating_sub(self.retired_display_bytes.used());
+        let limit=self.preparation_limit()?;
         let projected=restore.checked_add(bake).ok_or(GpuRasterError::SizeOverflow)?;
         let mut retained=self.retained_preparation_bytes(transforms)?;
         let mut bytes=projected.checked_add(retained).ok_or(GpuRasterError::SizeOverflow)?;
