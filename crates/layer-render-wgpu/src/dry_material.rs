@@ -179,8 +179,8 @@ pub(super) fn material_source(space:layer_core::color::RgbSpace,float_sampling:&
                 }
             }
             if matches!(operation,M::Wet|M::Watercolor) {source+=include_str!("material_gather.wgsl");}
-            if operation==M::Wet {source+=&format!("const RESERVOIR_TEXELS: u32 = {RESERVOIR_SIZE}u;\nconst PICKUP_TAPS: u32 = {}u;\n{}",
-                crate::destination_material::PICKUP_TAPS,include_str!("material_reservoir.wgsl"));}
+            if operation==M::Wet {source+=&format!("const RESERVOIR_TEXELS: u32 = {RESERVOIR_SIZE}u;\nconst PICKUP_TAPS: u32 = {}u;\nconst AVERAGE_TAPS: u32 = {}u;\n{}",
+                crate::destination_material::PICKUP_TAPS,crate::destination_material::AVERAGE_TAPS,include_str!("material_reservoir.wgsl"));}
             source.into()
         }
     };

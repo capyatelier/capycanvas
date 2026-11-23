@@ -16,6 +16,7 @@ pub(super) fn workgroup(operation: MaterialOperation) -> [u32; 2] {
 }
 
 pub(super) const PICKUP_TAPS: u32 = 5;
+pub(super) const AVERAGE_TAPS: u32 = 24;
 const DONOR_SLOTS: usize = 9;
 
 fn donor_record(header: [u32; 4], local: [u32; 4], coordinate: [u32; 2], donors: &[[u32; 2]]) -> [u32; material_sources::RECORD_WORDS] {
@@ -27,20 +28,76 @@ pub(super) fn reservoir_page(last: &Dab, extent: [u32; 2]) -> [u32; 2] {
     std::array::from_fn(|i| ([last.center.x, last.center.y][i].max(0.) as u32 / PAGE_SIZE).min(extent[i].saturating_sub(1) / PAGE_SIZE))
 }
 
-pub(super) fn exchange_reads(style: &layer_render::DabStyle, dabs: &[Dab], extent: [u32; 2]) -> PixelRect {
-    let blur = style.wet_mix.blur.clamp(0., 1.) * 4. + 2.;
-    dabs.iter().fold(PixelRect::EMPTY, |reads, dab| {
-        let [cos, sin] = dab.rotation;
-        let half = [(dab.radii[0] * cos).abs() + (dab.radii[1] * sin).abs(), (dab.radii[0] * sin).abs() + (dab.radii[1] * cos).abs()];
-        let pull = dab.material[1].clamp(0., 1.);
-        let square = |shift: [f32; 2], margin: f32| layer_core::Rect {
-            min: layer_core::Point { x: dab.center.x - half[0] + shift[0] - margin, y: dab.center.y - half[1] + shift[1] - margin },
-            max: layer_core::Point { x: dab.center.x + half[0] + shift[0] + margin, y: dab.center.y + half[1] + shift[1] + margin },
-        };
-        let pickup = pixel_rect(square(dab.motion.map(|motion| -motion * pull), blur), extent);
-        let averaged = if style.wet_mix.average > 0. { pixel_rect(square([0.; 2], 2.), extent) } else { PixelRect::EMPTY };
-        reads.union(pickup).union(averaged)
-    })
+pub(super) struct ExchangeReach {
+    pub direct: Vec<[u32; 2]>,
+    pub gathered: Vec<[u32; 2]>,
+    pub texels: PixelRect,
+}
+
+impl ExchangeReach {
+    pub fn pages(&self) -> impl Iterator<Item = [u32; 2]> + '_ { self.direct.iter().chain(&self.gathered).copied() }
+}
+
+struct Footprint<'a> { dab: &'a Dab, shift: [f32; 2], margin: f32, elliptic: bool }
+
+impl Footprint<'_> {
+    fn local(&self, at: [f32; 2]) -> [f32; 2] {
+        let [cos, sin] = self.dab.rotation;
+        let [x, y] = [at[0] - self.shift[0] - self.dab.center.x, at[1] - self.shift[1] - self.dab.center.y];
+        [(x * cos + y * sin) / self.dab.radii[0].max(0.005), (y * cos - x * sin) / self.dab.radii[1].max(0.005)]
+    }
+    fn bounds(&self, extent: [u32; 2]) -> PixelRect {
+        let [cos, sin] = self.dab.rotation;
+        let [x, y] = self.dab.radii.map(|radius| radius.max(0.005));
+        let half = if self.elliptic { [(x * cos).hypot(y * sin), (x * sin).hypot(y * cos)] }
+            else { [(x * cos).abs() + (y * sin).abs(), (x * sin).abs() + (y * cos).abs()] };
+        let center = [self.dab.center.x + self.shift[0], self.dab.center.y + self.shift[1]];
+        pixel_rect(layer_core::Rect {
+            min: layer_core::Point { x: center[0] - half[0] - self.margin, y: center[1] - half[1] - self.margin },
+            max: layer_core::Point { x: center[0] + half[0] + self.margin, y: center[1] + half[1] + self.margin },
+        }, extent)
+    }
+    fn corners(&self, page: [u32; 2]) -> [[f32; 2]; 4] {
+        let rect = page_rect(page).to_rect();
+        let [low, high] = [[rect.min.x - self.margin, rect.min.y - self.margin], [rect.max.x + self.margin, rect.max.y + self.margin]];
+        [[low[0], low[1]], [high[0], low[1]], [high[0], high[1]], [low[0], high[1]]].map(|corner| self.local(corner))
+    }
+    fn reaches(&self, page: [u32; 2]) -> bool {
+        if !self.elliptic { return true; }
+        let corners = self.corners(page);
+        let cross = |a: [f32; 2], b: [f32; 2]| a[0] * b[1] - a[1] * b[0];
+        let edges = (0..4).map(|index| (corners[index], corners[(index + 1) % 4]));
+        let sides: Vec<_> = edges.clone().map(|(a, b)| cross([b[0] - a[0], b[1] - a[1]], [-a[0], -a[1]])).collect();
+        sides.iter().all(|side| *side >= 0.) || sides.iter().all(|side| *side <= 0.) || edges.into_iter().any(|(a, b)| {
+            let along = [b[0] - a[0], b[1] - a[1]];
+            let t = (-(a[0] * along[0] + a[1] * along[1]) / (along[0] * along[0] + along[1] * along[1]).max(f32::MIN_POSITIVE)).clamp(0., 1.);
+            (a[0] + along[0] * t).hypot(a[1] + along[1] * t) < 1.
+        })
+    }
+    fn texels(&self, page: [u32; 2]) -> PixelRect {
+        let texels = self.corners(page).map(|local| local.map(|value| (value + 1.) * RESERVOIR_SIZE as f32 / 2. - 0.5));
+        let [low, high] = [f32::min, f32::max].map(|pick| std::array::from_fn::<f32, 2, _>(|axis| texels.iter().map(|texel| texel[axis]).reduce(pick).unwrap()));
+        pixel_rect(layer_core::Rect { min: layer_core::Point { x: low[0], y: low[1] }, max: layer_core::Point { x: high[0] + 1., y: high[1] + 1. } }, [RESERVOIR_SIZE; 2])
+    }
+}
+
+pub(super) fn exchange_reach(style: &layer_render::DabStyle, dabs: &[Dab], extent: [u32; 2]) -> ExchangeReach {
+    let elliptic = style.contact.is_none();
+    let pickups: Vec<_> = dabs.iter().map(|dab| Footprint { dab, shift: dab.motion.map(|motion| -motion * dab.material[1].clamp(0., 1.)),
+        margin: style.wet_mix.blur.clamp(0., 1.) * 4. + 2., elliptic }).collect();
+    let averages: Vec<_> = dabs.iter().filter(|_| style.wet_mix.average > 0.).map(|dab| Footprint { dab, shift: [0.; 2], margin: 2., elliptic }).collect();
+    let pages: std::collections::BTreeSet<[u32; 2]> = pickups.iter().chain(&averages)
+        .flat_map(|footprint| page_coordinates(footprint.bounds(extent)).filter(|page| footprint.reaches(*page))).collect();
+    let around = |center: [u32; 2], page: &[u32; 2]| (0..2).all(|axis| page[axis].abs_diff(center[axis]) <= 1);
+    let center = pages.iter().flat_map(|page| (0..9).filter_map(move |index| crate::source_access::neighborhood(*page, [Some([index % 3 - 1, index / 3 - 1])]).next()))
+        .max_by_key(|center| (pages.iter().filter(|page| around(*center, page)).count(), std::cmp::Reverse(*center)));
+    let (mut direct, beyond): (Vec<_>, Vec<_>) = pages.into_iter().partition(|page| center.is_some_and(|center| around(center, page)));
+    let reaching = |page: [u32; 2]| pickups.iter().filter(|footprint| footprint.reaches(page)).map(|footprint| footprint.texels(page)).fold(PixelRect::EMPTY, PixelRect::union);
+    let mut gathered: Vec<_> = beyond.into_iter().filter(|page| !reaching(*page).is_empty() || averages.iter().any(|footprint| footprint.reaches(*page))).collect();
+    gathered.sort_by_key(|page| std::cmp::Reverse(reaching(*page).area()));
+    direct.extend(gathered.drain(..DONOR_SLOTS.saturating_sub(direct.len()).min(gathered.len())));
+    let texels = gathered.iter().map(|page| reaching(*page)).fold(PixelRect::EMPTY, PixelRect::union);
+    ExchangeReach { direct, gathered, texels }
 }
 
 pub(super) fn job_reads(style: &layer_render::DabStyle, dabs: &[Dab], written: PixelRect, extent: [u32; 2]) -> PixelRect {
@@ -76,18 +133,19 @@ fn exchanges(batches: &[DabBatch], index: usize, extent: [u32; 2]) -> bool {
         && later.stroke_id == batch.stroke_id && wet(later) && crate::paints(later, extent)))
 }
 
+fn job_donors(style: &layer_render::DabStyle, dabs: &[Dab], written: PixelRect, coordinate: [u32; 2], extent: [u32; 2]) -> Option<Vec<[u32; 2]>> {
+    let reads = job_reads(style, dabs, written.intersect(page_rect(coordinate)), extent);
+    beyond(reads, coordinate).then(|| page_coordinates(reads).collect())
+}
+
 pub(super) fn read_pages(batches: &[DabBatch], index: usize, dabs: &[Dab], extent: [u32; 2], mut read: impl FnMut([u32; 2])) {
     let batch = &batches[index];
     let written = crate::batch_pixel_rect(batch, extent);
     for page in page_coordinates(written) {
-        let reads = job_reads(&batch.style, dabs, written.intersect(page_rect(page)), extent);
-        if beyond(reads, page) { page_coordinates(reads).for_each(&mut read); }
+        job_donors(&batch.style, dabs, written, page, extent).into_iter().flatten().for_each(&mut read);
     }
-    if let Some(last) = dabs.last().filter(|_| exchanges(batches, index, extent)) {
-        let around = reservoir_page(last, extent);
-        crate::source_access::neighborhood(around, TRANSPORT_OFFSETS.map(Some)).for_each(&mut read);
-        let reads = exchange_reads(&batch.style, dabs, extent);
-        if beyond(reads, around) { page_coordinates(reads).for_each(&mut read); }
+    if exchanges(batches, index, extent) {
+        exchange_reach(&batch.style, dabs, extent).pages().for_each(&mut read);
     }
 }
 
@@ -309,27 +367,24 @@ impl WgpuRasterizer {
         let declaration = preview.then(|| self.preview_declaration.clone()).flatten();
         let exchange = dabs.first().zip(dabs.last()).filter(|_| operation == MaterialOperation::Wet
             && (!preview || declaration.as_ref().is_some_and(|declaration| declaration.reservoir_consumed(batch_index))));
-        let gathered = exchange.and_then(|(_, last)| {
-            let reads = exchange_reads(&batch.style, dabs, extent);
-            beyond(reads, reservoir_page(last, extent)).then(|| page_coordinates(reads).collect::<Vec<_>>())
-        });
+        let reach = exchange.map(|_| exchange_reach(&batch.style, dabs, extent));
+        let gathered = reach.as_ref().map(|reach| &reach.gathered).filter(|pages| !pages.is_empty());
         let taps = page_taps(&batch.style);
         let rows = if operation == MaterialOperation::Wet { dabs.len() as u32 } else { 1 };
-        let far: Vec<Option<Vec<[u32; 2]>>> = jobs.iter().map(|job| {
-            let reads = job_reads(&batch.style, dabs, job.local.translated(job.coordinate.map(|at| at * PAGE_SIZE)), extent);
-            beyond(reads, job.coordinate).then(|| page_coordinates(reads).collect())
-        }).collect();
+        let damaged = crate::batch_pixel_rect(batch, extent);
+        let far: Vec<_> = jobs.iter().map(|job| job_donors(&batch.style, dabs, damaged, job.coordinate, extent)).collect();
+        let reached = |job: &MaterialJob| job.local.intersect(damaged.page_local(job.coordinate));
         let seeds: Vec<_> = jobs.iter().map(|job| operation == MaterialOperation::Watercolor && !self.watercolor_written.contains(&job.coordinate)).collect();
         self.watercolor_written.extend(jobs.iter().zip(&seeds).filter(|(_, seed)| **seed).map(|(job, _)| job.coordinate));
         self.metrics.material_cpu_ms[0] += elapsed(started);
         let mut first_record = self.prepare_records(jobs.iter().zip(&seeds).zip(&far).map(|((job, &seed), reads)| {
             record([job.dabs.start, job.dabs.end - job.dabs.start, u32::from(reads.is_some()), u32::from(seed)], [rect_words(job.local)])
-        }).chain(exchange.map(|(first, _)| {
+        }).chain(exchange.zip(reach.as_ref()).map(|((first, _), reach)| {
             let color = first.color_rgba_linear;
-            record([u32::from(gathered.is_some()), 0, 0, 0], [[color[0], color[1], color[2], batch.style.wet_mix.amount_of_paint * first.material[2]].map(f32::to_bits)])
-        })).chain(gathered.iter().flat_map(|pages| pages.chunks(DONOR_SLOTS)).enumerate().map(|(index, donors)| donor_record([2, 0, 0, u32::from(index == 0)], [0; 4], [0; 2], donors)))
+            donor_record([u32::from(gathered.is_some()), 0, 0, 0], [color[0], color[1], color[2], batch.style.wet_mix.amount_of_paint * first.material[2]].map(f32::to_bits), [0; 2], &reach.direct)
+        })).chain(reach.iter().filter(|_| gathered.is_some()).flat_map(|reach| reach.gathered.chunks(DONOR_SLOTS).map(|donors| donor_record([2, 0, 0, 0], rect_words(reach.texels), [0; 2], donors))))
         .chain(jobs.iter().zip(&far).filter_map(|(job, reads)| reads.as_ref().map(|reads| (job, reads))).flat_map(|(job, reads)| reads.chunks(DONOR_SLOTS).enumerate()
-            .map(move |(index, donors)| donor_record([0, taps, rows, u32::from(index == 0)], rect_words(job.local), job.coordinate, donors)))), encoder)?;
+            .map(move |(index, donors)| donor_record([0, taps, rows, u32::from(index == 0)], rect_words(reached(job)), job.coordinate, donors)))), encoder)?;
         let mut page_gathers = first_record + jobs.len() + usize::from(exchange.is_some()) + gathered.as_ref().map_or(0, |pages| pages.len().div_ceil(DONOR_SLOTS));
         let mut publications=Vec::with_capacity(jobs.len()*3+usize::from(exchange.is_some()));
         let mut written=Vec::with_capacity(jobs.len()*3+usize::from(exchange.is_some()));
@@ -342,7 +397,7 @@ impl WgpuRasterizer {
         let source_keys=jobs.iter().zip(&intents).zip(&far).map(|((job,(intent,_)),reads)| {
             let mut far=Vec::new();
             let gathers=reads.iter().flat_map(|pages|pages.chunks(DONOR_SLOTS)).map(|donors|
-                self.transport_sources(encoder,batch_index,batch,job.coordinate,target,intent,MaterialInputs::Donors(donors),Vec::new(),Some(&mut far))
+                self.transport_sources(encoder,batch_index,batch,job.coordinate,target,intent,MaterialInputs::Donors(donors),Vec::new(),declaration.is_some().then_some(&mut far))
             ).collect::<Result<Vec<_>,GpuRasterError>>()?;
             Ok((self.transport_sources(encoder,batch_index,batch,job.coordinate,target,intent,MaterialInputs::Neighborhood,far,None)?,gathers))
         }).collect::<Result<Vec<_>,GpuRasterError>>()?;
@@ -361,9 +416,10 @@ impl WgpuRasterizer {
                 let write=self.gathered_taps.as_mut().ok_or(GpuRasterError::Invariant("gathered material taps are not prepared"))?
                     .overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
                 let output=self.pipelines.destination_material.output(&self.device,&self.style_buffer,&write,None,None);
-                let extent=[job.local.width(),job.local.height()*rows];
+                let extent=[reached(job).width(),reached(job).height()*rows];
                 for gather in gathers {
                     let (gather,_)=write.value().material.inputs(gather,|key|create_material_inputs(&self.device,&self.material_layout,self.material_records.binding().size,key));
+                    #[cfg(test)] crate::test_support::PassCounts {gather_invocations:u64::from(extent[0]*extent[1]),..Default::default()}.record();
                     dispatches.push(Dispatch {entry:Entry::Gather,output:output.clone(),sources:gather,coordinate:job.coordinate,record_offset:self.material_records.offset(page_gathers),extent});
                     page_gathers+=1;
                 }
@@ -415,10 +471,12 @@ impl WgpuRasterizer {
         if let Some((_, last)) = exchange {
             let coordinate = reservoir_page(last, extent);
             let intent=self.raster_intent(batch.target,RasterPlane::Color,coordinate)?;
+            let reach=reach.as_ref().ok_or(GpuRasterError::Invariant("prepared wet exchange reach is not planned"))?;
             let mut donors=Vec::new();
-            let mut sources=self.transport_sources(encoder,batch_index,batch,coordinate,target,&intent,MaterialInputs::Exchange,Vec::new(),Some(&mut donors))?;
+            let collecting=declaration.is_some();
+            let mut sources=self.transport_sources(encoder,batch_index,batch,coordinate,target,&intent,MaterialInputs::Exchange(&reach.direct),Vec::new(),collecting.then_some(&mut donors))?;
             let gathers=gathered.iter().flat_map(|pages|pages.chunks(DONOR_SLOTS)).map(|chunk|
-                self.transport_sources(encoder,batch_index,batch,coordinate,target,&intent,MaterialInputs::Donors(chunk),Vec::new(),Some(&mut donors))
+                self.transport_sources(encoder,batch_index,batch,coordinate,target,&intent,MaterialInputs::Donors(chunk),Vec::new(),collecting.then_some(&mut donors))
             ).collect::<Result<Vec<_>,_>>()?;
             if let Some(declaration)=&declaration {declaration.accept_reservoir_inputs(batch_index,donors)?;}
             let receipt=encoder.submission();
@@ -432,10 +490,13 @@ impl WgpuRasterizer {
                 let write=self.reservoir.taps.as_mut().ok_or(GpuRasterError::Invariant("gathered reservoir taps are not prepared"))?
                     .overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
                 let output=self.pipelines.destination_material.output(&self.device,&self.style_buffer,&write,None,None);
+                let averaged=if batch.style.wet_mix.average>0. {dabs.len() as u32} else {0};
+                let extent=[(PICKUP_TAPS*reach.texels.width()).max(averaged.min(1)*AVERAGE_TAPS),dabs.len() as u32*reach.texels.height()+averaged];
                 for (index,gather) in gathers.into_iter().enumerate() {
                     let (gather,_)=write.value().material.inputs(gather,|key|create_material_inputs(&self.device,&self.material_layout,self.material_records.binding().size,key));
+                    #[cfg(test)] crate::test_support::PassCounts {gather_invocations:u64::from(extent[0]*extent[1]),..Default::default()}.record();
                     dispatches.push(Dispatch {entry:Entry::Reservoir,output:output.clone(),sources:gather,coordinate,
-                        record_offset:self.material_records.offset(first_record+1+index),extent:size});
+                        record_offset:self.material_records.offset(first_record+1+index),extent});
                 }
                 sources.key.1[9]=write.value().view.clone();
                 write.publish(layer_core::raster::ContentName::fresh());
@@ -492,7 +553,6 @@ impl WgpuRasterizer {
         let pass = encoder.compute_pass();
         pass.set_bind_group(3, textures, &[]);
         for dispatch in dispatches {
-            #[cfg(test)] if dispatch.entry == Entry::Gather {crate::test_support::PassCounts {gather_invocations:u64::from(dispatch.extent[0]*dispatch.extent[1]),..Default::default()}.record();}
             pass.set_pipeline(self.pipelines.destination_material.kernel(&batch.style, dispatch.entry));
             pass.set_bind_group(0, &dispatch.output, &[style_offset]);
             pass.set_bind_group(1, self.paint_target_binding(&batch.style), &[self.layer_target_offset(batch.target, dispatch.coordinate)]);
@@ -604,6 +664,39 @@ mod tests {
         let bound = broad_exchange(&style, 167., [173.4, 273.6], [32, 32]);
         assert_close(bound, [1., 0., 0., 1. / 15.], "the one red tap of fifteen sets the averaged load when its page is bound");
         assert_close(broad_exchange(&style, 0., [173.4, 273.6], [32, 32]), bound, "the same far tap is averaged wherever the page grid falls");
+    }
+
+    fn exchanged(extent: [u32; 2], donor: ([f32; 2], f32), dabs: &[Dab], texel: [usize; 2]) -> ([f32; 4], u64) {
+        let document = paint_document(extent, "reached wet exchange");
+        let target = target(&document);
+        let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        submit_ready(&mut r, FramePacket { reset_layers: true, ..packet(document.scene(), extent) }).unwrap();
+        paint_dry(&mut r, &document, donor.0, donor.1, [1., 0., 0., 1.]);
+        let before = crate::test_support::PassCounts::snapshot();
+        submit_ready(&mut r, FramePacket { dabs, dab_batches: &[DabBatch { dab_count: dabs.len() as u32, damage: dabs.iter().fold(dabs[0].bounds(), |damage, dab| damage.union(dab.bounds())),
+            ..wet_batch(target, &dabs[0], 0, true) }], ..packet(document.scene(), extent) }).unwrap();
+        (carried(&r, texel), crate::test_support::PassCounts::snapshot().delta(before).gather_invocations)
+    }
+
+    #[test]
+    fn a_wet_exchange_binds_the_pages_its_taps_reach_without_a_gather() {
+        let laid = |shift: f32| exchanged([1024, 512], ([140. + shift, 256.], 100.),
+            &[wet_contact(140. + shift, 256., 120., [0.; 2]), wet_contact(520. + shift, 256., 8., [380., 0.])], [32, 32]);
+        let (bound, gathered) = laid(0.);
+        assert!(bound[0] > 0.1, "the first contact takes up the red under it: {bound:?}");
+        assert_eq!(gathered, 0, "an exchange whose taps reach six pages binds them all");
+        assert_close(laid(64.).0, bound, "the same exchange takes up the same red wherever the page grid falls");
+    }
+
+    #[test]
+    fn a_long_wet_exchange_gathers_only_the_texels_that_reach_past_its_bound_pages() {
+        let laid = |shift: f32| exchanged([1024, 1024], ([644. + shift, 242.], 8.),
+            &[Dab { radii: [256., 376.], ..wet_contact(640. + shift, 600., 256., [0.; 2]) }], [32, 1]);
+        let (bound, gathered) = laid(0.);
+        assert!(bound[0] > 0.1, "the top texel takes up the red on the page above the bound ones: {bound:?}");
+        let field = u64::from(PICKUP_TAPS * RESERVOIR_SIZE * (RESERVOIR_SIZE + 1));
+        assert!(gathered * 8 <= field, "the gather visits only the texels whose taps reach past the bound pages: {gathered} of {field}");
+        assert_close(laid(64.).0, bound, "the same exchange takes up the same red wherever the page grid falls");
     }
 
     #[test]

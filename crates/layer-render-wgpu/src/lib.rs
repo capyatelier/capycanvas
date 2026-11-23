@@ -601,8 +601,9 @@ enum MaterialInputs<'a> {
     Neighborhood,
     /// The colour of up to nine donor pages, in slot order, and nothing else.
     Donors(&'a [[u32; 2]]),
-    /// The colour of the pages around the destination and the brush reservoir.
-    Exchange,
+    /// The colour of up to nine pages a Wet exchange reads, in slot order,
+    /// and the brush reservoir.
+    Exchange(&'a [[u32; 2]]),
     /// A gathered sample field.
     /// A retouching source's target and reference pages, in the eight slots
     /// around the destination.
@@ -2438,8 +2439,8 @@ impl WgpuRasterizer {
         let result=(|| {
             let reads_preview = target.material_source().is_preview();
             let declares_preview = target.is_preview();
-            let donating = matches!(inputs, MaterialInputs::Donors(_) | MaterialInputs::Exchange);
-            let offsets = if let MaterialInputs::Donors(pages) = inputs {
+            let donating = matches!(inputs, MaterialInputs::Donors(_) | MaterialInputs::Exchange(_));
+            let offsets = if let MaterialInputs::Donors(pages) | MaterialInputs::Exchange(pages) = inputs {
                 std::array::from_fn(|i| pages.get(i).map(|page| std::array::from_fn(|axis| page[axis] as i32 - coordinate[axis] as i32)))
             } else { self.material_offsets(batch) };
             let mut neighborhood=self.brush_inputs.take().ok_or(GpuRasterError::Invariant("brush inputs are not prepared"))?;

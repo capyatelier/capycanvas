@@ -400,12 +400,13 @@ including stroke coverage, so no page copy or coverage clear precedes it. One co
 shared by a frame's consecutive batches and their watercolor transport,
 dispatches every job of a batch and, after a wet batch's jobs, its reservoir
 exchange: always for a committed batch, and for a predicted batch only when a
-later predicted batch of its stroke reads the result. An exchange whose taps
-reach beyond the pages around its last contact first gathers every tap from
-the page that holds it, one dispatch per nine pages it reads, and then exchanges
-from the gathered taps. A Wet page whose pulled pickups, or a Watercolor page
-whose dragged trace, reaches beyond the pages around it gathers those taps the
-same way before its job runs, over its dirty rectangle only: each pixel finds
+later predicted batch of its stroke reads the result. An exchange binds the
+pages its contacts' footprints reach, up to the three by three block that holds
+most of them; taps on any other page are first gathered, one dispatch per nine
+such pages over only the reservoir texels whose taps can reach them. A Wet page
+whose pulled pickups, or a Watercolor page whose dragged trace, reaches beyond
+the pages around it gathers its taps from every page it reads before its job
+runs, over the part of its dirty rectangle the batch damages: each pixel finds
 its position once and stores every tap that falls on a bound page. A gather
 binds only the colour of the pages it reads. At stroke start the exchange begins from
 the selected pigment instead of the stored reservoir. Watercolor stores wetness

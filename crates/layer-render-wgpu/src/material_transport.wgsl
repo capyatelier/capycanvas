@@ -64,15 +64,22 @@ fn donor_slot(page: vec2<u32>) -> u32 {
     return donors;
 }
 
+fn donor_load(slot: u32, position: vec2<f32>) -> vec4<f32> {
+    return load_neighborhood(i32(slot), vec2<i32>(floor(position)) - vec2<i32>(vec2<u32>(floor(position / 256.0)) * 256u));
+}
+
+fn outside_drawing(position: vec2<f32>) -> bool {
+    return any(position < vec2<f32>(0.0)) || any(position >= render_target.document_extent.xy);
+}
+
 fn store_donated(at: vec2<u32>, position: vec2<f32>) {
-    if any(position < vec2<f32>(0.0)) || any(position >= render_target.document_extent.xy) {
+    if outside_drawing(position) {
         if material_sources.header.w != 0u { store_dry_color(at, vec4<f32>(0.0)); }
         return;
     }
-    let page = vec2<u32>(floor(position / 256.0));
-    let slot = donor_slot(page);
+    let slot = donor_slot(vec2<u32>(floor(position / 256.0)));
     if slot < material_sources.pages[1].z {
-        store_dry_color(at, load_neighborhood(i32(slot), vec2<i32>(floor(position)) - vec2<i32>(page * 256u)));
+        store_dry_color(at, donor_load(slot, position));
     }
 }
 

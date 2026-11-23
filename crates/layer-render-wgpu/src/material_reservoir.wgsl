@@ -19,7 +19,6 @@ fn wet_refill(dab: Dab) -> f32 {
 
 const EXCHANGE_GATHERED: u32 = 1u;
 const EXCHANGE_GATHER: u32 = 2u;
-const AVERAGE_TAPS: u32 = 24u;
 
 fn exchange_mode() -> u32 {
     return material_sources.header.x;
@@ -42,18 +41,20 @@ fn gathered_tap(at: vec2<u32>) -> vec4<f32> {
     return textureLoad(stroke_coverage_texture, vec2<i32>(at), 0);
 }
 
+fn exchange_tap(position: vec2<f32>, gathered: vec2<u32>) -> vec4<f32> {
+    if outside_drawing(position) { return vec4<f32>(0.0); }
+    let slot = donor_slot(vec2<u32>(floor(position / 256.0)));
+    if slot < material_sources.pages[1].z { return donor_load(slot, position); }
+    if exchange_mode() == EXCHANGE_GATHERED { return gathered_tap(gathered); }
+    return vec4<f32>(0.0);
+}
+
 fn pickup_tap(dab: Dab, offset: u32, texel: vec2<u32>, tap: u32) -> vec4<f32> {
-    if exchange_mode() == EXCHANGE_GATHERED {
-        return gathered_tap(texel + vec2<u32>(tap, offset) * RESERVOIR_TEXELS);
-    }
-    return canvas_load(pickup_position(dab, texel, tap));
+    return exchange_tap(pickup_position(dab, texel, tap), texel + vec2<u32>(tap, offset) * RESERVOIR_TEXELS);
 }
 
 fn average_tap(dab: Dab, offset: u32, tap: u32) -> vec4<f32> {
-    if exchange_mode() == EXCHANGE_GATHERED {
-        return gathered_tap(vec2<u32>(tap, style.operation.y * RESERVOIR_TEXELS + offset));
-    }
-    return canvas_load(average_position(dab, tap));
+    return exchange_tap(average_position(dab, tap), vec2<u32>(tap, style.operation.y * RESERVOIR_TEXELS + offset));
 }
 
 fn exchange_pickup(dab: Dab, offset: u32, texel: vec2<u32>) -> vec4<f32> {
@@ -80,18 +81,21 @@ fn footprint_average(dab: Dab, offset: u32) -> vec4<f32> {
     return resolve_mix_space(sum / max(weights, 0.000001));
 }
 
-fn gather_tap(at: vec2<u32>) {
+fn gather_tap(id: vec2<u32>) {
     let count = style.operation.y;
-    let rows = count * RESERVOIR_TEXELS;
-    var position: vec2<f32>;
-    if at.y < rows {
-        if at.x >= PICKUP_TAPS * RESERVOIR_TEXELS { return; }
-        position = pickup_position(dabs[style.operation.x + at.y / RESERVOIR_TEXELS], at % vec2<u32>(RESERVOIR_TEXELS), at.x / RESERVOIR_TEXELS);
-    } else {
-        if at.y >= rows + count || at.x >= AVERAGE_TAPS { return; }
-        position = average_position(dabs[style.operation.x + at.y - rows], at.x);
+    let texels = material_sources.pages[0];
+    let size = texels.zw - texels.xy;
+    if id.y < count * size.y {
+        if id.x >= PICKUP_TAPS * size.x { return; }
+        let texel = texels.xy + vec2<u32>(id.x % size.x, id.y % size.y);
+        let tap = id.x / size.x;
+        let offset = id.y / size.y;
+        store_donated(texel + vec2<u32>(tap, offset) * RESERVOIR_TEXELS, pickup_position(dabs[style.operation.x + offset], texel, tap));
+        return;
     }
-    store_donated(at, position);
+    let offset = id.y - count * size.y;
+    if offset >= count || id.x >= AVERAGE_TAPS { return; }
+    store_donated(vec2<u32>(id.x, count * RESERVOIR_TEXELS + offset), average_position(dabs[style.operation.x + offset], id.x));
 }
 
 fn carried_toward(carried: vec4<f32>, goal: vec4<f32>, exchange: f32, keep_alpha: bool) -> vec4<f32> {
