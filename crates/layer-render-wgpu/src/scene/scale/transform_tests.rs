@@ -775,15 +775,20 @@ impl Refusing {
         self.until(|engine|!engine.has_pending_document_edits() && engine.backend().settled() && engine.frame_demand()==layer_render::FrameDemand::Wait)
     }
     fn leave(&mut self,headroom:u64) {
-        let r=self.engine.backend_mut();
-        let budget=r.factory.memory_budget().clone();
-        let device=budget.snapshot().devices[0];
-        let held=device.limit_bytes.saturating_sub(device.pinned_bytes).saturating_sub(headroom);
-        let other=budget.register_owner(layer_core::MemoryOwnerKind::Other,layer_core::MemoryClass::Pinned,Some(device.device));
-        other.report(layer_core::MemoryReport {gpu_bytes:held,pinned_gpu_bytes:held,..Default::default()});
-        budget.flush_reports();r.memory.invalidate_limits();r.refresh_memory_limits();
-        self._held=Some(other);
-        self.settle().expect("the canvas settles under the smaller grant");
+        let budget=self.engine.backend().factory.memory_budget().clone();
+        let other=budget.register_owner(layer_core::MemoryOwnerKind::Other,layer_core::MemoryClass::Pinned,Some(budget.snapshot().devices[0].device));
+        let mut held=0;
+        for _ in 0..8 {
+            let device=budget.snapshot().devices[0];
+            let next=device.limit_bytes.saturating_sub(device.pinned_bytes.saturating_sub(held)).saturating_sub(headroom);
+            if next<=held {self._held=Some(other);return;}
+            held=next;
+            other.report(layer_core::MemoryReport {gpu_bytes:held,pinned_gpu_bytes:held,..Default::default()});
+            budget.flush_reports();
+            let r=self.engine.backend_mut();r.memory.invalidate_limits();r.refresh_memory_limits();
+            self.settle().expect("the canvas settles under the smaller grant");
+        }
+        panic!("fixture failed: the renderer kept releasing pinned memory under the smaller grant");
     }
     fn pose(&self,moving:bool,x:f32)->layer_render::TransformPreview {
         layer_render::TransformPreview {transaction:1,moving,target:self.layer,selection:None,
@@ -800,9 +805,10 @@ fn a_preview_the_grant_refuses_lets_the_canvas_settle() {
     let mut canvas=Refusing::filled();
     assert!(canvas.engine.backend().scale_display.as_ref().is_some_and(|cache|cache.plan.level>0 && cache.evaluation==Evaluation::Display));
     let inputs=canvas.engine.backend().transforms.as_ref().unwrap().storage_bytes();
-    canvas.leave(128<<20);
+    canvas.leave(32<<20);
     canvas.show(canvas.pose(false,0.));
     canvas.settle().expect("a preview the grant refuses must not hold the canvas");
+    assert_eq!(canvas.engine.backend().refused_transform,Some(canvas.pose(false,0.)),"fixture failed: the smaller grant admitted the first pose");
     for step in 1..=6 {
         canvas.show(canvas.pose(true,step as f32*200.));
         canvas.settle().expect("each refused pose of a drag lets the canvas settle");
