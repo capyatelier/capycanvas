@@ -174,6 +174,12 @@ impl Chunk {
         device.request_poll();
         Self {buffer,entries,ready}
     }
+    fn resolve_comparisons(&self,bytes:&[u8])->Result<(),String> {
+        let outcomes=self.entries.iter().filter_map(|entry|entry.comparison.as_ref()).map(|(offset,comparison)|
+            comparison.changed(&bytes[*offset as usize..*offset as usize+crate::native_tiles::comparison::RESULT_BYTES as usize]).map(|changed|(comparison,changed)))
+            .collect::<Result<Vec<_>,_>>()?;
+        outcomes.into_iter().try_for_each(|(comparison,changed)|comparison.resolve(changed))
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -368,9 +374,9 @@ impl RasterCapture {
                 drop(mapped);
                 chunk.buffer.unmap();
                 recycle(chunk.buffer.clone());
+                chunk.resolve_comparisons(&bytes)?;
                 let encode = |entries: &[Entry]| -> Result<(), String> {
                     for entry in entries {
-                        if let Some((offset,comparison))=&entry.comparison {comparison.resolve(&bytes[*offset as usize..*offset as usize+crate::native_tiles::comparison::RESULT_BYTES as usize])?;}
                         let begin = entry.offset as usize;
                         entry.tile.publish(TileBlob::encode(
                             entry.descriptor,

@@ -481,4 +481,38 @@ mod tests {
     #[test]
     fn scalar_native_canonical_names_resolve_from_capture_owned_comparisons() {assert_canonical_names(true);}
 
+    #[test]
+    fn an_invalid_comparison_word_fails_every_tile_of_its_transfer() {
+        use crate::native_tiles::comparison::{CanonicalComparisons,STRIDE};
+        use layer_core::color::{DocumentColor,RgbSpace,SampleDepth};
+        let color=DocumentColor {space:RgbSpace::Srgb,depth:SampleDepth::U8};
+        let mut r=WgpuRasterizer::new_native_headless(color).unwrap();
+        let descriptor=RasterPlane::Mask.descriptor(color);
+        let mut allocation=r.admit_raster_working(CanonicalComparisons::bytes(2).unwrap()).unwrap();
+        let comparisons=CanonicalComparisons::reserved(&mut r,2,&mut allocation).unwrap();
+        let tiles=[0,1].map(|index| {
+            let (tile,name)=RasterTile::pending_from_live(descriptor,layer_core::raster::ContentName::fresh().into());
+            (tile,comparisons.result(index,name))
+        });
+        let packed=r.device.create_buffer(&wgpu::BufferDescriptor {label:Some("compared capture fixture"),
+            size:descriptor.byte_len([256;2]).unwrap() as u64,usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_SRC,mapped_at_creation:false});
+        let module=r.device.create_shader_module(wgpu::ShaderModuleDescriptor {label:Some("invalid comparison writer"),source:wgpu::ShaderSource::Wgsl(
+            format!("@group(0) @binding(0) var<storage,read_write> words:array<u32>;\n@compute @workgroup_size(1) fn main() {{words[{}u]=2u;}}",STRIDE/4).into())});
+        let pipeline=r.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {label:None,layout:None,module:&module,
+            entry_point:Some("main"),compilation_options:Default::default(),cache:None});
+        let bind=r.device.create_bind_group(&wgpu::BindGroupDescriptor {label:None,layout:&pipeline.get_bind_group_layout(0),
+            entries:&[wgpu::BindGroupEntry {binding:0,resource:comparisons.buffer().as_entire_binding()}]});
+        let mut commands=r.device.create_command_encoder(&Default::default());
+        {let mut pass=commands.begin_compute_pass(&Default::default());pass.set_pipeline(&pipeline);pass.set_bind_group(0,&bind,&[]);pass.dispatch_workgroups(1,1,1);}
+        let copies=tiles.iter().map(|(tile,_)|TileCapture {source:CaptureSource::Packed(&packed),tile:tile.clone()}).collect::<Vec<_>>();
+        let results=tiles.iter().map(|(_,result)|Some(result.clone())).collect::<Vec<_>>();
+        let capture=prepare_capture_compared(&r.raster_buffers,&mut commands,&copies,&results,|bytes|r.raster_buffers.take(&r.device,bytes)).unwrap();
+        r.queue.submit([commands.finish()]);
+        assert_eq!(capture.submitted_device(&r.device).finish(),Err("Invalid canonical comparison result".into()));
+        for (index,(tile,_)) in tiles.iter().enumerate() {
+            assert!(matches!(tile.try_backing(),Some(Err(_))),"tile {index} of the failed transfer keeps an unverified backing");
+            assert_eq!(tile.content_version().resolved(),None,"tile {index} of the failed transfer resolved its name");
+        }
+    }
+
 }
