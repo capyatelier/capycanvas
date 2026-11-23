@@ -771,6 +771,40 @@ fn committed_miss(fixture:&mut Fixture,style:&layer_render::DabStyle) {
 fn final_preview(r:&WgpuRasterizer,coordinate:[u32;2])->bool {r.read_color_page(TARGET,r.preview_page(coordinate).unwrap(),true,None).is_ok()}
 
 #[test]
+fn a_heal_waits_for_its_kernels_to_compile() {
+    let mut fixture=Fixture::new(document(SIZE));
+    let retouch=Retouch {source:RetouchSource::References,references:Arc::new([PHOTO_USE].into()),..Default::default()};
+    let prepared=|execution|RetouchPreparation {execution,target:TARGET,retouch:retouch.clone(),points:vec![Point {x:96.,y:96.}]};
+    let mut heal=crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::HealingBrush);
+    heal.retouch=Some(retouch.clone());
+    let dab=clone_dab(96.,96.);
+    let stroke=crate::test_support::dab_batch(TARGET,heal.clone(),dab.bounds());
+    let (r,packet)=fixture.frame();
+    r.prepare_retouch(Some(&prepared(layer_core::BrushExecution::Clone)));
+    let mut needs=crate::compile::Needs::default();
+    needs.style(r,&heal,crate::dry_material::Reach::of_dabs(std::slice::from_ref(&dab)),false,false);
+    needs.render.extend(r.retouch_pipelines().required(layer_core::BrushExecution::Clone).0);
+    pollster::block_on(r.compilation.prepare_all(&needs.compute)).unwrap();
+    pollster::block_on(r.compilation.prepare_all(&needs.render)).unwrap();
+    crate::test_support::submit_settled(r,packet);
+    let paused=r.compilation.batch();
+    r.prepare_retouch(Some(&prepared(layer_core::BrushExecution::Heal)));
+    let frame=FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&stroke),composite_all:false,..packet};
+    let started=std::time::Instant::now();
+    let mut submitted=false;
+    while started.elapsed()<std::time::Duration::from_millis(500) {
+        r.poll_pending(frame.view).unwrap();
+        let next=if submitted {packet} else {frame};
+        submitted|=r.submit_when_ready(next,None).is_ready();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!submitted,"a heal waits for its kernels to compile");
+    drop(paused);
+    crate::test_support::submit_settled(r,frame);
+    assert_eq!(r.retouch.as_ref().unwrap().counts.heals,1,"the heal runs once its kernels compile");
+}
+
+#[test]
 fn a_preview_over_pixels_a_cold_donor_left_behind_is_not_final() {
     let (mut fixture,style)=cold_clone([384.,0.]);
     committed_miss(&mut fixture,&style);

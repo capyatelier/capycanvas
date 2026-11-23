@@ -2195,6 +2195,10 @@ impl WgpuRasterizer {
             if destination_material::gathers_far_taps(batch, dabs, packet.scene.target_extent(batch.target)) {
                 ready &= self.compilation.require(self.pipelines.destination_material.gather(&batch.style), startup::BRUSH);
             }
+            if batch.style.retouch.is_some() {
+                let (render, compute) = self.retouch_pipelines().required(batch.style.execution);
+                ready &= self.compilation.require(&render, startup::BRUSH) & self.compilation.require(&compute, startup::BRUSH);
+            }
             if !self.startup.as_ref().is_some_and(|startup|startup.strokes.covers(&batch.style)) {
                 let mask = layer_masks::MaskRenderer::is_mask(packet.scene, batch.target);
                 let mut required = compile::Needs::default();

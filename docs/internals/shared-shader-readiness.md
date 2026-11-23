@@ -207,8 +207,9 @@ until release.
 Frame readiness covers each batch's actual dependencies. For every distinct
 batch style, `raster_dependencies_ready` requests the style's Paper bake and tip
 mask, and its pipelines when the startup brush does not cover it; encoding
-selects the same texture set. A frame whose dependencies are missing waits with
-its input instead of failing. A texture set keeps the Paper relief it was built
+selects the same texture set. A retouching batch always requires its gathering,
+copying and healing kernels, which its pen-up heal also runs. A frame whose
+dependencies are missing waits with its input instead of failing. A texture set keeps the Paper relief it was built
 with, so evicting a bake does not change the pixels of an existing set.
 `ShaderDocument` memoizes the dependency-relevant document state: ordinary
 raster/parameter edits do not invalidate readiness or trigger effect preparation.
