@@ -603,7 +603,7 @@ enum MaterialInputs<'a> {
     Donors(&'a [[u32; 2]]),
     /// The colour of up to nine pages a Wet exchange reads, in slot order,
     /// and the brush reservoir.
-    Exchange(&'a [[u32; 2]]),
+    Exchange([Option<[u32; 2]>; 9]),
     /// A gathered sample field.
     /// A retouching source's target and reference pages, in the eight slots
     /// around the destination.
@@ -2166,7 +2166,7 @@ impl WgpuRasterizer {
 
     fn brush_batches_ready(&mut self, packet: FramePacket<'_>) -> bool {
         let mut ready = true;
-        for batch in packet.dab_batches {
+        for (position, batch) in packet.dab_batches.iter().enumerate() {
             if let DabBatchKind::RasterOperation(index) = batch.kind
                 && let Some(operation) = packet.scene.operations(batch.target).and_then(|ops| ops.get(index as usize))
             {
@@ -2192,9 +2192,10 @@ impl WgpuRasterizer {
             }
             ready &= self.brush_textures_ready(&batch.style);
             let dabs = packet.dabs.get(batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize).unwrap_or_default();
-            if destination_material::gathers_far_taps(batch, dabs, packet.scene.target_extent(batch.target)) {
-                ready &= self.compilation.require(self.pipelines.destination_material.gather(&batch.style), startup::BRUSH);
-            }
+            let far = destination_material::far_entries(BrushPassPlan::for_device(&batch.style, &self.device), packet.dab_batches, position, dabs,
+                packet.scene.target_extent(batch.target));
+            ready &= self.compilation.require(far.into_iter().map(|entry| self.pipelines.destination_material.kernel(&batch.style, destination_material::Taps::Far, entry)),
+                startup::BRUSH);
             if batch.style.retouch.is_some() {
                 let (render, compute) = self.retouch_pipelines().required(batch.style.execution);
                 ready &= self.compilation.require(&render, startup::BRUSH) & self.compilation.require(&compute, startup::BRUSH);
@@ -2447,9 +2448,12 @@ impl WgpuRasterizer {
             let reads_preview = target.material_source().is_preview();
             let declares_preview = target.is_preview();
             let donating = matches!(inputs, MaterialInputs::Donors(_) | MaterialInputs::Exchange(_));
-            let offsets = if let MaterialInputs::Donors(pages) | MaterialInputs::Exchange(pages) = inputs {
-                std::array::from_fn(|i| pages.get(i).map(|page| std::array::from_fn(|axis| page[axis] as i32 - coordinate[axis] as i32)))
-            } else { self.material_offsets(batch) };
+            let offset = |page: [u32; 2]| -> [i32; 2] { std::array::from_fn(|axis| page[axis] as i32 - coordinate[axis] as i32) };
+            let offsets = match inputs {
+                MaterialInputs::Donors(pages) => std::array::from_fn(|i| pages.get(i).copied().map(offset)),
+                MaterialInputs::Exchange(slots) => slots.map(|slot| slot.map(offset)),
+                _ => self.material_offsets(batch),
+            };
             let mut neighborhood=self.brush_inputs.take().ok_or(GpuRasterError::Invariant("brush inputs are not prepared"))?;
             #[cfg(test)] let _record=scene::sources::record_reads(&neighborhood);
             let source_preview=reads_preview.then_some((scene::PreviewStage::BeforeBatch(batch_index),None));

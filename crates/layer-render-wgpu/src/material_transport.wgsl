@@ -55,109 +55,12 @@ fn canvas_sample(brush_position: vec2<f32>) -> vec4<f32> {
     return mix(top, bottom, fraction.y);
 }
 
-fn donor_slot(page: vec2<u32>) -> u32 {
-    let donors = material_sources.pages[1].z;
-    for (var slot = 0u; slot < donors; slot += 1u) {
-        let pair = material_sources.pages[2u + slot / 2u];
-        if all(page == select(pair.xy, pair.zw, slot % 2u == 1u)) { return slot; }
-    }
-    return donors;
-}
-
-fn donor_load(slot: u32, position: vec2<f32>) -> vec4<f32> {
-    return load_neighborhood(i32(slot), vec2<i32>(floor(position)) - vec2<i32>(vec2<u32>(floor(position / 256.0)) * 256u));
-}
-
-fn outside_drawing(position: vec2<f32>) -> bool {
-    return any(position < vec2<f32>(0.0)) || any(position >= render_target.document_extent.xy);
-}
-
-fn store_donated(at: vec2<u32>, position: vec2<f32>) {
-    if outside_drawing(position) {
-        if material_sources.header.w != 0u { store_dry_color(at, vec4<f32>(0.0)); }
-        return;
-    }
-    let slot = donor_slot(vec2<u32>(floor(position / 256.0)));
-    if slot < material_sources.pages[1].z {
-        store_dry_color(at, donor_load(slot, position));
-    }
-}
-
-fn gathered_pickups() -> bool {
-    return material_sources.header.z != 0u;
-}
-
-fn gathered_page_tap(fragment_position: vec2<f32>, row: u32, tap: u32) -> vec4<f32> {
-    return textureLoad(source_00, vec2<i32>(floor(fragment_position)) + vec2<i32>(i32(tap), i32(row)) * 256, 0);
-}
-
 fn pickup_radius() -> f32 {
     return clamp(style.material_b.z, 0.0, 1.0) * 4.0;
 }
 
-fn pickup_tap_position(position: vec2<f32>, tap: u32) -> vec2<f32> {
-    let radius = pickup_radius();
-    var offsets = array<vec2<f32>, 5>(
-        vec2<f32>(0.0), vec2<f32>(radius, 0.0), vec2<f32>(-radius, 0.0), vec2<f32>(0.0, radius), vec2<f32>(0.0, -radius),
-    );
-    return position + offsets[tap];
-}
-
 fn pulled_position(world: vec2<f32>, dab: Dab) -> vec2<f32> {
     return world - dab.motion * clamp(dab.material.y, 0.0, 1.0);
-}
-
-fn pulled_tap(fragment_position: vec2<f32>, world: vec2<f32>, dab: Dab, row: u32, tap: u32) -> vec4<f32> {
-    if gathered_pickups() {
-        return gathered_page_tap(fragment_position, row, tap);
-    }
-    return canvas_load(pickup_tap_position(pulled_position(world, dab), tap));
-}
-
-fn pulled_pickup(fragment_position: vec2<f32>, world: vec2<f32>, dab: Dab, row: u32) -> vec4<f32> {
-    if pickup_radius() < 0.01 {
-        return pulled_tap(fragment_position, world, dab, row, 0u);
-    }
-    return (pulled_tap(fragment_position, world, dab, row, 0u) * 4.0
-        + pulled_tap(fragment_position, world, dab, row, 1u)
-        + pulled_tap(fragment_position, world, dab, row, 2u)
-        + pulled_tap(fragment_position, world, dab, row, 3u)
-        + pulled_tap(fragment_position, world, dab, row, 4u)) / 8.0;
-}
-
-fn trace_tap_position(position: vec2<f32>, tap: u32) -> vec2<f32> {
-    let base = floor(position - vec2<f32>(0.5)) + vec2<f32>(0.5);
-    let radius = pickup_radius();
-    var taps = array<vec2<f32>, 8>(
-        base, base + vec2<f32>(1.0, 0.0), base + vec2<f32>(0.0, 1.0), base + vec2<f32>(1.0, 1.0),
-        position + vec2<f32>(radius, 0.0), position + vec2<f32>(-radius, 0.0), position + vec2<f32>(0.0, radius), position + vec2<f32>(0.0, -radius),
-    );
-    return taps[tap];
-}
-
-fn traced_tap(fragment_position: vec2<f32>, position: vec2<f32>, tap: u32) -> vec4<f32> {
-    if gathered_pickups() {
-        return gathered_page_tap(fragment_position, 0u, tap);
-    }
-    return canvas_load(trace_tap_position(position, tap));
-}
-
-fn traced_sample(fragment_position: vec2<f32>, position: vec2<f32>) -> vec4<f32> {
-    let base = floor(position - vec2<f32>(0.5)) + vec2<f32>(0.5);
-    let fraction = clamp(position - base, vec2<f32>(0.0), vec2<f32>(1.0));
-    let sample = mix(
-        mix(traced_tap(fragment_position, position, 0u), traced_tap(fragment_position, position, 1u), fraction.x),
-        mix(traced_tap(fragment_position, position, 2u), traced_tap(fragment_position, position, 3u), fraction.x),
-        fraction.y,
-    );
-    if pickup_radius() < 0.01 {
-        return sample;
-    }
-    return (sample * 4.0
-        + traced_tap(fragment_position, position, 4u)
-        + traced_tap(fragment_position, position, 5u)
-        + traced_tap(fragment_position, position, 6u)
-        + traced_tap(fragment_position, position, 7u)) / 8.0;
 }
 
 fn trace_back(trace_coordinate: vec2<f32>, dab: Dab) -> vec2<f32> {
@@ -173,17 +76,6 @@ fn trace_back(trace_coordinate: vec2<f32>, dab: Dab) -> vec2<f32> {
         return trace_coordinate - dab.motion
             * clamp(dab.material.y, 0.0, 1.0)
             * trace_coverage;
-    }
-    return trace_coordinate;
-}
-
-fn watercolor_trace(world: vec2<f32>, first: u32, count: u32) -> vec2<f32> {
-    var trace_coordinate = world;
-    var remaining = count;
-    loop {
-        if remaining == 0u { break; }
-        remaining -= 1u;
-        trace_coordinate = trace_back(trace_coordinate, dabs[first + remaining]);
     }
     return trace_coordinate;
 }

@@ -408,7 +408,9 @@ whose pulled pickups, or a Watercolor page whose dragged trace, reaches beyond
 the pages around it gathers its taps from every page it reads before its job
 runs, over the part of its dirty rectangle the batch damages: each pixel finds
 its position once and stores every tap that falls on a bound page. A gather
-binds only the colour of the pages it reads. At stroke start the exchange begins from
+binds only the colour of the pages it reads. Jobs and exchanges whose taps stay
+within three by three pages run kernels compiled without gathered taps; the
+others run separate far kernels. At stroke start the exchange begins from
 the selected pigment instead of the stored reservoir. Watercolor stores wetness
 only where a contact of the job deposits, except that the first job of an
 update on a page also stores the pre-update wetness everywhere else; a later

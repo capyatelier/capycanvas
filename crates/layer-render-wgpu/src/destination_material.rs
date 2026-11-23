@@ -29,6 +29,8 @@ pub(super) fn reservoir_page(last: &Dab, extent: [u32; 2]) -> [u32; 2] {
 }
 
 pub(super) struct ExchangeReach {
+    /// The page whose three by three pages hold every page the taps reach.
+    pub near: Option<[u32; 2]>,
     pub direct: Vec<[u32; 2]>,
     pub gathered: Vec<[u32; 2]>,
     pub texels: PixelRect,
@@ -36,6 +38,18 @@ pub(super) struct ExchangeReach {
 
 impl ExchangeReach {
     pub fn pages(&self) -> impl Iterator<Item = [u32; 2]> + '_ { self.direct.iter().chain(&self.gathered).copied() }
+
+    /// The pages the exchange binds: around its near page in neighborhood
+    /// order, or in the order the far kernel lists them.
+    pub fn slots(&self) -> [Option<[u32; 2]>; DONOR_SLOTS] {
+        match self.near {
+            Some(center) => std::array::from_fn(|slot| crate::source_access::neighborhood(center, [Some([slot as i32 % 3 - 1, slot as i32 / 3 - 1])])
+                .next().filter(|page| self.direct.contains(page))),
+            None => std::array::from_fn(|slot| self.direct.get(slot).copied()),
+        }
+    }
+
+    pub fn taps(&self) -> Taps { if self.near.is_some() { Taps::Near } else { Taps::Far } }
 }
 
 struct Footprint<'a> { dab: &'a Dab, shift: [f32; 2], margin: f32, elliptic: bool }
@@ -92,12 +106,13 @@ pub(super) fn exchange_reach(style: &layer_render::DabStyle, dabs: &[Dab], exten
     let center = pages.iter().flat_map(|page| (0..9).filter_map(move |index| crate::source_access::neighborhood(*page, [Some([index % 3 - 1, index / 3 - 1])]).next()))
         .max_by_key(|center| (pages.iter().filter(|page| around(*center, page)).count(), std::cmp::Reverse(*center)));
     let (mut direct, beyond): (Vec<_>, Vec<_>) = pages.into_iter().partition(|page| center.is_some_and(|center| around(center, page)));
+    let near = beyond.is_empty().then(|| center.unwrap_or_default());
     let reaching = |page: [u32; 2]| pickups.iter().filter(|footprint| footprint.reaches(page)).map(|footprint| footprint.texels(page)).fold(PixelRect::EMPTY, PixelRect::union);
     let mut gathered: Vec<_> = beyond.into_iter().filter(|page| !reaching(*page).is_empty() || averages.iter().any(|footprint| footprint.reaches(*page))).collect();
     gathered.sort_by_key(|page| std::cmp::Reverse(reaching(*page).area()));
     direct.extend(gathered.drain(..DONOR_SLOTS.saturating_sub(direct.len()).min(gathered.len())));
     let texels = gathered.iter().map(|page| reaching(*page)).fold(PixelRect::EMPTY, PixelRect::union);
-    ExchangeReach { direct, gathered, texels }
+    ExchangeReach { near, direct, gathered, texels }
 }
 
 pub(super) fn job_reads(style: &layer_render::DabStyle, dabs: &[Dab], written: PixelRect, extent: [u32; 2]) -> PixelRect {
@@ -169,6 +184,15 @@ pub(super) fn transported(style: &layer_render::DabStyle) -> bool {
     OPERATIONS.contains(&BrushPassPlan::for_style(style).material)
 }
 
+/// Where a page job or exchange finds its taps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum Taps {
+    /// On the pages bound around the page it writes.
+    Near,
+    /// On donor pages bound by their coordinates, or in a gathered tap field.
+    Far,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum Entry {
     Color,
@@ -176,6 +200,7 @@ pub(super) enum Entry {
     Reservoir,
     Watercolor,
     Gather,
+    ReservoirGather,
 }
 
 impl Entry {
@@ -186,6 +211,7 @@ impl Entry {
             Self::Reservoir => "reservoir_exchange",
             Self::Watercolor => "transport_watercolor",
             Self::Gather => "transport_gather",
+            Self::ReservoirGather => "reservoir_gather",
         }
     }
 
@@ -194,16 +220,19 @@ impl Entry {
         match self {
             Self::Coverage => 1,
             Self::Watercolor => 2,
-            Self::Color | Self::Reservoir | Self::Gather => 0,
+            Self::Color | Self::Reservoir | Self::Gather | Self::ReservoirGather => 0,
         }
     }
 }
 
-pub(super) fn entries(operation: MaterialOperation) -> &'static [Entry] {
-    match operation {
-        MaterialOperation::Wet => &[Entry::Color, Entry::Coverage, Entry::Reservoir, Entry::Gather],
-        MaterialOperation::Watercolor => &[Entry::Watercolor, Entry::Gather],
-        MaterialOperation::Smudge => &[Entry::Color, Entry::Coverage],
+pub(super) fn entries(operation: MaterialOperation, taps: Taps) -> &'static [Entry] {
+    match (operation, taps) {
+        (MaterialOperation::Wet, Taps::Near) => &[Entry::Color, Entry::Coverage, Entry::Reservoir],
+        (MaterialOperation::Wet, Taps::Far) => &[Entry::Color, Entry::Coverage, Entry::Reservoir, Entry::Gather, Entry::ReservoirGather],
+        (MaterialOperation::Watercolor, Taps::Near) => &[Entry::Watercolor],
+        (MaterialOperation::Watercolor, Taps::Far) => &[Entry::Watercolor, Entry::Gather],
+        (MaterialOperation::Smudge, Taps::Near) => &[Entry::Color, Entry::Coverage],
+        (MaterialOperation::Smudge, Taps::Far) => &[],
         _ => unreachable!("operation uses its own pipeline"),
     }
 }
@@ -263,21 +292,20 @@ pub(super) fn rewritten(style: &layer_render::DabStyle, coordinate: [u32; 2], lo
     Some(PixelRect::new(low(0, local.min_x()), low(1, local.min_y()), high(0, local.max_x()), high(1, local.max_y())))
 }
 
-/// The module that provides `entry` of `operation` for one blend code and blender.
-pub(super) fn module(operation: MaterialOperation, blend: u32, blender: Blender) -> Entries {
+/// The module that provides `entry` of `operation` for one blend code, blender and tap reach.
+pub(super) fn module(operation: MaterialOperation, blend: u32, blender: Blender, taps: Taps) -> Entries {
     match operation {
         MaterialOperation::Smudge => Entries::Blend(blender),
-        _ => Entries::Transport(blend),
+        _ => Entries::Transport(blend, taps),
     }
 }
 
 /// The kernels a brush selection prepares for committed and predicted pages.
-pub(super) fn selected(plan: BrushPassPlan, preview: bool) -> impl Iterator<Item = Entry> {
-    entries(plan.material).iter().copied().filter(move |&entry| match entry {
+pub(super) fn selected(plan: BrushPassPlan, preview: bool, taps: Taps) -> impl Iterator<Item = Entry> {
+    entries(plan.material, taps).iter().copied().filter(move |&entry| match entry {
         Entry::Color => preview || !plan.state.coverage,
         Entry::Coverage => plan.state.coverage,
-        Entry::Reservoir | Entry::Watercolor => true,
-        Entry::Gather => false,
+        Entry::Reservoir | Entry::Watercolor | Entry::Gather | Entry::ReservoirGather => true,
     })
 }
 
@@ -285,9 +313,20 @@ fn gathered(style: &layer_render::DabStyle) -> bool {
     matches!(BrushPassPlan::for_style(style).material, MaterialOperation::Wet | MaterialOperation::Watercolor)
 }
 
-pub(super) fn gathers_far_taps(batch: &DabBatch, dabs: &[Dab], extent: [u32; 2]) -> bool {
+/// The far kernels `batches[index]` dispatches: a page kernel and the gather
+/// for jobs whose taps reach beyond the pages around them, and the exchange
+/// and its gather when its taps reach beyond one three by three block.
+pub(super) fn far_entries(plan: BrushPassPlan, batches: &[DabBatch], index: usize, dabs: &[Dab], extent: [u32; 2]) -> Vec<Entry> {
+    let batch = &batches[index];
+    if !gathered(&batch.style) { return Vec::new(); }
     let written = crate::batch_pixel_rect(batch, extent);
-    gathered(&batch.style) && page_coordinates(written).any(|page| job_donors(&batch.style, dabs, written, page, extent).is_some())
+    let pages = page_coordinates(written).any(|page| job_donors(&batch.style, dabs, written, page, extent).is_some());
+    let exchange = exchanges(batches, index, extent).then(|| exchange_reach(&batch.style, dabs, extent)).filter(|reach| reach.near.is_none());
+    selected(plan, batch.kind == DabBatchKind::Preview, Taps::Far).filter(|entry| match entry {
+        Entry::Reservoir => exchange.is_some(),
+        Entry::ReservoirGather => exchange.as_ref().is_some_and(|reach| !reach.gathered.is_empty()),
+        Entry::Color | Entry::Coverage | Entry::Watercolor | Entry::Gather => pages,
+    }).collect()
 }
 
 /// Wet and watercolor deposit through the brush blend. Smudge only
@@ -296,7 +335,7 @@ pub(super) fn blended(operation: MaterialOperation) -> bool {
     matches!(operation, MaterialOperation::Wet | MaterialOperation::Watercolor)
 }
 
-type KernelKey = (u32, usize, Entry, u8, bool, bool, bool);
+type KernelKey = (u32, usize, Taps, Entry, u8, bool, bool, bool);
 
 #[derive(Clone)]
 pub(super) struct Pipelines {
@@ -319,12 +358,13 @@ impl Pipelines {
         for (slot, operation) in (0..MATERIAL_SLOTS).flat_map(|slot| OPERATIONS.map(|operation| (slot, operation))) {
             if !blended(operation) && slot % MATERIAL_BLENDS.len() != 0 { continue; }
             let (flags, blend) = dry_material::material_entries(slot);
-            for blender in blenders(operation) {
-                let transport = dry_material::material_shader(device, module(operation, blend, blender), flags, operation);
-                for &entry in entries(operation) {
+            for (blender, taps) in blenders(operation).into_iter().flat_map(|blender| [Taps::Near, Taps::Far].map(|taps| (blender, taps))) {
+                if entries(operation, taps).is_empty() { continue; }
+                let transport = dry_material::material_shader(device, module(operation, blend, blender, taps), flags, operation);
+                for &entry in entries(operation, taps) {
                     let outputs = if matches!(blender.kind, layer_core::BlenderKind::Dither | layer_core::BlenderKind::Scatter) && entry == Entry::Coverage { 3 } else { entry.outputs() };
-                    kernels.insert((operation as u32, slot, entry, blender.kind as u8, blender.paper, blender.lift, blender.cells), Deferred::compute(device,
-                        format!("destination material {} operation={} contact={flags:#x} blend={blend} {blender:?}", entry.name(), operation as u32),
+                    kernels.insert((operation as u32, slot, taps, entry, blender.kind as u8, blender.paper, blender.lift, blender.cells), Deferred::compute(device,
+                        format!("destination material {} operation={} contact={flags:#x} blend={blend} {blender:?} {taps:?}", entry.name(), operation as u32),
                         &pipeline_layouts[outputs], &transport, entry.name()));
                 }
             }
@@ -332,16 +372,17 @@ impl Pipelines {
         Self { layouts, kernels }
     }
 
-    pub fn kernel(&self, style: &layer_render::DabStyle, entry: Entry) -> &Deferred<wgpu::ComputePipeline> {
+    pub fn kernel(&self, style: &layer_render::DabStyle, taps: Taps, entry: Entry) -> &Deferred<wgpu::ComputePipeline> {
         let operation = BrushPassPlan::for_style(style).material;
         let slot = if blended(operation) { dry_material::material_slot(style) }
             else { dry_material::material_contact_slot(style) * MATERIAL_BLENDS.len() };
         let blender = if operation == MaterialOperation::Smudge { blender(style) } else { PLAIN };
-        &self.kernels[&(operation as u32, slot, entry, blender.kind as u8, blender.paper, blender.lift, blender.cells)]
+        &self.kernels[&(operation as u32, slot, taps, entry, blender.kind as u8, blender.paper, blender.lift, blender.cells)]
     }
 
-    pub fn gather(&self, style: &layer_render::DabStyle) -> Option<&Deferred<wgpu::ComputePipeline>> {
-        gathered(style).then(|| self.kernel(style, Entry::Gather))
+    /// The far kernels a brush selection anticipates.
+    pub fn far<'a>(&'a self, style: &'a layer_render::DabStyle, plan: BrushPassPlan) -> impl Iterator<Item = &'a Deferred<wgpu::ComputePipeline>> {
+        gathered(style).then(|| selected(plan, true, Taps::Far)).into_iter().flatten().map(move |entry| self.kernel(style, Taps::Far, entry))
     }
 
     fn output(&self,device:&PipelineDevice,style:&wgpu::Buffer,color:&resident::RasterWrite<'_,PageSurface>,
@@ -354,6 +395,7 @@ impl Pipelines {
 }
 
 pub(super) struct Dispatch {
+    taps: Taps,
     entry: Entry,
     output: wgpu::BindGroup,
     sources: wgpu::BindGroup,
@@ -391,12 +433,12 @@ impl WgpuRasterizer {
         let seeds: Vec<_> = jobs.iter().map(|job| operation == MaterialOperation::Watercolor && !self.watercolor_written.contains(&job.coordinate)).collect();
         self.watercolor_written.extend(jobs.iter().zip(&seeds).filter(|(_, seed)| **seed).map(|(job, _)| job.coordinate));
         self.metrics.material_cpu_ms[0] += elapsed(started);
-        let mut first_record = self.prepare_records(jobs.iter().zip(&seeds).zip(&far).map(|((job, &seed), reads)| {
-            record([job.dabs.start, job.dabs.end - job.dabs.start, u32::from(reads.is_some()), u32::from(seed)], [rect_words(job.local)])
+        let mut first_record = self.prepare_records(jobs.iter().zip(&seeds).map(|(job, &seed)| {
+            record([job.dabs.start, job.dabs.end - job.dabs.start, 0, u32::from(seed)], [rect_words(job.local)])
         }).chain(exchange.zip(reach.as_ref()).map(|((first, _), reach)| {
             let color = first.color_rgba_linear;
             donor_record([u32::from(gathered.is_some()), 0, 0, 0], [color[0], color[1], color[2], batch.style.wet_mix.amount_of_paint * first.material[2]].map(f32::to_bits), [0; 2], &reach.direct)
-        })).chain(reach.iter().filter(|_| gathered.is_some()).flat_map(|reach| reach.gathered.chunks(DONOR_SLOTS).map(|donors| donor_record([2, 0, 0, 0], rect_words(reach.texels), [0; 2], donors))))
+        })).chain(reach.iter().filter(|_| gathered.is_some()).flat_map(|reach| reach.gathered.chunks(DONOR_SLOTS).map(|donors| donor_record([0; 4], rect_words(reach.texels), [0; 2], donors))))
         .chain(jobs.iter().zip(&far).filter_map(|(job, reads)| reads.as_ref().map(|reads| (job, reads))).flat_map(|(job, reads)| reads.chunks(DONOR_SLOTS).enumerate()
             .map(move |(index, donors)| donor_record([0, taps, rows, u32::from(index == 0)], rect_words(reached(job)), job.coordinate, donors)))), encoder)?;
         let mut page_gathers = first_record + jobs.len() + usize::from(exchange.is_some()) + gathered.as_ref().map_or(0, |pages| pages.len().div_ceil(DONOR_SLOTS));
@@ -435,7 +477,7 @@ impl WgpuRasterizer {
                 for gather in gathers {
                     let (gather,_)=write.value().material.inputs(gather,|key|create_material_inputs(&self.device,&self.material_layout,self.material_records.binding().size,key));
                     #[cfg(test)] crate::test_support::PassCounts {gather_invocations:u64::from(extent[0]*extent[1]),..Default::default()}.record();
-                    dispatches.push(Dispatch {entry:Entry::Gather,output:output.clone(),sources:gather,coordinate:job.coordinate,record_offset:self.material_records.offset(page_gathers),extent});
+                    dispatches.push(Dispatch {taps:Taps::Far,entry:Entry::Gather,output:output.clone(),sources:gather,coordinate:job.coordinate,record_offset:self.material_records.offset(page_gathers),extent});
                     page_gathers+=1;
                 }
                 sources.key.1[0]=write.value().view.clone();
@@ -481,7 +523,7 @@ impl WgpuRasterizer {
                 wetness.map(|write|MaterialPublication {kind:MaterialOutputKind::Wetness,coordinate:job.coordinate,preview:wetness_ticket.clone(),input:wet_intent.unwrap(),
                     encoding:write.encoded(wetness_ticket.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|ticket|ticket.version().clone()))}),
             ];
-            dispatches.push(Dispatch {entry,output,sources,coordinate:job.coordinate,record_offset:self.material_records.offset(first_record),extent:job_extent(&batch.style,job.coordinate)});
+            dispatches.push(Dispatch {taps:if far[index].is_some() {Taps::Far} else {Taps::Near},entry,output,sources,coordinate:job.coordinate,record_offset:self.material_records.offset(first_record),extent:job_extent(&batch.style,job.coordinate)});
             publications.extend(next_publications.into_iter().flatten());
             first_record += 1;
         }
@@ -492,7 +534,7 @@ impl WgpuRasterizer {
             let reach=reach.as_ref().ok_or(GpuRasterError::Invariant("prepared wet exchange reach is not planned"))?;
             let mut donors=Vec::new();
             let collecting=declaration.is_some();
-            let mut sources=self.transport_sources(encoder,batch_index,batch,coordinate,target,&intent,MaterialInputs::Exchange(&reach.direct),Vec::new(),collecting.then_some(&mut donors))?;
+            let mut sources=self.transport_sources(encoder,batch_index,batch,coordinate,target,&intent,MaterialInputs::Exchange(reach.slots()),Vec::new(),collecting.then_some(&mut donors))?;
             let gathers=gathered.iter().flat_map(|pages|pages.chunks(DONOR_SLOTS)).map(|chunk|
                 self.transport_sources(encoder,batch_index,batch,coordinate,target,&intent,MaterialInputs::Donors(chunk),Vec::new(),collecting.then_some(&mut donors))
             ).collect::<Result<Vec<_>,_>>()?;
@@ -514,7 +556,7 @@ impl WgpuRasterizer {
                 for (index,gather) in gathers.into_iter().enumerate() {
                     let (gather,_)=write.value().material.inputs(gather,|key|create_material_inputs(&self.device,&self.material_layout,self.material_records.binding().size,key));
                     #[cfg(test)] crate::test_support::PassCounts {gather_invocations:u64::from(extent[0]*extent[1]),..Default::default()}.record();
-                    dispatches.push(Dispatch {entry:Entry::Reservoir,output:output.clone(),sources:gather,coordinate,
+                    dispatches.push(Dispatch {taps:Taps::Far,entry:Entry::ReservoirGather,output:output.clone(),sources:gather,coordinate,
                         record_offset:self.material_records.offset(first_record+1+index),extent});
                 }
                 sources.key.1[9]=write.value().view.clone();
@@ -528,7 +570,8 @@ impl WgpuRasterizer {
                 .overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?.completed(complete);
             let output=self.pipelines.destination_material.output(&self.device,&self.style_buffer,&write,None,None);
             let (sources,_)=write.value().material.inputs(sources,|key|create_material_inputs(&self.device,&self.material_layout,self.material_records.binding().size,key));
-            dispatches.push(Dispatch {entry:Entry::Reservoir,output,sources,coordinate,record_offset:self.material_records.offset(first_record),extent:[RESERVOIR_SIZE;2]});
+            dispatches.push(Dispatch {taps:reach.taps(),entry:Entry::Reservoir,output,sources,coordinate:reach.near.unwrap_or(coordinate),
+                record_offset:self.material_records.offset(first_record),extent:[RESERVOIR_SIZE;2]});
             if let Some(declaration)=&declaration {predicted_exchange=Some(write.encoded(declaration.reservoir_output(batch_index)?));}
             else {publications.push(MaterialPublication {kind:MaterialOutputKind::Reservoir,coordinate,preview:None,input:intent,
                 encoding:write.encoded(layer_core::raster::ContentName::fresh())});}
@@ -572,7 +615,7 @@ impl WgpuRasterizer {
         let pass = encoder.compute_pass();
         pass.set_bind_group(3, textures, &[]);
         for dispatch in dispatches {
-            pass.set_pipeline(self.pipelines.destination_material.kernel(&batch.style, dispatch.entry));
+            pass.set_pipeline(self.pipelines.destination_material.kernel(&batch.style, dispatch.taps, dispatch.entry));
             pass.set_bind_group(0, &dispatch.output, &[style_offset]);
             pass.set_bind_group(1, self.paint_target_binding(&batch.style), &[self.layer_target_offset(batch.target, dispatch.coordinate)]);
             pass.set_bind_group(2, &dispatch.sources, &[dispatch.record_offset]);
@@ -639,19 +682,20 @@ mod tests {
 
     #[test]
     fn a_new_wet_stroke_exchanges_pigment_across_its_whole_reservoir() {
-        let extent = [256, 128];
-        let document = paint_document(extent, "opening wet exchange");
-        let target = target(&document);
-        let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-        submit_ready(&mut r, FramePacket { reset_layers: true, ..packet(document.scene(), extent) }).unwrap();
-        paint_dry(&mut r, &document, [48., 64.], 40., [1., 0., 0., 1.]);
-        let dabs = [wet_contact(48., 64., 20., [0.; 2]), wet_contact(176., 64., 20., [128., 0.])];
-        submit_ready(&mut r, FramePacket { dabs: &dabs, dab_batches: &[wet_batch(target, &dabs[0], 0, true)],
-            ..packet(document.scene(), extent) }).unwrap();
-        assert_close(carried(&r, [32, 32]), [2. / 3., 0., 1. / 3., 0.75], "the opening contact takes red up into the middle of its reservoir");
-        submit_ready(&mut r, FramePacket { dabs: &dabs, dab_batches: &[wet_batch(target, &dabs[1], 1, false)],
-            ..packet(document.scene(), extent) }).unwrap();
-        assert_close(painted(&r, target, [176, 64]), [0.5, 0., 0.25, 0.75], "the next contact lays the red it took up on clear paint");
+        for (extent, y) in [([256, 128], 64.), ([256, 512], 256.)] {
+            let document = paint_document(extent, "opening wet exchange");
+            let target = target(&document);
+            let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+            submit_ready(&mut r, FramePacket { reset_layers: true, ..packet(document.scene(), extent) }).unwrap();
+            paint_dry(&mut r, &document, [48., y], 40., [1., 0., 0., 1.]);
+            let dabs = [wet_contact(48., y, 20., [0.; 2]), wet_contact(176., y, 20., [128., 0.])];
+            submit_ready(&mut r, FramePacket { dabs: &dabs, dab_batches: &[wet_batch(target, &dabs[0], 0, true)],
+                ..packet(document.scene(), extent) }).unwrap();
+            assert_close(carried(&r, [32, 32]), [2. / 3., 0., 1. / 3., 0.75], &format!("the opening contact at y={y} takes red up into the middle of its reservoir"));
+            submit_ready(&mut r, FramePacket { dabs: &dabs, dab_batches: &[wet_batch(target, &dabs[1], 1, false)],
+                ..packet(document.scene(), extent) }).unwrap();
+            assert_close(painted(&r, target, [176, y as u32]), [0.5, 0., 0.25, 0.75], &format!("the next contact at y={y} lays the red it took up on clear paint"));
+        }
     }
 
     fn broad_exchange(style: &layer_render::DabStyle, shift: f32, donor: [f32; 2], texel: [usize; 2]) -> [f32; 4] {
@@ -925,24 +969,28 @@ mod tests {
             let ready = transport.kernels.values().filter(|p| p.ready()).count();
             assert_eq!(ready, expected, "{preset:?} first ink waits only for its commit, prediction and reservoir kernels");
             let normal = layer_render::DabStyle::for_brush(&brush, layer_core::StrokeTool::Brush);
-            if let Some(gather) = transport.gather(&normal) {
-                let compiler = &renderer.startup.as_ref().unwrap().compiler;
-                let demanded = |class| compile::tests::demands(compiler, class).contains(&gather.identity());
-                assert!(!gather.ready() && !demanded(crate::startup::BRUSH) && demanded(crate::startup::ANTICIPATED),
-                    "{preset:?} anticipates its far gather kernel after selection instead of waiting for it");
+            let compiler = &renderer.startup.as_ref().unwrap().compiler;
+            let far: Vec<_> = transport.far(&normal, BrushPassPlan::for_device(&normal, &renderer.device)).collect();
+            assert_eq!(far.is_empty(), !gathered(&normal), "{preset:?} anticipates far kernels only when its taps can reach far");
+            for kernel in far {
+                let demanded = |class| compile::tests::demands(compiler, class).contains(&kernel.identity());
+                assert!(!kernel.ready() && !demanded(crate::startup::BRUSH) && demanded(crate::startup::ANTICIPATED),
+                    "{preset:?} anticipates its far kernels after selection instead of waiting for them");
             }
             brush.rendering.blend_mode = BrushBlendMode::Multiply;
             let multiply = layer_render::DabStyle::for_brush(&brush, layer_core::StrokeTool::Brush);
             let operation = BrushPassPlan::for_style(&normal).material;
-            for &entry in entries(operation) {
-                assert_eq!(std::ptr::eq(transport.kernel(&normal, entry), transport.kernel(&multiply, entry)), !blended(operation),
-                    "{preset:?} {entry:?} has a module per blend only when it deposits through the blend");
+            for taps in [Taps::Near, Taps::Far] {
+                for &entry in entries(operation, taps) {
+                    assert_eq!(std::ptr::eq(transport.kernel(&normal, taps, entry), transport.kernel(&multiply, taps, entry)), !blended(operation),
+                        "{preset:?} {taps:?} {entry:?} has a module per blend only when it deposits through the blend");
+                }
             }
         }
     }
 
     #[test]
-    fn a_near_wet_contact_paints_after_selection_before_its_far_gather_compiles() {
+    fn a_near_wet_contact_after_selection_runs_only_near_kernels() {
         let reference = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         let extent = [1024, 256];
         let document = paint_document(extent, "first wet ink");
@@ -953,16 +1001,20 @@ mod tests {
         r.prepare_startup(&document, &brush, false).unwrap();
         crate::test_support::wait_startup(&mut r, std::time::Instant::now() + std::time::Duration::from_secs(60), |progress| progress.brush_ready, format_args!("Wet Round preparation timed out"));
         let style = layer_render::DabStyle::for_brush(&brush, layer_core::StrokeTool::Brush);
-        let gather = r.pipelines.destination_material.gather(&style).unwrap().clone();
-        assert!(!gather.ready(), "selection lets first ink go before the far gather kernel compiles");
+        let far: Vec<_> = r.pipelines.destination_material.far(&style, BrushPassPlan::for_device(&style, &r.device)).cloned().collect();
+        let started = |r: &WgpuRasterizer| far.iter().filter(|kernel| kernel.ready()
+            || compile::tests::demands(&r.compilation, crate::startup::BRUSH).contains(&kernel.identity())).count();
+        assert_eq!(started(&r), 0, "selection lets first ink go before any far kernel compiles");
         submit_ready(&mut r, FramePacket { reset_layers: true, ..packet(document.scene(), extent) }).unwrap();
         let near = wet_contact(200., 128., 40., [0.; 2]);
         let pulled = Dab { material: [0., 1., 1., 0.], ..wet_contact(700., 128., 16., [600., 0.]) };
         let dabs = [near, pulled];
         submit_ready(&mut r, FramePacket { dabs: &dabs, dab_batches: &[DabBatch { style: style.clone(), ..wet_batch(target, &near, 0, true) }], ..packet(document.scene(), extent) }).unwrap();
-        assert!(!gather.ready(), "the first near contact paints without the far gather kernel");
+        assert_eq!(started(&r), 0, "the first near contact paints with near kernels alone and requires no far kernel");
         submit_ready(&mut r, FramePacket { dabs: &dabs, dab_batches: &[DabBatch { style: style.clone(), ..wet_batch(target, &pulled, 1, false) }], ..packet(document.scene(), extent) }).unwrap();
-        assert!(gather.ready(), "a far contact waits for the gather kernel it needs");
+        let kernel = |entry| r.pipelines.destination_material.kernel(&style, Taps::Far, entry);
+        assert!(kernel(Entry::Color).ready() && kernel(Entry::Gather).ready(), "a far pull waits for the far page kernel and gather it needs");
+        assert!(!kernel(Entry::Reservoir).ready(), "its exchange, whose taps stay within three by three pages, waits for no far kernel");
     }
 
     #[test]
@@ -982,13 +1034,14 @@ mod tests {
     #[test]
     fn transport_kernels_declare_the_workgroup_they_are_dispatched_with() {
         for operation in OPERATIONS {
-            for (&entry, blender) in entries(operation).iter().flat_map(|entry| blenders(operation).into_iter().map(move |blender| (entry, blender))) {
+            for (taps, &entry, blender) in [Taps::Near, Taps::Far].into_iter().flat_map(|taps| entries(operation, taps).iter()
+                .flat_map(move |entry| blenders(operation).into_iter().map(move |blender| (taps, entry, blender)))) {
                 let source = dry_material::material_source(Default::default(), crate::pipeline_device::float_sampling_wgsl(true),
-                    module(operation, 0, blender), 0, operation);
+                    module(operation, 0, blender, taps), 0, operation);
                 let module = naga::front::wgsl::parse_str(&source).unwrap();
                 let kernel = module.entry_points.iter().find(|e| e.name == entry.name()).unwrap();
                 let [width, height] = workgroup(operation);
-                assert_eq!(kernel.workgroup_size, [width, height, 1], "{operation:?} {entry:?} {blender:?}");
+                assert_eq!(kernel.workgroup_size, [width, height, 1], "{operation:?} {taps:?} {entry:?} {blender:?}");
                 assert_eq!([PAGE_SIZE % width, PAGE_SIZE % height, RESERVOIR_SIZE % width, RESERVOIR_SIZE % height], [0; 4]);
             }
         }

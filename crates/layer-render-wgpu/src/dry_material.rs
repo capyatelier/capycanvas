@@ -105,8 +105,8 @@ pub(super) enum Entries {
     /// Dry compute kernels for one blend code.
     Kernel(Start, u32),
     /// Page kernels of a transported material for one blend code, and Wet's
-    /// reservoir exchange.
-    Transport(u32),
+    /// reservoir exchange, for taps near or far from the pages they write.
+    Transport(u32, crate::destination_material::Taps),
     /// Smudge page kernels for one blender kernel.
     Blend(crate::destination_material::Blender),
 }
@@ -178,9 +178,11 @@ pub(super) fn material_source(space:layer_core::color::RgbSpace,float_sampling:&
                     blender.kind as u8, blender.paper, blender.lift, if blender.paper {11} else {12}, include_str!("material_blend.wgsl"));
                 }
             }
-            if matches!(operation,M::Wet|M::Watercolor) {source+=include_str!("material_gather.wgsl");}
-            if operation==M::Wet {source+=&format!("const RESERVOIR_TEXELS: u32 = {RESERVOIR_SIZE}u;\nconst PICKUP_TAPS: u32 = {}u;\nconst AVERAGE_TAPS: u32 = {}u;\n{}",
-                crate::destination_material::PICKUP_TAPS,crate::destination_material::AVERAGE_TAPS,include_str!("material_reservoir.wgsl"));}
+            let far=matches!(entries,Entries::Transport(_,crate::destination_material::Taps::Far));
+            source+=if far {include_str!("material_gather.wgsl")} else {include_str!("material_neighborhood.wgsl")};
+            if operation==M::Wet {source+=&format!("const RESERVOIR_TEXELS: u32 = {RESERVOIR_SIZE}u;\nconst PICKUP_TAPS: u32 = {}u;\nconst AVERAGE_TAPS: u32 = {}u;\n{}{}",
+                crate::destination_material::PICKUP_TAPS,crate::destination_material::AVERAGE_TAPS,include_str!("material_reservoir.wgsl"),
+                if far {include_str!("reservoir_gather.wgsl")} else {""});}
             source.into()
         }
     };
@@ -188,9 +190,9 @@ pub(super) fn material_source(space:layer_core::color::RgbSpace,float_sampling:&
         Entries::Kernel(..) => include_str!("material_compute.wgsl"),
         Entries::Blend(blender) if blender.kind == layer_core::BlenderKind::Scatter => include_str!("material_scatter_cells.wgsl"),
         Entries::Blend(blender) if blender.cells => include_str!("material_dither_cells.wgsl"),
-        Entries::Transport(_) | Entries::Blend(..) => include_str!("material_destination.wgsl"),
+        Entries::Transport(..) | Entries::Blend(..) => include_str!("material_destination.wgsl"),
     };
-    let blend_code=match entries {Entries::Kernel(_, mode) | Entries::Transport(mode) => mode, Entries::Blend(..) => 0};
+    let blend_code=match entries {Entries::Kernel(_, mode) | Entries::Transport(mode, _) => mode, Entries::Blend(..) => 0};
     let blend=blend_source(blend_code);
     let source=compose_wgsl(&[&working_color::source(space),include_str!("blend_codes.wgsl"),&blend,float_sampling,
         &destination(start),include_str!("brush_types.wgsl"),include_str!("brush_textures.wgsl"),&clone,
@@ -1232,8 +1234,8 @@ mod tests {
                 .flat_map(move |operation| ["compute_color", "compute_coverage"].map(|entry| (Entries::Kernel(start, blend), operation, entry))));
             let kernels = destination::OPERATIONS.into_iter()
                 .filter(|&operation| destination::blended(operation) || slot % MATERIAL_BLENDS.len() == 0)
-                .flat_map(|operation| destination::entries(operation).iter().flat_map(move |&entry| destination::blenders(operation).into_iter()
-                    .map(move |blender| (destination::module(operation, blend, blender), operation, entry.name()))));
+                .flat_map(|operation| [destination::Taps::Near, destination::Taps::Far].into_iter().flat_map(move |taps| destination::entries(operation, taps).iter()
+                    .flat_map(move |&entry| destination::blenders(operation).into_iter().map(move |blender| (destination::module(operation, blend, blender, taps), operation, entry.name())))));
             for (entries, operation, entry) in pointwise.chain(kernels) {
                 let source = material_source(Default::default(), sampling, entries, flags, operation);
                 assert_logical_operators_grouped(&source);
@@ -1299,14 +1301,16 @@ mod tests {
                 absent(&present,&fine_completion,&format!("{preset:?} broad completion"));
             }
         }
-        use crate::destination_material::{self as destination, Entry};
-        for flags in [0, 128] {for operation in destination::OPERATIONS {for &entry in destination::entries(operation) {
-            let what = format!("{operation:?} {entry:?} {flags:#x}");
-            let present = compiled(destination::module(operation, 0, destination::PLAIN), flags, operation, entry.name());
+        use crate::destination_material::{self as destination, Entry, Taps};
+        let gathered = names(&[include_str!("material_gather.wgsl"), include_str!("reservoir_gather.wgsl")], &["pulled_pickup", "traced_sample", "exchange_pickup", "footprint_tap"]);
+        for flags in [0, 128] {for operation in destination::OPERATIONS {for taps in [Taps::Near, Taps::Far] {for &entry in destination::entries(operation, taps) {
+            let what = format!("{operation:?} {taps:?} {entry:?} {flags:#x}");
+            let present = compiled(destination::module(operation, 0, destination::PLAIN, taps), flags, operation, entry.name());
             for feature in [&relief, &bristle, &clone, &pointwise, &blend] { absent(&present, feature, &what); }
+            assert_eq!(present.is_disjoint(&gathered), taps == Taps::Near, "{what} reads gathered taps only in a far kernel: {:?}", present.intersection(&gathered).collect::<Vec<_>>());
             let operations: Vec<_> = fragments.iter().filter(|f| present.contains(**f)).collect();
-            assert_eq!(operations.len(), usize::from(!matches!(entry, Entry::Reservoir | Entry::Gather)), "{what} reaches {operations:?}");
-        }}}
+            assert_eq!(operations.len(), usize::from(!matches!(entry, Entry::Reservoir | Entry::Gather | Entry::ReservoirGather)), "{what} reaches {operations:?}");
+        }}}}
         let multiply = layer_core::LayerBlend::from(BrushBlendMode::Multiply).code();
         let formulas = blend.iter().filter(|f| *f != "blend_luma").cloned().collect();
         for start in [Start::Stored, Start::Sampled] {

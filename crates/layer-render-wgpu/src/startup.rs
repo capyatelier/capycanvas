@@ -305,8 +305,8 @@ impl Needs {
         if let Some(kind) = plan.direct {
             self.render.push(r.pipelines.direct[kind as usize].clone());
         } else if destination_material::transported(style) {
-            self.compute.extend(destination_material::selected(plan, preview)
-                .map(|entry| r.pipelines.destination_material.kernel(style, entry).clone()));
+            self.compute.extend(destination_material::selected(plan, preview, destination_material::Taps::Near)
+                .map(|entry| r.pipelines.destination_material.kernel(style, destination_material::Taps::Near, entry).clone()));
         }
     }
     pub(super) fn style(
@@ -573,7 +573,7 @@ impl WgpuRasterizer {
         }
         for style in &styles {
             strokes.style_helpers(self, style, mask, true);
-            if let Some(gather) = self.pipelines.destination_material.gather(style).filter(|_| !mask) { startup.compiler.warm(gather, ANTICIPATED, generation); }
+            for far in self.pipelines.destination_material.far(style, BrushPassPlan::for_device(style, &self.device)).filter(|_| !mask) { startup.compiler.warm(far, ANTICIPATED, generation); }
         }
         strokes.require(&startup.compiler, BRUSH);
         startup.papers.clear();
@@ -1017,8 +1017,8 @@ mod tests {
             assert!(!renderer.startup_needs_update(&document,&brush,false),"all coarse sizes share prepared kernels");
             let style=brush_style(&document,&brush,StrokeTool::Brush);
             let kernels=&renderer.pipelines.destination_material;
-            assert!(kernels.kernel(&style,destination_material::Entry::Color).ready(),"N{size} prediction Color kernel is ready");
-            assert!(kernels.kernel(&style,destination_material::Entry::Coverage).ready(),"N{size} commit Coverage kernel is ready");
+            assert!(kernels.kernel(&style,destination_material::Taps::Near,destination_material::Entry::Color).ready(),"N{size} prediction Color kernel is ready");
+            assert!(kernels.kernel(&style,destination_material::Taps::Near,destination_material::Entry::Coverage).ready(),"N{size} commit Coverage kernel is ready");
             renderer.prepare_startup(&document,&brush,false).unwrap();
             assert!(renderer.poll_startup().unwrap().brush_ready,"N{size} reuses both coarse kernels immediately");
         }
@@ -1043,8 +1043,8 @@ mod tests {
             assert!(!renderer.startup_needs_update(&document,&brush,false));
             let style=brush_style(&document,&brush,StrokeTool::Brush);
             let kernels=&renderer.pipelines.destination_material;
-            assert!(kernels.kernel(&style,destination_material::Entry::Color).ready());
-            assert!(kernels.kernel(&style,destination_material::Entry::Coverage).ready());
+            assert!(kernels.kernel(&style,destination_material::Taps::Near,destination_material::Entry::Color).ready());
+            assert!(kernels.kernel(&style,destination_material::Taps::Near,destination_material::Entry::Coverage).ready());
         }
     }
 

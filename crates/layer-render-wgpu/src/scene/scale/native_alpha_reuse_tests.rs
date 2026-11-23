@@ -700,8 +700,10 @@ fn native_alpha_reuse_only_read_write_dry_kernels_bind_writable_cells() {
                 .then_some((variable.name.clone(), variable.binding.as_ref().map(|binding| (binding.group, binding.binding))))
         }).collect::<Vec<_>>()
     };
-    let transport = crate::dry_material::material_source(r.device.working_space(), r.device.float_sampling_wgsl(), crate::dry_material::Entries::Transport(0), u32::MAX, MaterialOperation::Wet);
-    assert_eq!(writable(&transport), vec![], "transported material writes no cell flags");
+    for taps in [crate::destination_material::Taps::Near, crate::destination_material::Taps::Far] {
+        let transport = crate::dry_material::material_source(r.device.working_space(), r.device.float_sampling_wgsl(), crate::dry_material::Entries::Transport(0, taps), u32::MAX, MaterialOperation::Wet);
+        assert_eq!(writable(&transport), vec![], "{taps:?} transported material writes no cell flags");
+    }
     for start in [Start::Stored, Start::Sampled] {
         let kernel = crate::dry_material::material_source(r.device.working_space(), r.device.float_sampling_wgsl(), crate::dry_material::Entries::Kernel(start, 0), u32::MAX, MaterialOperation::Deposit);
         let expected = if start == Start::Stored { vec![(Some("changed_cells".into()), Some((0, 3)))] } else { vec![] };

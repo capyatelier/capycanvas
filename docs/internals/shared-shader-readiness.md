@@ -37,9 +37,10 @@ separate entries for destination targets, gathering and reservoir exchange.
 Smudge and wet brushes prepare the page kernel their commits write and
 the color kernel their predictions write; wet brushes also prepare the
 reservoir exchange, all compute. Watercolor prepares one kernel that
-writes color, coverage and wetness for both. The far tap gather of wet and
-watercolor brushes is anticipated after selection, and only a batch whose
-taps reach beyond the pages around a page it writes waits for it.
+writes color, coverage and wetness for both. These kernels read only the
+pages around the page they write. Wet and watercolor brushes anticipate far
+variants of them, which read gathered taps, and the gathers after selection;
+only a batch whose taps reach beyond those pages waits for the ones it runs.
 Liquify prepares the selected mode's map kernel, its shared original-image
 reconstruction kernel and original mip reductions. Map recipes distinguish
 analytic untextured tips without a selection from the general coverage path.
