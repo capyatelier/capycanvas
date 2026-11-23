@@ -346,6 +346,66 @@ impl WgpuRasterizer {
 mod tests {
     use super::*;
     use layer_core::DefaultBrushPreset as Preset;
+    use layer_core::{Point, StrokeId};
+    use crate::layer_tests::{dab, placement::{paint_document, target}};
+    use crate::test_support::{dab_batch, packet, submit_ready};
+
+    fn exchanging_wet() -> layer_render::DabStyle {
+        let mut style = crate::tests::test_style(BrushExecution::Wet);
+        style.wet_mix = layer_core::BrushWetMix { amount_of_paint: 0.5, ..Default::default() };
+        style
+    }
+
+    fn wet_contact(x: f32, y: f32, radius: f32, motion: [f32; 2]) -> Dab {
+        Dab { center: Point { x, y }, radii: [radius; 2], motion, material: [0., 0., 1., 0.], ..dab([0., 0., 1., 1.]) }
+    }
+
+    fn wet_batch(target: SourceTarget, contact: &Dab, first: usize, start: bool) -> DabBatch {
+        DabBatch { stroke_id: StrokeId(2), stroke_start: start, stroke_end: false, first_dab: first as u32,
+            ..dab_batch(target, exchanging_wet(), contact.bounds()) }
+    }
+
+    fn paint_red(r: &mut WgpuRasterizer, document: &layer_core::Document, center: [f32; 2], radius: f32) {
+        let red = Dab { center: Point { x: center[0], y: center[1] }, radii: [radius; 2], ..dab([1., 0., 0., 1.]) };
+        let extent = document.composition().size;
+        submit_ready(r, FramePacket { dabs: &[red], dab_batches: &[dab_batch(target(document), crate::tests::test_style(BrushExecution::Dry), red.bounds())],
+            ..packet(document.scene(), extent) }).unwrap();
+    }
+
+    fn carried(r: &WgpuRasterizer, texel: [usize; 2]) -> [f32; 4] {
+        let state = r.reservoir.state.as_ref().unwrap();
+        let surface = if r.reservoir.active_secondary { &r.reservoir.secondary } else { &r.reservoir.primary };
+        let pixels = crate::test_support::float_pixels(r, &surface.read(state.version.clone(), None).unwrap().value().texture);
+        pixels[texel[1] * RESERVOIR_SIZE as usize + texel[0]]
+    }
+
+    fn painted(r: &WgpuRasterizer, target: SourceTarget, at: [u32; 2]) -> [f32; 4] {
+        let coordinate = at.map(|value| value / PAGE_SIZE);
+        let page = r.paint_layers.iter().find(|layer| layer.id == target).unwrap().pages.iter().find(|page| page.coordinate == coordinate).unwrap();
+        let pixels = crate::test_support::float_pixels(r, &r.read_color_page(target, page, false, None).unwrap().value().texture);
+        pixels[(at[1] % PAGE_SIZE * PAGE_SIZE + at[0] % PAGE_SIZE) as usize]
+    }
+
+    fn assert_close(actual: [f32; 4], expected: [f32; 4], context: &str) {
+        assert!(actual.iter().zip(expected).all(|(a, e)| (a - e).abs() < 0.01), "{context}: {actual:?} != {expected:?}");
+    }
+
+    #[test]
+    fn a_new_wet_stroke_exchanges_pigment_across_its_whole_reservoir() {
+        let extent = [256, 128];
+        let document = paint_document(extent, "opening wet exchange");
+        let target = target(&document);
+        let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        submit_ready(&mut r, FramePacket { reset_layers: true, ..packet(document.scene(), extent) }).unwrap();
+        paint_red(&mut r, &document, [48., 64.], 40.);
+        let dabs = [wet_contact(48., 64., 20., [0.; 2]), wet_contact(176., 64., 20., [128., 0.])];
+        submit_ready(&mut r, FramePacket { dabs: &dabs, dab_batches: &[wet_batch(target, &dabs[0], 0, true)],
+            ..packet(document.scene(), extent) }).unwrap();
+        assert_close(carried(&r, [32, 32]), [2. / 3., 0., 1. / 3., 0.75], "the opening contact takes red up into the middle of its reservoir");
+        submit_ready(&mut r, FramePacket { dabs: &dabs, dab_batches: &[wet_batch(target, &dabs[1], 1, false)],
+            ..packet(document.scene(), extent) }).unwrap();
+        assert_close(painted(&r, target, [176, 64]), [0.5, 0., 0.25, 0.75], "the next contact lays the red it took up on clear paint");
+    }
 
     #[test]
     fn selecting_a_transported_brush_compiles_only_its_page_and_reservoir_kernels() {
