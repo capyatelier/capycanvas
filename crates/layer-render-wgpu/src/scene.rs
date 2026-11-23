@@ -2141,12 +2141,21 @@ impl Scene {
         self.exact_object_results.flush_retired(encoder);
     }
 
-    pub(crate) async fn prepare_capture_work_async(&mut self,r:&mut WgpuRasterizer)->Result<(),GpuRasterError> {
+    pub(crate) async fn prepare_capture_work_async(&mut self,r:&mut WgpuRasterizer)->Result<bool,GpuRasterError> {
         r.end_frame_memory();
+        let released=r.retire_capture_victims(self);
+        if released {
+            crate::local_tone::wait_async(&r.device,&r.queue).await.map_err(GpuRasterError::Color)?;
+            #[cfg(not(target_arch="wasm32"))]
+            r.device.retirement_handle().flush().map_err(GpuRasterError::WaitFailed)?;
+        }
         if !self.jobs.is_empty() { self.jobs_ready(r,0); }
-        r.transforms.as_ref().unwrap().materialization_needs().prepare(&r.compilation).await.map_err(GpuRasterError::Effect)?;
+        let (materialization,effects)=(r.transforms.as_ref().unwrap().materialization_needs(),self.effects.needs());
+        let outstanding=released || r.compilation.pending()!=0 || [&materialization,&self.pending_pipelines,&effects].into_iter().any(|needs|!needs.ready())
+            || self.exact_object_results.pending() || r.moving_decode.as_ref().is_some_and(|(_,queue)|queue.pending());
+        materialization.prepare(&r.compilation).await.map_err(GpuRasterError::Effect)?;
         self.pending_pipelines.prepare(&r.compilation).await.map_err(GpuRasterError::Effect)?;
-        self.effects.needs().prepare(&r.compilation).await.map_err(GpuRasterError::Effect)?;
+        effects.prepare(&r.compilation).await.map_err(GpuRasterError::Effect)?;
         if self.exact_object_results.pending() {
             let sampler=r.scene_pipelines.objects.clone();
             r.compilation.prepare_all(sampler.pipelines().into_iter().chain([&r.scene_pipelines.constant.2])).await.map_err(GpuRasterError::Effect)?;
@@ -2170,7 +2179,7 @@ impl Scene {
         if r.snapshot_cancelled.as_ref().is_some_and(|cancelled|cancelled.load(std::sync::atomic::Ordering::Relaxed)) {
             return Err(GpuRasterError::Color("Snapshot capture cancelled".into()));
         }
-        Ok(())
+        Ok(outstanding)
     }
 
     async fn complete_capture_plan(
@@ -2200,7 +2209,7 @@ impl Scene {
             r.uploads.finish(encoder);
             std::mem::replace(encoder,crate::submission::CommandEncoder::new(&r.device,&Default::default())).submit(&r.queue);
             r.await_capture_submission(idle).await?;
-            if result.is_err() {self.prepare_capture_work_async(r).await?;}
+            if result.is_err() && !self.prepare_capture_work_async(r).await? {return result;}
         }
         }.await;
         if result.is_err() {self.discard_unencoded_jobs();}

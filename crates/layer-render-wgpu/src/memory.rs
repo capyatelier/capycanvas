@@ -447,13 +447,21 @@ impl WgpuRasterizer {
         display.heap().pending()!=0 || self.memory.retired.get()!=Some([display.heap().epoch(),display.floor()])
             || self.memory.limits_changed() || self.memory.overdrawn() || self.retention_above_grant()
     }
-    fn retire_victims(&mut self,scene:Option<&mut scene::Scene>,encoder:&mut submission::CommandEncoder) {
+    fn retire_victims(&mut self,scene:Option<&mut scene::Scene>,encoder:&mut submission::CommandEncoder)->bool {
         let floor=self.scene_tiers.display.floor();
         self.memory.retired.set(Some([self.scene_tiers.display.heap().epoch(),floor]));
         let sources=self.source_tiles.get_mut();
         if self.warm.is_some() {sources.release_ready();} else {sources.release_unused(floor);}
         let decoded=sources.retire_evicted();sources.flush_retired(encoder);
-        if decoded+self.moving_images.retire_evicted(encoder)+scene.map_or(0,|scene|scene.retire_victims(encoder))!=0 {encoder.retain_resources();}
+        let retired=decoded+self.moving_images.retire_evicted(encoder)+scene.map_or(0,|scene|scene.retire_victims(encoder))!=0;
+        if retired {encoder.retain_resources();}
+        retired
+    }
+    pub(crate) fn retire_capture_victims(&mut self,scene:&mut scene::Scene)->bool {
+        let mut encoder=submission::CommandEncoder::new(&self.device,&Default::default());
+        let retired=self.retire_victims(Some(scene),&mut encoder);
+        if encoder.has_work() {self.last_submission=encoder.submit(&self.queue);}
+        retired
     }
     pub(crate) fn begin_frame_memory(&mut self, packet: FramePacket<'_>) {
         if let Some(lane)=self.memory.stop() {lane.rearm();}

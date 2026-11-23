@@ -43,6 +43,22 @@ fn terminal_raw_capture_errors_discard_their_unsubmitted_prefix() {
 }
 
 #[test]
+fn snapshot_captures_end_a_refusal_nothing_will_release() {
+    let document=Document::new(PortableId::random(),16,16,layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+    for refusal in [GpuRasterError::NotReady,GpuRasterError::SourceWorkingSetExceeded] {
+        let control=CaptureControl::default();
+        let mut snapshot=gpu().capture_scene(document.snapshot(),SceneScope::All,control.clone()).unwrap();
+        let mut rounds=0;
+        let result:Result<(),GpuRasterError>=pollster::block_on(snapshot.with_region_gpu([0,0,16,16],0,|_,_,_,_| {
+            rounds+=1;
+            if rounds==64 {control.cancel();}
+            Err(refusal.clone())
+        }));
+        assert!(rounds<=2 && result==Err(refusal.clone()),"{refusal:?} was retried {rounds} times and ended with {result:?}");
+    }
+}
+
+#[test]
 fn cold_raster_snapshots_prepare_the_normalizer_for_their_stored_depth() {
     for depth in [SampleDepth::U8,SampleDepth::U16,SampleDepth::F16,SampleDepth::F32] {
         let color=DocumentColor {depth,..Default::default()};
@@ -297,6 +313,43 @@ fn package_previews_of_masked_wet_and_object_layers_match_their_export() {
     for (index, (actual, expected)) in preview.preview.pixels().as_chunks::<4>().0.iter().zip(expected.as_chunks::<4>().0).enumerate() {
         assert!(actual.iter().zip(expected).all(|(a, b)| a.abs_diff(*b) <= 1), "preview pixel {index}: {actual:?} != {expected:?}");
     }
+}
+
+#[test]
+fn package_previews_of_many_layers_finish_under_a_tight_shared_ledger() {
+    let extent = [2048, 1536];
+    let document = layered_painting(extent, 32, true);
+    let budget = layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {host_default_bytes: Some(2 << 30), override_bytes: Some(2 << 30), ..Default::default()});
+    let mut live = WgpuRasterizer::new_native_headless_in(document.composition().color,
+        layer_core::DeviceMemoryFacts {budget_bytes: Some(1 << 30), unified: true, ..Default::default()}, budget.clone()).unwrap();
+    crate::test_support::submit_settled(&mut live, FramePacket {view: crate::test_support::view([1024; 2]), ..packet(document.scene(), extent)});
+    let _pressure = budget.admit_import(budget.import_headroom_bytes()).unwrap();
+    let checkpoint = CaptureCheckpoint {document:document.artwork.id,owner:document.owner,session_generation:0,artwork_generation:0,working_generation:0,edit_checkpoint:0};
+    let saved = document.artwork.capture(checkpoint).unwrap();
+    let gpu = live.snapshot_gpu();
+    let control = CaptureControl::default();
+    let (finished, finishing) = std::sync::mpsc::channel::<()>();
+    let watchdog = {let control = control.clone(); std::thread::spawn(move || if finishing.recv_timeout(std::time::Duration::from_secs(60)).is_err() { control.cancel(); })};
+    let mut bands = gpu.capture(saved.clone(), control.clone()).unwrap();
+    bands.planned_pixel_bytes = super::package_preview::PREVIEW_PIXEL_BYTES;
+    let mut y = 0;
+    let read = loop {
+        if y >= extent[1] { break Ok(()); }
+        match bands.read_band(y) { Ok((rows, _)) => y += rows, Err(error) => break Err(error) }
+    };
+    let _ = finished.send(());
+    watchdog.join().unwrap();
+    assert!(!control.is_cancelled(), "the preview bands were still capturing row {y} after 60 s: {read:?}");
+    drop(bands);
+    let preview = gpu.package_preview(&saved, &AtomicBool::new(false));
+    assert_eq!(preview.is_some(), read.is_ok(), "{read:?}");
+    if let Some(preview) = &preview {
+        let expected = capture(document).unwrap().preview_document([512; 2], RgbSpace::Srgb).unwrap().srgb_bytes().unwrap();
+        for (index, (actual, expected)) in preview.preview.pixels().as_chunks::<4>().0.iter().zip(expected.as_chunks::<4>().0).enumerate() {
+            assert!(actual.iter().zip(expected).all(|(a, b)| a.abs_diff(*b) <= 1), "preview pixel {index}: {actual:?} != {expected:?}");
+        }
+    }
+    layer_core::package::codec::PreparedPackage::prepare(&saved, preview, &AtomicBool::new(false)).unwrap();
 }
 
 #[test]

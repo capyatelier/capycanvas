@@ -394,3 +394,20 @@ fn a_capture_requests_its_cold_decodes_at_the_class_its_inputs_were_admitted_at(
     assert!(matches!(captured,Err(GpuRasterError::NotReady)),"{captured:?}");
     assert_eq!(r.moving_decode.as_ref().unwrap().1.outstanding_classes(),[Class::Refinement],"a refinement capture decodes ahead of the view");
 }
+
+#[test]
+fn capture_plans_end_a_refusal_nothing_will_release() {
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let cancelled=Arc::new(std::sync::atomic::AtomicBool::new(false));
+    r.snapshot_cancelled=Some(cancelled.clone());
+    let mut scene=Scene::new(&r).unwrap();
+    let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+    let declaration=sources::Inputs::default().for_unit(sources::InputUnit::tile([0;2])).unwrap();
+    let mut rounds=0;
+    let result=pollster::block_on(scene.complete_capture_plan(&mut r,&mut encoder,None,&declaration,&mut None,|_,_,_,_| {
+        rounds+=1;
+        if rounds==64 {cancelled.store(true,std::sync::atomic::Ordering::Relaxed);}
+        Err(GpuRasterError::NotReady)
+    }));
+    assert!(rounds<=2 && result==Err(GpuRasterError::NotReady),"a refused plan was retried {rounds} times and ended with {result:?}");
+}

@@ -568,7 +568,7 @@ impl SnapshotRenderer {
                     let mut scene=r.scene.take().map(Ok).unwrap_or_else(|| scene::Scene::new(r))?;
                     let result=scene.prepare_capture_work_async(r).await;
                     r.scene=Some(scene);
-                    result?;
+                    if !result? {return Err(error);}
                     self.control.check()?;
                 },
                 result=> {
