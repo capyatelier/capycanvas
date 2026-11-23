@@ -219,6 +219,13 @@ programs retain their dependency propagation. A full-document
 overview serves pixels outside the window. Covered overview
 regions derive from completed detail; uncovered regions use reduced composition,
 avoiding duplicate exact-source work.
+Unwritten pages show the finest whole-document picture available: a complete
+overview, a previous view, or the display floor. The floor is a pinned
+whole-document image at the Navigator's plan. It is written in the same
+submission as a complete picture of the current drawing, and is refreshed when
+the view settles after an edit. Inside the drawing, the surround colour appears
+only before that drawing's first complete picture
+(`scene/scale/floor.rs`).
 The overview remains coarser than the window, including at reduced zoom.
 Document-wide effects retain whole-document dependency coverage at reduced
 resolution. Finite-radius filters preserve document-edge sampling while evaluating

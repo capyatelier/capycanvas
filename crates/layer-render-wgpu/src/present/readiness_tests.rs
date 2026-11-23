@@ -27,7 +27,7 @@ fn first_ready_frame_requires_only_its_viewport_variant() {
     presenter.encode(&r, &mut encoder, &target, crate::test_support::view(extent), [0.; 4]).unwrap();
     assert!(presenter.recipes.paper.get().is_none(), "an unlit frame must not request lit viewport recipes");
     let encoded = presenter.history.valid;
-    let stand_in = crate::compile::tests::requested(&r.compilation, &presenter.pipeline[1], crate::startup::BACKGROUND)
+    let stand_in = crate::compile::tests::requested(&r.compilation, &presenter.pipeline[1], crate::startup::ANTICIPATED)
         && !crate::compile::tests::requested(&r.compilation, &presenter.pipeline[1], crate::startup::OTHER);
     drop(encoder);
     drop(presenter);
@@ -36,7 +36,7 @@ fn first_ready_frame_requires_only_its_viewport_variant() {
     crate::finish_shader_compiler_shutdown();
     assert!(!unused_required, "unused viewport variants do not enter the first frame gate");
     assert!(ready && encoded, "the ready source draws while the other variants remain cold");
-    assert!(stand_in, "the stand-in entry waits for background admission");
+    assert!(stand_in, "the stand-in entry compiles as anticipated work after the first frame");
 }
 
 #[test]
@@ -89,7 +89,7 @@ fn first_lit_frame_gates_its_variant_without_idle_frames_from_any_warm_class() {
     presenter.encode(&renderer, &mut encoder, &target, crate::test_support::view([128; 2]), [0.; 4]).unwrap();
     assert!(presenter.paper_lighting_drawn());
     assert_eq!(presenter.last_artwork_pipeline.as_ref(), Some(paper[0].compile()));
-    assert!(crate::compile::tests::requested(&renderer.compilation, &paper[1], crate::startup::BACKGROUND)
+    assert!(crate::compile::tests::requested(&renderer.compilation, &paper[1], crate::startup::ANTICIPATED)
         && !crate::compile::tests::requested(&renderer.compilation, &paper[1], crate::startup::OTHER));
     assert!(renderer.poll_startup().unwrap().complete, "unused warming must not reopen startup readiness");
     assert!(!crate::compile::tests::ordered_demands(&renderer.compilation, crate::startup::OTHER).is_empty());

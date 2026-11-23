@@ -287,7 +287,7 @@ fn after_present_trims_free_storage_but_keeps_presentation_and_root_overview() {
     submit_settled(&mut r, packet(doc.scene(), [512; 2]));
     let before = pixels(&r);
     let cache = r.scale_display.as_ref().unwrap();
-    let overview = cache.presentation().unwrap().views()[1].clone();
+    let overview = cache.presentation().unwrap().views(&r.empty_view)[1].clone();
     let pinned = r.composition_memory(r.scene.as_deref())[1];
     assert!(pinned > 0);
     r.raster_buffers.put(r.raster_buffers.take(&r.device, 32 << 20));
@@ -305,7 +305,7 @@ fn after_present_trims_free_storage_but_keeps_presentation_and_root_overview() {
     assert!(r.raster_buffers.retained.used() < retained);
     let cache = r.scale_display.as_ref().unwrap();
     assert_eq!(r.composition_memory(r.scene.as_deref())[1], pinned);
-    assert_eq!(cache.presentation().unwrap().views()[1], &overview);
+    assert_eq!(cache.presentation().unwrap().views(&r.empty_view)[1], &overview);
     assert_eq!(pixels(&r), before);
 }
 

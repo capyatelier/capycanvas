@@ -16,6 +16,8 @@ pub(super) struct CommittedImage {
     versions:Vec<Recorded>,
     current:Option<Current>,
     authored:Option<layer_core::raster::ContentStamp>,
+    complete:bool,
+    whole:Option<layer_core::BlendSpace>,
 }
 #[derive(Clone)]
 struct Current {frame:Arc<SignatureFrame>,derived:bool}
@@ -28,6 +30,9 @@ impl CommittedImage {
     pub(super) fn authored(&self)->Option<layer_core::raster::ContentStamp> {self.authored}
     pub fn image(&self)->&Image {&self.image}
     pub fn view(&self)->&wgpu::TextureView {&self.image.view}
+    pub(super) fn whole(&self)->Option<layer_core::BlendSpace> {self.whole}
+    pub(super) fn complete(&self)->bool {self.complete}
+    pub(super) fn submission(&self)->&submission::Submission {&self.submission}
     fn current_at(&self,frame:&Arc<SignatureFrame>,key:&Key)->Option<bool> {
         let current=self.current.as_ref()?;
         if Arc::ptr_eq(&current.frame,frame) {(self.authored==frame.authored_revision(&key.expression).ok()).then_some(true)}
@@ -40,7 +45,7 @@ impl Window {
     fn committed_mut(&mut self)->Option<&mut CommittedImage> {self.newest.iter_mut().chain(&mut self.good).find(|image|!image.submission.discarded())}
     fn commit(&mut self,submission:submission::Submission,pages:Vec<Held>,versions:Vec<Recorded>,current:Option<Current>,authored:Option<layer_core::raster::ContentStamp>) {
         if let Some(replaced)=self.newest.take().filter(|newest|!newest.submission.discarded() && !newest.submission.same(&submission)) {self.good=Some(replaced);}
-        self.newest=Some(CommittedImage {image:self.image.clone(),submission,pages,versions,current,authored});
+        self.newest=Some(CommittedImage {image:self.image.clone(),submission,pages,versions,current,authored,complete:false,whole:None});
     }
     fn take_changes(&mut self,since:Option<u64>)->(u64,PixelRect) {
         let (plan,changed)=(self.image.plan,std::mem::replace(&mut self.changed,PixelRect::EMPTY));
@@ -51,13 +56,24 @@ impl Window {
     }
 }
 pub(crate) struct PresentedPage<'a> {
-    pub(super) views: [&'a CommittedImage;3],
-    pub(super) stand_in: bool,
+    pub(super) holes: bool,
+    pub(super) detail: Option<[&'a CommittedImage;2]>,
+    pub(super) stand_in: Option<&'a CommittedImage>,
     pub(super) geometry: &'a wgpu::Buffer,
 }
 impl<'a> PresentedPage<'a> {
-    pub fn views(&self)->[&'a wgpu::TextureView;3] {self.views.map(CommittedImage::view)}
-    pub fn stand_in_scale(&self)->f32 {if self.stand_in {(1u32<<self.views[1].image.plan.level) as f32}else {0.}}
+    pub(super) fn floor(floor:&'a CommittedImage,geometry:&'a wgpu::Buffer)->Self {Self {holes:true,detail:None,stand_in:Some(floor),geometry}}
+    pub(super) fn with_floor(mut self,floor:&'a CommittedImage)->Self {
+        if self.holes && self.stand_in.is_none_or(|image|floor.image.plan.level<image.image.plan.level) {self.stand_in=Some(floor);}
+        self
+    }
+    pub(super) fn images(&self)->impl Iterator<Item=&'a CommittedImage> {self.detail.into_iter().flatten().chain(self.stand_in)}
+    pub fn views(&self,empty:&'a wgpu::TextureView)->[&'a wgpu::TextureView;3] {
+        let [root,next]=self.detail.map_or([empty;2],|images|images.map(CommittedImage::view));
+        [root,self.stand_in.map_or(root,CommittedImage::view),next]
+    }
+    pub fn stand_in_scale(&self)->f32 {self.stand_in.map_or(0.,|image|(1u32<<image.image.plan.level) as f32)}
+    pub fn stand_in_perceptual(&self)->bool {self.stand_in.and_then(CommittedImage::whole)==Some(layer_core::BlendSpace::Perceptual)}
     pub fn geometry(&self)->&'a wgpu::Buffer {self.geometry}
 }
 impl Pixels {
@@ -67,9 +83,18 @@ impl Pixels {
     pub fn committed_next(&self)->Option<&CommittedImage> {self.next.as_ref()?.committed()}
     fn commit_root(&mut self,submission:submission::Submission,pages:Vec<Held>,versions:Vec<Recorded>,current:Option<Current>,authored:Option<layer_core::raster::ContentStamp>) {self.root.as_mut().unwrap().commit(submission,pages,versions,current,authored);}
     pub fn commit_next(&mut self,submission:submission::Submission,reduced:PixelRect) {
-        let root=self.committed_root().unwrap();let pages=root.pages.clone();let versions=root.versions.clone();let current=root.current.clone();let authored=root.authored;
+        let covered=self.committed_next().is_some_and(|next|next.whole.is_some());
+        let root=self.committed_root().unwrap();let pages=root.pages.clone();let versions=root.versions.clone();let current=root.current.clone();let authored=root.authored;let whole=root.whole;
         let next=self.next.as_mut().unwrap();
+        let whole=whole.filter(|_|covered || reduced==PixelRect::new(0,0,next.image.plan.size[0],next.image.plan.size[1]));
         next.commit(submission,pages,versions,current,authored);next.changed=next.changed.union(reduced);self.unreduced=PixelRect::EMPTY;
+        if let Some(image)=&mut next.newest {image.complete=whole.is_some();image.whole=whole;}
+    }
+    pub(super) fn commit_whole(&mut self,submission:submission::Submission,authored:Option<layer_core::raster::ContentStamp>,blend:layer_core::BlendSpace) {
+        self.commit_root(submission,Vec::new(),Vec::new(),None,authored);self.certify_root(true,Some(blend));
+    }
+    fn certify_root(&mut self,complete:bool,whole:Option<layer_core::BlendSpace>) {
+        if let Some(image)=self.root.as_mut().and_then(|window|window.newest.as_mut()) {image.complete=complete;image.whole=whole;}
     }
     pub(super) fn wrote(&mut self,region:PixelRect) {
         self.unreduced=self.unreduced.union(region);
@@ -1409,7 +1434,7 @@ impl Cell {
         self.invalidate();self.lag=lag;
     }
     fn sleeping(&self)->bool {self.waits.iter().any(|(_,waiter)|waiter.as_ref().is_some_and(|waiter|!waiter.settled()))}
-    fn written(&self)->bool {self.derived || self.shown.is_some()}
+    fn written(&self)->bool {self.derived && self.reduced || self.shown.is_some()}
     fn pending(&self)->bool {!self.derived && (self.queued || self.shown.as_ref().is_none_or(|shown|!shown.exact))}
     fn refusal_applies(&self,refusal:&crate::residency::Blocked)->bool {
         refusal.class()!=Class::Refinement || self.current && self.shown.as_ref().is_some_and(|shown|!shown.exact)
@@ -1438,7 +1463,7 @@ pub(super) fn waits(r:&WgpuRasterizer,input:crate::frame_demand::Input,since:cra
     match input {crate::frame_demand::Input::Residency|crate::frame_demand::Input::Name=>!r.arrived_since(since),input=>r.waits_on(input)}
 }
 #[derive(Default)]
-pub(super) struct Cells {cells:Vec<Cell>,template:Option<Key>,input_level:u32,position:u64,frames:u64,unconfirmed:Vec<(submission::Submission,usize,Option<Shown>)>}
+pub(super) struct Cells {cells:Vec<Cell>,template:Option<Key>,input_level:u32,position:u64,frames:u64,unconfirmed:Vec<(submission::Submission,usize,Option<Shown>)>,unconfirmed_reductions:Vec<(submission::Submission,usize)>}
 impl Cells {
     fn index(plan:display_mips::Plan,coordinate:[u32;2])->usize {
         let side=1<<plan.level;
@@ -1457,7 +1482,7 @@ impl Cells {
         let same=self.cells.len()==count && regrouped.is_some() && self.input_level==input_level;
         match store.changes.since(self.position).filter(|_|same) {
             None=> {
-                if self.cells.len()!=count {self.cells.clear();self.cells.resize_with(count,Cell::default);self.unconfirmed.clear();}
+                if self.cells.len()!=count {self.cells.clear();self.cells.resize_with(count,Cell::default);self.unconfirmed.clear();self.unconfirmed_reductions.clear();}
                 for cell in &mut self.cells {if same {cell.stale();} else {cell.invalidate();}}
             },
             Some(events)=>for change in events {
@@ -1481,6 +1506,10 @@ impl Cells {
             }
         }
         self.unconfirmed.retain(|(submission,..)|submission.pending());
+        for (submission,index) in &self.unconfirmed_reductions {
+            if submission.discarded() && let Some(cell)=self.cells.get_mut(*index) {cell.reduced=false;}
+        }
+        self.unconfirmed_reductions.retain(|(submission,..)|submission.pending());
         self.template=Some(template.clone());self.input_level=input_level;self.position=store.changes.end();self.frames=store.frames;
     }
     pub(super) fn derivations(&self,plan:display_mips::Plan,changed:PixelRect)->PixelRect {
@@ -1488,10 +1517,13 @@ impl Cells {
             .map(|(cell,coordinate)|{let area=bounds(coordinate,plan.level,plan.extent).intersect(plan.bounds);if cell.reduced {area.intersect(changed)}else {area}})
             .fold(PixelRect::EMPTY,PixelRect::union)
     }
-    pub(super) fn reduced(&mut self,plan:display_mips::Plan,region:PixelRect) {
-        for (cell,coordinate) in self.cells.iter_mut().zip(coordinates(plan.bounds,plan.level)) {
+    pub(super) fn reduced(&mut self,plan:display_mips::Plan,region:PixelRect,submission:submission::Submission) {
+        for (index,(cell,coordinate)) in self.cells.iter_mut().zip(coordinates(plan.bounds,plan.level)).enumerate() {
             let area=bounds(coordinate,plan.level,plan.extent).intersect(plan.bounds);
-            if cell.derived && region.intersect(area)==area {cell.reduced=true;}
+            if cell.derived && region.intersect(area)==area {
+                self.unconfirmed_reductions.push((submission.clone(),index));
+                cell.reduced=true;
+            }
         }
     }
 }
@@ -1684,11 +1716,15 @@ impl Cache {
             let bytes=retired.iter().map(Image::bytes).sum();
             encoder.retire(crate::DisplayRetirement {_charge:r.retired_display_bytes.charge(bytes),
                 #[cfg(not(target_arch="wasm32"))] _scratch:(Vec::new(),retired)});
-            let mut cells=self.cells.lock().unwrap();
-            for cell in &mut cells.cells {cell.shown=None;cell.invalidate();}
+            self.forget_cells();
         }
         self.pixels.ensure_root(r,self.plan,format,"composition window",charge);
         true
+    }
+    pub(super) fn forget_cells(&self) {
+        let mut cells=self.cells.lock().unwrap();
+        for cell in &mut cells.cells {cell.shown=None;cell.reduced=false;cell.invalidate();}
+        cells.unconfirmed.clear();cells.unconfirmed_reductions.clear();
     }
     pub(super) fn copy_cells(&mut self,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,commands:&mut RegionRecords,
         copies:Vec<(usize,Projection,bool)>,
@@ -1726,7 +1762,7 @@ impl Cache {
         let frame=store.expected().cloned().ok_or(GpuRasterError::Invariant("signature frame is missing or inconsistent"))?;
         let authored=frame.authored_revision(&template.expression)?;
         let mut written=vec![0u32;(self.geometry.size() as usize-32)/4];
-        for (index,cell) in cells.cells.iter().enumerate() {if cell.derived && cell.reduced || cell.shown.is_some() {written[index/32]|=1<<(index%32);}}
+        for (index,cell) in cells.cells.iter().enumerate() {if cell.written() {written[index/32]|=1<<(index%32);}}
         let versions=cells.cells.iter().filter_map(|cell|cell.shown.as_ref().and_then(|shown|shown.recorded.clone())).collect::<Vec<_>>();
         let cell_count=cells.cells.len();
         let current=self.gesture.as_ref().filter(|_|cells.cells.iter().all(|cell|cell.derived || !cell.queued && cell.shown.is_some()))
@@ -1742,6 +1778,7 @@ impl Cache {
         let observed_written=written.clone();
         r.uploads.write_at(encoder,&self.geometry,12,&data.into_iter().chain(written).flat_map(u32::to_le_bytes).collect::<Vec<_>>())?;
         self.pixels.commit_root(encoder.submission(),Vec::new(),versions,current,same.then_some(authored));
+        self.pixels.certify_root(self.complete,(self.complete && self.graph.motion.is_none()).then(||self.graph.blend_space()));
         #[cfg(test)]
         {
             let root=self.pixels.committed_root().unwrap();
@@ -1964,6 +2001,13 @@ impl Cache {
     }
     pub(super) fn has_direct_cells(&self)->bool {
         self.cells.lock().unwrap().cells.iter().any(|cell|cell.shown.as_ref().is_some_and(|shown|shown.direct))
+    }
+    pub(crate) fn hole_area(&self,visible:PixelRect)->PixelRect {
+        let outside=if self.plan.bounds.intersect(visible)==visible {PixelRect::EMPTY}else {visible};
+        if self.pixels.committed_root().is_none() {return visible;}
+        let Some((cells,_store,_))=self.cells() else {return visible;};
+        cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level)).filter(|(cell,_)|!cell.written())
+            .map(|(_,coordinate)|bounds(coordinate,self.plan.level,self.plan.extent).intersect(visible)).fold(outside,PixelRect::union)
     }
     pub(super) fn holes(&self,visible:PixelRect)->bool {
         self.cells().is_some_and(|(cells,_,_)|cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level))
@@ -2799,7 +2843,7 @@ pub(super) mod query_tests {
     }
 
     #[test]
-    fn an_unwritten_overview_uses_the_committed_window() {
+    fn an_overview_without_a_whole_record_is_no_stand_in() {
         let extent=[4096,2048];
         let mut document=layer_core::Document::new(layer_core::PortableId::random(),extent[0],extent[1],
             layer_core::DocumentNames {paint:"Pixels".into(),paper:"Paper".into()});
@@ -2816,15 +2860,94 @@ pub(super) mod query_tests {
         assert!(claimed.texture.width()>0);
         assert!(overview.pixels.root().is_some() && overview.pixels.next().is_some());
         assert!(overview.presentation().is_none(),"allocation and validity bookkeeping cannot mint a committed page handle");
+        let mut encoder=submission::CommandEncoder::new(&renderer.device,&Default::default());
+        overview.pixels.commit_root(encoder.submission(),Vec::new(),Vec::new(),None,None);
+        encoder.submit(&renderer.queue);
+        assert!(overview.presentation().is_some() && overview.picture().is_none(),"a committed record that is not whole is no picture");
         renderer.scale_display=Some(cache);
         let cache=renderer.scale_display.as_ref().unwrap();
-        assert!(cache.overview.as_ref().is_some_and(|overview|overview.presentable().is_none()));
+        assert!(cache.stand_in().is_none(),"an overview whose record is not whole is no stand-in");
         assert!(cache.presentable().is_some());
         let page=renderer.presentation_page().unwrap();
-        let views=page.views();
+        let views=page.views(&renderer.empty_view);
         assert_eq!(views[0],cache.view());
-        assert_eq!((views[1],page.stand_in_scale()),(cache.view(),0.),"an unwritten overview is no stand-in");
+        assert_eq!((views[1],page.stand_in_scale()),(cache.view(),0.),"the page carries no stand-in");
         assert!(views.iter().all(|view|view.texture().width()>0 && view.texture().height()>0));
+    }
+
+    fn overview_cell(r:&WgpuRasterizer)->(&Cache,usize) {
+        let overview=r.scale_display.as_ref().unwrap().overview.as_deref().expect("a zoomed view keeps an overview");
+        (overview,Cells::index(overview.plan,[0,0]))
+    }
+    fn zoomed_over_the_first_overview_cell(document:&layer_core::Document)->FramePacket<'_> {
+        let extent=document.composition().size;
+        let mut frame=packet(document.scene(),extent);frame.composite_all=false;
+        frame.view.width_px=extent[1];frame.view.height_px=extent[1];
+        frame
+    }
+
+    #[test]
+    fn a_discarded_commit_never_certifies_the_older_pixels_it_falls_back_to() {
+        let document=crate::scene::scale::tests::document_at([256;2]);
+        let renderer=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        let mut pixels=Pixels::default();
+        pixels.ensure_root(&renderer,display_mips::Plan::at([256;2],0),wgpu::TextureFormat::Rgba16Float,"coverage records",renderer.scene_tiers.windows.charge(0));
+        let mut partial=submission::CommandEncoder::new(&renderer.device,&Default::default());
+        let receipt=partial.submission();
+        pixels.commit_root(receipt.clone(),Vec::new(),Vec::new(),None,None);pixels.certify_root(false,None);
+        partial.submit(&renderer.queue);
+        let mut completing=submission::CommandEncoder::new(&renderer.device,&Default::default());
+        pixels.commit_root(completing.submission(),Vec::new(),Vec::new(),None,None);pixels.certify_root(true,Some(layer_core::BlendSpace::Linear));
+        assert!(pixels.committed_root().is_some_and(|image|image.complete() && image.whole().is_some()));
+        drop(completing);
+        let image=pixels.committed_root().unwrap();
+        assert!(image.submission().same(&receipt) && !image.complete() && image.whole().is_none(),"the discarded commit's coverage leaves with it");
+    }
+
+    #[test]
+    fn a_discarded_overview_reduction_leaves_its_cell_unreduced() {
+        let document=super::super::tests::document_at([4096,2048]);
+        let frame=zoomed_over_the_first_overview_cell(&document);
+        let mut r=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        let deadline=std::time::Instant::now()+crate::READBACK_TIMEOUT;
+        loop {
+            r.test.discard_frame=true;
+            crate::test_support::submit_ready(&mut r,frame).unwrap();
+            assert!(!r.test.discard_frame,"the frame's encoder is dropped");
+            let (overview,index)=overview_cell(&r);
+            let discarded={let cells=overview.cells.lock().unwrap();
+                cells.cells[index].reduced && cells.unconfirmed_reductions.iter().any(|(submission,cell)|*cell==index && submission.discarded())};
+            if discarded {
+                assert!(!table(overview).cells[index].reduced,"a discarded reduction leaves its cell unreduced");
+                break;
+            }
+            crate::test_support::submit_ready(&mut r,frame).unwrap();r.wait_idle().unwrap();
+            assert!(std::time::Instant::now()<deadline,"a discarded frame reduces the derived overview cell");
+        }
+        crate::test_support::submit_settled(&mut r,frame);
+        let (overview,index)=overview_cell(&r);
+        let cells=table(overview);
+        assert!(cells.cells[index].derived && cells.cells[index].reduced,"a later frame reduces the cell again");
+    }
+
+    #[test]
+    fn a_precision_change_counts_no_earlier_reduction_as_written() {
+        let document=super::super::tests::document_at([4096,2048]);
+        let frame=zoomed_over_the_first_overview_cell(&document);
+        let mut r=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        crate::test_support::submit_settled(&mut r,frame);
+        {
+            let (overview,index)=overview_cell(&r);
+            let cells=table(overview);
+            assert!(cells.cells[index].derived && cells.cells[index].reduced,"the settled overview reduces its derived cell");
+        }
+        layer_render::CanvasRenderer::set_clipping_preview(&mut r,true,false);
+        r.test.discard_frame=true;
+        crate::test_support::submit_ready(&mut r,frame).unwrap();
+        assert!(!r.test.discard_frame,"the frame's encoder is dropped");
+        let (overview,_)=overview_cell(&r);
+        assert_eq!(overview.pixels.root().map(|image|image.texture.format()),Some(wgpu::TextureFormat::Rgba32Float),"the clipping preview replaces the overview's window");
+        assert!(table(overview).cells.iter().all(|cell|!cell.reduced),"a replaced window counts no earlier reduction as written");
     }
 
     #[test]

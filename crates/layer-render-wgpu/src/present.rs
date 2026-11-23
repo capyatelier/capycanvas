@@ -1016,7 +1016,7 @@ impl ViewportPresenter {
     pub fn needs_present(&self, renderer: &WgpuRasterizer, view: ViewState, surround_linear: [f32; 4]) -> bool {
         let page=renderer.presentation_page();
         let [composite,coarse,next] = match &page {
-            Some(page) => page.views(),
+            Some(page) => page.views(&renderer.empty_view),
             None => [&renderer.empty_view; 3],
         };
         let geometry=page.as_ref().map_or(&self.disabled_local_buffer,|page|page.geometry());
@@ -1271,7 +1271,7 @@ impl ViewportPresenter {
         let showing = renderer.presentation.showing;
         let page=renderer.presentation_page();
         let [composite,coarse,next] = match &page {
-            Some(page) => page.views(),
+            Some(page) => page.views(&renderer.empty_view),
             None => [&renderer.empty_view; 3],
         };
         let navigator = renderer.navigator.view().unwrap_or(&renderer.empty_view);
@@ -1396,6 +1396,7 @@ impl ViewportPresenter {
         data[128..152].copy_from_slice(&motion.map_or([0.; 24], |(_, values, ..)| values));
         data[152] = f32::from(composite.texture().format() == wgpu::TextureFormat::Rgba16Float);
         data[153] = page.as_ref().map_or(0.,|page|page.stand_in_scale());
+        data[154] = f32::from(page.as_ref().is_some_and(|page|page.stand_in_perceptual()));
         if let Some(reveal)=renderer.fill_reveal.filter(|reveal|reveal.radius>=0. && self.fill_before.as_ref().is_some_and(|(id,_)|*id==reveal.transaction)) {
             data[156..160].copy_from_slice(&[reveal.center[0],reveal.center[1],reveal.radius,1.]);
         }
@@ -1753,12 +1754,12 @@ impl ViewportPresenter {
         self.presented_overview_buffer=self.overview_buffer.clone();
         if showing && !overview_only && self.presented_drawing.is_none_or(|drawing| !drawing.showing) {
             for pipeline in self.pipeline.iter().enumerate().filter_map(|(index, pipeline)| (index != source).then_some(pipeline)) {
-                renderer.compilation.warm(pipeline, crate::startup::BACKGROUND, renderer.compilation.generation());
+                renderer.compilation.warm(pipeline, crate::startup::ANTICIPATED, renderer.compilation.generation());
             }
         }
         if lit && self.presented_paper != Some(true) {
             for pipeline in self.paper_pipelines(renderer).iter().enumerate().filter_map(|(index, pipeline)| (index != source).then_some(pipeline)) {
-                renderer.compilation.warm(pipeline, crate::startup::BACKGROUND, renderer.compilation.generation());
+                renderer.compilation.warm(pipeline, crate::startup::ANTICIPATED, renderer.compilation.generation());
             }
         }
         self.presented_drawing = Some(renderer.presentation);
@@ -2002,7 +2003,7 @@ mod tests {
         let held=presenter.capture_held(renderer.device(),renderer.queue()).unwrap();
         presenter.adopt_held(Some(held));
         renderer.set_canvas_transition(layer_render::CanvasFade::WAITING);
-        let cache=renderer.scale_display.take();
+        let (cache,floor)=(renderer.scale_display.take(),renderer.floor.take());
         assert!(renderer.presentation.showing && renderer.presentation_views().is_none());
         let presented=presenter.presented_drawing;
         let scope=renderer.device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -2012,7 +2013,7 @@ mod tests {
         assert!(pollster::block_on(scope.pop()).is_none());
         assert!(presenter.held_draw.is_some());
         assert!(presenter.presented_drawing==presented);
-        renderer.scale_display=cache;
+        renderer.scale_display=cache;renderer.floor=floor;
         renderer.set_canvas_transition(Default::default());
         set_source(&mut document,layer_core::color::source::rgba8_source(extent,|_,_|[0,0,255,255]));
         crate::test_support::submit_settled(&mut renderer,crate::test_support::packet(document.scene(),extent));

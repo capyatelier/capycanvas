@@ -1283,3 +1283,191 @@ fn a_raster_crossing_settles_to_the_level_a_fresh_view_renders() { assert_crossi
 fn a_vector_crossing_settles_to_the_level_a_fresh_view_renders() { assert_crossing_settles_to_the_level_a_fresh_view_renders(Crossed::Vector); }
 #[test]
 fn an_object_crossing_settles_to_the_level_a_fresh_view_renders() { assert_crossing_settles_to_the_level_a_fresh_view_renders(Crossed::Object); }
+
+#[test]
+fn a_level_change_without_a_committed_root_presents_the_floor() {
+    let (extent, mut doc) = (CROSSING_EXTENT, crossing_document(Crossed::Raster));
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    settle_at(&mut r, FramePacket { view: crossing_view(0.4), ..packet(doc.scene(), extent) });
+    assert!(r.floor.is_some(), "a complete picture publishes the floor");
+    crate::test_support::warm_presentation(&r, wgpu::TextureFormat::Rgba32Float, crate::SdrSurfaceColor::ExtendedLinearSrgb, crossing_view(0.6));
+    let mut presenter = crate::test_support::float_presenter(&r);
+    let expected = present(&r, &mut presenter, crossing_view(0.6));
+    let ink = doc.scene().order()[0];
+    let empty = paint_occurrence(&mut doc, "Empty", None);
+    set_root_entries(&mut doc, vec![ink, empty]);
+    r.test.discard_frame = true;
+    crate::test_support::submit_ready(&mut r, FramePacket { view: crossing_view(0.6), composite_all: false, ..packet(doc.scene(), extent) }).unwrap();
+    assert!(!r.test.discard_frame, "the level change's encoder is dropped");
+    assert_ne!(r.scale_display.as_ref().unwrap().plan.level, 1, "the view changes level");
+    assert!(r.selected_display_cache().is_none(), "the new level has no committed root and keeps no previous level");
+    assert!(r.has_presentable_frame() && r.presentation_page().is_some_and(|page| page.stand_in_scale() > 1.), "the floor presents alone");
+    assert_eq!(surround_inside_document(&r, &mut presenter, crossing_view(0.6), extent), 0);
+    let shown = present(&r, &mut presenter, crossing_view(0.6));
+    let error = quality(&shown, &expected, display_mips::Plan::at([600, 450], 0), wgpu::TextureFormat::Rgba32Float);
+    assert!(error[0] < 0.01, "the floor shows the drawing: {error:?}");
+}
+
+#[test]
+fn a_missing_floor_demands_frames_and_a_stale_floor_refreshes_on_the_next_settled_frame() {
+    let extent = [512, 512];
+    let mut doc = super::document_at(extent);
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    crate::test_support::submit_settled(&mut r, FramePacket { composite_all: false, ..packet(doc.scene(), extent) });
+    assert!(r.floor.is_some() && r.outstanding_terms().is_empty(), "a settled picture publishes the floor");
+    r.floor = None;
+    assert_eq!(r.outstanding_terms(), [("floor", crate::frame_demand::Outstanding::Runnable)], "a whole picture without a floor demands only the publish");
+    assert_eq!(r.frame_demand(), layer_render::FrameDemand::Work);
+    let revision = r.composite_revision;
+    crate::test_support::submit_ready(&mut r, FramePacket { composite_all: false, ..packet(doc.scene(), extent) }).unwrap();
+    r.wait_idle().unwrap();
+    assert!(r.floor.is_some() && r.outstanding_terms().is_empty(), "the frame publishes the floor");
+    assert_eq!(r.composite_revision, revision, "a publish while the view has no holes damages nothing");
+    assert_ne!(r.frame_demand(), layer_render::FrameDemand::Work);
+    let handle = doc.scene().order()[0];
+    let mut faded = doc.scene().occurrence(handle).unwrap().clone();
+    faded.opacity = 0.5;
+    doc.apply(layer_core::Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences, handle, Some(faded)).unwrap())).unwrap();
+    let still = FramePacket { composite_all: false, ..packet(doc.scene(), extent) };
+    let moved = FramePacket { view: ViewState { document_to_surface: [1., 0., 0., 1., 1., 0.], ..still.view }, ..still };
+    let published = r.floor.as_ref().unwrap().image().unwrap().authored();
+    for (step, frame) in [still, moved, still].into_iter().enumerate() {
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
+        r.wait_idle().unwrap();
+        assert!(r.scale_display.as_ref().unwrap().picture().is_some(), "frame {step} keeps a whole picture");
+        assert!(!r.outstanding_terms().iter().any(|(term, _)| *term == "floor"), "frame {step}: a stale floor demands no frames");
+        assert_eq!(r.floor.as_ref().unwrap().image().unwrap().authored(), published, "frame {step} is not settled and keeps the earlier floor");
+    }
+    crate::test_support::submit_ready(&mut r, still).unwrap();
+    r.wait_idle().unwrap();
+    let source = r.scale_display.as_ref().unwrap().picture().unwrap().authored();
+    assert!(source.is_some() && source != published);
+    assert_eq!(r.floor.as_ref().unwrap().image().unwrap().authored(), source, "the settled frame publishes the edited floor");
+}
+
+#[test]
+fn a_floor_publish_under_visible_holes_damages_exactly_those_holes() {
+    let extent = [4096, 2048];
+    let doc = super::document_at(extent);
+    let views = [-1248., -1247.].map(|x| ViewState { width_px: 1600, height_px: 1200, document_to_surface: [1., 0., 0., 1., x, -424.] });
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+    let mut frames = 0;
+    while r.floor.is_none() {
+        crate::test_support::submit_ready(&mut r, FramePacket { view: views[frames % 2], composite_all: false, ..packet(doc.scene(), extent) }).unwrap();
+        r.wait_idle().unwrap();
+        frames += 1;
+        assert!(std::time::Instant::now() < deadline, "the overview completes and publishes the floor");
+    }
+    let visible = display_mips::view_bounds(views[(frames - 1) % 2], extent, 0).unwrap();
+    let cache = r.selected_display_cache().unwrap();
+    assert!(cache.overview.is_some(), "the zoomed view keeps an overview");
+    let holes = cache.hole_area(visible);
+    assert!(!holes.is_empty(), "the floor is first published while the view has holes");
+    assert_eq!(r.composite_damage_since(r.composite_revision.wrapping_sub(1)), Some(holes), "the publish damages the visible holes");
+}
+
+#[test]
+fn a_replacement_drawing_never_publishes_the_old_pixels_into_its_floor() {
+    let (extent, first) = (CROSSING_EXTENT, crossing_document(Crossed::Raster));
+    let second = super::document_at(extent);
+    let view = crossing_view(0.4);
+    let mut r = WgpuRasterizer::new_native_headless(first.composition().color).unwrap();
+    settle_at(&mut r, FramePacket { view, ..packet(first.scene(), extent) });
+    let old = r.floor.as_ref().and_then(|floor| floor.image()).and_then(|image| image.authored());
+    assert!(old.is_some(), "the first drawing publishes its floor");
+    crate::test_support::submit_ready(&mut r, FramePacket { view, ..packet(second.scene(), extent) }).unwrap();
+    r.wait_idle().unwrap();
+    assert!(r.floor.as_ref().and_then(|floor| floor.image()).is_none_or(|image| image.authored() != old),
+        "the replacement's first frame publishes no floor from the old drawing's pixels");
+    settle_at(&mut r, FramePacket { view, ..packet(second.scene(), extent) });
+    let new = r.floor.as_ref().and_then(|floor| floor.image()).and_then(|image| image.authored());
+    assert!(new.is_some() && new != old, "the replacement publishes its own floor");
+}
+
+#[test]
+fn a_full_precision_picture_publishes_a_full_format_floor() {
+    let (extent, doc) = (CROSSING_EXTENT, crossing_document(Crossed::Raster));
+    for (clipping, format) in [(false, wgpu::TextureFormat::Rgba16Float), (true, wgpu::TextureFormat::Rgba32Float)] {
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        layer_render::CanvasRenderer::set_clipping_preview(&mut r, clipping, false);
+        settle_at(&mut r, FramePacket { view: crossing_view(0.4), ..packet(doc.scene(), extent) });
+        assert_eq!(r.scale_display.as_ref().unwrap().view().texture().format(), format, "clipping {clipping} selects the display precision");
+        let floor = r.floor.as_ref().and_then(|floor| floor.image()).expect("a complete picture publishes the floor");
+        assert_eq!(floor.image().texture.format(), format, "clipping {clipping}: the floor takes its source's format");
+    }
+}
+
+const JOURNEY_EXTENT: [u32; 2] = [4096, 4096];
+fn journey_view(zoom: f32, center: [f32; 2]) -> ViewState {
+    ViewState { width_px: 2048, height_px: 750, document_to_surface: [zoom, 0., 0., zoom, 1024. - zoom * center[0], 375. - zoom * center[1]] }
+}
+
+fn walk_without_surround(r: &mut WgpuRasterizer, frame: FramePacket<'_>, views: &[ViewState], label: &str) {
+    assert!(r.floor.is_some(), "{label}: the floor exists before the journey");
+    crate::test_support::warm_presentation(r, wgpu::TextureFormat::Rgba32Float, crate::SdrSurfaceColor::ExtendedLinearSrgb, views[0]);
+    let mut presenter = crate::test_support::float_presenter(r);
+    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+    for step in 0.. {
+        let view = views[step.min(views.len() - 1)];
+        crate::test_support::with_pace([crate::scene::PASS_TAPS, crate::frame_pace::IDLE_TAPS],
+            || crate::test_support::submit_ready(r, FramePacket { view, composite_all: false, ..frame })).unwrap();
+        r.wait_idle().unwrap();
+        let shown = surround_inside_document(r, &mut presenter, view, frame.document_extent);
+        assert_eq!(shown, 0, "{label}: frame {step} shows the surround at {shown} document pixels");
+        if step + 1 >= views.len() && r.scale_display.as_ref().unwrap().complete && r.next_frame() == layer_render::FrameDemand::Wait { break; }
+        assert!(std::time::Instant::now() < deadline, "{label} settles");
+        if r.next_frame() != layer_render::FrameDemand::Work { std::thread::sleep(std::time::Duration::from_millis(1)); }
+    }
+}
+
+fn settled_at_mid_zoom(doc: &Document) -> WgpuRasterizer {
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    settle_at(&mut r, FramePacket { view: journey_view(0.5, [2048., 750.]), ..packet(doc.scene(), JOURNEY_EXTENT) });
+    let cache = r.scale_display.as_ref().unwrap();
+    assert!(cache.plan.level == 1 && cache.overview.as_deref().is_some_and(|overview| overview.picture().is_some()), "mid zoom keeps a complete overview");
+    r
+}
+
+#[test]
+fn zooming_in_at_mid_zoom_shows_no_surround_inside_the_document() {
+    let doc = super::document_at(JOURNEY_EXTENT);
+    let mut r = settled_at_mid_zoom(&doc);
+    let views = [0.75, 0.8, 0.85, 0.9].map(|zoom| journey_view(zoom, [2048., 750.]));
+    walk_without_surround(&mut r, packet(doc.scene(), JOURNEY_EXTENT), &views, "zoom in at mid zoom");
+}
+
+#[test]
+fn zooming_out_to_the_overview_plan_shows_no_surround_inside_the_document() {
+    let doc = super::document_at(JOURNEY_EXTENT);
+    let mut r = settled_at_mid_zoom(&doc);
+    let overview = r.scale_display.as_ref().unwrap().overview.as_deref().unwrap().plan;
+    let views = [0.125, 0.12, 0.115, 0.11].map(|zoom| journey_view(zoom, [2048., 2048.]));
+    walk_without_surround(&mut r, packet(doc.scene(), JOURNEY_EXTENT), &views, "zoom out to the overview");
+    assert_eq!(r.scale_display.as_ref().unwrap().plan, overview, "the view promotes the overview");
+}
+
+#[test]
+fn zooming_in_after_a_large_stroke_at_fit_shows_no_surround_inside_the_document() {
+    let (extent, viewport) = ([2376, 1584], [640, 400]);
+    let mut doc = photo(extent);
+    let owner = doc.scene().order().iter().copied().find(|&owner| doc.scene().paint_source(owner).is_some()).unwrap();
+    set_root_entries(&mut doc, vec![owner]);
+    let fit = fit_view(extent, viewport, (viewport[0] as f32 / extent[0] as f32).min(viewport[1] as f32 / extent[1] as f32), 0.);
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    submit(&mut r, &doc, fit, true, false);
+    assert_eq!(r.scale_display.as_ref().unwrap().plan.level, 1, "Fit presents a whole-drawing level");
+    let target = source_at(&doc, 0);
+    for (step, x) in [600., 1100., 1600.].into_iter().enumerate() {
+        let mut dab = crate::tests::test_dab([x, 800.], [0.9, 0.02, 0.1, 0.8], 1.);
+        dab.radii = [150.; 2];
+        let batch = DabBatch { stroke_start: step == 0, stroke_end: step == 2,
+            ..dab_batch(target, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds()) };
+        crate::test_support::submit_ready(&mut r, FramePacket { view: fit, dabs: &[dab], dab_batches: std::slice::from_ref(&batch), composite_all: false,
+            blend_space: doc.composition().blend, ..packet(doc.scene(), extent) }).unwrap();
+    }
+    submit(&mut r, &doc, fit, false, false);
+    let views = [1., 1.05, 1.1].map(|zoom| ViewState { width_px: viewport[0], height_px: viewport[1],
+        document_to_surface: [zoom, 0., 0., zoom, 320. - 1100. * zoom, 200. - 800. * zoom] });
+    walk_without_surround(&mut r, FramePacket { blend_space: doc.composition().blend, ..packet(doc.scene(), extent) }, &views, "zoom in after a stroke at Fit");
+}

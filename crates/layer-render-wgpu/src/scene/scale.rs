@@ -21,6 +21,8 @@ pub(crate) use pages::PresentedPage;
 pub(crate) use sources::SOURCE_WORKING_BYTES;
 mod navigator;
 pub(crate) use navigator::Navigator;
+mod floor;
+pub(crate) use floor::Floor;
 pub(crate) use sources::Sources;
 #[cfg(test)]
 pub(crate) use pages::{composite_pages_at,layer_pages};
@@ -812,17 +814,20 @@ impl Cache {
     }
     pub(crate) fn content_revision(&self)->Option<(u64,u64)> {
         if !self.complete {return None;}
+        let (frame,authored)=self.current_authored()?;
+        if !self.presentation()?.images().all(|image|image.authored()==Some(authored)) {return None;}
+        Some((frame.scene().owner(),frame.scene().revision()))
+    }
+    fn current_authored(&self)->Option<(Arc<SignatureFrame>,layer_core::raster::ContentStamp)> {
         let frame=self.pages.lock().unwrap().expected()?.clone();
         let expression=self.graph.content.as_ref().or(self.graph.root.as_ref())?;
         let authored=frame.authored_revision(expression).ok()?;
-        if !self.presentation()?.views.iter().all(|image|image.authored()==Some(authored)) {return None;}
-        Some((frame.scene().owner(),frame.scene().revision()))
+        Some((frame,authored))
     }
     pub fn presentation(&self)->Option<PresentedPage<'_>> {
         let root=self.pixels.committed_root()?;
         let next=self.pixels.committed_next().unwrap_or(root);
-        let stand_in=self.stand_in().filter(|_|!self.complete);
-        Some(PresentedPage {views:[root,stand_in.unwrap_or(root),next],stand_in:stand_in.is_some(),geometry:&self.geometry})
+        Some(PresentedPage {holes:!root.complete(),detail:Some([root,next]),stand_in:self.stand_in().filter(|_|!root.complete()),geometry:&self.geometry})
     }
     #[cfg(test)]
     pub fn view(&self) -> &wgpu::TextureView {&self.pixels.root().expect("composition target").view}
@@ -830,11 +835,23 @@ impl Cache {
     pub fn texture(&self) -> &wgpu::Texture {&self.pixels.root().expect("composition target").texture}
     fn picture(&self)->Option<&pages::CommittedImage> {
         if let Some(overview)=&self.overview {return overview.picture();}
-        if !self.complete || self.plan.bounds!=PixelRect::full(self.plan.extent) {return None;}
-        self.pixels.committed_next().filter(|_|coarse_level(self.plan)>self.plan.level).or_else(||self.pixels.committed_root())
+        if self.plan.bounds!=PixelRect::full(self.plan.extent) {return None;}
+        self.pixels.committed_next().filter(|next|coarse_level(self.plan)>self.plan.level && next.whole().is_some())
+            .or_else(||self.pixels.committed_root().filter(|root|root.whole().is_some()))
     }
     fn stand_in(&self)->Option<&pages::CommittedImage> {
-        self.overview.as_deref().and_then(Self::picture).or_else(||self.previous.as_deref().and_then(Self::picture))
+        self.overview.as_deref().and_then(Self::picture).into_iter().chain(self.previous.as_deref().and_then(Self::picture))
+            .min_by_key(|image|image.image().plan.level)
+    }
+    fn current_picture(&self)->Option<&pages::CommittedImage> {
+        if let Some(overview)=&self.overview {return overview.current_picture();}
+        let image=self.picture()?;
+        let (_,authored)=self.current_authored()?;
+        (image.authored()==Some(authored)).then_some(image)
+    }
+    fn floor_source(&self,blend:layer_core::BlendSpace)->Option<&pages::CommittedImage> {
+        self.current_picture().into_iter().chain(self.previous.as_deref().and_then(Self::current_picture))
+            .filter(|image|image.whole()==Some(blend)).min_by_key(|image|image.image().plan.level)
     }
     fn release_previous(&mut self,r:&WgpuRasterizer) {
         let Some((previous,lease))=self.previous.as_ref().and_then(|previous|Some((previous,previous.standing.as_ref()?))) else {self.previous=None;return;};
@@ -1311,7 +1328,11 @@ impl Cache {
         }
         if !matches!(destination, Destination::Navigator) {
             r.telemetry.phase_begin(11, &r.device, &r.queue, encoder);
-            if let Some((finer,changed))=finer {shown=shown.union(texels(self.derive(scene,r,encoder,commands,finer,changed)?));}
+            if let Some((finer,changed))=finer {
+                let derived=self.derive(scene,r,encoder,commands,finer,changed)?;
+                if !derived.is_empty() {self.commit_window(r,encoder)?;}
+                shown=shown.union(texels(derived));
+            }
             self.reduce_output(scene,r,encoder,commands)?;
             r.telemetry.phase_end(11, encoder);
         }
@@ -1350,7 +1371,7 @@ impl Cache {
         let reduced=PixelRect::new(x,y,x+width,y+height).intersect(finer.pixels.unreduced()).is_empty();
         let input=finer.pixels.committed_next().filter(|_|reduced).map_or(root,pages::CommittedImage::image);
         let Some(written)=self.reduce_from(scene,r,encoder,commands,input,region)? else {return Ok(PixelRect::EMPTY);};
-        self.cells.lock().unwrap().reduced(self.plan,region);
+        self.cells.lock().unwrap().reduced(self.plan,region,encoder.submission());
         self.pixels.derived(written,encoder.submission());
         Ok(region)
     }
@@ -1367,6 +1388,7 @@ impl Cache {
             let bytes=retired.iter().map(Image::bytes).sum();
             encoder.retire(crate::DisplayRetirement {_charge:r.retired_display_bytes.charge(bytes),
                 #[cfg(not(target_arch="wasm32"))] _scratch:(Vec::new(),retired)});
+            self.forget_cells();
             self.pixels.ensure_root(r,self.plan,format,"composition window",charge);
         }
         let output=self.pixels.root().unwrap();

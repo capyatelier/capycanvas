@@ -58,7 +58,7 @@ impl VariantFixture {
     fn assert_projection(&self) {
         let page = self.renderer.presentation_page().expect("the producer must publish committed keyed pixels");
         assert!(page.geometry().size() > 0);
-        assert!(page.views().iter().all(|view| view.texture().width() > 0 && view.texture().height() > 0));
+        assert!(page.views(&self.renderer.empty_view).iter().all(|view| view.texture().width() > 0 && view.texture().height() > 0));
         assert!(self.renderer.selected_display_cache().unwrap().presentable_pages() > 0);
     }
 

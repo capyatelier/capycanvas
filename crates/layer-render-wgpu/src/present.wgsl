@@ -170,8 +170,9 @@ fn paper_composite(composite: vec4<f32>, p: vec2<f32>, dx: vec2<f32>, dy: vec2<f
     let weight = select(1., 1. - composite.a * (1. - paper_shade.light.w), paper_shade.state.y != 0.);
     return paper_relief(canvas_linear(paper_backed(composite)), weight, p, dx, dy);
 }
-fn source_at(stand_in: bool, p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, linear: bool) -> vec4<f32> {
-    let grid = moving_between(p, grid_artwork_at(p, dx, dy, stand_in));
+fn source_at(stand_in: bool, written: bool, p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, linear: bool) -> vec4<f32> {
+    var grid = grid_artwork_at(p, dx, dy, stand_in);
+    if !stand_in || written { grid = moving_between(p, grid); }
     if linear { return canvas_linear(grid); }
     return grid;
 }
@@ -192,7 +193,7 @@ fn moving_between(p: vec2<f32>, composite: vec4<f32>) -> vec4<f32> {
 }
 fn grid_artwork_at(p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, stand_in: bool) -> vec4<f32> {
     if !grid_written(p) {
-        if stand_in {return coarse_point(p);}
+        if stand_in {return restyled(coarse_point(p));}
         return vec4<f32>(0.);
     }
     if !grid_complete() {return detail_point(p);}
@@ -206,6 +207,12 @@ fn grid_artwork_at(p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, stand_in: bool) -
     let reduced = level_sample(kept, kept_level, (q - origin + .5) / vec2<f32>(textureDimensions(kept)));
     if coarser == 1. { return reduced; }
     return mix(detail_point(p), reduced, coarser);
+}
+fn restyled(c: vec4<f32>) -> vec4<f32> {
+    let encoded = camera.levels.z != 0.;
+    if encoded == (camera.composite.x != 0.) || c.a <= 0. { return c; }
+    let rgb = c.rgb / c.a;
+    return vec4<f32>(select(sdr_encode(rgb, CANVAS_SPACE), sdr_decode(rgb, CANVAS_SPACE), encoded) * c.a, c.a);
 }
 // Linear premultiplied artwork from the composite, which holds the
 // document's encoded values when it blends perceptually (composite.x).
@@ -351,11 +358,12 @@ fn surface_color(vertex:Vertex,stand_in:bool)->vec4<f32> {
     let extent = camera.offset_document.zw;
     let cropping = camera.crop_offset.w > .5;
     if any(p < vec2<f32>(0.)) || any(p >= extent) { return surround_color(surface, p); }
-    if !stand_in && !grid_written(p) {return surround_color(surface,p);}
+    let written = grid_written(p);
+    if !written && (!stand_in || camera.levels.y == 0.) {return surround_color(surface,p);}
     // Explicit LOD keeps sampling valid across the finite-canvas boundary.
     let dx = camera.inverse.xy * footprint;
     let dy = camera.inverse.zw * footprint;
-    let sampled = source_at(stand_in, p, dx, dy, !PAPER || paper_shade.state.y == 0.);
+    let sampled = source_at(stand_in, written, p, dx, dy, !PAPER || paper_shade.state.y == 0.);
     var artwork = sampled;
     if PAPER && paper_shade.state.y != 0. { artwork = paper_composite(sampled, p, dx, dy); }
     else if PAPER { artwork = paper_relief(sampled, 1., p, dx, dy); }
@@ -363,7 +371,7 @@ fn surface_color(vertex:Vertex,stand_in:bool)->vec4<f32> {
     let checker = transparency_checker(p, 16.);
     var rgb = screen_marked(paint, view_working_rgb(paint.rgb) + vec3<f32>(checker) * (1.0 - paint.a), checker);
     if PAPER && paper_shade.state.z != 0. { rgb = paper_lit(vec4<f32>(rgb, 1.), paper_slope_shade(p, dx, dy), 1.).rgb; }
-    if (bitcast<u32>(artwork.a)&0x7fffffffu)!=0u {
+    if (!stand_in || written) && (bitcast<u32>(artwork.a)&0x7fffffffu)!=0u {
         let bits=bitcast<vec3<u32>>(artwork.rgb);
         let shadows=camera.composite.z!=0. && (any((bits&vec3(0x7fffffffu))==vec3(0u)) || any((bits>>vec3(31u))!=vec3(0u)));
         let highlights=camera.composite.w!=0. && any(select(vec3(false), bits>=vec3(bitcast<u32>(artwork.a)), bits<vec3(0x80000000u)));

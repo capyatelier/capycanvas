@@ -1190,6 +1190,7 @@ pub struct WgpuRasterizer {
     retired_display_bytes: Arc<residency::Tier>,
     scene_tiers: scene::Tiers,
     navigator: scene::scale::Navigator,
+    floor: Option<scene::scale::Floor>,
     color_sampler: color_sample::ColorSampler,
     composite_revision: u64,
     presentable_revision: u64,
@@ -1634,6 +1635,7 @@ impl WgpuRasterizer {
             retired_display_bytes: residency::Tier::within(&scene_tiers.display),
             scene_tiers,
             navigator: Default::default(),
+            floor: None,
             color_sampler: color_sample::ColorSampler::new(&raster_tiers.paint),
             composite_revision: 0,
             presentable_revision: 0,
@@ -1820,13 +1822,18 @@ impl WgpuRasterizer {
             self.presentation.document = Some(document);
             self.presentation.showing = false;
             self.presentation.navigator = false;
+            self.floor = None;
         }
     }
     pub(crate) fn presentation_page(&self)->Option<scene::scale::PresentedPage<'_>> {
-        self.selected_display_cache()?.presentation()
+        let page=self.selected_display_cache().and_then(scene::scale::Cache::presentation);
+        match self.floor.as_ref().filter(|floor|Some(floor.document())==self.presentation.document) {
+            Some(floor)=>floor.page(page),
+            None=>page,
+        }
     }
     pub(crate) fn presentation_views(&self)->Option<[&wgpu::TextureView;3]> {
-        self.presentation_page().map(|page|page.views())
+        self.presentation_page().map(|page|page.views(&self.empty_view))
     }
     pub(crate) fn composed_vector_motion(&self) -> Option<&(layer_render::VectorMotion, DocRect)> {
         self.vector_motion_drawn.as_ref().filter(|_| self.vector_motion_split.is_none())
@@ -3967,6 +3974,7 @@ impl CanvasRenderer for WgpuRasterizer {
         self.presentation=previous.presentation;
         self.navigator=std::mem::take(&mut previous.navigator);
         if self.document_color==previous.document_color {
+            self.floor=previous.floor.take();
             self.scene=previous.scene.take();
             std::mem::swap(&mut self.scene_tiers,&mut previous.scene_tiers);
             self.retired_display_bytes=residency::Tier::within(&self.scene_tiers.display);
@@ -4559,7 +4567,7 @@ impl WgpuRasterizer {
             return Err(GpuRasterError::ExtentUnsupported);
         }
         if settled_commit.is_none() && (retained_transition
-            || !self.background_ready.load(std::sync::atomic::Ordering::Acquire) && !self.navigator.pending()
+            || !self.background_ready.load(std::sync::atomic::Ordering::Acquire) && !self.navigator.pending() && !matches!(scene::scale::Floor::demand(self), Some(frame_demand::Outstanding::Runnable))
             && !self.moving_images_pending()
             && !self.objects_outstanding()
             && !self.scale_display.as_ref().is_some_and(scene::scale::Cache::approximating)
@@ -5437,6 +5445,13 @@ impl WgpuRasterizer {
             || self.artwork_frame.as_ref().is_none_or(|old| !old.same_artwork(packet));
         self.prefetch_retouch(&frame, moving, &mut encoder)?;
         self.prefetch_regions(&frame,&mut encoder,&mut work)?;
+        let settled = !motion && !reset && !animated && !display_rebuilt && unchanged && dirty.is_empty()
+            && original_batches.is_empty() && packet.dabs.is_empty() && native_commit.is_none();
+        if match scene::scale::Floor::publish(self,&mut encoder,settled) {Err(error) if error.is_preparation_pending()=>false,result=>result?} {
+            let visible=display_mips::view_bounds(packet.view,self.document_extent,0).unwrap_or(PixelRect::EMPTY);
+            let holes=self.selected_display_cache().map_or(visible,|cache|cache.hole_area(visible));
+            if !holes.is_empty() {self.publish(holes);}
+        }
         self.apply_frame_grants(&mut encoder);
         self.uploads.finish(&encoder);
         if let Some(started) = started { cpu_phases[4] = started.elapsed().as_secs_f64() * 1000.; }
@@ -5452,8 +5467,7 @@ impl WgpuRasterizer {
         }
         #[cfg(test)]
         if std::mem::take(&mut self.test.discard_frame) {drop(encoder);return Ok(());}
-        self.background_frame = !motion && !reset && !animated && !display_rebuilt && unchanged && dirty.is_empty()
-            && original_batches.is_empty() && packet.dabs.is_empty() && native_commit.is_none();
+        self.background_frame = settled;
         let publication=encoder.submission();
         let submitting = web_time::Instant::now();
         let submission = encoder.submit(&self.queue)

@@ -38,11 +38,11 @@ impl WgpuRasterizer {
     pub(crate) fn outstanding_terms(&self) -> Vec<(&'static str, Outstanding)> {
         self.outstanding().into_iter().filter_map(|(term, state)| state.map(|state| (term, state))).collect()
     }
-    fn outstanding(&self) -> [(&'static str, Option<Outstanding>); 24] {
+    fn outstanding(&self) -> [(&'static str, Option<Outstanding>); 25] {
         let restoring = self.restore_preparation().is_some();
         self.terms().map(|(term, state)| (term, state.filter(|_| !restoring || matches!(term, "restore preparation" | "display selection" | "settling"))))
     }
-    fn terms(&self) -> [(&'static str, Option<Outstanding>); 24] {
+    fn terms(&self) -> [(&'static str, Option<Outstanding>); 25] {
         use Outstanding::{Blocked, Runnable};
         let decode = self.image_decode_waiting();
         let gated = |pending: bool| pending.then_some(if decode { Blocked(Input::Decode) } else { Runnable });
@@ -64,6 +64,7 @@ impl WgpuRasterizer {
             ("settling", self.settling.is_some().then_some(if self.settling_ready() { Runnable } else { Blocked(Input::Gpu) })),
             ("retouch sources", gated(self.retouch.as_ref().is_some_and(|retouch| retouch.pending()))),
             ("navigator", self.navigator.outstanding(self).map(|state| match objects { Some(Blocked(input)) => Blocked(input), _ => state })),
+            ("floor", crate::scene::scale::Floor::demand(self)),
             ("canonical names", (self.navigator.waiting_for_name()
                 || self.scale_display.as_ref().is_some_and(|cache| cache.waiting_for_name(self))).then_some(Blocked(Input::Name))),
             ("transform sources", gated(self.transform_sources_pending && self.transform_preview.is_some())),
