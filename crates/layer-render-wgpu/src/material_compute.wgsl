@@ -33,7 +33,7 @@ fn compute_color(@builtin(global_invocation_id) invocation: vec3<u32>) {
     let id=invocation.xy+select(vec2<u32>(0u),bounds.xy/block,cropped);
     if any(id>=textureDimensions(material_color_output)) || (cropped && any(id*block>=bounds.zw)) {return;}
     load_dry_destination(id);
-    if saturated_dry_coverage(vec2<i32>(id))>=1.0 {return;}
+    if saturated_dry_coverage(vec2<i32>(id*block))>=1.0 {return;}
     store_dry_color(id,dry_block_result(id).color);
 }
 

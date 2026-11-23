@@ -864,6 +864,29 @@ fn a_wide_dab_centred_just_off_screen_shows_its_ink_in_every_visible_cell_it_cov
 }
 
 #[test]
+fn a_reduced_preview_paints_where_only_it_covers_beside_a_persistent_dab_in_the_same_frame() {
+    let doc=wide_photo();let extent=doc.composition().size;let target=doc.active_target().unwrap();
+    let style=layer_render::DabStyle {blend_space:doc.composition().blend,..crate::layer_tests::preset_style(DefaultBrushPreset::GPen)};
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,8);frame.blend_space=doc.composition().blend;
+    let dabs=[ink(2068.,1044.,60.),ink(2248.,1224.,40.)];
+    let shown=|kinds:[layer_render::DabBatchKind;2]| {
+        let batches=kinds.iter().zip(&dabs).enumerate().map(|(index,(kind,dab))|layer_render::DabBatch {kind:*kind,stroke_id:layer_core::StrokeId(1),first_dab:index as u32,dab_count:1,
+            stroke_start:index==0,stroke_end:false,damage:dab.bounds(),..crate::test_support::dab_batch(target,style.clone(),dab.bounds())}).collect::<Vec<_>>();
+        let mut r=renderer(&doc);layer_render::CanvasRenderer::set_working_layer(&mut r,doc.working.occurrence);
+        crate::test_support::submit_settled(&mut r,frame);
+        crate::test_support::submit_ready(&mut r,FramePacket {dabs:&dabs,dab_batches:&batches,time_seconds:0.01,..frame}).unwrap();
+        let (plan,pixels)=(r.scale_display.as_ref().unwrap().plan,display_pixels(&r));
+        assert_eq!((plan.level,r.preview_level),(3,if kinds[1]==layer_render::DabBatchKind::Preview {2}else {0}));
+        texels_inside(plan,PixelRect::new(2232,1208,2264,1240)).into_iter().map(|(_,index)|pixels[index]).collect::<Vec<_>>()
+    };
+    let previewed=shown([layer_render::DabBatchKind::Persistent,layer_render::DabBatchKind::Preview]);
+    let painted=shown([layer_render::DabBatchKind::Persistent;2]);
+    assert!(painted.iter().all(|texel|texel[1]<0.25),"the dab inks its interior: {painted:?}");
+    let error=max_error(&previewed,&painted);
+    assert!(error<1e-2,"a level-2 preview beside the frame's persistent dab differs from the same dab painted by {error}: {previewed:?}");
+}
+
+#[test]
 fn a_wide_stroke_crossing_the_view_edge_composes_in_the_contact_it_begins_at_pen_down_as_a_fresh_renderer_shows_it() {
     let doc=wide_photo();let view=wide_frame(&doc).view;
     let visible=display_mips::view_bounds(view,doc.composition().size,0).ok();
