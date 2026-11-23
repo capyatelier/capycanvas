@@ -785,7 +785,7 @@ impl Scene {
             presented_backdrop: None,
             object_query: false,
             authored: false,
-            positions: r.transforms.as_ref().map_or_else(|| paint_transform::mesh::Positions::new(device), paint_transform::mesh::Positions::sharing).charged(&tiers.gpu),
+            positions: r.transforms.as_deref().map_or_else(|| paint_transform::mesh::Positions::new(device), paint_transform::mesh::Positions::sharing).charged(&tiers.gpu),
             position_key: None,
             mesh_geometry: Default::default(),
             scale_sources: Default::default(),

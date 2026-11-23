@@ -1134,7 +1134,7 @@ pub struct WgpuRasterizer {
     selection_previews: selection_previews::SelectionPreviews,
     selection_paint_revision: u64,
     selection_paint_damage: PixelRect,
-    regions: Option<region_requests::RegionRequests>,
+    regions: Option<Box<region_requests::RegionRequests>>,
     unclipped: wgpu::Buffer,
     scene: Option<Box<scene::Scene>>,
     source_tiles: std::cell::RefCell<scene::sources::DecodedTiles>,
@@ -1161,7 +1161,7 @@ pub struct WgpuRasterizer {
     #[cfg(target_arch = "wasm32")]
     browser_image_wake: std::rc::Rc<std::cell::RefCell<Option<std::task::Waker>>>,
     snapshot_decode_wake: Option<Arc<std::sync::Mutex<Option<std::task::Waker>>>>,
-    transforms: Option<paint_transform::PaintTransforms>,
+    transforms: Option<Box<paint_transform::PaintTransforms>>,
     compilation: compile::Scope,
     context_compilation: compile::Scope,
     preparation: layer_render::PreparationContext,
@@ -1520,7 +1520,7 @@ impl WgpuRasterizer {
         let scene_pipelines = recipes.scene.clone();
         let changed_cells = Some(changed_cells::ChangedCells::new(&device, &scene_tiers.display));
         let portable_blend = portable_blend::Renderer::new(&device);
-        let transforms = Some(paint_transform::PaintTransforms::from_recipes(&recipes.transforms).charged(&scene_tiers.display));
+        let transforms = Some(Box::new(paint_transform::PaintTransforms::from_recipes(&recipes.transforms)).charged(&scene_tiers.display));
         #[cfg(not(target_arch = "wasm32"))]
         let memory_samples=factory.memory_samples();
         let compilation = device.compilation()?;
@@ -6965,6 +6965,11 @@ use layer_render::{DabBatchKind, DabStyle, FramePacket, ViewState};
         assert_eq!(preview_block(scaled(0.1)), 4);
         let (sin, cos) = 0.7_f32.sin_cos();
         assert_eq!(preview_block([0.1 * cos, 0.1 * sin, -0.1 * sin, 0.1 * cos, 40., 9.]), 4);
+    }
+
+    #[test]
+    fn a_renderer_held_by_value_leaves_a_debug_test_thread_room_for_its_constructor_copies() {
+        assert!(mem::size_of::<WgpuRasterizer>() <= 32 << 10, "{} B renderer", mem::size_of::<WgpuRasterizer>());
     }
 
     #[test]

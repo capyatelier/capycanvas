@@ -94,9 +94,9 @@ impl RegionRequests {
             + self.running.as_ref().map_or(0, |r| match &r.then {Then::Refine(job)=>job.storage_bytes(),Then::Finish(..)=>0})
             + self.modify_source.as_ref().map_or(0, |s| s.document.size() + s.levels.iter().map(wgpu::Buffer::size).sum::<u64>())
     }
-    pub(super) fn new(r: &WgpuRasterizer) -> Self {
+    pub(super) fn new(r: &WgpuRasterizer) -> Box<Self> {
         let device=&r.device;
-        Self {
+        Box::new(Self {
             flood: Flood::new(device),
             raw: region_sources::RawRegions::new(device),
             cache:None,sampling:region_sources::Sampling::Pixels,cache_request:None,stop_mask:None,scope:None,preparation:None,
@@ -113,7 +113,7 @@ impl RegionRequests {
             rx: None,
             modify_source: None,
             charge: r.raster_tiers.paint.charge(0),
-        }
+        })
     }
     /// Drop the request in progress; a readback already in flight is ignored.
     pub(super) fn cancel(&mut self) {
@@ -133,7 +133,7 @@ impl RegionRequests {
     }
     fn positions(&mut self, r: &WgpuRasterizer) -> &mut paint_transform::mesh::Positions {
         self.positions.get_or_insert_with(|| {
-            r.transforms.as_ref().map_or_else(
+            r.transforms.as_deref().map_or_else(
                 || paint_transform::mesh::Positions::new(&r.device),
                 paint_transform::mesh::Positions::sharing,
             )
@@ -950,7 +950,7 @@ impl WgpuRasterizer {
             self.keep_regions(regions);
         }
     }
-    fn keep_regions(&mut self, mut regions: RegionRequests) {
+    fn keep_regions(&mut self, mut regions: Box<RegionRequests>) {
         let bytes = regions.storage_bytes();
         regions.charge.resize(bytes);
         self.regions = Some(regions);

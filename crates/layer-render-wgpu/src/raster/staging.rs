@@ -681,7 +681,7 @@ impl WgpuRasterizer {
         let mut masks=std::collections::BTreeSet::new();
         for page in self.layer_masks.pages.values() {if masks.insert(page.allocation_identity()) {bytes=bytes.checked_add(page.storage_bytes()).ok_or(GpuRasterError::SizeOverflow)?;}}
         bytes=bytes.checked_add(self.scale_display.as_ref().map_or(0,|cache|cache.resident_bytes()))
-            .and_then(|bytes|bytes.checked_add(transforms.or(self.transforms.as_ref()).map_or(0,|transforms|transforms.preparation_bytes(&mut textures))))
+            .and_then(|bytes|bytes.checked_add(transforms.or(self.transforms.as_deref()).map_or(0,|transforms|transforms.preparation_bytes(&mut textures))))
             .ok_or(GpuRasterError::SizeOverflow)?;
         Ok(bytes.saturating_add(self.staged_restore_bytes()))
     }

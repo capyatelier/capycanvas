@@ -3,8 +3,8 @@ use layer_core::raster::ContentVersion;
 
 #[derive(Default)]
 pub(super) struct Pixels {
-    root: Option<Window>,
-    next: Option<Window>,
+    root: Option<Box<Window>>,
+    next: Option<Box<Window>>,
     unreduced: PixelRect,
 }
 struct Window {image:Image,_charge:crate::residency::Charge,newest:Option<CommittedImage>,good:Option<CommittedImage>,changed:PixelRect,taken:u64}
@@ -40,7 +40,7 @@ impl CommittedImage {
     }
 }
 impl Window {
-    fn new(image:Image,charge:crate::residency::Charge)->Self {Self {image,_charge:charge,newest:None,good:None,changed:PixelRect::EMPTY,taken:new_take()}}
+    fn new(image:Image,charge:crate::residency::Charge)->Box<Self> {Box::new(Self {image,_charge:charge,newest:None,good:None,changed:PixelRect::EMPTY,taken:new_take()})}
     fn committed(&self)->Option<&CommittedImage> {self.newest.iter().chain(&self.good).find(|image|!image.submission.discarded())}
     fn committed_mut(&mut self)->Option<&mut CommittedImage> {self.newest.iter_mut().chain(&mut self.good).find(|image|!image.submission.discarded())}
     fn commit(&mut self,submission:submission::Submission,pages:Vec<Held>,versions:Vec<Recorded>,current:Option<Current>,authored:Option<layer_core::raster::ContentStamp>) {
@@ -105,7 +105,7 @@ impl Pixels {
             .map_or_else(||(new_take(),source.image.plan.bounds),|window|window.take_changes(since))
     }
     pub(super) fn hold_current(&mut self,frame:&Arc<SignatureFrame>) {
-        if let Some(image)=self.root.as_mut().and_then(Window::committed_mut) {image.current=Some(Current {frame:frame.clone(),derived:false});}
+        if let Some(image)=self.root.as_deref_mut().and_then(Window::committed_mut) {image.current=Some(Current {frame:frame.clone(),derived:false});}
     }
     pub(super) fn derived(&mut self,region:PixelRect,submission:submission::Submission) {
         self.wrote(region);

@@ -260,7 +260,7 @@ impl PaintTransforms {
             t.begin_frame();
         }
     }
-    pub(crate) fn charged(mut self, tier: &Arc<crate::residency::Tier>) -> Self {
+    pub(crate) fn charged(mut self: Box<Self>, tier: &Arc<crate::residency::Tier>) -> Box<Self> {
         for state in &mut self.0 { state.charge = tier.charge(0); state.account(); }
         self
     }

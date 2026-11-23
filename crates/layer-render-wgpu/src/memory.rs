@@ -636,7 +636,7 @@ impl WgpuRasterizer {
         let ram = scene.ram.saturating_add(source.cpu_bytes()).saturating_add(self.scene_tiers.moving[1].used()).saturating_add(self.scene_tiers.decodes.used()).saturating_add(self.moving_images.metadata_bytes());
         let resources = self.device.analysis_memory.used();
         let pinned_transforms = if self.transform_preview.is_some() || self.transforms.as_ref().is_some_and(|transforms| transforms.has_preview()) {
-            self.transforms.as_ref().map_or(0, paint_transform::PaintTransforms::charged_bytes) } else { 0 };
+            self.transforms.as_deref().map_or(0, paint_transform::PaintTransforms::charged_bytes) } else { 0 };
         let cells=self.changed_cells.as_ref().map_or(0,changed_cells::ChangedCells::storage_bytes);
         DisplayUsage {ram,pinned:[
             cells.saturating_add(pinned_transforms).saturating_add(scene.working),
