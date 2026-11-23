@@ -2062,7 +2062,7 @@ impl WgpuRasterizer {
         let export = self.paper_export.get_or_insert_with(|| self.recipes.paper_export.get_or_init(|| Arc::new(paper::ExportShade::new(&self.device))).clone());
         let Some(slope) = self.papers.slope(&tile.id(&binding.surface)) else { return Ok(None) };
         let offset = scene.evaluation_offset64();
-        let origin = [f64::from(origin[0]) + offset[0], f64::from(origin[1]) + offset[1]];
+        let origin = [f64::from(origin[0]) - offset[0], f64::from(origin[1]) - offset[1]];
         export.encode(&self.device, encoder, source, coverage, slope, tile.grain(&binding), light, origin).map(Some)
     }
 

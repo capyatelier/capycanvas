@@ -133,6 +133,24 @@ fn staged_off_canvas_captures_prepare_constant_paper_and_keep_its_frame_extent()
     }
 }
 
+#[test]
+fn a_window_capture_lights_its_paper_where_the_whole_capture_does() {
+    let mut document=crate::layer_tests::paper_shade::rough_gray_paper();
+    crate::layer_tests::paper_shade::set_paper(&mut document,&[(layer_core::paper::RELIEF,layer_core::EffectValue::Number(150.))]);
+    let size=document.composition().size;
+    let whole=capture(document.clone()).unwrap().read_region([0,0,size[0],size[1]]).unwrap();
+    let (origin,extent)=([37,21],[64,72]);
+    let mut window=capture(document).unwrap();
+    window.capture_window(origin,extent).unwrap();
+    let pixels=window.read_region([0,0,extent[0],extent[1]]).unwrap();
+    for y in 0..extent[1] {for x in 0..extent[0] {
+        let actual=pixels[(y*extent[0]+x) as usize];
+        let expected=whole[((y+origin[1] as u32)*size[0]+x+origin[0] as u32) as usize];
+        for channel in 0..4 {assert!((actual[channel]-expected[channel]).abs()<1e-5,
+            "window pixel ({x},{y}) lights the paper of another place: {actual:?} vs {expected:?}");}
+    }}
+}
+
 fn hide_paper(document:&mut Document) {
     let paper=document.scene().children(None)[1];document.artwork.occurrences.get_mut(paper).unwrap().visible=false;
 }
