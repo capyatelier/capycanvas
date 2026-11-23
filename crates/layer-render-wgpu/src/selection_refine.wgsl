@@ -24,17 +24,16 @@ fn incoming_at(p: vec2<i32>) -> f32 {
     }
     return select(value,1.-value,incoming.info.x != 0u);
 }
-fn sample_incoming(p: vec2<f32>) -> f32 {
-    let q = vec2<f32>(dot(params.inverse.xz,p),dot(params.inverse.yw,p)) + params.offset_radius.xy
-        - bitcast<vec2<f32>>(incoming.info.zw) - .5;
+fn incoming_layout(p: vec2<f32>) -> f32 {
+    let q = p - bitcast<vec2<f32>>(incoming.info.zw) - .5;
     let base = vec2<i32>(floor(q));
     let f = fract(q);
-    if all(f==vec2<f32>(0.)) {
-        let value=incoming_at(base);
-        return select(select(0.,1.,value>=.5),value,(params.flags & 1u)!=0u);
-    }
-    let value = mix(mix(incoming_at(base),incoming_at(base+vec2<i32>(1,0)),f.x),
+    if all(f==vec2<f32>(0.)) { return incoming_at(base); }
+    return mix(mix(incoming_at(base),incoming_at(base+vec2<i32>(1,0)),f.x),
         mix(incoming_at(base+vec2<i32>(0,1)),incoming_at(base+vec2<i32>(1,1)),f.x),f.y);
+}
+fn sample_incoming(p: vec2<f32>) -> f32 {
+    let value = incoming_layout(vec2<f32>(dot(params.inverse.xz,p),dot(params.inverse.yw,p)) + params.offset_radius.xy);
     return select(select(0.,1.,value >= .5),value,(params.flags & 1u) != 0u);
 }
 fn previous_at(p: vec2<f32>) -> f32 {
@@ -207,7 +206,7 @@ fn downsample(@builtin(global_invocation_id) id: vec3<u32>) {
         let high = max(low,min(low+vec2(scale),params.area.zw));
         var sum = 0.;
         for (var v = low.y; v < high.y; v++) {
-            for (var u = low.x; u < high.x; u++) { sum += incoming_at(vec2<i32>(i32(u),i32(v))); }
+            for (var u = low.x; u < high.x; u++) { sum += incoming_layout(vec2<f32>(f32(u),f32(v))+.5); }
         }
         let count = f32(high.x-low.x)*f32(high.y-low.y);
         packed |= u32(round(sum/max(count,1.)*255.)) << (i*8u);

@@ -455,6 +455,20 @@ fn modify_matches_its_steps_within_a_window_across_chunks_and_inverted() {
     }
 }
 
+fn preview_at(preview: &RegionResult, x: f32, y: f32) -> f32 {
+    let [s, _, _, _, ox, oy] = preview.placement.0;
+    let [gw, gh] = preview.pixels.extent();
+    let q = [(x - ox) / s - 0.5, (y - oy) / s - 0.5];
+    let at = |i: i32, j: i32| {
+        if i < 0 || j < 0 || i >= gw as i32 || j >= gh as i32 { 0. } else { f32::from(coverage(&preview.pixels, i as u32, j as u32)) }
+    };
+    let [i, j] = q.map(|v| v.floor() as i32);
+    let [fx, fy] = q.map(|v| v - v.floor());
+    let top = at(i, j) * (1. - fx) + at(i + 1, j) * fx;
+    let bottom = at(i, j + 1) * (1. - fx) + at(i + 1, j + 1) * fx;
+    top * (1. - fy) + bottom * fy
+}
+
 #[test]
 fn a_modify_preview_covers_the_selection_window_on_cells_that_approximate_the_result() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
@@ -484,21 +498,9 @@ fn a_modify_preview_covers_the_selection_window_on_cells_that_approximate_the_re
         assert_eq!(preview.placement.0[1..3], [0., 0.]);
         let [gw, gh] = preview.pixels.extent();
         assert!(ox >= 0. && oy >= 0. && ox + gw as f32 * s <= 128. + s && oy + gh as f32 * s <= 128. + s);
-        let cells = &preview.pixels;
-        let sample = |x: f32, y: f32| {
-            let q = [(x - ox) / s - 0.5, (y - oy) / s - 0.5];
-            let at = |i: i32, j: i32| {
-                if i < 0 || j < 0 || i >= gw as i32 || j >= gh as i32 { 0. } else { f32::from(coverage(cells, i as u32, j as u32)) }
-            };
-            let [i, j] = q.map(|v| v.floor() as i32);
-            let [fx, fy] = q.map(|v| v - v.floor());
-            let top = at(i, j) * (1. - fx) + at(i + 1, j) * fx;
-            let bottom = at(i, j + 1) * (1. - fx) + at(i + 1, j + 1) * fx;
-            top * (1. - fy) + bottom * fy
-        };
         for y in 0..128 {
             for x in 0..128 {
-                let shown = sample(x as f32 + 0.5, y as f32 + 0.5);
+                let shown = preview_at(&preview, x as f32 + 0.5, y as f32 + 0.5);
                 let expected = f32::from(exact[y * 128 + x]);
                 assert!((shown - expected).abs() <= 24., "{x},{y}: preview {shown} exact {expected} at scale {s}");
             }
@@ -512,6 +514,31 @@ fn a_modify_preview_covers_the_selection_window_on_cells_that_approximate_the_re
     assert_eq!(fine, 1., "a small radius needs every pixel at full zoom");
     assert!(coarse > 1. && coarse <= 4., "but a zoomed-out view hides cells up to a display pixel wide: {coarse}");
     r.set_refine_chunk(None);
+}
+
+#[test]
+fn a_reduced_modify_preview_of_a_moved_selection_samples_its_moved_pixels() {
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    submit(&mut r, paint_document([128; 2], "moved preview").scene(), &[], &[], true);
+    let source = from_bytes(&binary(|x, y| (8..54).contains(&x) && (15..85).contains(&y)));
+    let rebaked = from_bytes(&binary(|x, y| (72..118).contains(&x) && (15..85).contains(&y)));
+    let steps = [ModifyStep { feather: 12., ..Default::default() }];
+    for (delta, oracle) in [(64., rebaked), (64.5, source.translated(Point { x: 64.5, y: 0. }))] {
+        let exact = bytes_of(&modify(&mut r, oracle, &steps, None).pixels);
+        r.set_refine_chunk(Some(3000.));
+        let preview = modify(&mut r, source.translated(Point { x: delta, y: 0. }), &steps, Some(1.));
+        r.set_refine_chunk(None);
+        assert!(preview.placement.0[0] > 1., "the preview must use the pyramid: {:?}", preview.placement);
+        let centre = preview_at(&preview, 95.5, 50.5);
+        assert!((centre - f32::from(exact[50 * 128 + 95])).abs() <= 24., "moved by {delta}: preview {centre} at the moved centre");
+        for y in 0..128 {
+            for x in 0..128 {
+                let shown = preview_at(&preview, x as f32 + 0.5, y as f32 + 0.5);
+                let expected = f32::from(exact[y * 128 + x]);
+                assert!((shown - expected).abs() <= 24., "moved by {delta} at {x},{y}: preview {shown} exact {expected}");
+            }
+        }
+    }
 }
 
 #[test]
