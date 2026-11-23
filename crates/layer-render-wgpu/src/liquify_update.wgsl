@@ -61,7 +61,9 @@ fn update_map(@builtin(global_invocation_id) invocation: vec3<u32>) {
         textureStore(output_map, pixel, unchanged_map(pixel));
         return;
     }
-    let initial = render_target.origin_extent.xy + (vec2<f32>(invocation.xy) + .5) * f32(style.operation.z);
+    let start = vec2<f32>(invocation.xy * style.operation.z);
+    let size = clamp(render_target.document_extent.xy - render_target.origin_extent.xy - start, vec2(1.), vec2(f32(style.operation.z)));
+    let initial = render_target.origin_extent.xy + start + .5 * size;
     let trace = trace_liquify(initial);
     if style.operation.z == 1u && all(trace.position == initial) && trace.restore == 1.
         && all(trace.footprint[0] == IDENTITY[0]) && all(trace.footprint[1] == IDENTITY[1]) && all(trace.gradient == vec2(0.)) {

@@ -53,15 +53,21 @@ fn footprint_length(v: vec2<f32>) -> f32 {
     return min(scale, 1.e20) * length(v / scale);
 }
 
-fn prior_value(pixel: vec2<i32>, block: u32) -> vec4<u32> {
+fn block_size(pixel: vec2<i32>, block: u32) -> vec2<u32> {
+    let remaining = render_target.document_extent.xy - render_target.origin_extent.xy - vec2<f32>(pixel * i32(block));
+    return vec2<u32>(clamp(remaining, vec2(1.), vec2(f32(block))));
+}
+
+fn prior_value(pixel: vec2<i32>, block: u32, size: vec2<u32>) -> vec4<u32> {
     if sources.pages[0].w == 0u { return vec4(0u, 0u, 16256u, 1065353216u); }
     if block == 1u { return textureLoad(prior_map, pixel, 0); }
-    let at = pixel * i32(block) + i32(block / 2u) - 1;
+    let low = pixel * i32(block) + vec2<i32>((size - 1u) / 2u);
+    let high = pixel * i32(block) + vec2<i32>(size / 2u);
     var displacement = vec2(0.);
     var footprint = mat2x2(vec2(0.), vec2(0.));
     for (var y = 0; y < 2; y++) {
         for (var x = 0; x < 2; x++) {
-            let sample = unpack_map(textureLoad(prior_map, at + vec2(x, y), 0));
+            let sample = unpack_map(textureLoad(prior_map, vec2(select(low.x, high.x, x == 1), select(low.y, high.y, y == 1)), 0));
             displacement += sample.displacement * .25;
             footprint += (sample.footprint - IDENTITY) * .25;
         }
@@ -69,15 +75,15 @@ fn prior_value(pixel: vec2<i32>, block: u32) -> vec4<u32> {
     return pack_map(MapSample(displacement, footprint + IDENTITY));
 }
 
-fn current_average(pixel: vec2<i32>, block: u32) -> vec4<f32> {
+fn current_average(pixel: vec2<i32>, block: u32, size: vec2<u32>) -> vec4<f32> {
     if block == 1u { return textureLoad(current_color, pixel, 0); }
     var color = vec4(0.);
-    for (var y = 0u; y < block; y++) {
-        for (var x = 0u; x < block; x++) {
+    for (var y = 0u; y < size.y; y++) {
+        for (var x = 0u; x < size.x; x++) {
             color += textureLoad(current_color, pixel * i32(block) + vec2<i32>(i32(x), i32(y)), 0);
         }
     }
-    return color / f32(block * block);
+    return color / f32(size.x * size.y);
 }
 
 @compute @workgroup_size(16, 8)
@@ -86,16 +92,17 @@ fn reconstruct(@builtin(global_invocation_id) invocation: vec3<u32>) {
     let block = style.operation.z;
     if sources.pages[0].z == 0u && (any(invocation.xy < sources.pages[1].xy) || any(invocation.xy >= sources.pages[1].zw)) { return; }
     let packed = textureLoad(field, pixel, 0);
+    let size = block_size(pixel, block);
     if sources.pages[0].z == 1u && style.deformation.z < 0. {
-        if all(packed == prior_value(pixel, block)) {
-            textureStore(output_color, pixel, current_average(pixel, block));
+        if all(packed == prior_value(pixel, block, size)) {
+            textureStore(output_color, pixel, current_average(pixel, block, size));
             return;
         }
     }
     let displacement = bitcast<vec2<f32>>(packed.xy);
     var dx = unpack_footprint(packed.z);
     var dy = unpack_footprint(packed.w);
-    let at = render_target.origin_extent.xy + (vec2<f32>(invocation.xy) + .5) * f32(block) + displacement;
+    let at = render_target.origin_extent.xy + vec2<f32>(pixel * i32(block)) + .5 * vec2<f32>(size) + displacement;
     let bounds = bitcast<vec4<f32>>(sources.pages[2]);
     let radius = .5 * abs(dx) + .5 * abs(dy);
     let available = max(min(at - bounds.xy, bounds.zw - at), vec2(0.));

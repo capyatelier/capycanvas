@@ -1358,6 +1358,42 @@ fn smooth_liquify_gpu_map_and_footprint_match_numerical_reference() {
 }
 
 #[test]
+fn reduced_push_preview_keeps_the_real_pixels_of_a_partial_edge_block() {
+    let extent=[513,512];
+    let view=layer_render::ViewState{width_px:64,height_px:64,
+        document_to_surface:[0.125,0.,0.,0.125,0.,0.]};
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut doc=placement::paint_document(extent,"reduced Push edge block");
+    placement::set_source(&mut doc,layer_core::color::source::rgba8_source(extent,|_,_|[83,149,211,255]));
+    crate::test_support::submit_settled(&mut r,FramePacket{view,reset_layers:true,..crate::test_support::packet(doc.scene(),extent)});
+    let mut contact=dab([0.;4]);
+    contact.center=Point{x:500.,y:128.};
+    contact.radii=[40.;2];
+    contact.motion=[20.,0.];
+    contact.material[3]=1.;
+    let mut style=preset_style(DefaultBrushPreset::LiquifyPush);
+    style.liquify=Some(Arc::new(layer_core::liquify::Context::for_source(placement::paint(&doc),false)));
+    let mut preview=crate::test_support::dab_batch(placement::target(&doc),style,contact.bounds());
+    preview.kind=DabBatchKind::Preview;
+    preview.stroke_id=StrokeId(320);
+    preview.stroke_end=false;
+    crate::test_support::submit_ready(&mut r,FramePacket{view,dabs:&[contact],dab_batches:&[preview],
+        ..crate::test_support::packet(doc.scene(),extent)}).unwrap();
+    assert_eq!(r.preview_level,2,"Fit preview must use a four-pixel block");
+    let page=r.preview_pages.iter().find(|page|page.coordinate==[2,0]).unwrap();
+    let pixels=crate::test_support::float_pixels(&r,&r.read_color_page(placement::target(&doc),page,true,None).unwrap().value().texture);
+    let original=[83,149,211,255].map(|code|
+        layer_core::color::RgbSpace::Srgb.decode(f64::from(code)/255.) as f32);
+    for row in 0..64 {
+        let edge=pixels[row*64];
+        for component in 0..4 {
+            assert!((edge[component]-original[component]).abs()<=1e-5,
+                "the block holding the last real column must average its real pixels in row {row}: {edge:?} vs {original:?}");
+        }
+    }
+}
+
+#[test]
 fn sustained_pinch_preview_keeps_opaque_center_at_finite_footprint() {
     let extent=[256;2];
     let view=layer_render::ViewState{width_px:32,height_px:32,
