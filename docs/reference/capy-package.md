@@ -179,11 +179,12 @@ stops before its tree is built; evaluation graphs admit 65,536 objects,
 Layer names are at most 4,096 bytes. Resource bindings, including repeated
 tile references, do not consume evaluation edges. There are at most 262,144
 resource records. Project admission also bounds layers, dimensions, retained
-source bytes and raster bytes using the same units on reopen. There is no fixed
-tile count: the resource and metadata bounds above limit a document's tiles, and
-new pixels are admitted against free disk space when they are imported or
-pasted. Readers that admitted at most 16,384 tiles open larger documents as
-Preserved. Shared source
+source bytes and raster bytes using the same units on reopen. Composition,
+source, image and selection extents are at most 65,536 pixels per side. There is
+no fixed tile count: the resource and metadata bounds above limit a document's
+tiles, and new pixels are admitted against free disk space when they are
+imported or pasted. Readers that admitted at most 32,768 pixels per side and
+16,384 tiles open larger documents as Preserved. Shared source
 owners and compressed tile allocations count once; editable raster capacity is
 charged per source. Opening charges vector items for both their decoded bytes
 and the path records they become. Pending edits must resolve before final publication.

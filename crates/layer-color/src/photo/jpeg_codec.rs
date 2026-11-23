@@ -49,8 +49,8 @@ pub(super) fn decoder(
     let mut decoder = Decoder::new_with_limits(
         bytes,
         libjpeg_turbo_rs::DecodeLimits {
-            max_width: limits.dimension.min(32768) as usize,
-            max_height: limits.dimension.min(32768) as usize,
+            max_width: limits.dimension.min(layer_core::MAX_EXTENT) as usize,
+            max_height: limits.dimension.min(layer_core::MAX_EXTENT) as usize,
             max_scans: 256,
             max_memory: Some(budget as u64),
             ..Default::default()

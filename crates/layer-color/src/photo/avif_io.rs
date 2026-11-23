@@ -76,7 +76,7 @@ fn plane_extent(extent: [u32; 2], layout: u32, plane: usize) -> [u32; 2] {
     }
 }
 fn pixels(extent: [u32; 2], budget: usize) -> Result<Vec<[u16; 4]>, String> {
-    validate_extent(extent, 32768)?;
+    validate_extent(extent, layer_core::MAX_EXTENT)?;
     let count = (extent[0] as usize)
         .checked_mul(extent[1] as usize)
         .ok_or("AVIF image size overflow")?;
@@ -204,7 +204,7 @@ fn decode_item(
         let item = container.item(id)?;
         let p = Properties::read(container, id)?;
         let extent = p.extent.ok_or("Missing AVIF spatial extent")?;
-        validate_extent(extent, 32768)?;
+        validate_extent(extent, layer_core::MAX_EXTENT)?;
         let inherited = p.color.or(parent_color);
         let mut image = match &item.kind {
             b"av01" | b"hvc1" => {

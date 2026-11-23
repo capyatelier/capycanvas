@@ -157,7 +157,7 @@ pub(super) fn decode(
     cancel: &AtomicBool,
 ) -> Result<Picture> {
     check_cancel(cancel)?;
-    super::super::validate_extent(expected, 32768)?;
+    super::super::validate_extent(expected, layer_core::MAX_EXTENT)?;
     let (in_config, config_frames) = headers(config, expected, cancel)?;
     let (in_data, frames) = headers(bytes, expected, cancel)?;
     if (!in_config && !in_data) || config_frames != 0 {

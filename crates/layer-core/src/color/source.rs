@@ -152,7 +152,7 @@ impl SourceImage {
         }
         if let Some(resolution) = self.resolution { resolution.validate()?; }
         let [w, h] = self.extent;
-        if w == 0 || h == 0 || w > 32768 || h > 32768 {
+        if w == 0 || h == 0 || w > crate::MAX_EXTENT || h > crate::MAX_EXTENT {
             return Err("Unsupported source dimensions".into());
         }
         if let ColorProfile::Icc(bytes) = &self.interpretation.profile
@@ -239,7 +239,7 @@ pub fn rgba8_source(extent: [u32; 2], pixel: impl Fn(u32, u32) -> [u8; 4]) -> Ar
 
 /// Source decoding accumulates one row band and compresses it before continuing.
 /// `max_bytes` limits final compressed ownership; packing is one 256-row band
-/// plus one tile (64.5 MiB at the 32768×RGBA16 limit).
+/// plus one tile (128.5 MiB at the 65536×RGBA16 limit).
 pub struct SourceBuilder {
     image: SourceImage,
     next_y: u32,
@@ -253,7 +253,7 @@ impl SourceBuilder {
         interpretation: SourceInterpretation,
         max_bytes: usize,
     ) -> Result<Self, String> {
-        if extent.contains(&0) || extent.iter().any(|v| *v > 32768) {
+        if extent.contains(&0) || extent.iter().any(|v| *v > crate::MAX_EXTENT) {
             return Err("Unsupported source dimensions".into());
         }
         let row = extent[0] as usize * interpretation.pixel_bytes();

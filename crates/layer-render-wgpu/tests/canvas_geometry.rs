@@ -535,7 +535,7 @@ fn flipping_an_edited_photo_layer_moves_its_samples_and_stroke_exactly() {
     let original = image(&mut engine, 2_000_000_000);
     let target = engine.document().scene().source_target(photo).unwrap();
     let flip = LayerPlacement { interpolation: Interpolation::Nearest, ..LayerPlacement::from_affine(Affine([-1., 0., 0., 1., SIZE[0] as f32, 0.])) };
-    let plan = engine.document().exact_layer_transform_plan(target, &flip, engine.geometry_limits()).unwrap().unwrap();
+    let plan = engine.document().exact_layer_transform_plan(target, &flip, layer_core::ProjectLimits::default()).unwrap().unwrap();
     let plan = remapped(&mut engine, plan);
     engine.apply_edit(Edit::Batch(plan.edits)).unwrap();
     assert!(engine.document().extents_cover_canvas());

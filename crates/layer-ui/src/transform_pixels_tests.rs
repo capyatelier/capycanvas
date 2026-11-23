@@ -353,7 +353,7 @@ fn source_less_move_rejected_motion_and_release_commit_last_valid_preview_once()
     let coverage = doc.artwork.occurrences.get(owner).unwrap().mask.as_ref().unwrap().source;
     doc.artwork.coverage.get_mut(coverage).unwrap().domain = domain;
     doc.artwork.occurrences.get_mut(owner).unwrap().offset = [0, 0];
-    let mut s = launched(UiSession::new(Recorder { max_dimension: Some(512), ..Default::default() }, doc,
+    let mut s = launched(UiSession::new(Recorder::default(), doc,
         [800, 600], Platform::Gtk).unwrap());
     s.frame(1, 1).unwrap();
     s.layer_interaction.tool = LayerCanvasTool::Move;

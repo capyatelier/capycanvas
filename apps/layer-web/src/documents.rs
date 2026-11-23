@@ -337,13 +337,7 @@ impl WebApp {
             check_cancelled()?;
             // Yield before decoding so the file-progress UI is painted first.
             yield_browser().await?;
-            let limits = ProjectLimits {
-                dimension: factory.device()
-                    .limits()
-                    .max_texture_dimension_2d
-                    .min(ProjectLimits::default().dimension),
-                ..ProjectLimits::for_import()
-            };
+            let limits = ProjectLimits::for_import();
             let source_name = source_name.unwrap_or_default();
             let mut warning = None;
             let imported = match file {

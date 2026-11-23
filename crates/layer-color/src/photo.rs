@@ -147,7 +147,7 @@ impl DecodeLimits {
         Self {
             source_bytes: budget.source_bytes,
             codec_bytes: budget.decode_bytes,
-            dimension: 32768,
+            dimension: layer_core::MAX_EXTENT,
         }
     }
 }
@@ -157,7 +157,7 @@ impl DecodeLimits {
     }
 }
 fn validate_extent(extent: [u32; 2], dimension: u32) -> Result<(), String> {
-    if extent.contains(&0) || extent.iter().any(|v| *v > dimension.min(32768)) {
+    if extent.contains(&0) || extent.iter().any(|v| *v > dimension.min(layer_core::MAX_EXTENT)) {
         return Err("This image exceeds the dimension limit".into());
     }
     Ok(())

@@ -486,7 +486,7 @@ fn effect_reference_resize_preserves_authored_values_independently_of_display_un
             *document.artwork.effects.get_mut(effect).unwrap()=EffectApplication::new(program,instance.values,[16;2]);
             let mut editor=crate::Editor::new(crate::Document::from_artwork(document.artwork).unwrap());
             let geometry=crate::CanvasGeometry::resize([16,16],[32,32],crate::Interpolation::Bicubic);
-            let plan=editor.document().canvas_geometry_plan(&geometry,crate::GeometryLimits{project:Default::default(),device_dimension:8192}).unwrap();
+            let plan=editor.document().canvas_geometry_plan(&geometry,crate::ProjectLimits::default()).unwrap();
             editor.perform(crate::Edit::Batch(plan.edits)).unwrap();
             let effect=editor.document().scene().effect(editor.document().scene().order()[1]).unwrap();
             assert_eq!(effect.value("sigma"),Some(&EffectValue::Number(3.)),"{dimension:?}, {unit}");

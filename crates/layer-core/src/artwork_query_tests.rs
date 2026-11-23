@@ -71,7 +71,7 @@ fn artwork_sample_admission_checks_contact_width_extent_and_source_kind() {
         assert!(ArtworkSampleRequest::new(&doc, source, [0.; 2], 5).validate().is_err());
     }
     let mut oversized = doc.clone();
-    oversized.artwork.compositions.get_mut(oversized.artwork.root).unwrap().size[0] = 32769;
+    oversized.artwork.compositions.get_mut(oversized.artwork.root).unwrap().size[0] = crate::MAX_EXTENT + 1;
     assert!(ArtworkSampleRequest::new(&oversized, ArtworkSource::Visible, [0.; 2], 5).validate().is_err());
 }
 #[test]

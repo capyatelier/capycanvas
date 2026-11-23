@@ -1880,13 +1880,7 @@ fn a_placed_visible_object_settles_before_thumbnail_preparation() {
 
 #[test]
 fn oversized_nearest_sources_skip_optional_mips_and_keep_exact_capture() {
-    let reference=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let required_limits=wgpu::Limits {max_texture_dimension_2d:reference.device().limits().max_texture_dimension_2d.min(8192),..reference.device().limits()};
-    let (device,queue)=pollster::block_on(reference.adapter.request_device(&wgpu::DeviceDescriptor {
-        label:Some("oversized nearest source"),required_features:reference.device().features(),required_limits,
-        memory_hints:crate::memory_hints(),..Default::default()})).unwrap();
-    let mut r=*WgpuRasterizer::from_wgpu_inner(reference.adapter.clone(),device.into(),queue,Initialization::Headless).unwrap();
-    r.initialize_native(Default::default()).unwrap();
+    let mut r=crate::test_support::texture_limited_renderer(Default::default(),8192);
     let extent=[64;2];let source_extent=[r.device.limits().max_texture_dimension_2d+1,1];
     let mut object=ImageObject::new(image(source_extent,[255,0,0,255]));
     object.interpolation=ImageInterpolation::Nearest;

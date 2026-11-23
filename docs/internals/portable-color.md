@@ -85,8 +85,8 @@ let encode = JpegEncodeOptions::from_memory_budget(95, budget);
 JPEG preflight accounts for retained input capacity and the backend's estimated
 pixel/coefficient storage before allocating decoded pixels. Encoding estimates
 eight times the raw pixel buffer plus scratch and retained metadata. These are admission estimates,
-not allocator-enforced caps or reservations against concurrent jobs. The 32768
-pixel dimension limit and address-space overflow checks also remain in force.
+not allocator-enforced caps or reservations against concurrent jobs. The
+`MAX_EXTENT` dimension limit and address-space overflow checks also remain in force.
 
 The policy leaves headroom for the editor, GPU, other apps and allocation
 overhead. It does not certify every 100 MP editing session: one 100 MP RGBA f32

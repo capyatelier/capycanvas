@@ -119,8 +119,9 @@ Canvas geometry commands build one batch in
 A canvas size change resets the renderer's paint pages and restores every layer
 from its raster revision, including on undo and redo
 ([`tests/canvas_geometry.rs`](../../crates/layer-render-wgpu/tests/canvas_geometry.rs)).
-Limits are checked before the edit commits, including the device's texture limit
-through `CanvasRenderer::max_document_dimension`.
+Limits are checked before the edit commits, against `ProjectLimits`; the
+renderer evaluates the canvas in pages, so the device's texture limit does not
+bound its size.
 
 ### Merges
 

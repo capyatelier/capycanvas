@@ -226,17 +226,6 @@ impl CanvasGeometryPlan {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct GeometryLimits {
-    pub project: ProjectLimits,
-    /// The largest canvas side the renderer can compose.
-    pub device_dimension: u32,
-}
-impl GeometryLimits {
-    pub fn canvas_dimension(&self) -> u32 {
-        self.project.dimension.min(self.device_dimension)
-    }
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CanvasGeometryError {
@@ -418,15 +407,15 @@ fn swaps_axes(affine: Affine) -> bool {
 /// document map `doc`: its tile-padded domain turns as a whole and grows to
 /// cover the `canvas`, so every tile moves to one tile. Returns the new
 /// document origin, the new domain and the map from new to old local pixels.
-fn turned_layout(origin: [i64; 2], domain: [u32; 2], doc: GridMap, canvas: [u32; 2], limits: GeometryLimits) -> Result<([i64; 2], [u32; 2], GridMap), CanvasGeometryError> {
+fn turned_layout(origin: [i64; 2], domain: [u32; 2], doc: GridMap, canvas: [u32; 2], limits: ProjectLimits) -> Result<([i64; 2], [u32; 2], GridMap), CanvasGeometryError> {
     let size = i64::from(TILE_SIZE);
     let padded = domain.map(|v| i64::from(v.div_ceil(TILE_SIZE)) * size);
     let [turned, reach] = doc.result_rect(origin, offsets::checked_add(origin, padded).ok_or_else(out_of_range)?);
     let low: [i64; 2] = std::array::from_fn(|i| turned[i] - (turned[i].max(0) + size - 1).div_euclid(size) * size);
     let high: [i64; 2] = std::array::from_fn(|i| reach[i].max(i64::from(canvas[i])));
     let extent: [u32; 2] = std::array::from_fn(|i| ((high[i] - low[i] + size - 1).div_euclid(size) * size).min(i64::from(u32::MAX)) as u32);
-    if extent.iter().any(|v| *v > limits.project.dimension) {
-        return Err(CanvasGeometryError::ExtentTooLarge { limit: limits.project.dimension });
+    if extent.iter().any(|v| *v > limits.dimension) {
+        return Err(CanvasGeometryError::ExtentTooLarge { limit: limits.dimension });
     }
     Ok((low, extent, GridMap { origin: offsets::checked_sub(doc.source(low), origin).ok_or_else(out_of_range)?, ..doc }))
 }
@@ -500,24 +489,23 @@ pub(crate) fn geometry_edits(before: &Document, after: &Document) -> Result<Vec<
     Ok(edits)
 }
 impl Document {
-    pub fn check_canvas_geometry(&self, geometry: &CanvasGeometry, limits: GeometryLimits) -> Result<(), CanvasGeometryError> {
+    pub fn check_canvas_geometry(&self, geometry: &CanvasGeometry, limits: ProjectLimits) -> Result<(), CanvasGeometryError> {
         self.canvas_geometry_plan(geometry, limits).map(drop)
     }
     pub fn canvas_geometry_plan(
         &self,
         geometry: &CanvasGeometry,
-        limits: GeometryLimits,
+        limits: ProjectLimits,
     ) -> Result<CanvasGeometryPlan, CanvasGeometryError> {
         let rect = geometry.rect;
         if rect.size.contains(&0) {
             return Err(CanvasGeometryError::Empty);
         }
-        let dimension = limits.canvas_dimension();
-        if rect.size.iter().any(|v| *v > dimension) {
-            return Err(CanvasGeometryError::CanvasTooLarge { limit: dimension });
+        if rect.size.iter().any(|v| *v > limits.dimension) {
+            return Err(CanvasGeometryError::CanvasTooLarge { limit: limits.dimension });
         }
         if rect.origin.iter().any(|v| v.unsigned_abs() > 2 * MAX_EXTENT) {
-            return Err(CanvasGeometryError::ExtentTooLarge { limit: limits.project.dimension });
+            return Err(CanvasGeometryError::ExtentTooLarge { limit: limits.dimension });
         }
         let resampled = geometry.linear != Affine64::default();
         if resampled && geometry.linear.inverse().is_none() {
@@ -557,19 +545,19 @@ impl Document {
         );
         let mut working = self.working.clone();
         working.view_origin = offsets::checked_add(working.view_origin, rect.origin.map(i64::from))
-            .filter(|origin| offsets::admitted(*origin)).ok_or(CanvasGeometryError::ExtentTooLarge { limit: limits.project.dimension })?;
+            .filter(|origin| offsets::admitted(*origin)).ok_or(CanvasGeometryError::ExtentTooLarge { limit: limits.dimension })?;
         working.selection = working.selection.as_ref().map(|selection| selection.transformed(to_canvas)).transpose()?;
         if working != self.working {
             edits.push(Edit::Working(working));
         }
         Ok(CanvasGeometryPlan { edits, operations, remaps })
     }
-    pub fn paint_extent_plan(&self, targets: &[SourceTarget], limits: GeometryLimits) -> Result<Vec<Edit>, CanvasGeometryError> {
+    pub fn paint_extent_plan(&self, targets: &[SourceTarget], limits: ProjectLimits) -> Result<Vec<Edit>, CanvasGeometryError> {
         let geometry = CanvasGeometry::crop(CanvasRect { origin: [0; 2], size: self.composition().size });
         let (candidate, ..) = self.crop_candidate(&geometry, limits, Some(targets))?;
         Ok(geometry_edits(self, &candidate)?)
     }
-    pub fn validate_paint_extents(&self, targets: &[SourceTarget], limits: GeometryLimits) -> Result<(), CanvasGeometryError> {
+    pub fn validate_paint_extents(&self, targets: &[SourceTarget], limits: ProjectLimits) -> Result<(), CanvasGeometryError> {
         self.paint_extent_plan(targets, limits).map(drop)
     }
     pub fn extents_cover_canvas(&self) -> bool {
@@ -607,7 +595,7 @@ impl Document {
         &self,
         candidate: &Document,
         geometry: &CanvasGeometry,
-        limits: GeometryLimits,
+        limits: ProjectLimits,
         targets: Option<&[SourceTarget]>,
     ) -> Result<BTreeMap<SourceTarget, LayerChange>, CanvasGeometryError> {
         let scene = candidate.scene();
@@ -632,9 +620,9 @@ impl Document {
                 let [low, high] = local_window(scene, target, geometry.rect.size)?;
                 let mut tiles = [0; 2];
                 let mut grown = extent;
-                let limit = i64::from(limits.project.dimension);
+                let limit = i64::from(limits.dimension);
                 let size = i64::from(TILE_SIZE);
-                let too_large = || CanvasGeometryError::ExtentTooLarge { limit: limits.project.dimension };
+                let too_large = || CanvasGeometryError::ExtentTooLarge { limit: limits.dimension };
                 for axis in 0..2 {
                     let before = (-low[axis]).max(0);
                     let after = high[axis].max(0);
@@ -652,8 +640,8 @@ impl Document {
                         grown[axis] = (extent[axis] + delta).max((after as u32).saturating_add(delta));
                     }
                 }
-                if grown.iter().any(|v| *v > limits.project.dimension) {
-                    return Err(CanvasGeometryError::ExtentTooLarge { limit: limits.project.dimension });
+                if grown.iter().any(|v| *v > limits.dimension) {
+                    return Err(CanvasGeometryError::ExtentTooLarge { limit: limits.dimension });
                 }
                 if targets.is_none() || tiles != [0; 2] || grown != extent {
                     changes.insert(target, LayerChange { tiles, extent: grown, trim: geometry.delete_outside });
@@ -663,7 +651,7 @@ impl Document {
         Ok(changes)
     }
     fn crop_candidate(
-        &self, geometry: &CanvasGeometry, limits: GeometryLimits, targets: Option<&[SourceTarget]>,
+        &self, geometry: &CanvasGeometry, limits: ProjectLimits, targets: Option<&[SourceTarget]>,
     ) -> Result<GeometryCandidate, CanvasGeometryError> {
         let mut candidate = self.shifted_roots(geometry.rect.origin)?;
         let changes = self.canvas_changes(&candidate, geometry, limits, targets)?;
@@ -704,7 +692,7 @@ impl Document {
                 _ => {}
             }
         }
-        candidate.check_raster_limits(&BTreeMap::new(), limits.project)?;
+        candidate.check_raster_limits(&BTreeMap::new(), limits)?;
         let mut operations = Vec::new();
         for (target, change) in changes.iter().filter(|(t, c)| c.trim && matches!(t, SourceTarget::Paint(_)) && self.scene().paint_base(**t).is_none()) {
             let tiles = raster_data(candidate.target_raster(*target).ok_or(DocumentError::MissingTarget(*target))?)?;
@@ -721,7 +709,7 @@ impl Document {
         Ok((candidate, operations, remaps))
     }
     fn resampled_candidate(
-        &self, geometry: &CanvasGeometry, limits: GeometryLimits,
+        &self, geometry: &CanvasGeometry, limits: ProjectLimits,
     ) -> Result<GeometryCandidate, CanvasGeometryError> {
         let mut candidate = self.shifted_roots(geometry.rect.origin)?;
         let scene = self.scene();
@@ -787,8 +775,8 @@ impl Document {
                 let reach = if geometry.delete_outside { size } else { far[i].max(size) };
                 ((reach - frame[i] - PIXEL_TOLERANCE).ceil().max(0.) as u32).max(extent[i])
             });
-            if grown.iter().any(|v| *v > limits.project.dimension) {
-                return Err(CanvasGeometryError::ExtentTooLarge { limit: limits.project.dimension });
+            if grown.iter().any(|v| *v > limits.dimension) {
+                return Err(CanvasGeometryError::ExtentTooLarge { limit: limits.dimension });
             }
             let world = Point { x: frame[0], y: frame[1] };
             let origin = [frame[0] as i64, frame[1] as i64];
@@ -853,7 +841,7 @@ impl Document {
                 candidate.artwork.effects.get_mut(handle).unwrap().spatial.as_mut().unwrap().mapping = to_canvas64.compose(spatial.mapping);
             }
         }
-        candidate.check_raster_limits(&predicted, limits.project)?;
+        candidate.check_raster_limits(&predicted, limits)?;
         for (_, op) in &mut operations {
             op.coverage.target = self.artwork.coverage.next_handle();
             op.coverage.use_.source = op.coverage.target;
@@ -899,7 +887,7 @@ impl Document {
     /// An exact flip or turn of a paint layer with a base: the layer's
     /// tile-padded domain turns as a whole, so every tile moves to one tile and
     /// the base moves to a new image in its own interpretation.
-    fn oriented(&self, candidate: &mut Document, owner: OccurrenceHandle, handle: PaintHandle, doc: GridMap, canvas: [u32; 2], limits: GeometryLimits) -> Result<RemapSpec, CanvasGeometryError> {
+    fn oriented(&self, candidate: &mut Document, owner: OccurrenceHandle, handle: PaintHandle, doc: GridMap, canvas: [u32; 2], limits: ProjectLimits) -> Result<RemapSpec, CanvasGeometryError> {
         let target = SourceTarget::Paint(handle);
         let source = self.artwork.paint.get(handle).ok_or(DocumentError::MissingTarget(target))?;
         let base = source.base.as_ref().ok_or(DocumentError::MissingTarget(target))?;
@@ -918,7 +906,7 @@ impl Document {
         Ok(RemapSpec { target, base: Some(BaseRemap::Exact { extent: image_extent, map: image }), extent, map: local, keep: local.result_rect([0; 2], source.domain.map(i64::from)) })
     }
     /// The same exact move for the mask of `owner`.
-    fn oriented_mask(&self, candidate: &mut Document, owner: OccurrenceHandle, doc: GridMap, canvas: [u32; 2], limits: GeometryLimits) -> Result<RemapSpec, CanvasGeometryError> {
+    fn oriented_mask(&self, candidate: &mut Document, owner: OccurrenceHandle, doc: GridMap, canvas: [u32; 2], limits: ProjectLimits) -> Result<RemapSpec, CanvasGeometryError> {
         let mask = self.scene().occurrence(owner).and_then(|o| o.mask.as_ref()).ok_or(DocumentError::MissingOccurrence(owner))?;
         let target = SourceTarget::Coverage(mask.source);
         let source = self.artwork.coverage.get(mask.source).ok_or(DocumentError::MissingTarget(target))?;
@@ -936,7 +924,7 @@ impl Document {
     /// mask: exact sample moves instead of a resample. `map` takes the layer's
     /// local pixels where they go, keeping its offset. Other layers and maps
     /// have no exact plan.
-    pub fn exact_layer_transform_plan(&self, target: SourceTarget, map: &LayerPlacement, limits: GeometryLimits) -> Option<Result<CanvasGeometryPlan, String>> {
+    pub fn exact_layer_transform_plan(&self, target: SourceTarget, map: &LayerPlacement, limits: ProjectLimits) -> Option<Result<CanvasGeometryPlan, String>> {
         let SourceTarget::Paint(handle) = target else { return None };
         self.scene().paint_base(target)?;
         let [a, b, c, d, x, y] = map.as_affine()?.0.map(f64::from);
@@ -954,7 +942,7 @@ impl Document {
                 remaps.push(self.oriented_mask(&mut candidate, owner, doc, canvas, limits).map_err(|e| e.to_string())?);
             }
             let predicted = remaps.iter().map(|spec| Ok((spec.target, raster_data(self.target_raster(spec.target).ok_or(DocumentError::MissingTarget(spec.target))?)?.tiles.len()))).collect::<Result<BTreeMap<_, _>, CanvasGeometryError>>().map_err(|e| e.to_string())?;
-            candidate.check_raster_limits(&predicted, limits.project).map_err(|e| e.to_string())?;
+            candidate.check_raster_limits(&predicted, limits).map_err(|e| e.to_string())?;
             let mut edits = geometry_edits(self, &candidate).map_err(|e| e.to_string())?;
             remap_edits(self, &candidate, &remaps, &mut edits).map_err(|e| e.to_string())?;
             Ok(CanvasGeometryPlan { edits, operations: Vec::new(), remaps })

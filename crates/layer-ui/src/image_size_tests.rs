@@ -119,12 +119,11 @@ fn image_size_changes_only_the_resolution_or_both_in_one_step() {
 #[test]
 fn image_size_validates_limits_and_applies_an_open_crop() {
     let mut s = crop_session();
-    s.renderer_mut().max_dimension = Some(1500);
     invoke(&mut s, CommandId::ImageSize);
-    image_size(&mut s, ImageSizeAction::Width { value: 2000. });
+    image_size(&mut s, ImageSizeAction::Width { value: f64::from(layer_core::MAX_EXTENT) + 1. });
     let view = image_size_view(&s);
     assert!(!view.can_apply);
-    assert_eq!(view.message, "The canvas can be at most 1500 px on each side");
+    assert_eq!(view.message, format!("The canvas can be at most {} px on each side", layer_core::MAX_EXTENT));
     assert!(s.dispatch(UiAction::ImageSize { action: ImageSizeAction::Width { value: f64::NAN } }).is_err());
     image_size(&mut s, ImageSizeAction::Cancel);
     assert!(s.state.layer_tools.image_size.is_none());

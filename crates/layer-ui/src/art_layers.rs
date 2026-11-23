@@ -1815,7 +1815,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         let delta = layer_core::offsets::rounded(Point { x: p.x - start.x, y: p.y - start.y }).ok_or("The layer would move beyond the editor's range")?;
                         let edit = candidate.move_target_edit(delta).map_err(error)?;
                         candidate.apply(edit.clone()).map_err(error)?;
-                        candidate.validate_paint_extents(&targets, self.engine.geometry_limits()).map_err(error)?;
+                        candidate.validate_paint_extents(&targets, layer_core::ProjectLimits::default()).map_err(error)?;
                         Ok::<_, String>(edit)
                     })();
                     let edit = match planned {
@@ -1830,7 +1830,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     let moved = candidate.scene().occurrence(id) != Some(&original);
                     let edit = if moved && event.phase == PenPhase::Up {
                         let mut edits = vec![edit];
-                        edits.extend(candidate.paint_extent_plan(&targets, self.engine.geometry_limits()).map_err(error)?);
+                        edits.extend(candidate.paint_extent_plan(&targets, layer_core::ProjectLimits::default()).map_err(error)?);
                         Edit::Batch(edits)
                     } else { edit };
                     if event.phase == PenPhase::Up || candidate.artwork != self.engine.document().artwork {

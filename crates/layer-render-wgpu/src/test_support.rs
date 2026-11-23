@@ -1011,6 +1011,17 @@ pub(crate) fn max_error_bytes(a: &[u8], b: &[u8]) -> f32 {
         .fold(0., f32::max)
 }
 
+pub(crate) fn texture_limited_renderer(color: layer_core::color::DocumentColor, texture: u32) -> WgpuRasterizer {
+    let reference = WgpuRasterizer::new_native_headless(color).unwrap();
+    let required_limits = wgpu::Limits { max_texture_dimension_2d: reference.device().limits().max_texture_dimension_2d.min(texture), ..reference.device().limits() };
+    let (device, queue) = pollster::block_on(reference.adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("texture limited device"), required_features: reference.device().features(), required_limits,
+        memory_hints: crate::memory_hints(), ..Default::default() })).unwrap();
+    let mut r = *WgpuRasterizer::from_wgpu_inner(reference.adapter.clone(), device.into(), queue, Initialization::Headless).unwrap();
+    r.initialize_native(color).unwrap();
+    r
+}
+
 pub(crate) fn staged_renderer(reference: &WgpuRasterizer, color: layer_core::color::DocumentColor) -> WgpuRasterizer {
     let mut renderer = WgpuRasterizer::from_wgpu_native_staged(
         reference.adapter.clone(), reference.device().clone(), reference.queue.clone(), color).unwrap();

@@ -86,11 +86,11 @@ impl Capture {
             cover:create_target(&r.device,[SIDE;2],r.device.scalar_format(),"fill lower line alpha"),
             seed:create_color_target(&r.device,[1;2],"fill seed"),mask:r.unclipped.clone(),precision:None,
             line_seeds:create_color_target(&r.device,[1,lines.max(1) as u32],"fill line seeds").0,external:Vec::new(),
-            top:create_color_target(&r.device,[extent[0],HALO],"fill original row border").0,
+            top:create_color_target(&r.device,[extent[0].min(border_row(r)),extent[0].div_ceil(border_row(r))*HALO],"fill original row border").0,
             left:create_color_target(&r.device,[HALO,SIDE],"fill original page border").0,
             row:None,previous:None,top_columns:Default::default(),columns:Default::default(),complete:true}
     }
-    fn preserve(&mut self,coordinate:[u32;2],crop:PixelRect,extent:[u32;2],encoder:&mut submission::CommandEncoder) {
+    fn preserve(&mut self,r:&WgpuRasterizer,coordinate:[u32;2],crop:PixelRect,extent:[u32;2],encoder:&mut submission::CommandEncoder) {
         if self.row!=Some(coordinate[1]) {
             self.top_columns=if self.row.is_some_and(|row|row+1==coordinate[1]) {std::mem::take(&mut self.columns)}else {Default::default()};
             self.columns.clear();self.previous=None;self.row=Some(coordinate[1]);
@@ -100,7 +100,7 @@ impl Capture {
             for column in crop.min_x()/PAGE_SIZE..crop.max_x().div_ceil(PAGE_SIZE) {
                 if !self.top_columns.contains(&column) {continue;}
                 let left=crop.min_x().max(column*PAGE_SIZE);let right=crop.max_x().min((column+1)*PAGE_SIZE);
-                copy(encoder,&self.top,&self.color.0,[left,0],[left-crop.min_x(),0],[right-left,core.min_y()-crop.min_y()]);
+                copy(encoder,&self.top,&self.color.0,border_origin(r,left),[left-crop.min_x(),0],[right-left,core.min_y()-crop.min_y()]);
             }
         }
         if self.previous.is_some_and(|previous|previous[1]==coordinate[1] && previous[0]+1==coordinate[0]) {
@@ -110,7 +110,7 @@ impl Capture {
             copy(encoder,&self.color.0,&self.left,[core.max_x()-HALO-crop.min_x(),0],[0;2],[HALO,crop.height()]);
         }
         if core.max_y()<extent[1] {
-            copy(encoder,&self.color.0,&self.top,[core.min_x()-crop.min_x(),core.max_y()-HALO-crop.min_y()],[core.min_x(),0],[core.width(),HALO]);
+            copy(encoder,&self.color.0,&self.top,[core.min_x()-crop.min_x(),core.max_y()-HALO-crop.min_y()],border_origin(r,core.min_x()),[core.width(),HALO]);
         }
         self.previous=Some(coordinate);self.columns.insert(coordinate[0]);
     }
@@ -120,6 +120,8 @@ impl Capture {
             reset_layers:false,commit_rasters:false,composite_all:false,time_seconds:snapshot.context.elapsed,blend_space:scene.composition().blend,..packet}
     }
 }
+fn border_row(r:&WgpuRasterizer)->u32 {r.device.limits().max_texture_dimension_2d/PAGE_SIZE*PAGE_SIZE}
+fn border_origin(r:&WgpuRasterizer,x:u32)->[u32;2] {[x%border_row(r),x/border_row(r)*HALO]}
 fn copy(encoder:&mut submission::CommandEncoder,source:&wgpu::Texture,destination:&wgpu::Texture,from:[u32;2],to:[u32;2],size:[u32;2]) {
     encoder.copy_texture_to_texture(wgpu::TexelCopyTextureInfo {origin:wgpu::Origin3d {x:from[0],y:from[1],z:0},..source.as_image_copy()},
         wgpu::TexelCopyTextureInfo {origin:wgpu::Origin3d {x:to[0],y:to[1],z:0},..destination.as_image_copy()},
@@ -232,7 +234,7 @@ impl Scene {
         let crop=page_rect(coordinate).expand(HALO,extent);
         let result=(|| {
             capture.complete&=self.fill_target(r,target,crop,&capture.color,encoder)?;
-            capture.preserve(coordinate,crop,extent,encoder);
+            capture.preserve(r,coordinate,crop,extent,encoder);
             if !band_intersects(operation,coordinate,extent,0) {return Ok(None);}
             encoder.copy_texture_to_texture(capture.seed.0.as_image_copy(),wgpu::TexelCopyTextureInfo {texture:&capture.color.0,
                 origin:wgpu::Origin3d {x:0,y:SIDE,z:0},mip_level:0,aspect:wgpu::TextureAspect::All},wgpu::Extent3d {width:1,height:1,depth_or_array_layers:1});

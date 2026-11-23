@@ -49,9 +49,6 @@ impl CanvasRenderer for AttachedRenderer {
     fn supports_raster_damage(&self) -> bool {
         self.0.as_deref().is_some_and(CanvasRenderer::supports_raster_damage)
     }
-    fn max_document_dimension(&self) -> u32 {
-        self.0.as_deref().map_or(u32::MAX, CanvasRenderer::max_document_dimension)
-    }
     fn region_fits(&self, extent: [u32; 2]) -> bool {
         self.0.as_deref().is_none_or(|gpu| gpu.region_fits(extent))
     }

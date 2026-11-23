@@ -80,7 +80,7 @@ mod transform_pixels;
 pub use transform_pixels::{TransformPixelsPlan, TransformPixelsRefusal, TransformPixelsScope};
 mod canvas_geometry;
 pub mod sample_remap;
-pub use canvas_geometry::{CanvasGeometry, CanvasGeometryError, CanvasGeometryPlan, CanvasRect, GeometryLimits, ImageOrientation, BaseRemap, RemapPlan, RemapResult, RemapSpec};
+pub use canvas_geometry::{CanvasGeometry, CanvasGeometryError, CanvasGeometryPlan, CanvasRect, ImageOrientation, BaseRemap, RemapPlan, RemapResult, RemapSpec};
 mod content_bounds;
 pub use content_bounds::{ContentBoundsCache, ContentBoundsRequest, ContentScope};
 mod artwork_query;
@@ -117,7 +117,7 @@ use std::{
 pub type Revision = u64;
 
 /// Largest canvas or layer extent, in pixels per side.
-pub const MAX_EXTENT: u32 = 32768;
+pub const MAX_EXTENT: u32 = 65536;
 pub const MEMORY_BUDGET_EXCEEDED: &str = "The drawing exceeds the memory limit";
 
 #[derive(

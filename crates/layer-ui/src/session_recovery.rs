@@ -700,7 +700,7 @@ pub(crate) mod tests {
         let edit = moved.translate_target_edit(target, [300, 0]).unwrap();
         moved.apply(edit.clone()).unwrap();
         let mut edits = vec![edit];
-        edits.extend(moved.paint_extent_plan(&[target], source.engine.geometry_limits()).unwrap());
+        edits.extend(moved.paint_extent_plan(&[target], layer_core::ProjectLimits::default()).unwrap());
         source.layer_edit(layer_core::Edit::Batch(edits)).unwrap(); source.frame(1, 1).unwrap();
         assert_ne!(source.engine.document().target_extent(target), [1000; 2], "the paint domain grows by whole tiles");
         assert_eq!(source.engine.document().working.view_origin, [0, 0]);

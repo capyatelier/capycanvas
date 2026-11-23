@@ -10,9 +10,7 @@ use std::{
 const OVERVIEW_BYTES: u64 = 32 * 32 * 16;
 const ROW_BYTES: u64 = 32 * PAGE_SIZE as u64 * 16;
 const OVERVIEWS: usize = 8;
-// At most (tile columns + 32) * (tile rows + 32) small footprints.
-// The supported 32768px extent fits below 512 KiB per original.
-const CONTRIBUTION_LIMIT: u64 = 512 * 1024;
+const CONTRIBUTION_LIMIT: u64 = (layer_core::MAX_EXTENT.div_ceil(PAGE_SIZE) as u64 + 32).pow(2) * 16;
 #[derive(Clone, Copy, Default)]
 struct Contribution {
     bounds: [u32; 4],

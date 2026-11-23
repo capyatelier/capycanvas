@@ -39,7 +39,7 @@ pub(crate) fn generate(directory:&Path) {
         std::fs::write(directory.join(name),serialize(&prepare(&editable(std::fs::read(fixtures.join(name)).unwrap()),true))).unwrap();
     }
     std::fs::copy(fixtures.join(VIEW_ONLY),directory.join("newer").join(VIEW_ONLY)).unwrap();
-    for (name,extent,layers) in [("past-old-tile-count.capy",[128*TILE_SIZE,65*TILE_SIZE],2)] {
+    for (name,extent,layers) in [("widest-canvas.capy",[crate::MAX_EXTENT,TILE_SIZE],1),("past-old-tile-count.capy",[128*TILE_SIZE,65*TILE_SIZE],2)] {
         std::fs::write(directory.join("newer").join(name),serialize(&prepare(&photo_layers(extent,layers),false))).unwrap();
     }
     sweep::generate(directory);

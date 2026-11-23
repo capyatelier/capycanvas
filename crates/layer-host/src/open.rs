@@ -50,15 +50,7 @@ impl OpenEnvironment {
     }
 
     pub fn limits(&self) -> ProjectLimits {
-        ProjectLimits {
-            dimension: self
-                .gpu
-                .device
-                .limits()
-                .max_texture_dimension_2d
-                .min(ProjectLimits::default().dimension),
-            ..ProjectLimits::for_import()
-        }
+        ProjectLimits::for_import()
     }
 
     pub fn use_store(&mut self,stores:&crate::session_stores::SessionStores,id:u64)->Result<(),String> {

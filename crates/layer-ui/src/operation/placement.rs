@@ -124,7 +124,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let rollback = placement.rollback.clone();
             let mut edits = vec![restore_preview.clone()];
             if apply {
-                edits.extend(self.engine.document().paint_extent_plan(&member_targets(self.engine.document(), &current), self.engine.geometry_limits()).map_err(error)?);
+                edits.extend(self.engine.document().paint_extent_plan(&member_targets(self.engine.document(), &current), layer_core::ProjectLimits::default()).map_err(error)?);
                 original.apply(Edit::Batch(edits.clone())).map_err(error)?;
             }
             self.engine.preview_edit(rollback).map_err(error)?;

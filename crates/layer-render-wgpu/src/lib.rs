@@ -68,6 +68,8 @@ mod view_color;
 mod working_color;
 #[cfg(test)]
 mod flat_areas_tests;
+#[cfg(test)]
+mod gigapixel_tests;
 pub use view_color::SdrSurfaceColor;
 mod raster;
 mod deferred;
@@ -4058,9 +4060,6 @@ impl CanvasRenderer for WgpuRasterizer {
         self.native_edit.is_some()
     }
     fn supports_raster_damage(&self) -> bool { true }
-    fn max_document_dimension(&self) -> u32 {
-        self.device.limits().max_texture_dimension_2d
-    }
     fn region_fits(&self, extent: [u32; 2]) -> bool {
         flood::fits(extent, &self.device.limits())
     }
@@ -4604,7 +4603,7 @@ impl WgpuRasterizer {
         let analysis_dirty = std::mem::take(&mut self.analysis_dirty);
         let packet = FramePacket {composite_all: packet.composite_all || analysis_dirty, ..packet};
         let packet = FramePacket { inspect_mask: if self.clipping_preview.iter().any(|enabled| *enabled) { None } else { packet.inspect_mask }, ..packet };
-        if packet.document_extent.iter().any(|n| *n > self.max_document_dimension()) {
+        if packet.document_extent.iter().any(|n| *n > layer_core::MAX_EXTENT) {
             return Err(GpuRasterError::ExtentUnsupported);
         }
         if settled_commit.is_none() && (retained_transition

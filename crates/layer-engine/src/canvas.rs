@@ -865,14 +865,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         Ok(())
     }
 
-    /// The project limits, and the renderer's, that a canvas change must fit.
-    pub fn geometry_limits(&self) -> layer_core::GeometryLimits {
-        layer_core::GeometryLimits {
-            project: layer_core::ProjectLimits::default(),
-            device_dimension: self.backend.max_document_dimension(),
-        }
-    }
-
     /// Move the canvas to `geometry` in one undo step. Limits are checked
     /// before anything changes. A crop that keeps hidden pixels changes only
     /// metadata; resampling and erasing run as pixel operations in the same
@@ -904,7 +896,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if self.has_active_stroke() {
             return Err(DocumentError::InvalidLayerOperation("Finish the stroke first").into());
         }
-        self.document().canvas_geometry_plan(geometry, self.geometry_limits())
+        self.document().canvas_geometry_plan(geometry, layer_core::ProjectLimits::default())
     }
 
     /// Apply a completed canvas plan, with `then` in the same undo step.

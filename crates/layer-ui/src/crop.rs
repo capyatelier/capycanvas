@@ -364,7 +364,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let Some(session) = &self.operation.crop else {
             return Vec::new();
         };
-        let limit = f64::from(self.engine.geometry_limits().canvas_dimension());
+        let limit = f64::from(layer_core::MAX_EXTENT);
         let pixels = |label| tool_settings::ToolSetting { preview: false,
             id: "",
             label: localizer.text(label),
@@ -460,7 +460,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn apply_crop_drag(&mut self, modifiers: Modifiers) {
         let aspect = self.crop_aspect();
-        let limit = self.engine.geometry_limits().canvas_dimension() as f32;
+        let limit = layer_core::MAX_EXTENT as f32;
         let snap = modifiers.shift;
         let Some(session) = &mut self.operation.crop else { return };
         let Some(drag) = session.drag else { return };

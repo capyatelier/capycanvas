@@ -138,7 +138,7 @@ impl ImageSizeDraft {
         }
     }
 
-    pub(super) fn set_localization(&mut self, document: &Document, limits: layer_core::GeometryLimits, localization: &Localizer) {
+    pub(super) fn set_localization(&mut self, document: &Document, limits: layer_core::ProjectLimits, localization: &Localizer) {
         self.view = Self::new(self.current, document.composition().resolution, localization).view;
         self.update(document, limits, localization);
     }
@@ -174,8 +174,8 @@ impl ImageSizeDraft {
         self.resolution != self.ppi
     }
 
-    fn update(&mut self, document: &Document, limits: layer_core::GeometryLimits, localization: &Localizer) {
-        let limit = f64::from(limits.canvas_dimension());
+    fn update(&mut self, document: &Document, limits: layer_core::ProjectLimits, localization: &Localizer) {
+        let limit = f64::from(limits.dimension);
         self.view.numeric = std::array::from_fn(|axis| match self.unit {
             CanvasSizeUnit::Pixels => number(1., limit, 0, "px"),
             CanvasSizeUnit::Percent => number(0.01, limit * 100. / f64::from(self.current[axis]), 2, "%"),
@@ -213,7 +213,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         refused(self.canvas_geometry_refusal())?;
         let doc = self.engine.document();
         let mut draft = ImageSizeDraft::new(doc.composition().size, doc.composition().resolution, self.localization());
-        draft.update(doc, self.engine.geometry_limits(), self.localization());
+        draft.update(doc, layer_core::ProjectLimits::default(), self.localization());
         self.image_size = Some(draft);
         self.refresh_tools();
         Ok(())
@@ -244,7 +244,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             ImageSizeAction::Apply => return self.apply_image_size(),
             ImageSizeAction::Cancel => unreachable!(),
         }
-        let limits = self.engine.geometry_limits();
+        let limits = layer_core::ProjectLimits::default();
         let draft = self.image_size.as_mut().unwrap();
         draft.update(self.engine.document(), limits, &self.state.localization);
         self.refresh_tools();

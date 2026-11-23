@@ -39,7 +39,7 @@ feature allows and approximate only where an exact result costs too much.
 | Wayland mailbox presentation | Unknown | The GTK host chooses another GPU that has it, or refuses to start |
 | Wayland color pass-through | NVIDIA 580 and older, Mesa before 25.1 | When the driver lists only sRGB and the compositor describes Display P3 or PQ, the GTK host keeps its own color description on an sRGB swapchain; otherwise it presents untagged sRGB. HDR needs pass-through |
 | Timestamp queries | Many mobile GPUs, Metal, Web | Already optional |
-| Large textures (`max_texture_dimension_2d`) | 8192 on Web and some PowerVR | Already adaptive: the canvas size is capped |
+| Large textures (`max_texture_dimension_2d`) | 8192 on Web and some PowerVR | Already adaptive: the canvas is evaluated in pages, so its size does not depend on this limit |
 
 Device data comes from Apple's
 [Metal feature set tables](https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf),

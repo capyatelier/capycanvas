@@ -27,7 +27,7 @@ If display dimensions are unavailable, the sheet is 1,440 × 1,080 px.
   when the resolution changes; pixels keep the pixel size. Dragging W or H
   lands on whole pixels and millimetres, tenths of a centimetre and eighths of
   an inch; typed values keep their precision.
-- **Limits.** A sheet larger than the GPU accepts, or one that leaves no memory
+- **Limits.** A sheet larger than 65,536 px on a side, or one that leaves no memory
   for a layer, shows why instead of the size line and cannot be created. Common
   resolutions that would cross a limit are disabled.
 - **Presets.** Search, category pills, tiles with a sheet thumbnail, name, size

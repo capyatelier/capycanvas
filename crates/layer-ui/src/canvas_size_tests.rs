@@ -73,13 +73,12 @@ fn canvas_size_grows_from_an_anchor_in_one_undo_step_and_keeps_the_view_still() 
 #[test]
 fn canvas_size_converts_percent_and_relative_values_and_validates_limits() {
     let mut s = canvas_size_session();
-    s.renderer_mut().max_dimension = Some(4096);
     invoke(&mut s, CommandId::CanvasSize);
     canvas_size(&mut s, CanvasSizeAction::Unit { unit: CanvasSizeUnit::Percent });
     let view = canvas_view(&s);
     assert_eq!(view.values, [100.; 2]);
     assert_eq!(view.numeric[0].unit, "%");
-    assert_eq!(view.numeric[0].max, 409.6);
+    assert_eq!(view.numeric[0].max, 6553.6);
     canvas_size(&mut s, CanvasSizeAction::Width { value: 50. });
     assert_eq!(canvas_view(&s).message, "New size: 500 × 1000 px");
     canvas_size(&mut s, CanvasSizeAction::Relative { relative: true });
@@ -87,13 +86,13 @@ fn canvas_size_converts_percent_and_relative_values_and_validates_limits() {
     canvas_size(&mut s, CanvasSizeAction::Unit { unit: CanvasSizeUnit::Pixels });
     let view = canvas_view(&s);
     assert_eq!(view.values, [-500., 0.]);
-    assert_eq!((view.numeric[0].min, view.numeric[0].max), (-999., 3096.));
+    assert_eq!((view.numeric[0].min, view.numeric[0].max), (-999., 64536.));
     canvas_size(&mut s, CanvasSizeAction::Relative { relative: false });
     assert_eq!(canvas_view(&s).values, [500., 1000.]);
-    canvas_size(&mut s, CanvasSizeAction::Width { value: 5000. });
+    canvas_size(&mut s, CanvasSizeAction::Width { value: f64::from(layer_core::MAX_EXTENT) + 1. });
     let view = canvas_view(&s);
     assert!(!view.can_apply);
-    assert_eq!(view.message, "The canvas can be at most 4096 px on each side");
+    assert_eq!(view.message, format!("The canvas can be at most {} px on each side", layer_core::MAX_EXTENT));
     canvas_size(&mut s, CanvasSizeAction::Width { value: 0. });
     assert!(!canvas_view(&s).can_apply);
     assert!(s.dispatch(UiAction::CanvasSize { action: CanvasSizeAction::Width { value: f64::NAN } }).is_err());

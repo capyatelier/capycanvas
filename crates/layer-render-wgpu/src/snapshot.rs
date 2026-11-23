@@ -144,10 +144,6 @@ impl SnapshotGpu {
         *self.device == *other.device
     }
 
-    /// The largest canvas side the shared device can compose.
-    pub fn max_document_dimension(&self) -> u32 {
-        self.device.limits().max_texture_dimension_2d
-    }
     pub fn memory_headroom(&self) -> Option<u64> {
         Some(self.factory.memory_budget().import_headroom_bytes())
     }

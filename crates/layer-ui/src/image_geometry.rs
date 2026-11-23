@@ -141,7 +141,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     /// Flip or turn a photo layer exactly, on the worker, when `map` allows it.
     pub(super) fn start_exact_layer_transform(&mut self, target: SourceTarget, map: &layer_core::LayerPlacement) -> Option<Result<(), String>> {
-        let plan = self.engine.document().exact_layer_transform_plan(target, map, self.engine.geometry_limits())?;
+        let plan = self.engine.document().exact_layer_transform_plan(target, map, layer_core::ProjectLimits::default())?;
         Some(plan.and_then(|plan| {
             let remap = plan.remap_plan(self.engine.document()).ok_or("The layer has nothing to move")?;
             self.start_remap(remap, RemapCompletion::Layer(plan))

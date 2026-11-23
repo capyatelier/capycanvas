@@ -174,7 +174,7 @@ impl CanvasSizeDraft {
         }
     }
 
-    pub(super) fn set_localization(&mut self, document: &Document, limits: layer_core::GeometryLimits, localization: &Localizer) {
+    pub(super) fn set_localization(&mut self, document: &Document, limits: layer_core::ProjectLimits, localization: &Localizer) {
         self.view = Self::new(self.current, localization).view;
         self.update(document, limits, localization);
     }
@@ -221,8 +221,8 @@ impl CanvasSizeDraft {
         self.relative = relative;
     }
 
-    fn update(&mut self, document: &Document, limits: layer_core::GeometryLimits, localization: &Localizer) {
-        let limit = f64::from(limits.canvas_dimension());
+    fn update(&mut self, document: &Document, limits: layer_core::ProjectLimits, localization: &Localizer) {
+        let limit = f64::from(limits.dimension);
         self.view.numeric = std::array::from_fn(|axis| {
             let current = f64::from(self.current[axis]);
             match (self.unit, self.relative) {
@@ -251,7 +251,7 @@ impl CanvasSizeDraft {
 impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn refresh_size_localization(&mut self) {
         let document = self.engine.document();
-        let limits = self.engine.geometry_limits();
+        let limits = layer_core::ProjectLimits::default();
         let localization = &self.state.localization;
         if let Some(draft) = &mut self.canvas_size { draft.set_localization(document, limits, localization); }
         if let Some(draft) = &mut self.image_size { draft.set_localization(document, limits, localization); }
@@ -289,7 +289,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         refused(self.canvas_geometry_refusal())?;
         let doc = self.engine.document();
         let mut draft = CanvasSizeDraft::new(doc.composition().size, self.localization());
-        draft.update(doc, self.engine.geometry_limits(), self.localization());
+        draft.update(doc, layer_core::ProjectLimits::default(), self.localization());
         self.canvas_size = Some(draft);
         self.refresh_tools();
         Ok(())
@@ -327,7 +327,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CanvasSizeAction::Cancel => unreachable!(),
         }
-        let limits = self.engine.geometry_limits();
+        let limits = layer_core::ProjectLimits::default();
         let draft = self.canvas_size.as_mut().unwrap();
         draft.update(self.engine.document(), limits, &self.state.localization);
         self.refresh_tools();

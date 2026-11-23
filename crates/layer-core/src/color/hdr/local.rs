@@ -31,7 +31,7 @@ pub struct LocalToneBuilder {
 }
 impl LocalToneBuilder {
     pub fn new(document: [u32; 2], space: RgbSpace) -> Result<Self, String> {
-        if document.contains(&0) || document.iter().any(|&v| v > 32768) {
+        if document.contains(&0) || document.iter().any(|&v| v > crate::MAX_EXTENT) {
             return Err("Invalid local tone-map dimensions".into());
         }
         let scale = (document[0].max(document[1]) as f32 / LOCAL_GUIDE_EDGE as f32).max(1.);

@@ -79,7 +79,6 @@ pub(crate) struct Recorder {
     pub(crate) filter_preview_cancels: usize,
     pub(crate) reject_filter_previews: bool,
     pub(crate) preparing_filter_previews: bool,
-    pub(crate) max_dimension: Option<u32>,
     pub(crate) region_pixels: Option<u64>,
     pub(crate) crop_overlay: Option<layer_render::CropOverlay>,
     pub(crate) paper_overlay: Option<layer_render::PaperOverlay>,
@@ -142,7 +141,6 @@ impl CanvasRenderer for Recorder {
         Ok(true)
     }
     fn supports_tiled_sources(&self) -> bool { self.tiled_sources }
-    fn max_document_dimension(&self) -> u32 { self.max_dimension.unwrap_or(u32::MAX) }
     fn region_fits(&self, extent: [u32; 2]) -> bool { self.region_pixels.is_none_or(|limit| u64::from(extent[0]) * u64::from(extent[1]) <= limit) }
     fn preflight_image_object_affine(&self,_scene:layer_core::SceneView<'_>,object:layer_core::ImageObjectHandle,affine:layer_core::Affine64,view:layer_render::ViewState)->Result<(),Self::Error> {
         self.image_affine_requests.borrow_mut().push((object,affine,view));

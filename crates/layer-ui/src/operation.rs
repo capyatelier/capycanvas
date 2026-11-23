@@ -558,7 +558,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let targets: Vec<_> = candidate.scene().source_target(owner).into_iter()
                     .chain(candidate.scene().mask(owner).map(|(mask, _)| SourceTarget::Coverage(mask.source))).collect();
                 let mut edits = vec![edit];
-                edits.extend(candidate.paint_extent_plan(&targets, self.engine.geometry_limits()).map_err(error)?);
+                edits.extend(candidate.paint_extent_plan(&targets, layer_core::ProjectLimits::default()).map_err(error)?);
                 self.layer_edit(layer_core::Edit::Batch(edits))?;
                 self.operation.last_transform = world;
             }
@@ -676,7 +676,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let mut candidate = self.engine.document().clone();
                 candidate.apply(edit.clone()).map_err(error)?;
                 candidate.validate_paint_extents(&placement.targets(&candidate),
-                    self.engine.geometry_limits()).map_err(error)?;
+                    layer_core::ProjectLimits::default()).map_err(error)?;
                 self.engine.preview_edit(edit).map_err(error)?;
             }
             t.revision = self.engine.document().revision;
@@ -902,7 +902,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             candidate.apply(edit.clone()).map_err(error)?;
             let mut edits = vec![edit];
             let sources: Vec<_> = targets.iter().flat_map(|h| [candidate.scene().source_target(*h), candidate.scene().occurrence(*h).and_then(|o| o.mask.as_ref()).map(|m| SourceTarget::Coverage(m.source))]).flatten().collect();
-            edits.extend(candidate.paint_extent_plan(&sources, self.engine.geometry_limits()).map_err(error)?);
+            edits.extend(candidate.paint_extent_plan(&sources, layer_core::ProjectLimits::default()).map_err(error)?);
             return self.layer_edit(layer_core::Edit::Batch(edits));
         }
         let target = doc.scene().source_target(roots[0]).ok_or("Select a paint layer")?;

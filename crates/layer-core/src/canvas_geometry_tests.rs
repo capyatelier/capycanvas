@@ -64,12 +64,12 @@ fn remapped(doc: &Document, plan: CanvasGeometryPlan) -> CanvasGeometryPlan {
     plan.with_remapped(results).unwrap()
 }
 
-fn limits() -> GeometryLimits {
-    GeometryLimits { project: ProjectLimits::default(), device_dimension: 16384 }
+fn limits() -> ProjectLimits {
+    ProjectLimits::default()
 }
 
-fn raster_limit(bytes: u64) -> GeometryLimits {
-    GeometryLimits { project: ProjectLimits { raster_bytes: bytes, ..Default::default() }, ..limits() }
+fn raster_limit(bytes: u64) -> ProjectLimits {
+    ProjectLimits { raster_bytes: bytes, ..limits() }
 }
 
 fn held_bytes(doc: &Document) -> u64 {
@@ -211,13 +211,13 @@ fn hidden_pixels_survive_a_crop_and_return_when_the_canvas_grows_back() {
 #[test]
 fn limits_are_refused_before_anything_changes() {
     let doc = fixture();
-    let refuse = |geometry: CanvasGeometry, limits: GeometryLimits| {
+    let refuse = |geometry: CanvasGeometry, limits: ProjectLimits| {
         let error = doc.canvas_geometry_plan(&geometry, limits).unwrap_err();
         assert_eq!(doc.check_canvas_geometry(&geometry, limits), Err(error.clone()));
         error
     };
-    assert_eq!(refuse(rect([0, 0], [16385, 10]), limits()), CanvasGeometryError::CanvasTooLarge { limit: 16384 });
-    let small = GeometryLimits { project: ProjectLimits { dimension: 1000, ..Default::default() }, device_dimension: 16384 };
+    assert_eq!(refuse(rect([0, 0], [MAX_EXTENT + 1, 10]), limits()), CanvasGeometryError::CanvasTooLarge { limit: MAX_EXTENT });
+    let small = ProjectLimits { dimension: 1000, ..Default::default() };
     assert_eq!(refuse(rect([0, 0], [1001, 10]), small), CanvasGeometryError::CanvasTooLarge { limit: 1000 });
     assert_eq!(refuse(rect([-900, 0], [1000, 256]), small), CanvasGeometryError::ExtentTooLarge { limit: 1000 });
     assert_eq!(refuse(rect([0, 0], [512, 256]), limits()), CanvasGeometryError::Unchanged);
@@ -745,7 +745,7 @@ fn paint_extent_plan_changes_only_selected_paint_and_rebases_photos_with_their_b
     let id = fixture::target(&doc,"Current ink");
     fixture::occurrence_mut(&mut doc,"Current ink").offset = [20, 30];
     fixture::insert_paint(&mut doc,"Unselected",0,None);
-    fixture::occurrence_mut(&mut doc,"Unselected").offset=[40000,0];
+    fixture::occurrence_mut(&mut doc,"Unselected").offset=[i64::from(MAX_EXTENT)+7232,0];
     let other=fixture::target(&doc,"Unselected");let unrelated=fixture::occurrence(&doc,"Unselected").clone();let unrelated_source=fixture::paint(&doc,"Unselected").clone();
     fixture::insert_paint(&mut doc,"Photo",0,None);
     fixture::paint_mut(&mut doc,"Photo").base=Some(PaintBase::new(Arc::new(photo_source([300,200])).into()));fixture::paint_mut(&mut doc,"Photo").domain=[300,200];
@@ -763,7 +763,7 @@ fn paint_extent_plan_changes_only_selected_paint_and_rebases_photos_with_their_b
     assert_eq!(editor.document().composition().size, [512, 256]);
     assert!(editor.document().extents_cover_canvas() || editor.document().validate_paint_extents(&[other], limits()).is_err());
     assert!(doc.validate_paint_extents(&[id], limits()).is_ok());
-    assert_eq!(doc.validate_paint_extents(&[other], limits()), Err(CanvasGeometryError::ExtentTooLarge { limit: 32768 }));
+    assert_eq!(doc.validate_paint_extents(&[other], limits()), Err(CanvasGeometryError::ExtentTooLarge { limit: MAX_EXTENT }));
 }
 #[test]
 fn paint_extent_plan_cap_refusal_and_identity_are_atomic_and_add_no_history() {
@@ -771,9 +771,9 @@ fn paint_extent_plan_cap_refusal_and_identity_are_atomic_and_add_no_history() {
     let id = fixture::target(&doc,"Current ink");
     assert!(doc.paint_extent_plan(&[id], limits()).unwrap().is_empty());
     assert!(doc.validate_paint_extents(&[id], limits()).is_ok());
-    fixture::occurrence_mut(&mut doc,"Current ink").offset = [40000, 0];
+    fixture::occurrence_mut(&mut doc,"Current ink").offset = [i64::from(MAX_EXTENT) + 7232, 0];
     let editor = Editor::new(doc.clone());
-    let error = CanvasGeometryError::ExtentTooLarge { limit: 32768 };
+    let error = CanvasGeometryError::ExtentTooLarge { limit: MAX_EXTENT };
     assert_eq!(doc.paint_extent_plan(&[id], limits()), Err(error.clone()));
     assert_eq!(doc.validate_paint_extents(&[id], limits()), Err(error));
     same_state(editor.document(), &doc);
@@ -963,7 +963,7 @@ fn deleting_cropped_pixels_beside_a_photo_drops_its_base_and_a_whole_photo_moves
 fn an_oriented_photo_beyond_the_size_limit_is_refused_before_anything_changes() {
     let (mut doc, _) = photo_document();
     fixture::paint_mut(&mut doc, "Photo").domain = [1024, 256];
-    let tight = GeometryLimits { project: ProjectLimits { dimension: 600, ..Default::default() }, device_dimension: 8192 };
+    let tight = ProjectLimits { dimension: 600, ..Default::default() };
     let error = doc.canvas_geometry_plan(&CanvasGeometry::orient([512, 256], ImageOrientation::RotateLeft), tight).unwrap_err();
     assert_eq!(error, CanvasGeometryError::ExtentTooLarge { limit: 600 });
 }
@@ -1007,7 +1007,7 @@ fn a_whole_photo_layer_flips_and_turns_exactly_with_its_linked_mask() {
 #[test]
 fn the_widest_admitted_photo_turns_exactly_and_a_wider_turn_is_refused_atomically() {
     let width = MAX_EXTENT;
-    let wide = GeometryLimits { project: ProjectLimits::default(), device_dimension: MAX_EXTENT };
+    let wide = ProjectLimits::default();
     let mut doc = fixture::document([width, 256], &["Current ink"]);
     fixture::insert_paint(&mut doc, "Photo", 0, None);
     let photo = fixture::target(&doc, "Photo");

@@ -88,14 +88,21 @@ fn stored_fill_prepares_cold_reference_tiles_beside_its_seed() {
 }
 
 fn reference_fill_pixels(extent:[u32;2],cold:bool,preview:bool)->Vec<u8> {
+    let reference=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut engine=reference_fill(&reference,extent,cold,preview);
+    let pixels=engine.backend_mut().readback_srgb_rgba8().unwrap();
+    assert!(pixels[((240*extent[0]+240)*4+3) as usize]>0,"the fill must present after external reference preparation");
+    pixels
+}
+
+fn reference_fill(reference:&WgpuRasterizer,extent:[u32;2],cold:bool,preview:bool)->layer_engine::CanvasEngine<WgpuRasterizer> {
     let mut document=paint_document(extent,"Cold reference fill");let target=target(&document);
     let references:Vec<_>=(0..3).map(|index| {
         let image=layer_core::color::source::rgba8_source(extent,|_,y|if (252..260).contains(&y) {[16+index*32,24,40,192]}else{[0;4]});
         placement::append_paint(&mut document,"Reference",PaintSource {domain:extent,color_mode:Default::default(),raster:Default::default(),
             base:Some(PaintBase::new(image.into())),operations:Default::default()}).1
     }).collect();
-    let reference=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
-    let renderer=crate::test_support::staged_renderer(&reference,document.composition().color);
+    let renderer=crate::test_support::staged_renderer(reference,document.composition().color);
     let mut engine=layer_engine::CanvasEngine::new(renderer,document,layer_engine::input_queue(8).1,
         crate::test_support::view(extent),layer_engine::ViewTransform::IDENTITY).unwrap();
     flush_engine(&mut engine);crate::test_support::settle_decodes(engine.backend_mut());
@@ -111,10 +118,21 @@ fn reference_fill_pixels(extent:[u32;2],cold:bool,preview:bool)->Vec<u8> {
     if preview {engine.set_fill_preview(Some(layer_render::FillPreview {transaction:42,revision:0,target,operation}));}
     else {engine.append_raster_operation(target,operation).unwrap();}
     flush_engine(&mut engine);
-    let pixels=engine.backend_mut().readback_srgb_rgba8().unwrap();
-    assert!(pixels[((240*extent[0]+240)*4+3) as usize]>0,"the fill must present after external reference preparation");
     assert_eq!(engine.can_undo(),!preview);assert!(!engine.raster_backing_pending());
-    pixels
+    engine
+}
+
+#[test]
+fn stored_fill_rows_wider_than_the_device_texture_keep_their_page_borders() {
+    let extent=[8192+2*PAGE_SIZE,512];
+    let tiles=|reference:&WgpuRasterizer| {
+        let engine=reference_fill(reference,extent,false,false);
+        let data=engine.document().target_raster(target(engine.document())).unwrap().wait_data().unwrap();
+        data.tiles.iter().map(|(key,tile)|(*key,tile.wait_backing().unwrap().decode_on_worker().unwrap())).collect::<std::collections::BTreeMap<_,_>>()
+    };
+    let wide=tiles(&WgpuRasterizer::new_native_headless(Default::default()).unwrap());
+    assert!(wide.keys().any(|key|key.coordinate[0]*PAGE_SIZE>=8192),"the fill must reach past the limited texture width");
+    assert_eq!(tiles(&crate::test_support::texture_limited_renderer(Default::default(),8192)),wide);
 }
 
 #[test]

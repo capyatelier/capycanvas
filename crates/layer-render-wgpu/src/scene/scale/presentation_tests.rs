@@ -109,7 +109,7 @@ fn rejected_views_and_abandoned_composition_preserve_artwork() {
     let before = present(&r, &mut presenter, v);
     let texture = r.scale_display.as_ref().unwrap().texture().clone();
     let metrics = r.metrics();
-    let oversized = [r.max_document_dimension() + 1, 8192];
+    let oversized = [layer_core::MAX_EXTENT + 1, 8192];
     for (rejected, extent) in [
         (ViewState { document_to_surface: [f32::NAN; 6], ..v }, [8192; 2]),
         (ViewState { document_to_surface: [0.; 6], ..v }, [8192; 2]),

@@ -126,7 +126,7 @@ pub(crate) struct Params {
 }
 
 pub(crate) fn guide_extent(document: [u32; 2]) -> Result<[u32; 2], String> {
-    if document.contains(&0) || document.iter().any(|&n| n > 32768) {
+    if document.contains(&0) || document.iter().any(|&n| n > layer_core::MAX_EXTENT) {
         return Err("Invalid local tone-map dimensions".into());
     }
     let edge = document[0].max(document[1]).max(LOCAL_GUIDE_EDGE);

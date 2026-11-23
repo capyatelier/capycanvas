@@ -1100,7 +1100,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub fn canvas_limits(&self) -> crate::CanvasLimits {
         let memory = self.engine.backend().memory_headroom().or_else(layer_color::photo::PhotoMemoryBudget::available_memory);
-        crate::CanvasLimits::new(self.engine.geometry_limits().canvas_dimension(), memory)
+        crate::CanvasLimits::new(layer_core::MAX_EXTENT, memory)
             .with_working_bytes(self.engine.backend().new_drawing_working_bytes(self.state.camera.viewport))
     }
     pub fn initialize_paper(&mut self, id: Option<String>, texture: Option<layer_core::TextureSource>, warning: Option<String>) -> UiChange {
