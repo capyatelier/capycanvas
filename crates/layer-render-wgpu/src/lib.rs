@@ -452,6 +452,7 @@ pub fn software_adapter_tests() -> bool {
 pub enum GpuRasterError {
     Color(String),
     CaptureBudget { required: u64, limit: u64 },
+    WholeDrawingFilter { required: u64, limit: u64 },
     SourceWorkingSetExceeded,
     StrokeMemory,
     NotReady,
@@ -493,6 +494,8 @@ impl fmt::Display for GpuRasterError {
             Self::StrokeMemory => formatter.write_str("Not enough memory to finish this edit"),
             Self::CaptureBudget { required, limit } => write!(formatter,
                 "Snapshot dependency plan requires {required} bytes; limit is {limit}"),
+            Self::WholeDrawingFilter { required, limit } => write!(formatter,
+                "Document-wide filters require up to {required} bytes of image pixels; the live filter limit is {limit} bytes"),
             Self::Effect(message) => write!(formatter, "effect shader: {message}"),
             Self::FilterPreviewCancelled => formatter.write_str("Filter preview source changed"),
             Self::AdapterUnavailable => {
@@ -1218,6 +1221,9 @@ pub struct WgpuRasterizer {
     analysis_job: Option<effect_analysis::Job>,
     analysis_candidate: Option<effect_analysis::Candidate>,
     analysis_dirty: bool,
+    skipped_filters: (u64, Vec<OccurrenceHandle>),
+    filter_skips: u64,
+    filter_refusals: u64,
     bake_analyses: Vec<effect_analysis::BakeTask>,
     #[cfg(target_arch = "wasm32")]
     analysis_backing_waiter: Option<effect_analysis::BackingWaiter>,
@@ -1630,6 +1636,9 @@ impl WgpuRasterizer {
             analysis_job: None,
             analysis_candidate: None,
             analysis_dirty: false,
+            skipped_filters: (0, Vec::new()),
+            filter_skips: 0,
+            filter_refusals: 0,
             bake_analyses: Vec::new(),
             #[cfg(target_arch = "wasm32")]
             analysis_backing_waiter: None,
@@ -3998,7 +4007,7 @@ impl WgpuRasterizer {
 }
 impl CanvasRenderer for WgpuRasterizer {
     fn is_preparation_pending(error: &Self::Error) -> bool { error.is_preparation_pending() }
-    fn is_memory_refusal(error: &Self::Error) -> bool { *error == GpuRasterError::StrokeMemory }
+    fn is_memory_refusal(error: &Self::Error) -> bool { matches!(error, GpuRasterError::StrokeMemory | GpuRasterError::WholeDrawingFilter { .. }) }
     fn adopt_committed_pages(&mut self, previous:&mut Self) {
         #[cfg(not(target_arch="wasm32"))]
         self.adopt_raster_preparation_wake(previous);
@@ -4113,6 +4122,8 @@ impl CanvasRenderer for WgpuRasterizer {
     fn waits_for_frame_slot(&self) -> bool { self.frame_slot_blocked() }
     fn stroke_waits_for_memory(&self) -> bool { self.lane_waits() }
     fn stroke_memory_refusals(&self) -> u64 { self.memory.stroke_memory_refusals() }
+    fn skipped_filter_previews(&self) -> u64 { self.filter_skips }
+    fn refused_filter_bakes(&self) -> u64 { self.filter_refusals }
     fn poll_pending(&mut self, view: layer_render::ViewState) -> Result<(), Self::Error> {
         self.observed_completions.store(self.device.completions(), std::sync::atomic::Ordering::Release);
         self.refresh_memory_limits();
@@ -4509,7 +4520,7 @@ impl WgpuRasterizer {
         let revision = self.composite_revision;
         let submitted = self.metrics.submissions;
         let navigator_revision = self.navigator.revision;
-        let result = self.submit_frame_inner(packet, native_commit);
+        let result = self.submit_frame_inner(packet, native_commit, false);
         self.release_original_room();
         self.end_frame_memory();
         self.fit_grants();
@@ -4594,11 +4605,14 @@ impl WgpuRasterizer {
         (self.presentable_revision != self.composite_revision)
             .then(|| self.presentation_released.map_or_else(web_time::Instant::now, |released| released + frame_pace::SETTLE_PRESENTATION))
     }
-    fn submit_frame_inner(&mut self, packet: FramePacket<'_>, settled_commit: Option<raster::native_edit::NativeFrame>) -> Result<(), GpuRasterError> {
+    fn submit_frame_inner(&mut self, packet: FramePacket<'_>, settled_commit: Option<raster::native_edit::NativeFrame>, bypassed: bool) -> Result<(), GpuRasterError> {
         self.background_frame = false;
         #[cfg(test)]
         let artwork_revision_before=self.artwork_revision;
-        if let Some(error)=self.take_lane_failure().or_else(||self.take_bake_failure()).or_else(||self.take_fill_edges_failure()).or_else(||self.take_restore_failure()) {return Err(error);}
+        if let Some(error)=self.take_lane_failure().or_else(||self.take_bake_failure()).or_else(||self.take_fill_edges_failure()).or_else(||self.take_restore_failure()) {
+            if matches!(error, GpuRasterError::WholeDrawingFilter { .. }) { self.filter_refusals += 1; }
+            return Err(error);
+        }
         let retained_transition = self.retained_transition_frame(packet, self.transform_preview.as_ref());
         let analysis_dirty = std::mem::take(&mut self.analysis_dirty);
         let packet = FramePacket {composite_all: packet.composite_all || analysis_dirty, ..packet};
@@ -4621,10 +4635,20 @@ impl WgpuRasterizer {
             // Reject unsupported global dependencies before clearing/restoring
             // paint, allocating the composite, or submitting any part of a frame.
             let resident = self.scale_display.as_ref().map_or(0, |c| c.resident_bytes());
-            let admitted = scene::Scene::window_plan(packet.scene, packet.document_extent, self.image_pixel_budget(resident), self.device.limits().max_texture_dimension_2d,self.scene.as_deref());
+            let mut admitted = scene::Scene::window_plan(packet.scene, packet.document_extent, self.image_pixel_budget(resident), self.device.limits().max_texture_dimension_2d,self.scene.as_deref());
             if resident > 0 && admitted.is_err() {
-                scene::Scene::window_plan(packet.scene, packet.document_extent, self.image_pixel_budget(0), self.device.limits().max_texture_dimension_2d,self.scene.as_deref())?;
-            } else { admitted?; }
+                admitted = scene::Scene::window_plan(packet.scene, packet.document_extent, self.image_pixel_budget(0), self.device.limits().max_texture_dimension_2d,self.scene.as_deref());
+            }
+            if let Err(error @ GpuRasterError::WholeDrawingFilter { .. }) = admitted {
+                let skipped = (packet.scene.owner(), scene::Scene::whole_drawing_filters(packet.scene));
+                if skipped.1.is_empty() { return Err(error); }
+                let mut bypass = packet.scene.snapshot();
+                for handle in &skipped.1 { bypass.artwork.occurrences.get_mut(*handle).ok_or(GpuRasterError::Invariant("a skipped filter has no occurrence"))?.visible = false; }
+                if self.skipped_filters != skipped { self.skipped_filters = skipped; self.filter_skips += 1; }
+                return self.submit_frame_inner(FramePacket { scene: bypass.view(), ..packet }, settled_commit, true);
+            }
+            admitted?;
+            if !bypassed { self.skipped_filters.1.clear(); }
         }
         if source_access::placed_targets(packet.scene).any(|t| packet.scene.paint_base(t).is_some()) {
             // Source-backed photos own no paint initially. Prepare their bounded

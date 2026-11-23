@@ -252,7 +252,10 @@ fn submit_ready_frame<R: CanvasRenderer>(renderer: &mut R, packet: FramePacket<'
     let checking = std::time::Instant::now();
     let Some(ready) = renderer.ready_submission(packet, preview) else { return std::task::Poll::Pending; };
     *draw_start += checking.elapsed();
-    std::task::Poll::Ready(match renderer.submit_ready(ready, packet) {
+    let result = renderer.submit_ready(ready, packet);
+    report.filter_skips.store(renderer.skipped_filter_previews(), Ordering::Release);
+    report.filter_refusals.store(renderer.refused_filter_bakes(), Ordering::Release);
+    std::task::Poll::Ready(match result {
         Err(error) if R::is_memory_refusal(&error) => { report.memory_refusals.fetch_add(1, Ordering::AcqRel); Ok(false) }
         result => result.map(|()| true),
     })
@@ -591,6 +594,8 @@ struct FrameReport {
     retouch_miss: std::sync::atomic::AtomicU64,
     retouch_waiting: std::sync::atomic::AtomicU64,
     memory_refusals: std::sync::atomic::AtomicU64,
+    filter_skips: std::sync::atomic::AtomicU64,
+    filter_refusals: std::sync::atomic::AtomicU64,
     paper_drawn: std::sync::atomic::AtomicU64,
     showing_drawing: AtomicBool,
     showing_navigator: AtomicBool,
@@ -1284,6 +1289,8 @@ impl CanvasRenderer for RenderWorker {
     }
     fn is_memory_refusal(error: &Self::Error) -> bool { *error == MEMORY_REFUSED }
     fn stroke_memory_refusals(&self) -> u64 { self.memory_refusals }
+    fn skipped_filter_previews(&self) -> u64 { self.report.filter_skips.load(Ordering::Acquire) }
+    fn refused_filter_bakes(&self) -> u64 { self.report.filter_refusals.load(Ordering::Acquire) }
     fn poll_pending(&mut self, view: ViewState) -> Result<(), Self::Error> {
         let refusals = self.report.memory_refusals.load(Ordering::Acquire);
         if std::mem::replace(&mut self.memory_refusals, refusals) != refusals { return Err(MEMORY_REFUSED); }

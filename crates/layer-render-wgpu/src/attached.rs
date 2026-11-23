@@ -81,6 +81,8 @@ impl CanvasRenderer for AttachedRenderer {
     fn waits_for_frame_slot(&self) -> bool { self.0.as_ref().is_some_and(|gpu| gpu.waits_for_frame_slot()) }
     fn stroke_waits_for_memory(&self) -> bool { self.0.as_ref().is_some_and(|gpu| gpu.stroke_waits_for_memory()) }
     fn stroke_memory_refusals(&self) -> u64 { self.0.as_ref().map_or(0, |gpu| gpu.stroke_memory_refusals()) }
+    fn skipped_filter_previews(&self) -> u64 { self.0.as_ref().map_or(0, |gpu| gpu.skipped_filter_previews()) }
+    fn refused_filter_bakes(&self) -> u64 { self.0.as_ref().map_or(0, |gpu| gpu.refused_filter_bakes()) }
     fn prepare_moving_layer(&mut self, layer: Option<layer_core::authored::OccurrenceHandle>) {
         if let Some(gpu) = self.0.as_mut() {
             gpu.prepare_moving_layer(layer);

@@ -5277,6 +5277,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.engine.metrics().saved_tile_refusals!=tile_refusals {
             self.raise_message_notice(MessageId::DOCUMENTS_REFUSAL_SAVE_CAPACITY);
         }
+        let [skipped, refused] = self.notices.filter_limits_reached(self.filter_limit_counts());
+        if skipped { self.raise_message_notice(MessageId::DOCUMENTS_FILTER_PREVIEW_SKIPPED); }
+        if refused { self.raise_message_notice(MessageId::DOCUMENTS_FILTER_APPLY_REFUSED); }
         if self.engine.clone_source() != clone_source {
             self.sync_retouch_points();
         }

@@ -26,10 +26,7 @@ impl Plan {
         if full <= limit && images::image_sizes_fit(layers,PixelRect::full(extent).into(),maximum_side,objects) {
             return Ok(None);
         }
-        stack::support(layers,0)
-            .ok_or_else(|| GpuRasterError::Color(format!(
-                "Document-wide filters require up to {full} bytes of image pixels; the live filter limit is {limit} bytes"
-            )))?;
+        stack::support(layers,0).ok_or(GpuRasterError::WholeDrawingFilter { required: full, limit })?;
         // Bounded recording as well as bounded textures. Whole output pages
         // preserve the existing compositor's tile ownership at window seams.
         for side in [2048u32, 1024, 512, PAGE_SIZE] {
@@ -324,12 +321,7 @@ mod tests {
     fn oversized_global_or_halo_dependencies_are_explicit_and_hidden_ones_are_excluded() {
         let extent = [8192, 7324];
         let mut global = adjustments(EffectSampling::Document, 1, extent);
-        assert!(
-            Plan::new(global.scene(), extent, IMAGE_BYTES, 16384)
-                .unwrap_err()
-                .to_string()
-                .contains("Document-wide")
-        );
+        assert!(matches!(Plan::new(global.scene(), extent, IMAGE_BYTES, 16384), Err(GpuRasterError::WholeDrawingFilter { .. })));
         let handle = global.scene().order()[0];
         global.artwork.occurrences.get_mut(handle).unwrap().visible = false;
         assert!(

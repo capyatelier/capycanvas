@@ -960,6 +960,8 @@ pub trait CanvasRenderer {
     fn waits_for_frame_slot(&self) -> bool { false }
     fn stroke_waits_for_memory(&self) -> bool { false }
     fn stroke_memory_refusals(&self) -> u64 { 0 }
+    fn skipped_filter_previews(&self) -> u64 { 0 }
+    fn refused_filter_bakes(&self) -> u64 { 0 }
     /// Host frame-mailbox backpressure before consuming input.
     fn can_submit(&self) -> bool {
         true

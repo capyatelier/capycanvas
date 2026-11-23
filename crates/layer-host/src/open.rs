@@ -255,6 +255,31 @@ mod tests {
     }
 
     #[test]
+    fn a_drawing_whose_whole_drawing_filter_exceeds_the_live_limit_restores_with_the_filter_kept() {
+        use layer_core::authored::{EffectApplication,Occurrence,OccurrenceContent,PortableId};
+        let english=layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
+        let budget=layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {total_bytes:Some(8<<30),available_bytes:Some(6<<30),..Default::default()});
+        let gpu=WgpuRasterizer::new_native_headless_in(Default::default(),layer_core::DeviceMemoryFacts {budget_bytes:Some(256<<20),..Default::default()},budget).unwrap();
+        let session=UiSession::from_project_localized(Renderer(Some(gpu)),layer_ui::new_drawing(64,48,&english).unwrap(),None,[640,480],layer_ui::Platform::Android,english.clone()).unwrap();
+        let admission=layer_ui::DocumentSessions::<()>::default().admission(&session.retained_document_tiles());
+        let mut environment=OpenEnvironment::capture(&session,admission,RendererOptions::default()).unwrap();
+        environment.asset_writer=None;
+        let mut project=Document::new(PortableId::random(),4096,4096,layer_core::DocumentNames {paint:"ink".into(),paper:"paper".into()});
+        let program=layer_core::bundled_effect_catalog().get("swirl").unwrap().program();
+        let instance=layer_core::EffectInstance::new(program);
+        let effect=project.artwork.effects.insert(PortableId::random(),EffectApplication::new(instance.program,instance.values,[4096;2])).unwrap();
+        let swirl=project.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(effect),"Swirl")).unwrap();
+        let stack=project.composition().result;
+        project.artwork.stacks.get_mut(stack).unwrap().entries.push(swirl);
+        let project=Document::from_artwork(project.artwork).unwrap();
+        let restored=environment.prepare(project.clone(),||false).unwrap();
+        assert_eq!(restored.engine().document().artwork,project.artwork,"the restored drawing keeps the filter unchanged");
+        assert_eq!(layer_render::CanvasRenderer::skipped_filter_previews(restored.engine().backend()),1);
+        drop((restored,environment,session));
+        layer_render_wgpu::finish_shader_compiler_shutdown();
+    }
+
+    #[test]
     fn a_drawing_past_sixteen_thousand_tiles_passes_validation() {
         use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey,TILE_SIZE};
         let english=layer_ui::Localizer::shared(layer_ui::UiLanguage::English);

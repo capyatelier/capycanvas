@@ -140,11 +140,16 @@ pub(super) struct Notices {
     held: Option<Notice>,
     /// The mask whose editing session already explained dry coverage.
     dry_mask: Option<SourceTarget>,
+    filter_limits: [u64; 2],
 }
 
 impl Notices {
     pub(super) fn publishing(&self) -> bool {
         self.changed
+    }
+    pub(super) fn filter_limits_reached(&mut self, counts: [u64; 2]) -> [bool; 2] {
+        let seen = std::mem::replace(&mut self.filter_limits, counts);
+        [seen[0] < counts[0], seen[1] < counts[1]]
     }
 }
 
@@ -226,6 +231,11 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub fn last_notice_id(&self) -> u64 {
         self.notices.last_id
+    }
+
+    pub(super) fn filter_limit_counts(&self) -> [u64; 2] {
+        let backend = self.engine.backend();
+        [backend.skipped_filter_previews(), backend.refused_filter_bakes()]
     }
 
     pub(super) fn raise_notice(&mut self, text: String, actions: Vec<(NoticeAction, NoticeRun)>) {
@@ -574,7 +584,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 #[cfg(test)]
 mod localization_tests {
     use super::*;
-    use crate::session::test_support::session;
+    use crate::session::test_support::{session, Recorder};
 
     #[test]
     fn reference_offer_language_refresh_retains_literal_name_and_action() {
@@ -619,6 +629,27 @@ mod localization_tests {
         assert_ne!(raised, before);
         s.frame(3, 3).unwrap();
         assert_eq!(s.last_notice_id(), raised, "the same wait is not announced again");
+    }
+
+    #[test]
+    fn whole_drawing_filter_limits_are_told_once_per_new_refusal_and_not_for_a_replaced_renderer() {
+        let mut s = crate::session::test_support::launched(session(Platform::Gtk));
+        s.frame(1, 1).unwrap();
+        let text = |s: &UiSession<Recorder>| s.state.notice.as_ref().map(|notice| notice.text.clone());
+        let told = |s: &UiSession<Recorder>, message| Some(s.localization().text(message).to_string());
+        s.engine.backend_mut().filter_limits = [1, 0];
+        s.frame(2, 2).unwrap();
+        assert_eq!(text(&s), told(&s, MessageId::DOCUMENTS_FILTER_PREVIEW_SKIPPED));
+        let raised = s.last_notice_id();
+        s.frame(3, 3).unwrap();
+        assert_eq!(s.last_notice_id(), raised, "the same skip is not announced again");
+        s.engine.backend_mut().filter_limits = [1, 1];
+        s.frame(4, 4).unwrap();
+        assert_eq!(text(&s), told(&s, MessageId::DOCUMENTS_FILTER_APPLY_REFUSED));
+        let raised = s.last_notice_id();
+        s.replace_renderer(Recorder { filter_limits: [7, 3], ..Default::default() }).unwrap();
+        s.frame(5, 5).unwrap();
+        assert_eq!(s.last_notice_id(), raised, "a replacement renderer's earlier refusals are not this drawing's");
     }
 
     #[test]

@@ -1190,7 +1190,10 @@ workgroup bins and eight counters per lane combine into its 4,096-bin shards.
 
 The composition frame, bake destination and temporary image edge do not limit
 source reads. Global filters request the finite retained input domain, subject to
-the same allocation allowance and GPU dimension checks. Output, current-pass
+the same allocation allowance and GPU dimension checks. When the live image
+allowance can't hold a whole-drawing filter, the frame composes without it and
+the session shows a notice; the filter stays in the drawing. A bake that would
+need it is refused as a memory refusal, which discards the edit. Output, current-pass
 input and original input carry their own region and texel footprint through the
 shared image-grid descriptor. Filter sampling clamps at the declared finite input
 support; samples beyond an allocated dependency window are transparent. Reduced inputs use

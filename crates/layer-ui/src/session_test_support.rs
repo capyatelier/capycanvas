@@ -95,6 +95,7 @@ pub(crate) struct Recorder {
     pub(crate) motion_path_updates: usize,
     pub(crate) memory_refusals: u64,
     pub(crate) memory_refusal_next_frame: bool,
+    pub(crate) filter_limits: [u64; 2],
     pub(crate) capture_failure: Option<&'static str>,
 }
 const MEMORY_REFUSAL: &str = "Not enough memory to finish this edit";
@@ -102,6 +103,8 @@ impl CanvasRenderer for Recorder {
     type Error = BackendError;
     fn is_memory_refusal(error: &Self::Error) -> bool { error.0 == MEMORY_REFUSAL }
     fn stroke_memory_refusals(&self) -> u64 { self.memory_refusals }
+    fn skipped_filter_previews(&self) -> u64 { self.filter_limits[0] }
+    fn refused_filter_bakes(&self) -> u64 { self.filter_limits[1] }
     fn poll_pending(&mut self, _view: layer_render::ViewState) -> Result<(), Self::Error> {
         self.memory_refusals += u64::from(std::mem::take(&mut self.memory_refusal_next_frame));
         match self.capture_failure {

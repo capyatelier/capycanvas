@@ -515,6 +515,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.discard_render_requests();
         self.cancel_auto_levels();self.cancel_histogram();self.cancel_effect_analyses();
         let previous = self.engine.replace_backend(renderer).map_err(error)?;
+        self.notices.filter_limits_reached(self.filter_limit_counts());
         self.paper_preview.invalidate();
         self.renderer_generation = self.renderer_generation.wrapping_add(1);
         self.brush_stamps.invalidate();

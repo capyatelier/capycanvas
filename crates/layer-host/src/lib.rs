@@ -1748,6 +1748,62 @@ mod tests {
     }
 
     #[test]
+    fn an_android_host_keeps_its_filter_panel_cancel_back_and_undo_working_when_a_whole_drawing_filter_exceeds_the_live_limit() {
+        use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey,TILE_SIZE};
+        use layer_ui::{CommandId,EffectAction,MessageId,UiInput};
+        let english = layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
+        let mut document = layer_ui::new_drawing(4096, 4096, &english).unwrap();
+        let layer_core::SourceTarget::Paint(ink) = document.working.target.unwrap() else { panic!("a new drawing paints its first layer") };
+        let pixels = [23, 47, 83, 255].repeat((TILE_SIZE * TILE_SIZE) as usize);
+        let blob = std::sync::Arc::new(TileBlob::encode(document.composition().color.paint_descriptor(), &pixels).unwrap());
+        document.artwork.paint.get_mut(ink).unwrap().raster = RasterRevision::backed(RasterData {
+            tiles: [(TileKey { plane: RasterPlane::Color, coordinate: [3, 5] }, RasterTile::backed_shared(blob))].into(), ..Default::default()
+        });
+        let budget = layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts { total_bytes: Some(8 << 30), available_bytes: Some(6 << 30), ..Default::default() });
+        let gpu = layer_render_wgpu::WgpuRasterizer::new_native_headless_in(document.composition().color,
+            layer_core::DeviceMemoryFacts { budget_bytes: Some(256 << 20), ..Default::default() }, budget).unwrap();
+        let mut native = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        *native.session = UiSession::from_project(Renderer(Some(gpu)), document, None, [640, 480], layer_ui::Platform::Android).unwrap();
+        native.startup = Default::default();
+        native.resize(640, 480, 1.).unwrap();
+        let mut host = crate::test_storage::StoredHost::new(native);
+        host.set_wake(std::sync::Arc::new(|| {}));
+        host.set_launch_interaction(true);
+        host.session.renderer_mut().0.as_mut().unwrap().finish_startup_catalog();
+        let clock = std::cell::Cell::new(0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(240);
+        let settle = |host: &mut NativeHost, done: &dyn Fn(&NativeHost) -> bool| {
+            while !host.startup.complete || !done(host) || matches!(host.session.frame_demand(), layer_render::FrameDemand::Work | layer_render::FrameDemand::Animate) {
+                frame_step(host, &clock, deadline);
+                assert!(host.error.is_none() && host.poisoned().is_none());
+            }
+            assert!(!host.snapshot_bytes().unwrap().is_empty());
+        };
+        let notice = |host: &NativeHost, message: MessageId| host.session.state().notice.as_ref().is_some_and(|notice| notice.text == english.text(message).as_ref());
+        settle(&mut host, &|_| true);
+        host.dispatch_user_action(UiAction::Effect { action: EffectAction::Insert { effect: "swirl".into() } }).unwrap();
+        let swirl = host.session.engine().document().working.occurrence.unwrap();
+        assert!(host.session.engine().document().scene().effect(swirl).is_some_and(|effect| effect.program.id.as_ref() == "swirl"));
+        settle(&mut host, &|host| notice(host, MessageId::DOCUMENTS_FILTER_PREVIEW_SKIPPED));
+        let with_filter = host.session.engine().document().clone();
+        host.dispatch_user_action(UiAction::Invoke { command: CommandId::MergeDown }).unwrap();
+        settle(&mut host, &|host| notice(host, MessageId::DOCUMENTS_FILTER_APPLY_REFUSED));
+        assert!(host.session.engine().document().scene().same_artwork(with_filter.scene()), "a refused Apply leaves the drawing as it was");
+        host.dispatch_user_action(UiAction::Effect { action: EffectAction::CancelFilter }).unwrap();
+        settle(&mut host, &|host| host.session.engine().document().scene().occurrence(swirl).is_none());
+        host.dispatch_user_action(UiAction::Invoke { command: CommandId::Undo }).unwrap();
+        settle(&mut host, &|host| host.session.engine().document().scene().effect(swirl).is_some());
+        for pressed in [true, false] {
+            host.input(UiInput::Key { latin: None, key: "Escape".into(), pressed, repeat: false, modifiers: Default::default(), editing: false, divider: None }).unwrap();
+        }
+        settle(&mut host, &|_| true);
+        host.dispatch_user_action(UiAction::Invoke { command: CommandId::Undo }).unwrap();
+        settle(&mut host, &|host| host.session.engine().document().scene().occurrence(swirl).is_none());
+        drop(host);
+        layer_render_wgpu::finish_shader_compiler_shutdown();
+    }
+
+    #[test]
     fn a_windows_host_whose_stroke_waits_on_memory_frames_only_when_its_renderer_asks() {
         use layer_render::CanvasRenderer;
         use std::time::{Duration, Instant};

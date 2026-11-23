@@ -116,42 +116,26 @@ fn native_live_windows_match_full_filters_masks_clips_and_reconfiguration() {
 }
 
 #[test]
-fn native_live_global_limit_rejects_before_document_or_submission_changes() {
+fn a_whole_drawing_filter_beyond_the_live_limit_is_skipped_in_view_and_kept_in_the_drawing() {
     let extent = [333, 291];
-    let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
-        space: RgbSpace::ProPhoto,
-        depth: SampleDepth::U16,
-    })
-    .unwrap();
-    let mut document = document(extent, DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 });
-    let adjustment = effect(&mut document, false, true);
+    let mut r = WgpuRasterizer::new_native_headless(DocumentColor::default()).unwrap();
+    let mut document = document(extent, DocumentColor::default());
     let generator = effect(&mut document, true, false);
-    set_entries(&mut document, vec![adjustment, generator]);
-    crate::test_support::submit_published(&mut r, packet(&document, extent));
-    let before = pixels(&r);
-    let texture = r.scale_display.as_ref().map(|c| c.texture().clone());
-    let metrics = r.metrics();
-    r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(1024);
-    // Includes a resize and reset: rejection must precede both.
-    let error = r
-        .submit(FramePacket {
-            reset_layers: true,
-            ..packet(&document, [6000, 4000])
-        })
-        .unwrap_err();
-    assert!(error.to_string().contains("Document-wide"));
-    assert_eq!(r.document_extent, extent);
-    assert_eq!(r.scale_display.as_ref().map(|c| c.texture().clone()), texture);
-    assert_eq!(r.metrics(), metrics);
-    assert_eq!(
-        pixels(&r),
-        before,
-        "rejection must preserve the exact current composite"
-    );
-    // Removing the unsupported adjustment leaves the renderer usable.
     set_entries(&mut document, vec![generator]);
     crate::test_support::submit_published(&mut r, packet(&document, extent));
-    assert!(pixels(&r).iter().any(|b| *b != 0));
+    let without = pixels(&r);
+    let swirl = super::image_windows::insert_effect(&mut document, layer_core::EffectInstance::new(crate::tests::fixture("swirl").program()));
+    let bound = scene::Scene::capture_image_bound(document.scene(), PixelRect::full(extent));
+    r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(bound - 1);
+    let before = document.clone();
+    for _ in 0..2 { crate::test_support::submit_published(&mut r, packet(&document, extent)); }
+    assert_eq!(layer_render::CanvasRenderer::skipped_filter_previews(&r), 1, "one skip is reported for the filter");
+    assert_eq!(pixels(&r), without, "the rest of the drawing composes without the skipped filter");
+    assert_eq!(document, before);
+    assert!(document.scene().visible(swirl), "the filter stays in the drawing");
+    r.native_edit.as_mut().unwrap().image_pixel_bytes = None;
+    crate::test_support::submit_published(&mut r, packet(&document, extent));
+    assert_ne!(pixels(&r), without, "a limit that admits the filter shows it again");
 }
 
 #[test]

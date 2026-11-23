@@ -1986,6 +1986,9 @@ impl Scene {
     pub(super) fn cached_capture_window(&self,layers:SceneView<'_>,region:PixelRect)->DocRect {
         images::capture_window_cached(layers,region,Some(&self.object_spatial))
     }
+    pub(super) fn whole_drawing_filters(layers:SceneView<'_>)->Vec<OccurrenceHandle> {
+        layers.order().iter().copied().filter(|handle|layers.visible(*handle) && layers.effect(*handle).is_some_and(|effect|crate::effects::damage_radius(effect,0).is_none())).collect()
+    }
     pub(super) fn window_plan(layers:SceneView<'_>,extent:[u32;2],limit:u64,maximum_side:u32,scene:Option<&Self>)->Result<Option<windows::Plan>,GpuRasterError> {
         windows::Plan::new_cached(layers,extent,limit,maximum_side,scene.map(|scene|&scene.object_spatial))
     }
