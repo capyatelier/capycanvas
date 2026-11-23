@@ -1305,7 +1305,7 @@ mod tests {
             let present = compiled(destination::module(operation, 0, destination::PLAIN), flags, operation, entry.name());
             for feature in [&relief, &bristle, &clone, &pointwise, &blend] { absent(&present, feature, &what); }
             let operations: Vec<_> = fragments.iter().filter(|f| present.contains(**f)).collect();
-            assert_eq!(operations.len(), usize::from(!matches!(entry, Entry::Reservoir)), "{what} reaches {operations:?}");
+            assert_eq!(operations.len(), usize::from(!matches!(entry, Entry::Reservoir | Entry::Gather)), "{what} reaches {operations:?}");
         }}}
         let multiply = layer_core::LayerBlend::from(BrushBlendMode::Multiply).code();
         let formulas = blend.iter().filter(|f| *f != "blend_luma").cloned().collect();
