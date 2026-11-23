@@ -244,7 +244,7 @@ fn native_level_pointwise_chains_and_fusion_boundaries_match_full_native_windows
             let batch = dab_batch(target, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
             let edited = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame };
             let work = incremental.metrics.composited_pixels;
-            crate::test_support::submit_ready(&mut incremental, edited).unwrap(); crate::test_support::submit_ready(&mut exact, edited).unwrap();
+            submit_published(&mut incremental, edited); submit_published(&mut exact, edited);
             let reference = pixels(&exact, crate::test_support::document_texture(&exact));
             assert!(quality(&display_pixels(&incremental), &reference, plan, incremental.scale_display.as_ref().unwrap().texture().format())[2] < 2e-5, "{blend:?} state={state} partial update");
             assert!(incremental.metrics.composited_pixels - work < plan.bounds.area(), "partial update stays bounded");
