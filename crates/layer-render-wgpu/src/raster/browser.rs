@@ -99,10 +99,10 @@ impl RasterCapture {
                         .buffer
                         .get_mapped_range(..)
                         .map_err(|e| e.to_string())?;
+                    chunk.resolve_comparisons(&mapped)?;
                     let mut bytes=Vec::with_capacity(size as usize);
                     let mut offset=0;
                     for entry in &chunk.entries {
-                        if let Some((at,comparison))=&entry.comparison {comparison.resolve(&mapped[*at as usize..*at as usize+crate::native_tiles::comparison::RESULT_BYTES as usize])?;}
                         bytes.extend_from_slice(&mapped[offset..offset+entry.size as usize]);
                         offset+=entry.size as usize;
                     }

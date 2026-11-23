@@ -51,12 +51,13 @@ impl CanonicalReadback {
     pub fn copy(&self,encoder:&mut wgpu::CommandEncoder,buffer:&wgpu::Buffer,offset:u64) {
         encoder.copy_buffer_to_buffer(self.storage.buffer(),self.storage.offset()+self.index as u64*STRIDE,buffer,offset,RESULT_BYTES);
     }
-    pub fn resolve(&self,bytes:&[u8])->Result<(),String> {
+    pub fn changed(&self,bytes:&[u8])->Result<bool,String> {
         if bytes.len()!=RESULT_BYTES as usize {return Err("Invalid canonical comparison size".into());}
         let mut changed=false;
         for word in bytes.chunks_exact(4) {
             match u32::from_le_bytes(word.try_into().unwrap()) {0=>{},1=>changed=true,_=>return Err("Invalid canonical comparison result".into()),}
         }
-        self.name.resolve(changed).map_err(str::to_owned)
+        Ok(changed)
     }
+    pub fn resolve(&self,changed:bool)->Result<(),String> {self.name.resolve(changed).map_err(str::to_owned)}
 }
