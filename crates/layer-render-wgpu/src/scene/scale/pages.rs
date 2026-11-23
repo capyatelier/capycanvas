@@ -1567,13 +1567,18 @@ impl Cache {
     }
     pub(super) fn presented_matches_expected(&self)->Option<bool> {
         if self.gesture.is_some() {return Some(self.cells.lock().unwrap().cells.iter().all(|cell|cell.derived || !cell.queued));}
-        let store=self.pages.lock().unwrap();let Some(frame)=store.expected() else {return Some(false);};
+        let Some(frame)=self.pages.lock().unwrap().expected().cloned() else {return Some(false);};
+        self.presents(&frame)
+    }
+    fn presents(&self,frame:&Arc<SignatureFrame>)->Option<bool> {
         let Some(expression)=self.graph.content.as_ref().or(self.graph.root.as_ref()) else {return Some(false);};
-        let input_level=self.required_input_level();
         let key=self.page_key(expression.clone(),self.plan.bounds);
         if let Some(matches)=self.pixels.committed_root().and_then(|root|root.current_at(frame,&key)) {return Some(matches);}
         let held=self.pixels.committed_root().and_then(|root|root.authored.map(|authored|(authored,root.versions.as_slice())));
-        publication_matches(frame,&key,self.plan.bounds,input_level,held)
+        publication_matches(frame,&key,self.plan.bounds,self.required_input_level(),held)
+    }
+    pub(super) fn hold_current(&mut self,frame:&Arc<SignatureFrame>) {
+        if self.presents(frame)==Some(true) {self.pixels.hold_current(frame);}
     }
     pub(super) fn page_key(&self, expression: graph::Node, region: PixelRect) -> Key {
         let span=PAGE_SIZE<<self.plan.level;

@@ -1075,8 +1075,7 @@ mod tests {
         assert!(error[2]<2e-5,"8192-wide Navigator must match selected contents over its whole coverage: {error:?}, first(navigator_xy,actual,expected)={first:?}, first_document_xy={first_document:?}, mismatching_pixels(x<4096,x>=4096)={halves:?}");
     }
 
-    fn replaced_base()->(Document,Document,Arc<layer_core::color::source::SourceImage>) {
-        let extent=[512,256];
+    fn replaced_base(extent:[u32;2])->(Document,Document,Arc<layer_core::color::source::SourceImage>) {
         let mut doc=Document::new(layer_core::authored::PortableId::random(),extent[0],extent[1],
             layer_core::DocumentNames {paint:"Revision window".into(),paper:"Paper".into()});
         let target=doc.working.target.unwrap();let owner=doc.working.occurrence.unwrap();
@@ -1092,18 +1091,20 @@ mod tests {
         let mut changed=doc.clone();changed.artwork.paint.get_mut(paint).unwrap().base=Some(layer_core::authored::PaintBase::new(replacement.clone().into()));
         (doc,changed,replacement)
     }
-    fn prepare_first_replacement_tile(r:&mut WgpuRasterizer,replacement:&Arc<layer_core::color::source::SourceImage>)->crate::test_support::GatedStore {
+    fn prepare_replacement_tiles(r:&mut WgpuRasterizer,replacement:&Arc<layer_core::color::source::SourceImage>,tiles:&[[u32;2]])->crate::test_support::GatedStore {
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        let pixels=crate::prepare_image_tile(replacement,[0;2],r.device.working_space(),&r.device.source_samples,None).unwrap();
-        let tile=Scene::decode_prepared_for(r,&mut encoder,replacement,[0;2],pixels,crate::scene::sources::SourceUse::Exact,crate::residency::Class::Visible).unwrap();
-        Scene::promote_source(r,&mut encoder,tile).unwrap();
+        for coordinate in tiles {
+            let pixels=crate::prepare_image_tile(replacement,*coordinate,r.device.working_space(),&r.device.source_samples,None).unwrap();
+            let tile=Scene::decode_prepared_for(r,&mut encoder,replacement,*coordinate,pixels,crate::scene::sources::SourceUse::Exact,crate::residency::Class::Visible).unwrap();
+            Scene::promote_source(r,&mut encoder,tile).unwrap();
+        }
         r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(r);
         crate::test_support::GatedStore::new(&layer_core::raster_storage::RetainedTiles::from_sources([replacement.as_ref()]),false)
     }
 
     #[test]
     fn an_authored_window_does_not_wait_for_a_margin_cell_outside_the_view() {
-        let (doc,changed,replacement)=replaced_base();let extent=doc.composition().size;
+        let (doc,changed,replacement)=replaced_base([512,256]);let extent=doc.composition().size;
         let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         let mut frame=FramePacket {blend_space:doc.composition().blend,composite_all:false,..packet(doc.scene(),extent)};
         frame.view.width_px=256;frame.view.height_px=256;
@@ -1111,7 +1112,7 @@ mod tests {
         assert!(r.scale_display.as_ref().unwrap().plan.bounds==PixelRect::full(extent),"the view's plan keeps the second cell as margin");
         let mut presenter=crate::test_support::float_presenter(&r);
         let (output,view)=create_color_target(&r.device,[256,256],"margin-cell authored publication");
-        let store=prepare_first_replacement_tile(&mut r,&replacement);
+        let store=prepare_replacement_tiles(&mut r,&replacement,&[[0;2]]);
         let next=FramePacket {scene:changed.scene(),..frame};
         crate::test_support::submit_ready(&mut r,next).unwrap();crate::test_support::complete(&r);store.gate.entered();
         crate::test_support::submit_ready(&mut r,next).unwrap();crate::test_support::complete(&r);
@@ -1128,7 +1129,7 @@ mod tests {
     #[test]
     fn a_held_decode_blocks_display_frames_until_its_completion_wakes_one() {
         use layer_render::{CanvasRenderer,FrameDemand};
-        let (doc,changed,replacement)=replaced_base();let extent=doc.composition().size;
+        let (doc,changed,replacement)=replaced_base([512,256]);let extent=doc.composition().size;
         let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         let (wake,woken)=std::sync::mpsc::channel();let wake=std::sync::Mutex::new(wake);
         r.set_preparation_wake(Arc::new(move||{let _=wake.lock().unwrap().send(());}));
@@ -1160,7 +1161,7 @@ mod tests {
 
     #[test]
     fn a_root_window_keeps_its_previous_revision_until_every_visible_page_matches() {
-        let (doc,changed,replacement)=replaced_base();let extent=doc.composition().size;
+        let (doc,changed,replacement)=replaced_base([512,256]);let extent=doc.composition().size;
         let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         let frame=FramePacket {blend_space:doc.composition().blend,composite_all:false,..packet(doc.scene(),extent)};
         submit_settled(&mut r,frame);crate::test_support::complete(&r);
@@ -1169,7 +1170,7 @@ mod tests {
         presenter.present(&r,&view,frame.view,[0.;4]).unwrap();let previous=float_pixels(&r,&output);
         let cache=r.scale_display.as_ref().unwrap();
         let receipt=crate::test_support::published_coverage(crate::test_support::coverage_hash(&cache.geometry)).unwrap().receipt;
-        let store=prepare_first_replacement_tile(&mut r,&replacement);
+        let store=prepare_replacement_tiles(&mut r,&replacement,&[[0;2]]);
         let next=FramePacket {scene:changed.scene(),..frame};
         crate::test_support::submit_ready(&mut r,next).unwrap();crate::test_support::complete(&r);store.gate.entered();
         for index in 0..=2 {
@@ -1202,5 +1203,41 @@ mod tests {
             freshness_difference(&actual,&expected,display_mips::Plan::at(extent,0),output.format()));
         assert!(crate::test_support::max_error(&actual,&previous)>0.5,"the complete new revision must really replace the previous picture");
     }
-}
+    fn navigator_texel(r:&WgpuRasterizer,[x,y]:[u32;2])->[f32;4] {
+        let plan=r.navigator.cache.as_ref().unwrap().plan;
+        pixels(r)[(((y-plan.bounds.min_y())>>plan.level)*plan.size[0]+((x-plan.bounds.min_x())>>plan.level)) as usize]
+    }
+    fn stroke_batch(target:SourceTarget,style:&layer_render::DabStyle,dab:&layer_render::Dab,start:bool,end:bool)->DabBatch {
+        DabBatch {stroke_start:start,stroke_end:end,..crate::test_support::dab_batch(target,style.clone(),dab.bounds())}
+    }
 
+    #[test]
+    fn a_stroke_admitted_beside_cells_without_a_current_record_leaves_the_navigator_pending_until_it_shows_them() {
+        let (doc,changed,replacement)=replaced_base([1024,256]);let extent=doc.composition().size;let target=doc.working.target.unwrap();
+        let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        layer_render::CanvasRenderer::set_working_layer(&mut r,doc.working.occurrence);
+        let frame=FramePacket {blend_space:doc.composition().blend,composite_all:false,..packet(doc.scene(),extent)};
+        submit_settled(&mut r,frame);crate::test_support::complete(&r);
+        r.scale_display.as_ref().unwrap().evict_window(PixelRect::new(512,0,1024,256));
+        let store=prepare_replacement_tiles(&mut r,&replacement,&[[0,0],[1,0]]);
+        let next=FramePacket {scene:changed.scene(),time_seconds:1.,..frame};
+        crate::test_support::submit_ready(&mut r,next).unwrap();crate::test_support::complete(&r);store.gate.entered();
+        let style=crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::GPen);
+        let dab=super::super::tests::contact::material_dab(100.,128.,&style);
+        let send=|r:&mut WgpuRasterizer,end:bool,time:f32| {
+            let batch=stroke_batch(target,&style,&dab,!end,end);
+            crate::test_support::submit_ready(r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),time_seconds:time,..next}).unwrap();
+            crate::test_support::complete(r);
+        };
+        send(&mut r,false,2.);
+        assert!(r.scale_display.as_ref().unwrap().contact_id().is_some(),"the stroke enters contact beside the gated cells");
+        let shown=navigator_texel(&r,[896,128]);
+        assert!(r.navigator.pending() && r.navigator.content_revision().is_none() || shown[0]>shown[2],
+            "the Navigator reports a current picture that shows the gated cell's old color: {shown:?}");
+        store.gate.release();
+        send(&mut r,true,3.);
+        submit_settled(&mut r,FramePacket {time_seconds:4.,..next});
+        let shown=navigator_texel(&r,[896,128]);
+        assert!(!r.navigator.pending() && shown[0]>shown[2],"once the cell's input arrives the Navigator shows its new color: {shown:?}");
+    }
+}

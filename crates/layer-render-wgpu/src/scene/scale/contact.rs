@@ -336,7 +336,7 @@ impl Cache {
         let drawn_directly=drawn_directly(&root,&tainted);
         let predicted=frame.preview_for(target).and_then(|preview|preview.contact_outputs().map(Iterator::collect)).unwrap_or_default();
         static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);
-        self.pixels.hold_current(&frame);
+        self.hold_current(&frame);
         let tip=pointwise_reach(packet,plan,&frame,target,drawn_directly,&[DabBatchKind::Preview]);
         let mut contact=Contact {id:NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed),stroke,target,plan:self.plan,source,window,root,tiled,frame,composed,predicted,
             previewed:r.preview_input_tiles(target),next:None,
