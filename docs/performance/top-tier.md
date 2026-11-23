@@ -7481,3 +7481,29 @@ builds miss the desktop pacing target. This comparison does not qualify a
 reference tablet or tier canvas.
 [Gate data, confirmations and profiles](../../artifacts/fractional-seams/round-2/performance/results.md)
 keep every run.
+
+## Wet and Watercolor display-consistency fixes
+
+Measured 2026-11-23 against `9c2b6c3ea`, before the display-consistency audit
+fixes, with ABBA blocks of three six-second contacts per arm at 512 px and
+thermal status 0. Watercolor rows are main at `6061862ce`. Wet rows add the
+near Wet kernels that compile without gathered taps; they were measured
+together with parked Watercolor-only patches that Wet brushes never run. Raw
+runs: `artifacts/wide-pen-stale-cells/brief26-trials/`.
+
+| MovinkPad Pro 14, 61 MP at Fit, 120 Hz | Control → main, completed updates/s |
+| --- | --- |
+| Watercolor Wash, near | 104.80 → 96.50 |
+| Wet Watercolor, near | 100.67 → 93.83 |
+| Wet Watercolor, fast pull | 12.32 → 13.89 |
+| Wet Round | 205.00 → 193.32 |
+| Opaque Gouache | 129.56 → 123.44 |
+| Select Wet Round, ms to first ink | 363.92 → 373.94 |
+| Select Opaque Gouache, ms to first ink | 450.72 → 455.29 |
+
+Wet Round and Opaque Gouache meet 120 Hz on both builds; the Watercolor rows
+miss it on both. The remaining Watercolor loss comes from the composite reading
+its near wetness band on every pixel, which the wet-edge fix requires. A tiled
+composite that shared those reads was 22–47% slower on these tablets and is
+parked in `artifacts/wide-pen-stale-cells/parked-lane-g/`. Gouache now reads
+paint the control left out beyond the pages around its last contact.

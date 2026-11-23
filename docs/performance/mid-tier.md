@@ -2354,3 +2354,27 @@ pan uses FIFO clears, so the entire difference cannot be assigned to blending.
 Reducing this additional cost remains follow-up work. The longer post-presenter
 waits remain unattributed; these results do not qualify the fade's frame rate.
 Raw runs: `/mnt/localssd/capycanvas7-issue24-impl/switch-transition-android/`.
+
+## Wet and Watercolor display-consistency fixes
+
+Measured 2026-11-23 against `9c2b6c3ea`, before the display-consistency audit
+fixes, with ABBA blocks of three six-second contacts per arm at 512 px and
+thermal status 0. Watercolor rows are main at `6061862ce`. Wet rows add the
+near Wet kernels that compile without gathered taps; they were measured
+together with parked Watercolor-only patches that Wet brushes never run. Raw
+runs: `artifacts/wide-pen-stale-cells/brief26-trials/`.
+
+| MovinkPad 11, 24 MP at Fit, 90 Hz | Control → main, completed updates/s |
+| --- | --- |
+| Watercolor Wash, near | 17.80 → 15.14 |
+| Wet Watercolor, near | 17.30 → 14.73 |
+| Wet Watercolor, fast pull | 2.00 → 1.83 |
+| Wet Round | 41.09 → 39.93 |
+| Opaque Gouache | 14.29 → 13.48 |
+
+Every row misses 90 Hz on both builds. The remaining Watercolor loss comes from
+the composite reading its near wetness band on every pixel, which the wet-edge
+fix requires. A tiled composite that shared those reads was 22–47% slower on
+these tablets and is parked in `artifacts/wide-pen-stale-cells/parked-lane-g/`.
+Gouache now reads paint the control left out beyond the pages around its last
+contact.

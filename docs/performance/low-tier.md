@@ -3459,3 +3459,27 @@ reference mid/top tiers. The final report at
 rows, intervals, class/page attribution, desktop and startup/Windows results,
 pixel exceptions and cleanup. All tablets are released; TCL's prior density
 override 272 is restored.
+
+## Wet and Watercolor display-consistency fixes
+
+Measured 2026-11-23 against `9c2b6c3ea`, before the display-consistency audit
+fixes, with ABBA blocks of three six-second contacts per arm at 512 px and
+thermal status 0. Watercolor rows are main at `6061862ce`. Wet rows add the
+near Wet kernels that compile without gathered taps; they were measured
+together with parked Watercolor-only patches that Wet brushes never run. Raw
+runs: `artifacts/wide-pen-stale-cells/brief26-trials/`.
+
+| TCL TAB 11 Gen 2, 12 MP at Fit, 60 Hz | Control → main, completed updates/s |
+| --- | --- |
+| Watercolor Wash, near | 7.47 → 6.31 |
+| Wet Watercolor, near | 7.39 → 6.31 |
+| Wet Watercolor, fast pull | 1.16 → 1.00 |
+| Wet Round | 7.07 → 7.14 |
+| Opaque Gouache | 1.58 → 1.50 |
+
+Every row misses 60 Hz on both builds. The remaining Watercolor loss comes from
+the composite reading its near wetness band on every pixel, which the wet-edge
+fix requires. A tiled composite that shared those reads was 22–47% slower on
+these tablets and is parked in `artifacts/wide-pen-stale-cells/parked-lane-g/`.
+Gouache now reads paint the control left out beyond the pages around its last
+contact.
