@@ -155,6 +155,10 @@ pub enum ToolOption {
         columns: Option<u8>,
         #[serde(skip_serializing_if = "Option::is_none")]
         beside: Option<&'static str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        before: Option<&'static str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        heading: Option<std::sync::Arc<str>>,
         items: Vec<ToolSetItem>,
     },
     Action {
@@ -164,6 +168,9 @@ pub enum ToolOption {
 }
 
 impl ToolOption {
+    pub fn anchor(&self) -> Option<&'static str> {
+        match self { Self::Choice { beside, before, .. } => beside.or(*before), _ => None }
+    }
     /// Values, selection and presentation copy do not invalidate native editors.
     pub fn same_schema(&self, other: &Self) -> bool {
         match (self, other) {
@@ -184,6 +191,8 @@ impl ToolOption {
                     labeled: g,
                     columns: c,
                     beside: e,
+                    before: m,
+                    heading: k,
                     items: x,
                     ..
                 },
@@ -193,12 +202,14 @@ impl ToolOption {
                     labeled: h,
                     columns: d,
                     beside: f,
+                    before: n,
+                    heading: l,
                     items: y,
                     ..
                 },
             ) => {
                 a == b
-                    && p == q && g == h && c == d && e == f
+                    && p == q && g == h && c == d && e == f && m == n && k.is_some() == l.is_some()
                     && x.len() == y.len()
                     && x.iter()
                         .zip(y)
@@ -343,6 +354,8 @@ impl UiState {
                 labeled: false,
                 columns: None,
                 beside: None,
+                before: None,
+                heading: None,
                 items,
             })
         };
@@ -400,10 +413,15 @@ impl UiState {
             if group == ToolActionGroup::ColorMixing { grouped_choices.extend(option); }
             else { options.extend(option); }
         }
-        options.extend(self.tool_extra.iter().filter(|option| !matches!(option,ToolOption::Choice {id:"gradient-shape",..})).cloned());
+        let (mut anchored, extras): (Vec<_>, Vec<_>) = self.tool_extra.iter()
+            .filter(|option| !matches!(option,ToolOption::Choice {id:"gradient-shape",..})).cloned().partition(|option| option.anchor().is_some());
+        options.extend(extras);
         let details = options.len();
         let mut fields = self.tool_settings.iter().peekable();
         while let Some(field) = fields.next() {
+            while let Some(index) = anchored.iter().position(|option| option.anchor() == Some(field.id)) {
+                options.push(anchored.remove(index));
+            }
             if field.id == "tonal_lower" && fields.peek().is_some_and(|f| f.id == "tonal_upper") {
                 options.push(ToolOption::Range {
                     id: "tonal",
@@ -414,12 +432,15 @@ impl UiState {
                 options.push(ToolOption::Numeric(field.clone()));
             }
         }
+        options.extend(anchored);
         if !grouped_choices.is_empty() {
             options.extend(grouped_choices);
             options[details..].sort_by_key(|option| crate::tool_settings::group_order(match option {
                 ToolOption::Numeric(field) => field.group_id,
                 ToolOption::Range { bounds, .. } => bounds[0].group_id,
                 ToolOption::Choice { id: "color-mixing", .. } => MessageId::TOOL_SETTING_GROUP_MIXING.key(),
+                choice @ ToolOption::Choice { .. } => choice.anchor()
+                    .and_then(|id| self.tool_settings.iter().find(|field| field.id == id)).map_or("", |field| field.group_id),
                 _ => "",
             }));
         }

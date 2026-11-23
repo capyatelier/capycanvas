@@ -12,9 +12,9 @@ async function execute({id,request,storagePort:receivedPort}) {
   const retire=()=>outputs.size===0 && (instance?.memory.buffer.byteLength || 0)>256*1024*1024;
   try {
     if (request.operation === 'alpha-image') {
-      const {size}=request.metadata, alpha=request.buffers[0];
-      if (!Number.isInteger(size) || size<1 || size>192 || alpha.length!==size*size) throw Error('Invalid brush preview');
-      const pixels=new ImageData(size,size);
+      const {width,height}=request.metadata, alpha=request.buffers[0];
+      if (![width,height].every(side=>Number.isInteger(side) && side>=1 && side<=512) || alpha.length!==width*height) throw Error('Invalid brush preview');
+      const pixels=new ImageData(width,height);
       for(let i=0;i<alpha.length;i++) {
         pixels.data[i*4]=pixels.data[i*4+1]=pixels.data[i*4+2]=255; pixels.data[i*4+3]=alpha[i];
       }

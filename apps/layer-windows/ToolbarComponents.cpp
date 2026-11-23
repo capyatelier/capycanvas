@@ -471,8 +471,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             }}))stampBusy=false;
     }
     void openPreview(J const& result,Imaging::WriteableBitmap const& bitmap){
-        auto size=int(num(result,L"size"));
-        if(!bitmap||size!=bitmap.PixelWidth()||size!=bitmap.PixelHeight()||!root.XamlRoot())return;
+        if(!bitmap||int(num(result,L"width"))!=bitmap.PixelWidth()||int(num(result,L"height"))!=bitmap.PixelHeight()||!root.XamlRoot())return;
         stamp=result;
         bitmap.Invalidate();
         if(preview&&preview.IsOpen()){stampImage.Source(bitmap);paintPreview();return;}

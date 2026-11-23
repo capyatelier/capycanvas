@@ -164,7 +164,7 @@ pub fn query(host: &mut NativeHost, json: &str) -> Result<CapyPreview, String> {
 fn stamp(host: &mut NativeHost, context: layer_ui::ToolbarContext, known_request: Option<u64>) -> Result<CapyPreview, String> {
     match host.session.toolbar_stamp(context, known_request) {
             Ok(Some(stamp)) => CapyPreview::packet(
-                json!({"result":{"size":stamp.size,"extent":stamp.extent,"request_id":stamp.request_id,"pending":stamp.pending},"error":null}),
+                json!({"result":{"width":stamp.width,"height":stamp.height,"extent":stamp.extent,"request_id":stamp.request_id,"pending":stamp.pending},"error":null}),
                 stamp.alpha,
             ),
             Ok(None) => CapyPreview::packet(json!({"result":{"pending":true},"error":null}), Vec::new()),
@@ -495,10 +495,10 @@ mod tests {
             let reply=crate::previews::copied_metadata(owned);
             assert!(reply["error"].is_null(), "{reply}");
             assert!(reply["result"].is_object(), "{reply}");
-            let size = reply["result"]["size"].as_u64().unwrap() as usize;
+            let pixels = reply["result"]["width"].as_u64().unwrap() * reply["result"]["height"].as_u64().unwrap();
             assert!(reply["result"]["extent"].as_f64().unwrap() > 0.);
             let bytes=crate::previews::copied_bytes(owned);let count=bytes.len();
-            assert_eq!(count, size * size);
+            assert_eq!(count as u64, pixels);
             assert!(bytes.iter().any(|&a| a > 0));
             let alpha = bytes;
             let (bubble, bubble_metadata) = loop {
@@ -511,7 +511,7 @@ mod tests {
                 assert!(std::time::Instant::now() < deadline, "GPU bubble stamp did not complete: {bubble_metadata}");
                 std::thread::sleep(std::time::Duration::from_millis(1));
             };
-            for field in ["size", "extent", "pending"] {
+            for field in ["width", "height", "extent", "pending"] {
                 assert_eq!(bubble_metadata["result"][field], reply["result"][field]);
             }
             assert!(bubble_metadata["result"]["request_id"].is_u64());

@@ -1,6 +1,8 @@
 use super::*;
-use layer_render::BrushStampRequest;
+use layer_render::{BrushStampRequest, MAX_BRUSH_STAMP_CONTACTS};
 use wgpu::util::DeviceExt;
+
+const MAX_STAMP_SIDE: u32 = 512;
 
 pub(super) struct BrushStamps {
     layout: wgpu::BindGroupLayout,
@@ -19,8 +21,8 @@ fn shader_source(flags:u32) -> Cow<'static,str> {
 
 impl BrushStamps {
     fn new(r: &WgpuRasterizer) -> Self {
-        let entries=[0,1,2,3].map(|binding| bindings::buffer(binding,wgpu::ShaderStages::COMPUTE,
-            match binding {1=>wgpu::BufferBindingType::Storage {read_only:true},3=>wgpu::BufferBindingType::Storage {read_only:false},
+        let entries=[0,1,2,3,4].map(|binding| bindings::buffer(binding,wgpu::ShaderStages::COMPUTE,
+            match binding {1|4=>wgpu::BufferBindingType::Storage {read_only:true},3=>wgpu::BufferBindingType::Storage {read_only:false},
                 _=>wgpu::BufferBindingType::Uniform},false,None));
         let layout=bindings::layout(&r.device,"brush stamp",&entries);
         let pipeline_layout=r.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -32,7 +34,8 @@ impl BrushStamps {
 
     fn request(&mut self,r:&mut WgpuRasterizer,id:u64,request:&BrushStampRequest)->Result<bool,GpuRasterError> {
         if self.pending.is_some() {return Ok(false);}
-        if request.dabs.len()>64 || request.bounds.is_empty()
+        let [width,height]=request.size;
+        if request.dabs.len()>MAX_BRUSH_STAMP_CONTACTS || request.bounds.is_empty() || width%4!=0 || !(4..=MAX_STAMP_SIDE).contains(&width) || !(1..=MAX_STAMP_SIDE).contains(&height)
             || [request.bounds.min.x,request.bounds.min.y,request.bounds.max.x,request.bounds.max.y]
                 .iter().any(|v|!v.is_finite())
             || request.shape_strength.is_some_and(|v|!(0.0..=1.0).contains(&v)) {return Err(GpuRasterError::InvalidImage);}
@@ -63,23 +66,26 @@ impl BrushStamps {
         let mut dabs:Vec<DabGpu>=request.dabs.iter().copied().map(DabGpu::from).collect();
         dry_material::prepare_geometry(&request.style,&mut dabs);
         let mut contacts=dab_bytes(&dabs).to_vec();
-        contacts.resize(64*mem::size_of::<DabGpu>(),0);
-        let style=StyleGpu::for_brush([192;2],&request.style,0,request.dabs.len() as u32,&r.device,r.paper_style(&request.style));
+        contacts.resize(MAX_BRUSH_STAMP_CONTACTS*mem::size_of::<DabGpu>(),0);
+        let mut extents:Vec<u8>=request.dabs.iter().map(|dab|dab.bounds())
+            .flat_map(|bounds|[bounds.min.x,bounds.min.y,bounds.max.x,bounds.max.y]).flat_map(f32::to_ne_bytes).collect();
+        extents.resize(MAX_BRUSH_STAMP_CONTACTS*4*mem::size_of::<f32>(),0);
+        let style=StyleGpu::for_brush(request.size,&request.style,0,request.dabs.len() as u32,&r.device,r.paper_style(&request.style));
         let params=[request.bounds.min.x.to_bits(),request.bounds.min.y.to_bits(),
             request.bounds.max.x.to_bits(),request.bounds.max.y.to_bits(),request.dabs.len() as u32,
-            u32::from(request.shape_strength.is_some()),request.shape_strength.unwrap_or(1.).to_bits(),0];
+            u32::from(request.shape_strength.is_some()),request.shape_strength.unwrap_or(1.).to_bits(),width,height,0,0,0];
         let params:Vec<u8>=params.iter().flat_map(|v|v.to_ne_bytes()).collect();
         let inputs=[(style_bytes(&style),wgpu::BufferUsages::UNIFORM),(contacts.as_slice(),wgpu::BufferUsages::STORAGE),
-            (params.as_slice(),wgpu::BufferUsages::UNIFORM)].map(|(contents,usage)|
+            (params.as_slice(),wgpu::BufferUsages::UNIFORM),(extents.as_slice(),wgpu::BufferUsages::STORAGE)].map(|(contents,usage)|
             r.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label:Some("brush stamp input"),contents,usage,
             }));
-        let size=192*192;
+        let size=u64::from(width*height);
         let output=r.device.create_buffer(&wgpu::BufferDescriptor {
             label:Some("brush stamp output"),size,usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_SRC,mapped_at_creation:false,
         });
-        let mut entries:Vec<_>=inputs.iter().enumerate().map(|(i,buffer)|wgpu::BindGroupEntry {
-            binding:i as u32,resource:buffer.as_entire_binding(),
+        let mut entries:Vec<_>=inputs.iter().zip([0,1,2,4]).map(|(buffer,binding)|wgpu::BindGroupEntry {
+            binding,resource:buffer.as_entire_binding(),
         }).collect();
         entries.push(wgpu::BindGroupEntry {binding:3,resource:output.as_entire_binding()});
         let binding=r.device.create_bind_group(&wgpu::BindGroupDescriptor {label:Some("brush stamp"),layout:&self.layout,entries:&entries});
@@ -91,12 +97,12 @@ impl BrushStamps {
             let mut pass=encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {label:Some("brush stamp"),timestamp_writes:None});
             pass.set_pipeline(&pipeline);pass.set_bind_group(0,&binding,&[]);
             pass.set_bind_group(1,&r.texture_sets.iter().find(|set|set.key==key).unwrap().bind_group,&[]);
-            pass.dispatch_workgroups(1,192,1);
+            pass.dispatch_workgroups((width/4).div_ceil(64),height,1);
         }
         encoder.copy_buffer_to_buffer(&output,0,&readback,0,size);
         r.last_submission=encoder.submit(&r.queue);
         let tx=self.tx.clone();
-        raster::map_then(&r.device,None,&readback,size,move|data|Ok(ReadbackImage {request_id:id,width:192,height:192,stride:192,bytes:data.to_vec()}),
+        raster::map_then(&r.device,None,&readback,size,move|data|Ok(ReadbackImage {request_id:id,width,height,stride:width,bytes:data.to_vec()}),
             move|result|{let _=tx.send(result);});
         self.pending=Some(readback);
         Ok(true)

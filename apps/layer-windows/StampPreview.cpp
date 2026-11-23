@@ -28,9 +28,9 @@ bool RequestStamp(PreviewTransport const& transport,J const& query,winrt::Window
                 auto result=packet?object(J::Parse(to_hstring(NativeString(capy_preview_metadata(packet.get())).get())),L"result"):J{};
                 auto count=capy_preview_length(packet.get());
                 if(!count){reply(result,nullptr);return;}
-                auto size=int(num(result,L"size"));
-                if(size<=0||size>192||count!=size_t(size)*size_t(size))throw hresult_invalid_argument();
-                Imaging::WriteableBitmap bitmap(size,size);auto buffer=bitmap.PixelBuffer();uint8_t* pixels=nullptr;
+                auto width=int(num(result,L"width")),height=int(num(result,L"height"));
+                if(width<=0||height<=0||width>512||height>512||count!=size_t(width)*size_t(height))throw hresult_invalid_argument();
+                Imaging::WriteableBitmap bitmap(width,height);auto buffer=bitmap.PixelBuffer();uint8_t* pixels=nullptr;
                 check_hresult(buffer.as<::Windows::Storage::Streams::IBufferByteAccess>()->Buffer(&pixels));
                 if(buffer.Capacity()!=count*4)throw hresult_invalid_argument();
                 ConvertStamp(queue,std::move(packet),result,ink,reply,agile_ref(bitmap),agile_ref(buffer),pixels,count);

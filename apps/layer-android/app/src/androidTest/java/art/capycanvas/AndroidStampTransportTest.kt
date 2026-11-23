@@ -61,7 +61,7 @@ class AndroidStampTransportTest {
             val (metadata,mask)=ready(owner)
             assertFalse("Stamp metadata must not carry a JSON alpha array",metadata.has("alpha"))
             assertArrayEquals("The typed mask equals the canonical JSON-query mask",bytes,mask)
-            assertEquals(canonical.getInt("size"),metadata.getInt("size"))
+            assertEquals(canonical.getInt("width"),metadata.getInt("width"));assertEquals(canonical.getInt("height"),metadata.getInt("height"))
             assertEquals(canonical.getDouble("extent"),metadata.getDouble("extent"),0.0)
             val (known,empty)=checkNotNull(raw(owner,metadata.getLong("request_id")))
             assertEquals(metadata.getLong("request_id"),known.getLong("request_id"))

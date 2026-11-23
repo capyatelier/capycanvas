@@ -374,6 +374,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             segmented: true, labeled: true,
             columns: None,
             beside: None,
+            before: None, heading: None,
             items: TonalOptions::choices(self.engine.document().composition().color.depth.is_float())
                 .map(|(index, label, icon)| ToolSetItem { enabled: true, disabled_reason: None,
                     label: self.localization().text(label),

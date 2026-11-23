@@ -20,6 +20,7 @@ pub const MAX_RING_SETTINGS: usize = 6;
 pub const RING_TRACK: f32 = 4.;
 pub const HALO_RINGS: [f32; 2] = [53., 88.];
 pub const HALO_BANDS: [f32; 2] = [28., 28.];
+pub const TAPER_STAMP: [f32; 2] = [2. * HALO_RINGS[0] - HALO_BANDS[0], HALO_RINGS[0] - HALO_BANDS[0] * 0.5];
 pub const RING_ICON: f32 = 21.;
 pub const CHOOSER_ITEM: f32 = 44.;
 pub const CHOOSER_RING: f32 = 84.;
@@ -950,7 +951,7 @@ pub struct BubbleButton {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct BubbleStamp {
     pub center: [f32; 2],
-    pub diameter: f32,
+    pub size: [f32; 2],
     pub color: layer_core::color::RgbColor,
 }
 

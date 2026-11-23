@@ -26,7 +26,7 @@ fn option(value:&ToolOption)->Value {
         ToolOption::Numeric(value)=>setting(value),
         ToolOption::Range {id,label,bounds}=>json!([id,label,bounds.iter().map(setting).collect::<Vec<_>>()]),
         ToolOption::Gradient(value)=>property(value),
-        ToolOption::Choice {id,label,labeled,segmented,columns,beside,items}=>json!([id,label,labeled,segmented,columns,beside,
+        ToolOption::Choice {id,label,labeled,segmented,columns,beside,before,heading,items}=>json!([id,label,labeled,segmented,columns,beside,before,heading,
             items.iter().map(|item|json!([item.label,item.icon,item.preview.is_some()])).collect::<Vec<_>>()]),
         ToolOption::Action {state,checkable}=>json!([state.id,state.label,state.icon,checkable]),
     }

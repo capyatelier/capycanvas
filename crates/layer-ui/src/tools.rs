@@ -671,8 +671,8 @@ impl ToolMemory {
     }
     pub fn set_override(&mut self, id: u32, setting: &str, value: f32, localizer: &Localizer) -> Result<(), String> {
         let defaults = layer_core::default_brush(preset(id)?);
-        crate::tool_settings::edit(&defaults, setting, value, localizer)?;
-        let default = crate::tool_settings::value(&defaults, setting).ok_or("Unknown tool setting")?;
+        crate::tool_settings::edit(id, &defaults, setting, value, localizer)?;
+        let default = crate::tool_settings::value(id, &defaults, setting).ok_or("Unknown tool setting")?;
         if value == default {
             if let Some(values) = self.overrides.get_mut(&id) {
                 values.remove(setting);
@@ -708,10 +708,7 @@ impl ToolMemory {
             }
         }
         for (&id, values) in &self.overrides {
-            let mut brush = layer_core::default_brush(preset(id)?);
-            for (setting, &value) in values {
-                brush = crate::tool_settings::edit_value(&brush, setting, value)?;
-            }
+            Self::configured(id, values)?;
         }
         Ok(())
     }
@@ -748,18 +745,20 @@ impl ToolMemory {
         let defaults = layer_core::default_brush(preset);
         if !defaults.draws_vector_lines() { return None; }
         self.overrides.get(&(preset as u32))?.iter()
-            .find(|(setting, value)| crate::tool_settings::edit_value(&defaults, setting, **value).is_ok_and(|brush| !brush.draws_vector_lines()))
+            .find(|(setting, value)| crate::tool_settings::edit_value(preset as u32, &defaults, setting, **value).is_ok_and(|brush| !brush.draws_vector_lines()))
             .map(|(setting, _)| setting.as_str())
     }
     pub fn brush(&self, preset: DefaultBrushPreset) -> BrushSnapshot {
-        let mut brush = layer_core::default_brush(preset);
-        if let Some(values) = self.overrides.get(&(preset as u32)) {
-            for (setting, &value) in values {
-                brush = crate::tool_settings::edit_value(&brush, setting, value)
-                    .expect("validated workspace brush override");
-            }
-        }
-        brush
+        self.overrides.get(&(preset as u32)).map_or_else(
+            || layer_core::default_brush(preset),
+            |values| Self::configured(preset as u32, values).expect("validated workspace brush override"),
+        )
+    }
+    fn configured(id: u32, values: &BTreeMap<String, f32>) -> Result<BrushSnapshot, crate::WorkspaceValidationError> {
+        values.iter().filter(|(setting, _)| crate::tool_settings::reads(id, setting)).try_fold(
+            layer_core::default_brush(preset(id)?),
+            |brush, (setting, &value)| crate::tool_settings::edit_value(id, &brush, setting, value),
+        )
     }
 }
 

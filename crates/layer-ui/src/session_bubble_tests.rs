@@ -10,7 +10,7 @@ fn desk() -> UiSession<Recorder> {
     s
 }
 
-fn act(s: &mut UiSession<Recorder>, action: BubbleAction) -> Result<UiChange, String> {
+fn act<R: CanvasRenderer>(s: &mut UiSession<R>, action: BubbleAction) -> Result<UiChange, String> {
     s.dispatch(UiAction::Bubble { action })
 }
 
@@ -51,7 +51,7 @@ fn reopening_layers_card_sizes_current_rows_from_intrinsic_measurements() {
     assert_eq!(view(&s,id).card.unwrap().metrics, None);
 }
 
-fn contact(s: &mut UiSession<Recorder>, grab: BubbleGrab, phase: ContactPhase, position: [f32; 2]) -> Result<UiChange, String> {
+fn contact<R: CanvasRenderer>(s: &mut UiSession<R>, grab: BubbleGrab, phase: ContactPhase, position: [f32; 2]) -> Result<UiChange, String> {
     act(s, BubbleAction::Drag { grab, phase, position, viewport: VIEW })
 }
 
@@ -177,13 +177,13 @@ fn bubble_pickup_keeps_drawer_surfaces_and_pending_contacts_out_of_canvas() {
     assert!(s.require_workspace_idle().is_ok());
 }
 
-fn drag(s: &mut UiSession<Recorder>, grab: BubbleGrab, from: [f32; 2], to: [f32; 2]) {
+fn drag<R: CanvasRenderer>(s: &mut UiSession<R>, grab: BubbleGrab, from: [f32; 2], to: [f32; 2]) {
     contact(s, grab, ContactPhase::Down, from).unwrap();
     contact(s, grab, ContactPhase::Move, to).unwrap();
     contact(s, grab, ContactPhase::Up, to).unwrap();
 }
 
-fn take(s: &mut UiSession<Recorder>, grab: BubbleGrab, at: [f32; 2]) -> u32 {
+fn take<R: CanvasRenderer>(s: &mut UiSession<R>, grab: BubbleGrab, at: [f32; 2]) -> u32 {
     drag(s, grab, at, at);
     s.state.workspace.layout.bubbles.bubbles.last().unwrap().id
 }
@@ -715,11 +715,11 @@ fn bubble_wheel_rejects_invalid_contacts_and_preserves_transparent_and_mask_pain
     }
 }
 
-fn view(s: &UiSession<Recorder>, id: u32) -> BubbleView {
+fn view<R: CanvasRenderer>(s: &UiSession<R>, id: u32) -> BubbleView {
     s.bubbles().into_iter().find(|b| b.id == id).unwrap()
 }
 
-fn tap(s: &mut UiSession<Recorder>, id: u32) {
+fn tap<R: CanvasRenderer>(s: &mut UiSession<R>, id: u32) {
     act(s, BubbleAction::Tap { id, position: [0.; 2] }).unwrap();
 }
 
@@ -1459,7 +1459,7 @@ fn the_color_picker_comes_out_with_size_and_strength_always_open() {
     let stamp = view(&s, id).stamp.expect("a dab in the current color follows the contact");
     assert_eq!(stamp.center, ring.arc.point(0.8));
     assert_eq!(stamp.color, s.state.colors.definition());
-    assert!((stamp.diameter - size(&s) * s.state.camera.zoom).abs() < 1e-3, "{stamp:?}");
+    assert!((stamp.size[0] - size(&s) * s.state.camera.zoom).abs() < 1e-3 && stamp.size[0] == stamp.size[1], "{stamp:?}");
     act(&mut s, BubbleAction::Ring { id, phase: ContactPhase::Move, position: ring.arc.point(0.6) }).unwrap();
     assert_eq!(view(&s, id).stamp.unwrap().center, ring.arc.point(0.6));
     act(&mut s, BubbleAction::Ring { id, phase: ContactPhase::Up, position: ring.arc.point(0.6) }).unwrap();
@@ -2379,6 +2379,94 @@ fn halo_arcs_that_shape_the_dab_show_it_under_the_contact() {
 }
 
 #[test]
+fn taper_arcs_preview_a_fitted_tapered_line_while_dabs_keep_canvas_scale() {
+    let mut s = desk();
+    let id = take(&mut s, brush(DefaultBrushPreset::GPen), FAR);
+    tap(&mut s, id);
+    tap(&mut s, id);
+    s.dispatch(UiAction::Invoke { command: CommandId::TaperFixed }).unwrap();
+    for setting in ["taper_start_widths", "hardness"] {
+        if !view(&s, id).rings.iter().any(|r| r.setting == setting) {
+            act(&mut s, BubbleAction::ToggleRingSetting { brush: DefaultBrushPreset::GPen as u32, setting: setting.into() }).unwrap();
+        }
+    }
+    let press = |s: &mut UiSession<Recorder>, setting: &str| {
+        let ring = view(s, id).rings.into_iter().find(|r| r.setting == setting).unwrap();
+        act(s, BubbleAction::Ring { id, phase: ContactPhase::Down, position: ring.arc.point(0.4) }).unwrap();
+        let preview = (view(s, id).stamp.unwrap().size, s.preview_key(), s.stamp_request().unwrap().0);
+        act(s, BubbleAction::Ring { id, phase: ContactPhase::Up, position: ring.arc.point(0.4) }).unwrap();
+        preview
+    };
+    let mut dabs = Vec::new();
+    for (diameter, zoom) in [(10., 1.), (200., 1.), (200., 2.5)] {
+        s.dispatch(UiAction::SetBrushSize { value: diameter }).unwrap();
+        s.state.camera.zoom = zoom;
+        let (size, key, line) = press(&mut s, "taper_start_widths");
+        assert_eq!(size, TAPER_STAMP, "{diameter} px at {zoom}x");
+        let width = |dab: &layer_render::Dab| dab.radii[0].min(dab.radii[1]);
+        assert!((8..=192).contains(&line.dabs.len()), "{} contacts", line.dabs.len());
+        let middle = width(&line.dabs[line.dabs.len() / 2]);
+        assert!(width(&line.dabs[0]) < middle && width(line.dabs.last().unwrap()) < middle);
+        let (dab, dot_key, dot) = press(&mut s, "hardness");
+        assert!(dot.dabs.iter().all(|dab| dab.center == layer_core::Point { x: 0., y: 0. }));
+        assert_eq!((key.0, dot_key.0), (crate::toolbar_preview::StampPurpose::Taper, crate::toolbar_preview::StampPurpose::Dab));
+        assert!(key != dot_key);
+        dabs.push(dab[0]);
+    }
+    assert_eq!(dabs, [10., 200., 500.], "a dab's base follows the brush size and zoom; its image's own extent scales it");
+}
+
+#[test]
+fn taper_arc_stamps_follow_the_latest_value_one_request_at_a_time() {
+    let mut s = session_with(StampRecorder::default(), Platform::Gtk);
+    s.set_viewport(VIEW, [1200, 900]).unwrap();
+    let id = take(&mut s, brush(DefaultBrushPreset::GPen), FAR);
+    tap(&mut s, id);
+    tap(&mut s, id);
+    s.dispatch(UiAction::Invoke { command: CommandId::TaperFixed }).unwrap();
+    for setting in ["taper_start_widths", "hardness"] {
+        if !view(&s, id).rings.iter().any(|r| r.setting == setting) {
+            act(&mut s, BubbleAction::ToggleRingSetting { brush: DefaultBrushPreset::GPen as u32, setting: setting.into() }).unwrap();
+        }
+    }
+    let ring = |s: &UiSession<StampRecorder>, setting| view(s, id).rings.into_iter().find(|r| r.setting == setting).unwrap();
+    let taper = ring(&s, "taper_start_widths");
+    let poll = |s: &mut UiSession<StampRecorder>, known| s.toolbar_stamp(s.state.toolbar_context(), known).unwrap();
+    act(&mut s, BubbleAction::Ring { id, phase: ContactPhase::Down, position: taper.arc.point(0.1) }).unwrap();
+    assert!(poll(&mut s, None).is_none());
+    for step in 1..=20 {
+        act(&mut s, BubbleAction::Ring { id, phase: ContactPhase::Move, position: taper.arc.point(0.1 + step as f32 * 0.04) }).unwrap();
+        assert!(poll(&mut s, None).is_none());
+    }
+    let requests = |s: &mut UiSession<StampRecorder>| s.renderer_mut().requests.clone();
+    assert_eq!(requests(&mut s).len(), 1, "edits while a stamp renders never queue");
+    assert_eq!(requests(&mut s)[0].1.size, [384, 192], "the line renders at its own aspect");
+    let first = requests(&mut s)[0].0;
+    s.renderer_mut().complete(first, 7);
+    let stale = poll(&mut s, None).unwrap();
+    assert!(stale.pending && stale.alpha == [7; 4]);
+    let last = requests(&mut s).last().unwrap().clone();
+    assert_eq!((requests(&mut s).len(), &last.1.dabs), (2, &s.stamp_request().unwrap().0.dabs), "the landing poll asks for the final value");
+    s.renderer_mut().complete(last.0, 9);
+    let fresh = poll(&mut s, Some(stale.request_id)).unwrap();
+    assert!(!fresh.pending && fresh.request_id == last.0 && fresh.alpha == [9; 4], "the next line is the final value's");
+    act(&mut s, BubbleAction::Ring { id, phase: ContactPhase::Move, position: taper.arc.point(0.5) }).unwrap();
+    let kept = poll(&mut s, Some(last.0)).unwrap();
+    assert!(kept.pending && kept.request_id == last.0 && kept.alpha.is_empty() && view(&s, id).stamp.is_some(), "the previous line stays");
+    act(&mut s, BubbleAction::Ring { id, phase: ContactPhase::Up, position: taper.arc.point(0.5) }).unwrap();
+    let hardness = ring(&s, "hardness");
+    act(&mut s, BubbleAction::Ring { id, phase: ContactPhase::Down, position: hardness.arc.point(0.3) }).unwrap();
+    assert!(poll(&mut s, None).is_none() && requests(&mut s).len() == 3, "a dab waits for the line in flight");
+    let line = requests(&mut s)[2].0;
+    s.renderer_mut().complete(line, 13);
+    assert!(poll(&mut s, None).is_none(), "a landed line is not shown as a dab");
+    assert_eq!((requests(&mut s).len(), requests(&mut s)[3].1.size), (4, [192, 192]), "the dab is requested as soon as the line lands");
+    let dab = requests(&mut s)[3].0;
+    s.renderer_mut().complete(dab, 11);
+    assert!(poll(&mut s, None).is_some_and(|dab| !dab.pending && dab.alpha == [11; 4]));
+}
+
+#[test]
 fn serialized_bubble_hit_geometry_preserves_native_contact_regions() {
     let mut s = desk();
     let dial = take_control(&mut s, ToolbarControl::Command { command: CommandId::DrawingBrush }, FAR);
@@ -2555,23 +2643,23 @@ fn dither_and_scatter_cell_size_is_a_localized_whole_pixel_log_slider() {
             if position == 0.5 { assert!(value < 8., "small cells occupy most of the slider"); }
         }
         for value in 1..=layer_core::BLENDER_CELL_SIZE_LIMIT {
-            let edited = tool_settings::edit(&brush, cell.id, value as f32, &english).unwrap();
+            let edited = tool_settings::edit(preset as u32, &brush, cell.id, value as f32, &english).unwrap();
             assert_eq!(edited.blender.cell_size, value as f32);
             let restored: layer_core::BrushSnapshot = serde_json::from_str(&serde_json::to_string(&edited).unwrap()).unwrap();
             assert_eq!(restored, edited);
             restored.validate().unwrap();
         }
         for value in [0., 51., 1.5, f32::NAN, f32::INFINITY] {
-            assert!(tool_settings::edit(&brush, cell.id, value, &english).is_err());
+            assert!(tool_settings::edit(preset as u32, &brush, cell.id, value, &english).is_err());
             let mut invalid = brush.clone();
             invalid.blender.cell_size = value;
             assert!(invalid.validate().is_err());
         }
         let other_cell_id = if cell_id == "dither_cell_size" { "scatter_cell_size" } else { "dither_cell_size" };
-        assert!(tool_settings::edit(&brush, other_cell_id, 2., &english).is_err());
-        let crystal = layer_core::default_brush(DefaultBrushPreset::CrystalBlender);
-        assert!(tool_settings::edit(&crystal, cell.id, 2., &english).is_err());
-        assert_eq!(tool_settings::edit(&crystal, "cell_size", 0.3, &english).unwrap().blender.scale, 0.3);
+        assert!(tool_settings::edit(preset as u32, &brush, other_cell_id, 2., &english).is_err());
+        let (crystal_id, crystal) = (DefaultBrushPreset::CrystalBlender as u32, layer_core::default_brush(DefaultBrushPreset::CrystalBlender));
+        assert!(tool_settings::edit(crystal_id, &crystal, cell.id, 2., &english).is_err());
+        assert_eq!(tool_settings::edit(crystal_id, &crystal, "cell_size", 0.3, &english).unwrap().blender.scale, 0.3);
         for language in UiLanguage::ALL {
             let localized = tool_settings::controls(preset as u32, &brush, &Localizer::shared(language));
             let localized = localized.iter().find(|c| c.id == cell.id).unwrap();

@@ -9,17 +9,17 @@ final class NativeBrushStamp: @unchecked Sendable {
         var info = CapyBrushStampInfo()
         guard capy_brush_stamp_read(handle, &info) else { capy_brush_stamp_free(handle); return nil }
         self.handle = handle
-        metadata = JSON(["request_id": info.request, "pending": info.pending, "size": info.size, "extent": Double(info.extent)])
+        metadata = JSON(["request_id": info.request, "pending": info.pending, "width": info.width, "height": info.height, "extent": Double(info.extent)])
         count = info.count
     }
     deinit { capy_brush_stamp_free(handle) }
     func image() -> CGImage? {
-        let side = Int(metadata["size"].uint)
-        guard side > 0, count == side * side,
+        let width = Int(metadata["width"].uint), height = Int(metadata["height"].uint)
+        guard width > 0, height > 0, count == width * height,
             let alpha = copyNativeData(count, copy: { capy_brush_stamp_copy(handle, $0, $1, $2) }) else { return nil }
         let bytes = alpha.flatMap { [0, 0, 0, $0] as [UInt8] }
         guard let provider = CGDataProvider(data: Data(bytes) as CFData) else { return nil }
-        return CGImage(width: side, height: side, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: side * 4,
+        return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
             provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
     }

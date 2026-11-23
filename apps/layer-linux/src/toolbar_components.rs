@@ -1063,7 +1063,7 @@ impl Component {
         let Some(stamp) = result else { return; };
         if stamp.alpha.is_empty() { return; }
         let Ok(image) = gtk::cairo::ImageSurface::create_for_data(stamp.alpha,
-            gtk::cairo::Format::A8, stamp.size as i32, stamp.size as i32, stamp.size as i32) else {
+            gtk::cairo::Format::A8, stamp.width as i32, stamp.height as i32, stamp.width as i32) else {
             return;
         };
         preview.request.set(Some(stamp.request_id));

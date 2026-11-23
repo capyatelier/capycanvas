@@ -8,6 +8,18 @@
   rates, physical pen latency or display timing on any reference tier. Hardware
   measurements require access to PresentMon's ETW presentation records.
 
+- **A tapered pen redraws its held end every frame.** The live preview shows
+  the end as if the pen lifted now, so the whole end changes each frame and the
+  renderer restores and redraws its area. On the TCL a 10-width end costs 7–10 %
+  of completed updates at 18–30 px and 22–25 % at 100 px
+  ([low tier](low-tier.md#brush-taper)). Freezing the end's far part or restoring
+  less than whole pages would reduce it.
+
+- **Very wide tapered pens stall at lift.** A 1024 px G-Pen with a 10-width end
+  holds more than the 64-page allowance, so it saves early and replays the stroke
+  at lift: on the TCL, lift p99 214 → 495 ms. Replaying only the end region would
+  remove the stall.
+
 - **Wet, watercolor, Smudge and blending brushes fall behind the pen at 512 px.**
   - A frame consumes input only until its material contacts reach 512 page
     jobs ([brushes](../internals/brushes.md)), so these brushes never run out

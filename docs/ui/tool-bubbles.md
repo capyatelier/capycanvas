@@ -174,7 +174,13 @@ everything rests.
   hides while it shows, and the setting's name and value show below. Halo arcs
   for the other settings that shape a single dab (opacity, hardness, angle,
   grain depth, material hardness, bristle scale and load;
-  `tool_settings::shapes_dab`) show the same dab.
+  `tool_settings::shapes_dab`) show the same dab. Taper arcs
+  (`tool_settings::shapes_taper`) show a short straight line of the brush with
+  both ends tapered instead, fitted to the inner diameter of the first halo ring
+  whatever the brush size and zoom. The line renders at that rectangle's 2:1
+  aspect with as many pixel rows as a dab (384 × 192) and is drawn, placed and
+  refreshed exactly like the dab: one render in flight, the latest value
+  requested as each lands, the previous image kept until then.
   Tapping its center starts or stops the color picker, like its tile.
 - **Undo and redo:** tapping either half undoes or redoes; dragging anywhere on
   it moves it.
@@ -475,8 +481,9 @@ panels are absent from the dock.
   unavailable arc draws at 40%. The name and value show at `readout_center`,
   fitting their text with 7 px horizontal and 2 px vertical padding and tabular
   digits; there is no fixed minimum width or height.
-- **Dab:** draw the stamp mask in the stamp color, `stamp.diameter` times the
-  stamp's extent, centered at `stamp.center`, behind every bubble.
+- **Dab:** draw the stamp mask in the stamp color, `stamp.size` times the
+  extent of the stamp image being shown, centered at `stamp.center`, behind
+  every bubble.
 - **Chooser:** 44 px media circles and 152 × 48 px brush pills with the brush
   stroke (68% of the pill wide, 14 px tall, 6 px from the top) over its name;
   18 px icons on media and tool choices; brush names at 80% opacity, 8 px from

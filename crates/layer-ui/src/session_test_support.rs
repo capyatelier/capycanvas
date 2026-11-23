@@ -331,8 +331,11 @@ pub(crate) fn stored_selection(s: &mut UiSession<Recorder>, mask: layer_core::au
         .filter(|op| op.kind == layer_core::RasterOperationKind::Coverage).and_then(|op| op.coverage.selection)
 }
 pub(crate) fn session(platform: Platform) -> UiSession<Recorder> {
+    session_with(Recorder::default(), platform)
+}
+pub(crate) fn session_with<R: CanvasRenderer>(renderer: R, platform: Platform) -> UiSession<R> {
     let mut session = UiSession::new(
-        Recorder::default(),
+        renderer,
         Document::new(layer_core::PortableId::random(), 1000, 1000, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
         [1000, 1000],
         platform,
@@ -352,6 +355,34 @@ pub(crate) fn launching_session(platform: Platform) -> UiSession<Recorder> {
     let mut session = session(platform);
     session.launch_finished = false;
     session
+}
+pub(crate) struct StampRecorder {
+    pub(crate) inner: Recorder,
+    pub(crate) requests: Vec<(u64,layer_render::BrushStampRequest)>,
+    pub(crate) reply: Option<Result<layer_render::ReadbackImage,layer_render::BackendError>>,
+    pub(crate) accepts: bool,
+    pub(crate) error: bool,
+}
+impl Default for StampRecorder {
+    fn default()->Self {Self{inner:Recorder::default(),requests:Vec::new(),reply:None,accepts:true,error:false}}
+}
+impl StampRecorder {
+    pub(crate) fn complete(&mut self,id:u64,value:u8)->*const u8 {
+        let bytes=vec![value;4];let pointer=bytes.as_ptr();
+        self.reply=Some(Ok(layer_render::ReadbackImage{request_id:id,width:2,height:2,stride:2,bytes}));pointer
+    }
+}
+impl CanvasRenderer for StampRecorder {
+    type Error=layer_render::BackendError;
+    fn resize_surface(&mut self,w:u32,h:u32)->Result<(),Self::Error>{self.inner.resize_surface(w,h)}
+    fn prepare_asset(&mut self,id:&AssetId,image:layer_render::HostImage<'_>)->Result<(),Self::Error>{self.inner.prepare_asset(id,image)}
+    fn release_asset(&mut self,id:&AssetId){self.inner.release_asset(id)}
+    fn submit(&mut self,packet:layer_render::FramePacket<'_>)->Result<(),Self::Error>{self.inner.submit(packet)}
+    fn request_brush_stamp(&mut self,id:u64,request:&layer_render::BrushStampRequest)->Result<bool,Self::Error>{
+        if self.error {return Err(layer_render::BackendError("stamp request failed"));}
+        self.requests.push((id,request.clone()));Ok(self.accepts)
+    }
+    fn take_brush_stamp(&mut self)->Option<Result<layer_render::ReadbackImage,Self::Error>>{self.reply.take()}
 }
 #[derive(Clone, Copy)]
 pub(crate) struct TestKey<'a>(pub(crate) &'a str, pub(crate) Option<&'a str>);

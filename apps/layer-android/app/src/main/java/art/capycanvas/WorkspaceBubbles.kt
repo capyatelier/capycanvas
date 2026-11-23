@@ -476,9 +476,9 @@ private class BubbleColorShape(private val diameter: Float, private val bounds: 
     val placement = record.view.objectOrNull("stamp") ?: return
     val stamp = rememberToolbarStamp(host, obj("type" to "bubble_stamp"), true)
     stamp?.let { (data, image) ->
-        val diameter = placement.number("diameter") * data.number("extent")
+        val (width, height) = placement.array("size").let { it.getDouble(0).toFloat() * data.number("extent") to it.getDouble(1).toFloat() * data.number("extent") }
         val at = record.center + placement.array("center").bubblePoint()
-        Image(image, null, Modifier.offset { IntOffset(((at.x - diameter / 2) * density).roundToInt(), ((at.y - diameter / 2) * density).roundToInt()) }
-            .size(diameter.dp).zIndex(699f), colorFilter = ColorFilter.tint(record.packet.array("stamp_color").color()), contentScale = androidx.compose.ui.layout.ContentScale.FillBounds)
+        Image(image, null, Modifier.offset { IntOffset(((at.x - width / 2) * density).roundToInt(), ((at.y - height / 2) * density).roundToInt()) }
+            .size(width.dp, height.dp).zIndex(699f), colorFilter = ColorFilter.tint(record.packet.array("stamp_color").color()), contentScale = androidx.compose.ui.layout.ContentScale.FillBounds)
     }
 }

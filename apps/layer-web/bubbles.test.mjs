@@ -61,7 +61,7 @@ function preview() {
   const jobs=[],closed=[],wakes=[];
   let request=0;
   const context={stampBusy:false,stampPending:false,stampWanted:{record:{}},stampGeneration:0,stamp:undefined,active:false,
-    app:{bubble_stamp:()=>({request_id:++request,pending:false,size:2,alpha:new Uint8Array([0,255,255,0])})},
+    app:{bubble_stamp:()=>({request_id:++request,pending:false,width:2,height:2,alpha:new Uint8Array([0,255,255,0])})},
     rasterWorker:()=>new Promise(resolve=>jobs.push(resolve)),wake:()=>wakes.push(true),console:{error:assert.fail}};
   runInNewContext(source.slice(source.indexOf('  async function refreshStamp()'),source.indexOf('  function refresh()'))+'this.poll=refreshStamp;',context);
   const image=id=>({width:2,height:2,close:()=>closed.push(id)});

@@ -48,7 +48,7 @@ impl ZoomToolSettings {
     }
     pub(crate) fn controls(self, localizer: &Localizer) -> Vec<ToolOption> {
         let choice = |id, label, entries: &[(MessageId, ZoomToolAction, bool, &'static str)]| ToolOption::Choice {
-            id, label: localizer.text(label), segmented: true, labeled: true, columns: None, beside: None,
+            id, label: localizer.text(label), segmented: true, labeled: true, columns: None, beside: None, before: None, heading: None,
             items: entries.iter().map(|&(label, action, selected, icon)| ToolSetItem {
                 enabled: true, disabled_reason: None, label: localizer.text(label), icon, selected,
                 action: UiAction::ZoomTool { action }, preview: None,

@@ -385,7 +385,7 @@ class AndroidToolBubblesTest {
         event(MotionEvent.ACTION_DOWN, ringPoint(id, size, .2f)); event(MotionEvent.ACTION_MOVE, ringPoint(id, size, .82f))
         waitFor("Held arc publishes dab") { view(id).objectOrNull("stamp") != null }
         val stamp = view(id).getJSONObject("stamp"); val offset = stamp.getJSONArray("center")
-        val at = center(id) + Offset(offset.getDouble(0).toFloat() + stamp.number("diameter") * .3f, offset.getDouble(1).toFloat()) * density
+        val at = center(id) + Offset(offset.getDouble(0).toFloat() + stamp.getJSONArray("size").getDouble(0).toFloat() * .3f, offset.getDouble(1).toFloat()) * density
         var ink = false
         waitFor("Actual screenshot presents the enlarged dab") {
             shot("dab-presented") { image ->

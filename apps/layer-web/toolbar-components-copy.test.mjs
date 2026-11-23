@@ -37,9 +37,9 @@ function harness(t,standalone=false,fixed=false,initiallyDisabled=false){
   doc.createElement=tag=>new Element(tag,doc);Object.assign(globalThis,{document:doc,window:{addEventListener(){},removeEventListener(){}},innerWidth:1000,innerHeight:800,devicePixelRatio:1,requestAnimationFrame:callback=>{frames.set(++frameId,callback);return frameId;},cancelAnimationFrame:id=>frames.delete(id),getComputedStyle:()=>({color:'#fff',backgroundColor:'#333',fontWeight:'400',fontSize:'12px',fontFamily:'sans'})});
   let root;t.after(()=>{root?.disposeComponent();for(const[key,value]of Object.entries(original))if(value===undefined)delete globalThis[key];else globalThis[key]=value;});
   let language='en',stamps=0,layouts=0,expressions=0,actionHandler;const actions=[],stampQueries=[],workerRequests=[],numeric={kind:'slider',min:0,max:100,soft_min:0,soft_max:100,scale:1,step:1,digits:0};
-  let stampReply=(_,known)=>({request_id:1n,pending:false,size:1,alpha:new Uint8Array(known===1n?[]:[255]),extent:1});
+  let stampReply=(_,known)=>({request_id:1n,pending:false,width:1,height:1,alpha:new Uint8Array(known===1n?[]:[255]),extent:1});
   let workerReply=async request=>({alpha:request.buffers[0],closed:0,close(){this.closed++;}});
-  const rasterWorker=request=>{assert.equal(request.operation,'alpha-image');assert.deepEqual(request.metadata,{size:1});assert.equal(request.buffers.length,1);assert.ok(request.buffers[0] instanceof Uint8Array);workerRequests.push(request);return workerReply(request);};
+  const rasterWorker=request=>{assert.equal(request.operation,'alpha-image');assert.deepEqual(request.metadata,{width:1,height:1});assert.equal(request.buffers.length,1);assert.ok(request.buffers[0] instanceof Uint8Array);workerRequests.push(request);return workerReply(request);};
   const formatted=value=>({value,text:String(value),edit:String(value),fill:value/100});
   const app={phone_slider_stretch_distance:()=>null,native_caption:request=>{assert.equal(request.type,'numeric_error');assert.equal(request.reason.reason,'invalid_expression');return`${language}:invalid`;},catalog:()=>({panel_metrics:{control_height:26},native_copy:{tool_controls:Object.fromEntries(['more_options','remove_bookmark','bookmark_value'].map(key=>[key,`${language}:${key}`]))}}),numeric_labels:label=>({edit:`${language}:edit:${label}`,decrease:'-',increase:'+'}),number_input:request=>formatted(request.value),toolbar_stamp:(context,known)=>{stampQueries.push({context,known});const next=stampReply(context,known);if(next?.alpha.length)stamps++;return next;},toolbar_ui:request=>{
     if(request.type==='slider_readout')return {value:'5',unit:'px',metrics:{inset:4,gap:2,units_below:false}};
@@ -85,14 +85,14 @@ test('toolbar preview polls ready and pending stamps, retains bitmaps and forwar
   h.root.querySelector('.toolbar-slider-cap').click();
   const popup=h.root.querySelector('.toolbar-brush-preview'),canvas=popup.querySelector('canvas');
   assert.equal(canvas.drawnImage,undefined);assert.equal(h.pendingFrames(),1);assert.equal(h.stamps(),0);
-  reply={request_id:1n,pending:false,size:1,alpha:new Uint8Array([191]),extent:1};h.frame();await h.flush();
+  reply={request_id:1n,pending:false,width:1,height:1,alpha:new Uint8Array([191]),extent:1};h.frame();await h.flush();
   const first=canvas.drawnImage;
   assert.equal(first.alpha,reply.alpha);assert.equal(canvas.dataset.previewRequest,'1');assert.equal(h.pendingFrames(),1,'ready previews keep polling');
   reply={...reply,pending:true,alpha:new Uint8Array()};h.root.updateComponent(h.tile());
   assert.equal(canvas.drawnImage,first,'old image remains visible during the next GPU request');assert.equal(h.pendingFrames(),1);
   h.frame();assert.equal(canvas.drawnImage,first);assert.equal(h.pendingFrames(),1);assert.equal(h.stamps(),1);
   let prepared;h.workerReply(request=>new Promise(resolve=>{prepared=()=>resolve({alpha:request.buffers[0],closed:0,close(){this.closed++;}});}));
-  reply={request_id:2n,pending:false,size:1,alpha:new Uint8Array([63]),extent:2};h.frame();
+  reply={request_id:2n,pending:false,width:1,height:1,alpha:new Uint8Array([63]),extent:2};h.frame();
   assert.equal(canvas.drawnImage,first,'old bitmap remains visible while the worker prepares its replacement');assert.equal(first.closed,0);
   prepared();await h.flush();
   const second=canvas.drawnImage;
@@ -104,7 +104,7 @@ test('toolbar preview polls ready and pending stamps, retains bitmaps and forwar
   const draws=canvas.drawCount;
   for(let i=0;i<2;i++){h.frame();assert.equal(h.pendingFrames(),1);assert.equal(canvas.drawCount,draws,'idle metadata does not repaint the settled popup');}
   assert.equal(canvas.drawnImage,second);assert.equal(h.workerRequests.length,2,'idle metadata does not request another bitmap');
-  reply={request_id:3n,pending:false,size:1,alpha:new Uint8Array([31]),extent:2};h.frame();prepared();await h.flush();
+  reply={request_id:3n,pending:false,width:1,height:1,alpha:new Uint8Array([31]),extent:2};h.frame();prepared();await h.flush();
   const third=canvas.drawnImage;
   assert.notEqual(third,second);assert.equal(canvas.dataset.previewRequest,'3','brush changes arrive without a tile-view update');assert.equal(canvas.drawCount,draws+1);
   assert.equal(second.closed,1);assert.equal(h.workerRequests.length,3);assert.equal(h.stampQueries.at(-1).known,2n);
@@ -115,7 +115,7 @@ test('toolbar preview polls ready and pending stamps, retains bitmaps and forwar
 test('toolbar preview coalesces bitmap work and closes stale results across reopen and disposal',async t=>{
   const h=harness(t,true),jobs=[],cap=h.root.querySelector('.toolbar-slider-cap');
   h.workerReply(()=>new Promise(resolve=>jobs.push(resolve)));
-  h.stampReply(()=>({request_id:BigInt(h.stampQueries.length),pending:false,size:1,alpha:new Uint8Array([127]),extent:1}));
+  h.stampReply(()=>({request_id:BigInt(h.stampQueries.length),pending:false,width:1,height:1,alpha:new Uint8Array([127]),extent:1}));
   cap.click();const old=h.root.querySelector('.toolbar-brush-preview');
   h.root.updateComponent(h.tile());h.root.updateComponent(h.tile());
   assert.equal(jobs.length,1);assert.equal(h.stampQueries.length,1,'one bitmap preparation in flight');

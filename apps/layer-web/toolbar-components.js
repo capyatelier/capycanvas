@@ -188,7 +188,7 @@ export function createToolbarComponent({ app, tile, control = tile?.control, pre
       try {
         const next = app.toolbar_stamp(context, stamp?.request_id);
         if (next?.alpha.length && next.request_id !== stamp?.request_id) {
-          const image=await rasterWorker({operation:'alpha-image',metadata:{size:next.size},buffers:[next.alpha]});
+          const image=await rasterWorker({operation:'alpha-image',metadata:{width:next.width,height:next.height},buffers:[next.alpha]});
           if (popup!==opened || !opened.isConnected) { image.close(); return; }
           stamp?.image.close(); stamp = {...next, image};
           canvas.dataset.previewRequest = String(next.request_id);

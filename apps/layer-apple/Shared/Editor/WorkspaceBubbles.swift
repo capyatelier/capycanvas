@@ -65,11 +65,11 @@ private struct BubbleDab: View {
     }
     var body: some View {
         if let stamp = item.stamp, !item.view["stamp"].isNull {
-            let source = item.view["stamp"], side = source["diameter"].number * item.stampExtent
+            let source = item.view["stamp"], size = source["size"]
             let center = source["center"].point
             Image(decorative: stamp, scale: 1).resizable().renderingMode(.template)
                 .foregroundStyle(color(source["color"]))
-                .frame(width: side, height: side).position(x: placement.center.x + center.x, y: placement.center.y + center.y)
+                .frame(width: size[0].number * item.stampExtent, height: size[1].number * item.stampExtent).position(x: placement.center.x + center.x, y: placement.center.y + center.y)
                 .opacity(placement.opacity)
         }
     }

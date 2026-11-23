@@ -353,7 +353,7 @@ impl ToolSettings {
             _ => None,
         }).unwrap_or_else(|| command.label.clone());
         self.settings.set_visible(!picking);
-        self.extra.set_visible(!picking && state.tool_extra.iter().any(|option| !matches!(option, layer_ui::ToolOption::Choice { beside: Some(_), .. })));
+        self.extra.set_visible(!picking && state.tool_extra.iter().any(|option| option.anchor().is_none()));
         let mode_group=state.tool_actions.iter().find_map(|action| action.group().filter(|group| group.segmented()));
         self.mode_container.set_visible(!picking && mode_group.is_some());
         if let Some(group)=mode_group { self.modes.update_property(&[gtk::accessible::Property::Label(&group.localized_label(&workspace.localization()))]); }
@@ -386,7 +386,7 @@ impl ToolSettings {
             while let Some(child)=self.extra.first_child() {self.extra.remove(&child);}
             for option in &state.tool_extra {
                 let field=crate::tool_extra::ExtraField::new(workspace,option,context);
-                if !matches!(option, layer_ui::ToolOption::Choice { beside: Some(_), .. }) { self.extra.append(&field.root); }
+                if option.anchor().is_none() { self.extra.append(&field.root); }
                 self.extra_fields.borrow_mut().push((option.clone(),field));
             }
         } else {
@@ -410,7 +410,7 @@ impl ToolSettings {
         if !same_schema {
             if let Some(range) = self.range.borrow().as_ref() { range.retire(); }
             for (option, field) in self.extra_fields.borrow().iter() {
-                if matches!(option, layer_ui::ToolOption::Choice { beside: Some(_), .. })
+                if option.anchor().is_some()
                     && let Some(parent) = field.root.parent().and_downcast::<gtk::Box>() { parent.remove(&field.root); }
             }
             while let Some(child) = self.form.first_child() {
@@ -448,9 +448,8 @@ impl ToolSettings {
                     grouped = None;
                     grid_group = false;
                     let extras = self.extra_fields.borrow();
-                    let beside = extras.iter().find(|(option, _)| matches!(option, layer_ui::ToolOption::Choice { beside: Some(id), .. } if *id == control.id));
-                    if !group.is_empty() {
-                        let title = gtk::Label::new(Some(beside.map_or(control.group.as_ref(), |(option, _)| match option { layer_ui::ToolOption::Choice { label, .. } => label.as_ref(), _ => control.group.as_ref() })));
+                    let heading = |text: &str| {
+                        let title = gtk::Label::new(Some(text));
                         title.add_css_class("heading");
                         title.add_css_class("dim-label");
                         title.set_xalign(0.0);
@@ -459,8 +458,20 @@ impl ToolSettings {
                         } else { 0 });
                         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
                         self.form.append(&title);
+                        title
+                    };
+                    let opening = |own: bool| extras.iter().filter(move |(option, _)| matches!(option,
+                        layer_ui::ToolOption::Choice { before: Some(id), heading, .. } if *id == control.id && heading.is_some() == own));
+                    for (option, field) in opening(true) {
+                        if let layer_ui::ToolOption::Choice { id, heading: Some(text), .. } = option { self.headings.borrow_mut().push((*id, heading(text))); }
+                        self.form.append(&field.root);
+                    }
+                    let beside = extras.iter().find(|(option, _)| matches!(option, layer_ui::ToolOption::Choice { beside: Some(id), .. } if *id == control.id));
+                    if !group.is_empty() {
+                        let title = heading(beside.map_or(control.group.as_ref(), |(option, _)| match option { layer_ui::ToolOption::Choice { label, .. } => label.as_ref(), _ => control.group.as_ref() }));
                         self.headings.borrow_mut().push((control.id, title));
                     }
+                    for (_, field) in opening(false) { self.form.append(&field.root); }
                     if let Some((option, field)) = beside {
                         grid_group = matches!(option, layer_ui::ToolOption::Choice { columns: Some(_), .. });
                         let row = crate::panel_controls::action_row(if grid_group { crate::panel_controls::COMPOUND_SPACING } else { crate::panel_controls::CONTROL_SPACING });
@@ -593,6 +604,8 @@ impl ToolSettings {
         }
         for (id, title) in self.headings.borrow().iter() {
             if let Some(control) = controls.iter().find(|control| control.id == *id) { title.set_text(&control.group); }
+            else if let Some(layer_ui::ToolOption::Choice { heading: Some(text), .. }) = state.tool_extra.iter()
+                .find(|option| matches!(option, layer_ui::ToolOption::Choice { id: choice, .. } if choice == id)) { title.set_text(text); }
         }
         for ((old, input), control) in fields.iter_mut().zip(controls) {
             if old.label != control.label { input.set_caption(&control.label, "", workspace.localization()); input.set_tooltip_text(Some(&control.tooltip_localized(&workspace.localization()))); }

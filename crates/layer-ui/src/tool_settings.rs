@@ -3,7 +3,8 @@
 use crate::NumericControl;
 use crate::localization::{Localizer, MessageId, UiLanguage};
 use std::sync::Arc;
-use layer_core::{BlenderKind, BrushExecution, BrushSnapshot, BrushTip, ColorMixSpace, LiquifyMode};
+use layer_core::{BlenderKind, BrushExecution, BrushSnapshot, BrushTaper, BrushTip, ColorMixSpace, LiquifyMode, TaperMode};
+use layer_engine::can_taper;
 use serde::Serialize;
 
 pub(crate) mod profiles;
@@ -183,8 +184,19 @@ struct Definition {
 }
 
 impl Definition {
-    fn applicable(&self, brush: &BrushSnapshot) -> bool {
+    fn field<'a>(&self, preset: u32, brush: &'a mut BrushSnapshot) -> Option<&'a mut f32> {
+        if shapes_taper(self.id) && !taper_visible(preset, brush) {
+            return None;
+        }
+        (self.field)(brush)
+    }
+
+    fn applicable(&self, preset: u32, brush: &BrushSnapshot) -> bool {
+        let taper = |shown: fn(TaperMode) -> bool| taper_visible(preset, brush) && shown(brush.taper.mode);
         match self.id {
+            "taper_start_widths" | "taper_end_widths" => taper(|mode| mode == TaperMode::Fixed),
+            "taper_start_share" | "taper_end_share" => taper(|mode| mode == TaperMode::Proportional),
+            "taper_pointiness" => taper(|mode| mode != TaperMode::Off),
             "paint" | "dilution" => brush.execution_class() != BrushExecution::Smudge,
             "pull" => brush.execution_class() != BrushExecution::Smudge || !matches!(brush.blender.kind,
                 BlenderKind::Blur | BlenderKind::Sharpen | BlenderKind::Crystal | BlenderKind::Comb | BlenderKind::Dither),
@@ -256,6 +268,7 @@ pub(crate) fn ring_defaults(preset: u32, brush: &BrushSnapshot, controls: &[Tool
 const GROUP_ORDER: &[MessageId] = &[
     MessageId::TOOL_SETTING_GROUP_BLENDER,
     MessageId::TOOL_SETTING_GROUP_TIP,
+    MessageId::TOOL_SETTING_GROUP_TAPER,
     MessageId::TOOL_SETTING_GROUP_MATERIAL,
     MessageId::TOOL_SETTING_GROUP_TEXTURE,
     MessageId::TOOL_SETTING_GROUP_BRISTLES,
@@ -300,14 +313,49 @@ pub(crate) fn color_mixing(command: crate::CommandId) -> Option<ColorMixSpace> {
     })
 }
 
-/// The stored value of a setting, including the Color mixing choice.
-pub(crate) fn value(brush: &BrushSnapshot, id: &str) -> Option<f32> {
+fn pen(preset: u32) -> bool {
+    crate::tools::group_presets(crate::ToolGroup::Pen).any(|pen| pen == preset)
+}
+
+pub(crate) fn taper_visible(preset: u32, brush: &BrushSnapshot) -> bool {
+    pen(preset) && can_taper(brush)
+}
+
+pub(crate) fn reads(preset: u32, id: &str) -> bool {
+    pen(preset) || id != TAPER && !shapes_taper(id)
+}
+
+pub(crate) const TAPER: &str = "taper";
+pub(crate) const TAPER_COMMANDS: [crate::CommandId; 3] =
+    [crate::CommandId::TaperOff, crate::CommandId::TaperFixed, crate::CommandId::TaperProportional];
+const TAPER_MODES: [TaperMode; 3] = [TaperMode::Off, TaperMode::Fixed, TaperMode::Proportional];
+pub(crate) const NOT_TAPERING: &str = "Choose a pen first";
+
+pub(crate) fn taper(command: crate::CommandId) -> Option<TaperMode> {
+    TAPER_COMMANDS.iter().position(|&taper| taper == command).map(|index| TAPER_MODES[index])
+}
+
+pub(crate) fn section_choice(id: &'static str, label: MessageId, section: MessageId, settings: &[ToolSetting], items: Vec<crate::ToolSetItem>,
+    localizer: &Localizer) -> Option<crate::ToolOption> {
+    let order = group_order(section.key());
+    let first = settings.iter().find(|setting| group_order(setting.group_id) >= order)?;
+    Some(crate::ToolOption::Choice {
+        id, label: localizer.text(label), segmented: true, labeled: true, columns: None, beside: None, before: Some(first.id),
+        heading: (first.group_id != section.key()).then(|| localizer.text(section)), items,
+    })
+}
+
+/// The stored value of a setting, including the Color mixing and Taper choices.
+pub(crate) fn value(preset: u32, brush: &BrushSnapshot, id: &str) -> Option<f32> {
     if id == COLOR_MIXING {
         return mixes_color(brush).then_some(f32::from(brush.wet_mix.mix_space as u8));
     }
+    if id == TAPER {
+        return taper_visible(preset, brush).then_some(f32::from(brush.taper.mode as u8));
+    }
     let mut brush = brush.clone();
     let definition = DEFINITIONS.iter().find(|d| d.id == id)?;
-    (definition.field)(&mut brush).copied()
+    definition.field(preset, &mut brush).copied()
 }
 
 const DEFINITIONS: &[Definition] = &[
@@ -371,6 +419,41 @@ const DEFINITIONS: &[Definition] = &[
             ..NumericControl::number(-std::f64::consts::PI, std::f64::consts::PI, 0.01, 2).unit("°")
         },
         field: |b| Some(&mut b.angle_radians),
+    },
+    Definition {
+        id: "taper_start_widths",
+        label: MessageId::TOOL_SETTING_TAPER_START,
+        group: Some(MessageId::TOOL_SETTING_GROUP_TAPER),
+        numeric: taper_widths,
+        field: |b| Some(&mut b.taper.fixed_widths[0]),
+    },
+    Definition {
+        id: "taper_end_widths",
+        label: MessageId::TOOL_SETTING_TAPER_END,
+        group: Some(MessageId::TOOL_SETTING_GROUP_TAPER),
+        numeric: taper_widths,
+        field: |b| Some(&mut b.taper.fixed_widths[1]),
+    },
+    Definition {
+        id: "taper_start_share",
+        label: MessageId::TOOL_SETTING_TAPER_START,
+        group: Some(MessageId::TOOL_SETTING_GROUP_TAPER),
+        numeric: taper_share,
+        field: |b| Some(&mut b.taper.proportional_shares[0]),
+    },
+    Definition {
+        id: "taper_end_share",
+        label: MessageId::TOOL_SETTING_TAPER_END,
+        group: Some(MessageId::TOOL_SETTING_GROUP_TAPER),
+        numeric: taper_share,
+        field: |b| Some(&mut b.taper.proportional_shares[1]),
+    },
+    Definition {
+        id: "taper_pointiness",
+        label: MessageId::TOOL_SETTING_TAPER_POINTINESS,
+        group: Some(MessageId::TOOL_SETTING_GROUP_TAPER),
+        numeric: NumericControl::percent,
+        field: |b| Some(&mut b.taper.pointiness),
     },
     Definition {
         id: "size_jitter",
@@ -647,6 +730,19 @@ fn four_times() -> NumericControl {
     NumericControl { max: 4., soft_max: 4., ..NumericControl::percent() }
 }
 
+fn taper_widths() -> NumericControl {
+    NumericControl { soft_max: 50., ..NumericControl::number(0., f64::from(BrushTaper::MAX_FIXED_WIDTHS), 0.1, 1) }
+}
+
+fn taper_share() -> NumericControl {
+    let max = f64::from(BrushTaper::MAX_PROPORTIONAL_SHARE);
+    NumericControl { max, soft_max: max, ..NumericControl::percent() }
+}
+
+pub fn shapes_taper(id: &str) -> bool {
+    matches!(id, "taper_start_widths" | "taper_end_widths" | "taper_start_share" | "taper_end_share" | "taper_pointiness")
+}
+
 pub fn shapes_dab(id: &str) -> bool {
     matches!(id, "size" | "flow" | "strength" | "opacity" | "hardness" | "angle" | "grain_depth" | "material_hardness" | "bristle_scale" | "bristle_load")
 }
@@ -659,7 +755,7 @@ pub(crate) fn controls(preset: u32, brush: &BrushSnapshot, localizer: &Localizer
         .iter()
         .enumerate()
         .filter_map(|(index, d)| {
-            if !d.applicable(&brush) { return None; }
+            if !d.applicable(preset, &brush) { return None; }
             let placement = profile.and_then(|profile| profile.placement(d.id));
             let rank = match d.id {
                 "size" => Some(0),
@@ -681,7 +777,7 @@ pub(crate) fn controls(preset: u32, brush: &BrushSnapshot, localizer: &Localizer
                 group_id: group.map_or("", MessageId::key),
                 group: group.map(|id| localizer.text(id)).unwrap_or_else(|| Arc::from("")),
                 numeric: d.numeric(&brush),
-                value: *(d.field)(&mut brush)?,
+                value: *d.field(preset, &mut brush)?,
             }))
         })
         .collect::<Vec<_>>();
@@ -689,11 +785,11 @@ pub(crate) fn controls(preset: u32, brush: &BrushSnapshot, localizer: &Localizer
     controls.into_iter().map(|(_, field)| field).collect()
 }
 
-pub(crate) fn edit(brush: &BrushSnapshot, id: &str, value: f32, localizer: &Localizer) -> Result<BrushSnapshot, String> {
-    edit_value(brush, id, value).map_err(|reason| reason.message(localizer))
+pub(crate) fn edit(preset: u32, brush: &BrushSnapshot, id: &str, value: f32, localizer: &Localizer) -> Result<BrushSnapshot, String> {
+    edit_value(preset, brush, id, value).map_err(|reason| reason.message(localizer))
 }
 
-pub(crate) fn edit_value(brush: &BrushSnapshot, id: &str, value: f32) -> Result<BrushSnapshot, crate::WorkspaceValidationError> {
+pub(crate) fn edit_value(preset: u32, brush: &BrushSnapshot, id: &str, value: f32) -> Result<BrushSnapshot, crate::WorkspaceValidationError> {
     if id == COLOR_MIXING {
         let space = ColorMixSpace::ALL
             .into_iter()
@@ -706,13 +802,25 @@ pub(crate) fn edit_value(brush: &BrushSnapshot, id: &str, value: f32) -> Result<
         next.wet_mix.mix_space = space;
         return Ok(next);
     }
+    if id == TAPER {
+        let mode = TAPER_MODES
+            .into_iter()
+            .find(|mode| f32::from(*mode as u8) == value)
+            .ok_or("Unknown taper")?;
+        if !taper_visible(preset, brush) {
+            return Err(NOT_TAPERING.into());
+        }
+        let mut next = brush.clone();
+        next.taper.mode = mode;
+        return Ok(next);
+    }
     let d = DEFINITIONS
         .iter()
         .find(|d| d.id == id)
         .ok_or("Unknown tool setting")?;
     d.numeric(brush).validate(value, d.label)?;
     let mut next = brush.clone();
-    *(d.field)(&mut next).ok_or("This setting is not used by the selected tool")? = value;
+    *d.field(preset, &mut next).ok_or("This setting is not used by the selected tool")? = value;
     next.validate().map_err(|e| e.to_string())?;
     Ok(next)
 }
@@ -780,17 +888,35 @@ mod tests {
             let brush = default_brush(crate::preset(choice.id).unwrap());
             for control in controls(choice.id, &brush, &Localizer::shared(UiLanguage::English)) {
                 assert_eq!(
-                    edit(&brush, control.id, control.value, &Localizer::shared(UiLanguage::English)).unwrap(),
+                    edit(choice.id, &brush, control.id, control.value, &Localizer::shared(UiLanguage::English)).unwrap(),
                     brush,
                     "{}: {}",
                     choice.label,
                     control.id
                 );
                 for value in [control.numeric.min as f32, control.numeric.max as f32] {
-                    edit(&brush, control.id, value, &Localizer::shared(UiLanguage::English)).unwrap();
+                    edit(choice.id, &brush, control.id, value, &Localizer::shared(UiLanguage::English)).unwrap();
                 }
             }
         }
+    }
+
+    #[test]
+    fn taper_controls_appear_only_for_pens_that_can_taper() {
+        let english = Localizer::shared(UiLanguage::English);
+        let mut pens = 0;
+        for choice in crate::brush_catalog() {
+            let mut brush = default_brush(crate::preset(choice.id).unwrap());
+            let shown = choice.group == crate::ToolGroup::Pen && can_taper(&brush);
+            pens += usize::from(shown);
+            for mode in TAPER_MODES {
+                brush.taper.mode = mode;
+                let ids = controls(choice.id, &brush, &english).into_iter().map(|c| c.id).filter(|id| id.starts_with("taper_")).count();
+                assert_eq!(ids, if shown && mode != TaperMode::Off { 3 } else { 0 }, "{} {mode:?}", choice.label);
+                assert_eq!(value(choice.id, &brush, TAPER).is_some(), shown, "{}", choice.label);
+            }
+        }
+        assert!(pens > 0);
     }
 
     #[test]
@@ -809,8 +935,9 @@ mod tests {
             assert_eq!(ids.contains(&"momentum"), momentum, "{preset:?}");
         }
         let crystals = default_brush(DefaultBrushPreset::LiquifyCrystals);
-        assert_eq!(edit(&crystals, "distortion", 0.9, &Localizer::shared(UiLanguage::English)).unwrap().deform.distortion, 0.9);
-        assert_eq!(edit(&crystals, "momentum", 0.5, &Localizer::shared(UiLanguage::English)).unwrap().deform.momentum, 0.5);
+        let crystals_id = DefaultBrushPreset::LiquifyCrystals as u32;
+        assert_eq!(edit(crystals_id, &crystals, "distortion", 0.9, &Localizer::shared(UiLanguage::English)).unwrap().deform.distortion, 0.9);
+        assert_eq!(edit(crystals_id, &crystals, "momentum", 0.5, &Localizer::shared(UiLanguage::English)).unwrap().deform.momentum, 0.5);
     }
 
     #[test]
@@ -831,11 +958,12 @@ mod tests {
             assert!(expected.iter().all(|id| ids.contains(id)), "{preset:?} shows {expected:?}: {ids:?}");
             assert!(!absent.iter().any(|id| ids.contains(id)), "{preset:?} hides {absent:?}: {ids:?}");
         }
-        let crystal = edit(&default_brush(DefaultBrushPreset::CrystalBlender), "cell_size", 0.3, &english).unwrap();
+        let (crystal_id, wet_id) = (DefaultBrushPreset::CrystalBlender as u32, DefaultBrushPreset::WetBlender as u32);
+        let crystal = edit(crystal_id, &default_brush(DefaultBrushPreset::CrystalBlender), "cell_size", 0.3, &english).unwrap();
         assert_eq!(crystal.blender.scale, 0.3);
-        assert!(edit(&crystal, "swirl", 1., &english).is_err());
-        let wet = edit(&default_brush(DefaultBrushPreset::WetBlender), "average_pickup", 0.5, &english).unwrap();
-        assert_eq!(edit(&wet, "persistence", 2., &english).unwrap().wet_mix.stretch, 2.);
+        assert!(edit(crystal_id, &crystal, "swirl", 1., &english).is_err());
+        let wet = edit(wet_id, &default_brush(DefaultBrushPreset::WetBlender), "average_pickup", 0.5, &english).unwrap();
+        assert_eq!(edit(wet_id, &wet, "persistence", 2., &english).unwrap().wet_mix.stretch, 2.);
     }
 
     #[test]
@@ -848,7 +976,7 @@ mod tests {
                 let mut ids = std::collections::HashSet::new();
                 for control in profile.0 {
                     assert!(ids.insert(control.setting), "{} repeats {}", choice.label, control.setting);
-                    assert!(value(&brush, control.setting).is_some(), "{} has no {} binding", choice.label, control.setting);
+                    assert!(value(choice.id, &brush, control.setting).is_some(), "{} has no {} binding", choice.label, control.setting);
                 }
                 assert!(profile.primary().count() <= crate::MAX_RING_SETTINGS);
             }
@@ -870,15 +998,16 @@ mod tests {
             ("flow", f32::NAN),
             ("size", 3000.0),
         ] {
-            assert!(edit(&brush, id, value, &Localizer::shared(UiLanguage::English)).is_err());
+            assert!(edit(DefaultBrushPreset::GPen as u32, &brush, id, value, &Localizer::shared(UiLanguage::English)).is_err());
         }
     }
 
     #[test]
     fn bristle_controls_preserve_relative_scale_when_resizing_and_round_trip() {
         let brush = default_brush(DefaultBrushPreset::BristlePaintbrush);
-        let scaled = edit(&brush, "bristle_scale", 2., &Localizer::shared(UiLanguage::English)).unwrap();
-        let resized = edit(&scaled, "size", 1000., &Localizer::shared(UiLanguage::English)).unwrap();
+        let bristles = DefaultBrushPreset::BristlePaintbrush as u32;
+        let scaled = edit(bristles, &brush, "bristle_scale", 2., &Localizer::shared(UiLanguage::English)).unwrap();
+        let resized = edit(bristles, &scaled, "size", 1000., &Localizer::shared(UiLanguage::English)).unwrap();
         assert_eq!(scaled.contact, resized.contact);
         let restored: BrushSnapshot =
             serde_json::from_str(&serde_json::to_string(&resized).unwrap()).unwrap();

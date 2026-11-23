@@ -411,10 +411,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             _ => Vec::new(),
         };
         let readout = rings.iter().find(|r| r.active).map(|r| format!("{} · {}", r.label, r.text));
-        let stamp = self.bubble_state.ring.filter(|r| state.workspace.layout.bubbles.show_sliders && r.id == bubble.id && tool_settings::shapes_dab(r.setting)).and_then(|r| {
-            let size = ToolbarNumericBinding::BrushSize.field(state)?.value;
-            let scale = self.logical_viewport.map_or(1., |v| (state.camera.viewport[0] as f32 / v[0]).max(f32::EPSILON));
-            Some(BubbleStamp { center: r.at, diameter: size * state.camera.zoom / scale, color: state.colors.definition() })
+        let stamp = self.bubble_state.ring.filter(|r| state.workspace.layout.bubbles.show_sliders && r.id == bubble.id
+            && (tool_settings::shapes_dab(r.setting) || tool_settings::shapes_taper(r.setting))).and_then(|r| {
+            let size = if tool_settings::shapes_taper(r.setting) { TAPER_STAMP } else {
+                let size = ToolbarNumericBinding::BrushSize.field(state)?.value;
+                let scale = self.logical_viewport.map_or(1., |v| (state.camera.viewport[0] as f32 / v[0]).max(f32::EPSILON));
+                [size * state.camera.zoom / scale; 2]
+            };
+            Some(BubbleStamp { center: r.at, size, color: state.colors.definition() })
         });
         let chooser = self.bubble_state.chooser.filter(|c| c.id == bubble.id).map(|c| self.chooser_items(bubble, c).0).unwrap_or_default();
         let card = (self.bubble_state.card == Some(bubble.id)).then(|| BubbleCard {
@@ -485,6 +489,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             Some(saved) => saved.iter().filter_map(|id| controls.iter().find(|c| c.id == id)).map(|c| c.id).collect(),
             None => tool_settings::ring_defaults(brush, snapshot, controls),
         }
+    }
+
+    pub(crate) fn ring_previews_taper(&self) -> bool {
+        self.bubble_state.ring.is_some_and(|ring| tool_settings::shapes_taper(ring.setting))
     }
 
     fn halo_settings(&self) -> Vec<&ToolSetting> {

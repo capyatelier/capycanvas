@@ -431,6 +431,9 @@ command-color-mix-oklab = Pencampuran Oklab
 command-color-mix-linear = Pencampuran cahaya linear
 
 command-color-mix-classic = Pencampuran klasik
+command-taper-off = Tanpa peruncingan
+command-taper-fixed = Peruncingan tetap
+command-taper-proportional = Peruncingan proporsional
 
 command-blend-perceptual = Pembauran Perseptual
 
@@ -685,6 +688,7 @@ commands-help-new-dodge-burn-layer = Tambah lapisan Cahaya Lembut berwarna abu-a
 commands-help-frequency-separation = Pisahkan lapisan aktif menjadi Rendah, dengan warna dan nadanya dikaburkan sesuai radius, serta Tinggi, yang berisi tekstur halusnya, dalam grup baru. Lapisan asli tetap tersembunyi di bawah.
 
 commands-help-color-mix-oklab = Pilih cara kuas ini mencampur warna yang diambil: Oklab membaurkan secara merata menurut penglihatan, Cahaya linear membaurkan seperti cahaya, dan Klasik membaurkan seperti Clip Studio Paint.
+commands-help-taper = Pilih cara garis pena ini menyempit di ujungnya: tanpa peruncingan, peruncingan yang diukur dalam lebar garis, atau peruncingan sepanjang sebagian panjang garis.
 
 commands-cycle-through-tools-in-this-family = Beralih di antara alat dalam keluarga ini.
 
@@ -1019,6 +1023,7 @@ command-merge-clipped-layers = Gabungkan Lapisan Terkliping
 command-apply-effect-to-layer-below = Terapkan Efek ke Lapisan di Bawah
 
 commands-paint-mixing-unavailable = Pilih kuas yang mencampur cat terlebih dahulu
+commands-taper-unavailable = Pilih pena terlebih dahulu
 
 commands-refusal-selection-pixels-alpha-lock-keeps-transparency-unlock-the-layer-first = Kunci alpha mempertahankan transparansi; buka kunci lapisan terlebih dahulu
 

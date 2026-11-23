@@ -142,6 +142,15 @@ struct ToolSettingsControls: View {
             settingsBody
         }
     }
+    @ViewBuilder private func choiceRow(_ choice: JSON) -> some View {
+        let field = ToolOptionField(store: store, option: JSON(["Choice": choice.raw]), iconSize: store.panelMetrics.icon, vertical: false, labeled: true,
+            style: "small", preferences: JSON(), stacked: false, prefix: "tool") { action, completion in
+            store.edit(action as? [String: Any] ?? [:], completion: completion)
+        }.frame(height: choice["labeled"].bool ? nil : store.panelMetrics.height)
+        if !choice["segmented"].bool && !choice["labeled"].bool {
+            HStack(spacing: store.panelMetrics.spacing) { Text(choice["label"].string); field }
+        } else { field }
+    }
     @ViewBuilder private var settingsBody: some View {
         let editingContext = context
         let actions = store.state["tool_actions"].array
@@ -164,14 +173,8 @@ struct ToolSettingsControls: View {
                 }
             }
             let choices = store.state["tool_extra"].array.map { $0["Choice"] }.filter { !$0.isNull }
-            ForEach(choices.filter { $0["beside"].isNull }, id: \.stableKey) { choice in
-                let field = ToolOptionField(store: store, option: JSON(["Choice": choice.raw]), iconSize: store.panelMetrics.icon, vertical: false, labeled: true,
-                    style: "small", preferences: JSON(), stacked: false, prefix: "tool") { action, completion in
-                    store.edit(action as? [String: Any] ?? [:], completion: completion)
-                }.frame(height: choice["labeled"].bool ? nil : store.panelMetrics.height)
-                if !choice["segmented"].bool && !choice["labeled"].bool {
-                    HStack(spacing: store.panelMetrics.spacing) { Text(choice["label"].string); field }
-                } else { field }
+            ForEach(choices.filter { $0["beside"].isNull && $0["before"].isNull }, id: \.stableKey) { choice in
+                choiceRow(choice)
             }
             ForEach(store.state["tool_extra"].array.filter { !$0["Checklist"].isNull }, id: \.["Checklist"]["id"].string) { option in
                 ToolOptionField(store: store, option: option, iconSize: store.panelMetrics.icon, vertical: false, labeled: true,
@@ -181,8 +184,14 @@ struct ToolSettingsControls: View {
             }
             ForEach(settingGroups.map { ($0[0].settingID, $0) }, id: \.0) { _, group in
                 let first = group[0], choice = choices.first { $0["beside"].string == first.settingID }
+                let opening = choices.first { $0["before"].string == first.settingID }
                 let title = choice?["label"].string ?? first["group"].string
+                if let opening, !opening["heading"].isNull {
+                    Text(opening["heading"].string).fontWeight(.bold).padding(.top, group[0].settingID == settings.first?.settingID ? 0 : 2)
+                    choiceRow(opening)
+                }
                 if !title.isEmpty { Text(title).fontWeight(.bold).padding(.top, group[0].settingID == settings.first?.settingID ? 0 : 2) }
+                if let opening, opening["heading"].isNull { choiceRow(opening) }
                 if let choice {
                     let grid = choice["columns"].uint > 0
                     let placement = grid ? AnyLayout(HStackLayout(spacing: store.panelMetrics.compound))

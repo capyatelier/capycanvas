@@ -64,6 +64,27 @@ On the control a Dither Blender stroke on the photo at Fit stops the canvas with
 Both blenders miss the target on both builds: their stroke frames compose whole
 cells, 1,179,648 texels per frame at 100% on both.
 
+## Brush taper
+
+Measured 2026-11-23 on the 12 MP photo, G-Pen, benchmark APKs in ABBA order, three
+five-second gestures per arm, thermal status 0. Taper Off against `982da4748`:
+G-Pen 18 px 132.54 → 139.63 updates/s (p99 14.46 → 11.72 ms, six gestures per
+arm), G-Pen 30 px 130.34 → 131.51, G-Pen 1024 px at Fit 44.22 → 44.41, Lifts 18 px
+90.53 → 91.29. Taper Off → Fixed on the same candidate, `a8777c50e`:
+
+| Row | Held end | Completed updates/s | Completed p99 gap ms | Fresh input updates/s | Next contact first submit p50 ms |
+| --- | --- | ---: | ---: | ---: | ---: |
+| G-Pen 18 px, speed 1, 10 widths | 180 px | 131.30 → 121.59 | 15.15 → 16.25 | 131.30 → 120.60 | — |
+| G-Pen 30 px constant, 10 widths | 300 px | 130.94 → 117.93 | 15.82 → 17.09 | 130.54 → 117.73 | — |
+| G-Pen 100 px slow, 3 widths | 300 px | 145.54 → 133.22 | 10.34 → 12.38 | 144.94 → 133.22 | — |
+| G-Pen 100 px slow, 10 widths | 1000 px | 148.22 → 116.04 | 11.01 → 11.93 | 147.62 → 115.88 | — |
+| Lifts 18 px, 10 widths | 180 px | 88.31 → 80.64 | 51.93 → 50.87 | 60.60 → 57.28 | 63.47 → 66.23 |
+| Lifts 100 px, 10 widths | 1000 px | 77.47 → 57.85 | 62.55 → 68.53 | 58.50 → 42.07 | 70.23 → 62.84 |
+| G-Pen 1024 px, Fit, 10 widths | whole stroke | 44.58 → 79.59 | 40.68 → 50.63 | 44.38 → 79.59 | — |
+| Lifts 1024 px, Fit, 10 widths | whole stroke | 14.55 → 6.99 | 214.44 → 494.61 | 10.56 → 5.79 | 150.55 → 215.88 |
+
+Idle native heap after five retained 256 px strokes stays 24–35 MiB below Off.
+
 ## Stroke patches below 100%
 
 Measured 2026-11-21 against `bd6ad1e02`: benchmark APKs in ABBA order, candidate

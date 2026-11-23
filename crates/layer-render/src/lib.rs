@@ -404,12 +404,15 @@ pub struct ReadbackImage {
     pub bytes: Vec<u8>,
 }
 
+pub const MAX_BRUSH_STAMP_CONTACTS: usize = 192;
+
 #[derive(Clone, Debug)]
 pub struct BrushStampRequest {
     pub style: DabStyle,
     pub dabs: Vec<Dab>,
     pub bounds: layer_core::Rect,
     pub shape_strength: Option<f32>,
+    pub size: [u32; 2],
 }
 
 #[derive(Clone, Debug, PartialEq)]

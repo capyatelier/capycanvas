@@ -238,6 +238,10 @@ tool-rulers-radial = Radial
 tool-rulers-straight = Lurus
 
 tool-setting-angle = Sudut ujung
+tool-setting-taper-type = Jenis peruncingan
+tool-setting-taper-start = Peruncingan awal
+tool-setting-taper-end = Peruncingan akhir
+tool-setting-taper-pointiness = Ketajaman peruncingan
 
 tool-setting-bristle-load = Muatan cat
 
@@ -271,6 +275,7 @@ tool-setting-group-mixing = Pencampuran
 tool-setting-group-texture = Tekstur
 
 tool-setting-group-tip = Ujung
+tool-setting-group-taper = Peruncingan
 
 tool-setting-group-watercolor = Cat air
 

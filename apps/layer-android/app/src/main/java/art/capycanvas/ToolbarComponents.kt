@@ -51,7 +51,6 @@ import kotlin.coroutines.resume
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.graphics.ImageBitmap
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 
@@ -73,13 +72,13 @@ private fun formatted(language: String, control: JSONObject, value: Float, units
             if (reply != null && (reply[1] as ByteArray).isNotEmpty()) {
                 result = withContext(Dispatchers.Default) {
                     val next = JSONObject(reply[0] as String)
-                    val alpha = reply[1] as ByteArray; val size = next.getInt("size")
-                    next to android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ALPHA_8).apply {
+                    val alpha = reply[1] as ByteArray
+                    next to android.graphics.Bitmap.createBitmap(next.getInt("width"), next.getInt("height"), android.graphics.Bitmap.Config.ALPHA_8).apply {
                         copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(alpha))
                     }.asImageBitmap()
                 }
             }
-            delay(16)
+            withFrameNanos {}
         }
     }
     return result.takeIf { active }

@@ -193,7 +193,8 @@ typedef uint64_t CapyBrushStamp;
 typedef struct {
     uint64_t request;
     bool pending;
-    uint32_t size;
+    uint32_t width;
+    uint32_t height;
     float extent;
     size_t count;
 } CapyBrushStampInfo;

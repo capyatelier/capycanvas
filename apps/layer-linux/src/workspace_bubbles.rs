@@ -265,7 +265,7 @@ mod imp {
                 place(icon.upcast_ref(), ring.arc.icon_point(), [16.; 2]);
             }
             if let (Some(patch), Some(stamp), Some((_, extent, _))) = (self.stamp_patch.borrow().as_ref(), view.stamp, self.stamp.borrow().as_ref()) {
-                place(patch.upcast_ref(), stamp.center, [stamp.diameter * extent; 2]);
+                place(patch.upcast_ref(), stamp.center, stamp.size.map(|side| side * extent));
             }
             if let Some(readout) = self.readout.borrow().as_ref().filter(|r| r.is_visible()) {
                 let (_, natural, _, _) = readout.measure(gtk::Orientation::Horizontal, -1);
@@ -1338,8 +1338,7 @@ impl Bubble {
             g.session.toolbar_stamp(context, known).ok().flatten()
         });
         if let Some(stamp) = stamp.filter(|s| !s.alpha.is_empty()) {
-            let size = stamp.size as i32;
-            let texture = gdk::MemoryTexture::new(size, size, gdk::MemoryFormat::A8, &glib::Bytes::from_owned(stamp.alpha), stamp.size as usize);
+            let texture = gdk::MemoryTexture::new(stamp.width as i32, stamp.height as i32, gdk::MemoryFormat::A8, &glib::Bytes::from_owned(stamp.alpha), stamp.width as usize);
             imp.stamp.replace(Some((stamp.request_id, stamp.extent, texture.upcast())));
             self.queue_allocate();
             self.layer_redraw();

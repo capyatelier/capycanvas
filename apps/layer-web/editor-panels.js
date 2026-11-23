@@ -160,7 +160,7 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
           input.toolChoiceChange=change;input.dataset.toolActionGroup=id;
           return {row,input,update(label,items,value){caption.textContent=label;input.update({label,choices:items,value,disabled:items.every(i=>i.enabled===false)});}};
         };
-        const beside=new Map();let grouped,gridGroup=false;
+        const beside=new Map(),before=new Map();let grouped,gridGroup=false;
         for (const option of s.tool_extra) {
           if(option.Gradient){gradient=gradientEditor({app,element,button,icon,dropdown,dispatch});body.append(gradient.node);continue;}
           if(option.Checklist){const field=checklistField({element,button,icon},option.Checklist,dispatch);choices.push([option.Checklist.id,field]);body.append(field.row);continue;}
@@ -174,7 +174,7 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
           bar.dataset.toolChoiceBar=spec.id;
           [...bar.children].forEach((node,index)=>node.dataset.toolChoiceTone=String(index));
           choices.push([spec.id,field]);
-          if(spec.beside)beside.set(spec.beside,{spec,bar});else body.append(bar);
+          if(spec.beside)beside.set(spec.beside,{spec,bar});else if(spec.before)before.set(spec.before,{spec,bar});else body.append(bar);
         }
         for (const field of s.tool_settings) {
           if (compact && field.id==='tonal_upper') continue;
@@ -185,9 +185,11 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
             body.append(range);continue;
           }
           if(field.group_id!==group){
-            group=field.group_id;grouped=null;gridGroup=false;const extra=beside.get(field.id);
+            group=field.group_id;grouped=null;gridGroup=false;const extra=beside.get(field.id),opening=before.get(field.id);
+            if(opening?.spec.heading)body.append(element('h3','',()=>state().tool_extra.find(o=>o.Choice?.id===opening.spec.id)?.Choice.heading??''),opening.bar);
             if(group)body.append(element('h3','',()=>state().tool_extra.find(o=>o.Choice?.beside===field.id)?.Choice.label??state().tool_settings.find(f=>f.id===field.id)?.group??''));
             if(extra){gridGroup=!!extra.spec.columns;const row=element('div','tool-position-group');row.classList.toggle('stacked',!gridGroup);grouped=element('div','tool-position-numbers');row.append(extra.bar,grouped);body.append(row);}
+            if(opening&&!opening.spec.heading)body.append(opening.bar);
           }
           const node=numberField(field.numeric,()=>state().tool_settings.find(f=>f.id===field.id)?.label??"",value=>{if(key===next)dispatch({type:"set_tool_setting",id:field.id,value});},compact||gridGroup);
           node.onReset=()=>{if(key===next)dispatch({type:'reset_tool_setting',id:field.id});};

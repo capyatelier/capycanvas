@@ -81,6 +81,24 @@ canvas; the panel ran at 90 Hz.
 Both blenders miss the target on both builds: their stroke frames compose whole
 cells.
 
+## Brush taper
+
+Measured 2026-11-23 on the 12 MP photo, G-Pen, benchmark APKs in ABBA order, three
+five-second gestures per arm, thermal status 0. Taper Off against its `origin/main`
+merge base: G-Pen 18 px 300.23 → 302.04 updates/s, Lifts 18 px 242.62 → 244.50.
+Taper Off → Fixed on `a83b9c823`:
+
+| Row | Held end | Completed updates/s | Completed p99 gap ms | Fresh input updates/s | Fresh input p99 gap ms |
+| --- | --- | ---: | ---: | ---: | ---: |
+| G-Pen 18 px, speed 1, 10 widths | 180 px | 304.32 → 288.03 | 5.09 → 5.63 | 197.44 → 197.01 | 8.51 → 9.03 |
+| G-Pen 30 px constant, 10 widths | 300 px | 302.17 → 274.84 | 5.54 → 6.10 | 196.40 → 196.71 | 8.48 → 9.59 |
+| G-Pen 100 px slow, 3 widths | 300 px | 292.40 → 266.03 | 4.71 → 5.39 | 196.46 → 195.53 | 8.27 → 9.27 |
+| G-Pen 100 px slow, 10 widths | 1000 px | 290.94 → 223.59 | 4.84 → 6.71 | 196.10 → 181.92 | 8.43 → 8.74 |
+| Lifts 18 px, 10 widths | 180 px | 246.72 → 228.28 | 19.19 → 16.62 | 146.83 → 143.54 | 63.08 → 62.62 |
+| Lifts 100 px, 10 widths | 1000 px | 224.97 → 171.88 | 19.66 → 31.30 | 140.44 → 126.77 | 66.84 → 67.49 |
+
+After ten retained 256 px strokes, idle native heap is 8 MiB below Off and flat.
+
 ## Stroke patches below 100%
 
 Measured 2026-11-21 against `bd6ad1e02`: benchmark APKs in ABBA order, candidate

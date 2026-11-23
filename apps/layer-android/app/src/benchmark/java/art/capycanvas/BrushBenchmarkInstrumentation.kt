@@ -56,9 +56,11 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             val opacity = arguments.getString("opacity")?.toDouble()
             val tilt = arguments.getString("tilt")?.toFloat()
             val smoothing = arguments.getString("smoothing")?.toDouble()
+            val taper = arguments.getString("taper")?.split(":")
             check(strength == null || strength in 0.0..1.0)
             check(opacity == null || opacity in 0.0..1.0)
             check(smoothing == null || smoothing in 0.0..1.0)
+            check(taper == null || taper.size in 3..4 && taper[0] in listOf("fixed", "proportional"))
             check(tilt == null || tilt in 0f..1.57f)
             val duration = arguments.getString("durationMs", "10000")!!.toInt()
             val repeats = arguments.getString("repeats", "3")!!.toInt()
@@ -168,6 +170,13 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 check(host.actionError == null) { host.actionError!! }
             }
             fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))
+            fun applyTaper() = taper?.let { t ->
+                val lengths = if (t[0] == "fixed") "widths" else "share"
+                invoke("taper_${t[0]}")
+                action(obj("type" to "set_tool_setting", "id" to "taper_start_$lengths", "value" to t[1].toDouble()))
+                action(obj("type" to "set_tool_setting", "id" to "taper_end_$lengths", "value" to t[2].toDouble()))
+                t.getOrNull(3)?.let { action(obj("type" to "set_tool_setting", "id" to "taper_pointiness", "value" to it.toDouble())) }
+            }
             fun enabledCommand(id: String): Boolean {
                 val commands = state().getJSONArray("commands")
                 return (0 until commands.length()).any { commands.getJSONObject(it).let { command ->
@@ -437,6 +446,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             strength?.let { action(obj("type" to "set_brush_strength", "value" to it)) }
             opacity?.let { action(obj("type" to "set_brush_opacity", "value" to it)) }
             smoothing?.let { action(obj("type" to "set_tool_setting", "id" to "smoothing_strength", "value" to it)) }
+            applyTaper()
             arguments.getString("paintLoad")?.let {
                 val load = it.toDouble()
                 check(load in 0.0..1.0)
@@ -617,6 +627,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 strength?.let { action(obj("type" to "set_brush_strength", "value" to it)) }
                 opacity?.let { action(obj("type" to "set_brush_opacity", "value" to it)) }
                 smoothing?.let { action(obj("type" to "set_tool_setting", "id" to "smoothing_strength", "value" to it)) }
+                applyTaper()
                 waitFor { host.snapshot?.optBoolean("brush_ready") == true && !native { Native.renderingPending(it) } }
                 check(enabledCommand("liquify_reset")) { "Reconstruct must start from a deformed session" }
                 reconstructFixture = obj("seed_preset" to 12, "duration_ms" to seedDuration,
@@ -636,7 +647,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 "brush_preparation" to selection, "size_preparation" to sizePreparation, "size_idle_ms" to sizeIdleMs,
                 "brush_size" to size, "mode" to mode, "prediction" to prediction, "speed" to speed,
                 "visual_background" to visualBackground,
-                "strength" to strength, "opacity" to opacity, "tilt" to tilt, "smoothing" to smoothing,
+                "strength" to strength, "opacity" to opacity, "tilt" to tilt, "smoothing" to smoothing, "taper" to taper?.joinToString(":"),
                 "orientation" to if (tilt != null) -PI/2 else if (mode == "tilt") .5 else 0.0,
                 "memory_snapshots" to memorySnapshots,
                 "stats_panel" to statsPanel,

@@ -65,6 +65,7 @@ def main():
     for name, help in (("strength", "Brush Strength"), ("opacity", "Brush Opacity"), ("smoothing", "Curve fit Smoothing")):
         p.add_argument(f"--{name}", type=float, help=f"{help}, 0 to 1; omit for the preset default")
     p.add_argument("--tilt", type=float, help="Fixed pen tilt in radians, 0 to 1.57")
+    p.add_argument("--taper", help="MODE:START:END[:POINTINESS], MODE fixed or proportional, e.g. fixed:2:2")
     p.add_argument("--speed", type=float, default=1)
     p.add_argument("--prediction", choices=["true", "false"], default="true")
     p.add_argument("--horizon", type=int, default=16, help="Engine prediction lookahead in ms")
@@ -166,7 +167,7 @@ def main():
         requested.update(wait_for_warmup=args.wait_for_warmup, warmup_idle_ms=args.warmup_idle_ms, size_idle_ms=args.size_idle_ms,
                          probe_presets=[int(value) for value in args.probe_presets.split(",")] if args.probe_presets else [])
         requested.update(workload=args.workload, effect_radius=args.effect_radius, color_mode=args.color_mode)
-        requested.update({name: getattr(args, name) for name in ("strength", "opacity", "tilt", "smoothing") if getattr(args, name) is not None})
+        requested.update({name: getattr(args, name) for name in ("strength", "opacity", "tilt", "smoothing", "taper") if getattr(args, name) is not None})
         if args.workload.startswith("objects"):
             requested.update(image_count=args.image_count, image_sources=args.image_sources)
         if args.canvas_width is not None:
@@ -229,7 +230,7 @@ def main():
                     "-e", "liveFilterDisabled", str(args.live_filter_disabled).lower()]
         if args.paint_load is not None:
             cmd += ["-e", "paintLoad", str(args.paint_load)]
-        for name in ("strength", "opacity", "tilt", "smoothing"):
+        for name in ("strength", "opacity", "tilt", "smoothing", "taper"):
             if getattr(args, name) is not None:
                 cmd += ["-e", name, str(getattr(args, name))]
         if args.paint_layer_name:

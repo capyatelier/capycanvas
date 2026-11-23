@@ -1531,35 +1531,6 @@ fn slider_stamp_plan_accepts_every_builtin_tool_context() {
     }
 }
 
-struct StampRecorder {
-    inner: Recorder,
-    requests: Vec<(u64,layer_render::BrushStampRequest)>,
-    reply: Option<Result<layer_render::ReadbackImage,layer_render::BackendError>>,
-    accepts: bool,
-    error: bool,
-}
-impl Default for StampRecorder {
-    fn default()->Self {Self{inner:Recorder::default(),requests:Vec::new(),reply:None,accepts:true,error:false}}
-}
-impl StampRecorder {
-    fn complete(&mut self,id:u64,value:u8)->*const u8 {
-        let bytes=vec![value;4];let pointer=bytes.as_ptr();
-        self.reply=Some(Ok(layer_render::ReadbackImage{request_id:id,width:2,height:2,stride:2,bytes}));pointer
-    }
-}
-impl CanvasRenderer for StampRecorder {
-    type Error=layer_render::BackendError;
-    fn resize_surface(&mut self,w:u32,h:u32)->Result<(),Self::Error>{self.inner.resize_surface(w,h)}
-    fn prepare_asset(&mut self,id:&AssetId,image:layer_render::HostImage<'_>)->Result<(),Self::Error>{self.inner.prepare_asset(id,image)}
-    fn release_asset(&mut self,id:&AssetId){self.inner.release_asset(id)}
-    fn submit(&mut self,packet:layer_render::FramePacket<'_>)->Result<(),Self::Error>{self.inner.submit(packet)}
-    fn request_brush_stamp(&mut self,id:u64,request:&layer_render::BrushStampRequest)->Result<bool,Self::Error>{
-        if self.error {return Err(layer_render::BackendError("stamp request failed"));}
-        self.requests.push((id,request.clone()));Ok(self.accepts)
-    }
-    fn take_brush_stamp(&mut self)->Option<Result<layer_render::ReadbackImage,Self::Error>>{self.reply.take()}
-}
-
 #[test]
 fn slider_stamp_coalesces_full_brush_keys_and_rejects_stale_owners() {
     let mut s=UiSession::blank(StampRecorder::default(),[1000,1000],Platform::Gtk).unwrap();
@@ -1570,9 +1541,9 @@ fn slider_stamp_coalesces_full_brush_keys_and_rejects_stale_owners() {
     let ready=s.toolbar_stamp(context,None).unwrap().unwrap();
     assert!(!ready.pending);
     assert_eq!(ready.alpha.as_ptr(),pixels,"GPU reply allocation moves to the client");
-    assert_eq!((ready.request_id,ready.size,ready.alpha.as_slice()),(first,2,&[7;4][..]));
+    assert_eq!((ready.request_id,ready.width,ready.height,ready.alpha.as_slice()),(first,2,2,&[7;4][..]));
     let unchanged=s.toolbar_stamp(context,Some(first)).unwrap().unwrap();
-    assert_eq!((unchanged.request_id,unchanged.size,unchanged.extent),(first,ready.size,ready.extent));
+    assert_eq!((unchanged.request_id,unchanged.width,unchanged.extent),(first,ready.width,ready.extent));
     assert!(!unchanged.pending && unchanged.alpha.is_empty(),"completed pixels are delivered once");
     assert_eq!(s.renderer_mut().requests.len(),1);
     let mut brush=s.engine.configured_brush().clone();
@@ -1611,6 +1582,27 @@ fn slider_stamp_coalesces_full_brush_keys_and_rejects_stale_owners() {
     assert!(s.toolbar_stamp(next,Some(fourth)).unwrap().is_none(),"replacement GPU discards cached pixels");
     assert_eq!(s.renderer_mut().requests.len(),1);
     assert!(s.renderer_mut().requests[0].0>fourth,"replacement does not reuse request identity");
+}
+
+#[test]
+fn a_shown_dab_keeps_its_own_extent_until_its_new_shape_arrives() {
+    let mut s=UiSession::blank(StampRecorder::default(),[1000,1000],Platform::Gtk).unwrap();
+    let mut brush=layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+    s.engine.set_brush(brush.clone()).unwrap();
+    let context=s.state().toolbar_context();
+    assert!(s.toolbar_stamp(context,None).unwrap().is_none());
+    let (first,shown)=(s.renderer_mut().requests[0].0,s.stamp_request().unwrap().1);
+    s.renderer_mut().complete(first,7);
+    assert_eq!(s.toolbar_stamp(context,None).unwrap().unwrap().extent,shown);
+    brush.shape.size_jitter=1.;
+    s.engine.set_brush(brush).unwrap();
+    let varied=s.stamp_request().unwrap().1;
+    assert!((varied-shown).abs()>0.01,"{shown} {varied}");
+    let pending=s.toolbar_stamp(context,Some(first)).unwrap().unwrap();
+    assert!(pending.pending && pending.request_id==first && pending.extent==shown,"the shown image keeps its own extent");
+    let second=s.renderer_mut().requests.last().unwrap().0;
+    s.renderer_mut().complete(second,9);
+    assert_eq!(s.toolbar_stamp(context,Some(first)).unwrap().unwrap().extent,varied);
 }
 
 #[test]

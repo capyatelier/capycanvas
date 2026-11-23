@@ -417,11 +417,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn region_controls(&self) -> Vec<ToolOption> {
         let Some((fill, source, contiguous)) = self.layer_interaction.tool.region() else { return Vec::new(); };
         let mut controls = vec![ToolOption::Choice { id: "selection-source", label: self.localization().text(MessageId::TOOL_ACTION_GROUP_LINES_FROM),
-            segmented: true, labeled: true, columns: None, beside: None,
+            segmented: true, labeled: true, columns: None, beside: None, before: None, heading: None,
             items: [CommandId::SelectionReference, CommandId::SelectionVisible, CommandId::SelectionEditing].into_iter()
                 .map(|command| { let state = self.command(command); state.choice_item(state.label.clone()) }).collect() }];
         if self.layer_interaction.tool.encloses() {
-            controls.push(ToolOption::Choice {id:"fill-areas",label:self.localization().text(MessageId::TOOL_ACTION_GROUP_FILL_AREAS),segmented:true,labeled:true,columns:None,beside:None,items:[CommandId::FillAreasTransparent,CommandId::FillAreasTransparentOrWhite,CommandId::FillAreasAnyColour].into_iter().map(|command|{let state=self.command(command);state.choice_item(state.label.clone())}).collect()});
+            controls.push(ToolOption::Choice {id:"fill-areas",label:self.localization().text(MessageId::TOOL_ACTION_GROUP_FILL_AREAS),segmented:true,labeled:true,columns:None,beside:None,before:None,heading:None,items:[CommandId::FillAreasTransparent,CommandId::FillAreasTransparentOrWhite,CommandId::FillAreasAnyColour].into_iter().map(|command|{let state=self.command(command);state.choice_item(state.label.clone())}).collect()});
         }
         for (id, label, commands) in [
             ("close-gaps", MessageId::TOOL_CONTROL_CLOSE_GAPS, &[CommandId::CloseGapsAuto, CommandId::CloseGapsOff][..]),
@@ -429,7 +429,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         ] {
             if id == "close-gaps" && (!contiguous || fill && self.region_tools.scope == FillScope::Everywhere) { continue; }
             let beside=(id=="region-edges" && matches!(self.region_tools.refinement.edges,layer_render::RegionEdges::GrowShrink(_))).then_some("edge_offset");
-            controls.push(ToolOption::Choice { id, label:self.localization().text(label), segmented:true, labeled:beside.is_none(), columns:None, beside,
+            controls.push(ToolOption::Choice { id, label:self.localization().text(label), segmented:true, labeled:beside.is_none(), columns:None, beside, before:None,heading:None,
                 items:commands.iter().map(|command| {let state=self.command(*command);
                     let label=if matches!(self.layer_interaction.tool,LayerCanvasTool::Region {fill:true,..}) && *command==CommandId::CloseGapsAuto {self.region_tools.gap_reach.map(|reach|NumericControl::whole_pixels(0.,64.).compact_text(f64::from(reach)).into()).unwrap_or_else(||state.label.clone())}else{state.label.clone()};
                     state.choice_item(label)}).collect() });

@@ -204,7 +204,7 @@ export function createBubbles({app,workspace,element,button,icon,state,dispatch,
       const next=app.bubble_stamp(stamp?.request_id);
       stampPending=!next||next.pending;
       if(next?.alpha.length&&next.request_id!==stamp?.request_id) {
-        const image=await rasterWorker({operation:'alpha-image',metadata:{size:next.size},buffers:[next.alpha]});
+        const image=await rasterWorker({operation:'alpha-image',metadata:{width:next.width,height:next.height},buffers:[next.alpha]});
         if(generation!==stampGeneration||stampWanted?.record!==owner)image.close();
         else {stamp?.image.close();stamp={...next,image};}
         active=true;wake();
@@ -271,9 +271,9 @@ export function createBubbles({app,workspace,element,button,icon,state,dispatch,
     input.refreshHover(hoverChanged);
     stampCanvas.hidden=!stampWanted||!stamp;
     if(stampWanted) {
-      refreshStamp();if(stampPending)active=true;const s=stampWanted;if(!s)return active||dirty;const diameter=s.diameter*(stamp?.extent||1);
-      place(stampCanvas,s.center.map((x,i)=>x+s.record.center[i]),[diameter,diameter]);
-      if(stamp){const size=stamp.image.width;if(stampCanvas.width!==size)stampCanvas.width=stampCanvas.height=size;const ctx=stampCanvas.getContext('2d');ctx.clearRect(0,0,size,size);ctx.drawImage(stamp.image,0,0);ctx.globalCompositeOperation='source-in';ctx.fillStyle=rgba(s.color);ctx.fillRect(0,0,size,size);ctx.globalCompositeOperation='source-over';}
+      refreshStamp();if(stampPending)active=true;const s=stampWanted;if(!s)return active||dirty;
+      place(stampCanvas,s.center.map((x,i)=>x+s.record.center[i]),s.size.map(side=>side*(stamp?.extent||1)));
+      if(stamp){const {width,height}=stamp.image;if(stampCanvas.width!==width)stampCanvas.width=width;if(stampCanvas.height!==height)stampCanvas.height=height;const ctx=stampCanvas.getContext('2d');ctx.clearRect(0,0,width,height);ctx.drawImage(stamp.image,0,0);ctx.globalCompositeOperation='source-in';ctx.fillStyle=rgba(s.color);ctx.fillRect(0,0,width,height);ctx.globalCompositeOperation='source-over';}
     }
     workspace.classList.toggle('bubble-dab-active',!!stampWanted);glassChanged();return active||dirty;
   }

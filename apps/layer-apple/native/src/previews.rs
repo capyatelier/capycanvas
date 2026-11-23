@@ -7,7 +7,8 @@ use layer_render::FilterPreviewImage;
 pub struct CapyBrushStampInfo {
     pub request: u64,
     pub pending: bool,
-    pub size: u32,
+    pub width: u32,
+    pub height: u32,
     pub extent: f32,
     pub count: usize,
 }
@@ -31,7 +32,7 @@ pub unsafe extern "C" fn capy_brush_stamp_read(stamp: u64, output: *mut CapyBrus
     unsafe { output.write(CapyBrushStampInfo::default()); }
     let Some(stamp) = handles::shared::<layer_ui::BrushStamp>(stamp) else { return false; };
     unsafe { output.write(CapyBrushStampInfo {
-        request: stamp.request_id, pending: stamp.pending, size: stamp.size, extent: stamp.extent, count: stamp.alpha.len(),
+        request: stamp.request_id, pending: stamp.pending, width: stamp.width, height: stamp.height, extent: stamp.extent, count: stamp.alpha.len(),
     }); }
     true
 }

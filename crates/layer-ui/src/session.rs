@@ -2943,6 +2943,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::ColorMixOklab | CommandId::ColorMixLinear | CommandId::ColorMixClassic => {
                 tool_settings::color_mixing_visible(self.engine.configured_brush())
             }
+            CommandId::TaperOff | CommandId::TaperFixed | CommandId::TaperProportional => {
+                tool_settings::taper_visible(self.state.brush.preset, self.engine.configured_brush())
+            }
             CommandId::EraseTouchedPart | CommandId::EraseWholePaths | CommandId::EraseToIntersection => self.vector_erasing_layer(false).is_some(),
             CommandId::ScaleOutlineWidths => self.selected_vector_items().is_some(),
             _ => true,
@@ -2983,6 +2986,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             || tool_settings::color_mixing(id).is_some_and(|space| {
                 let brush = self.engine.configured_brush();
                 tool_settings::color_mixing_visible(brush) && brush.wet_mix.mix_space == space
+            })
+            || tool_settings::taper(id).is_some_and(|mode| {
+                let brush = self.engine.configured_brush();
+                tool_settings::taper_visible(self.state.brush.preset, brush) && brush.taper.mode == mode
             })
             || blending::blend_space(id).is_some_and(|space| document.composition().blend == space)
             || matches!((id, self.layer_interaction.tool.region().map(|(fill, source, connected)| (fill, self.lines_from(source), connected))),
@@ -4145,7 +4152,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     region_tools::RegionTools::default().controls(&self.state.localization)
                 } else {
                     let brush = layer_core::default_brush(tools::preset(self.state.brush.preset)?);
-                    let value = tool_settings::value(&brush, &id).ok_or("This setting has no default")?;
+                    let value = tool_settings::value(self.state.brush.preset, &brush, &id).ok_or("This setting has no default")?;
                     return self.dispatch(UiAction::SetToolSetting { id, value });
                 };
                 let value = defaults.iter().find(|f| f.id == id)
@@ -5628,6 +5635,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.edit_brush(tool_settings::COLOR_MIXING, f32::from(space as u8))?;
                 Ok((BRUSH, false))
             }
+            CommandId::TaperOff | CommandId::TaperFixed | CommandId::TaperProportional => {
+                let mode = tool_settings::taper(command).expect("a taper choice");
+                self.edit_brush(tool_settings::TAPER, f32::from(mode as u8))?;
+                Ok((BRUSH, false))
+            }
             CommandId::ScaleOutlineWidths => {
                 self.state.settings.keep_outline_widths ^= true;
                 Ok((SETTINGS | BRUSH | COMMANDS, false))
@@ -6277,7 +6289,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn edit_brush(&mut self, id: &str, value: f32) -> Result<(), String> {
-        let brush = tool_settings::edit(self.engine.configured_brush(), id, value, &self.state.localization)?;
+        let brush = tool_settings::edit(self.state.brush.preset, self.engine.configured_brush(), id, value, &self.state.localization)?;
         self.state.brush.diameter = brush.diameter;
         self.state.brush.opacity = brush.opacity;
         self.engine.set_brush(brush).map_err(error)?;
@@ -6519,6 +6531,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         let _ = self.prepare_transform_snapping();
         if !self.operation.transforming() {self.state.tool_extra.extend(self.gradient_tool_options());}
         self.state.tool_extra.extend(self.region_controls());
+        if self.layer_interaction.tool == LayerCanvasTool::Paint && !self.operation.active() && !self.cropping()
+            && tool_settings::taper_visible(self.state.brush.preset, self.engine.configured_brush()) {
+            let items = tool_settings::TAPER_COMMANDS.into_iter().map(|command| { let state = self.command(command); state.choice_item(state.label.clone()) }).collect();
+            self.state.tool_extra.extend(tool_settings::section_choice(tool_settings::TAPER, MessageId::TOOL_SETTING_TAPER_TYPE, MessageId::TOOL_SETTING_GROUP_TAPER,
+                &self.state.tool_settings, items, &self.state.localization));
+        }
     }
 
     /// Whether a contact of `kind` pressed with `button` at surface

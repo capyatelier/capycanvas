@@ -213,8 +213,9 @@ import kotlinx.coroutines.withContext
         Column(verticalArrangement=Arrangement.spacedBy(metrics.spacing)) {
         val choices = state.array("tool_extra").objects().mapNotNull { it.optJSONObject("Choice") }
         val beside = choices.filter { it.has("beside") }.associateBy { it.getString("beside") }
+        val before = choices.filter { it.has("before") }.associateBy { it.getString("before") }
         val choiceLabelWidth = panelLabelWidth(choices.filter { !it.getBoolean("segmented") }.map { it.getString("label") })
-        choices.filterNot { it.has("beside") }.forEach { choice ->
+        choices.filterNot { it.has("beside") || it.has("before") }.forEach { choice ->
             if (choice.getBoolean("segmented") || choice.optBoolean("labeled")) {
                 ToolbarChoice(choice, false, false, false, 20, host::dispatch, prefix = "tool", height = metrics.height.value)
             } else Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(metrics.spacing)) {
@@ -251,8 +252,12 @@ import kotlinx.coroutines.withContext
             groups
         }.forEachIndexed { index, fields ->
             val choice = beside[fields.first().getString("id")]
+            val opening = before[fields.first().getString("id")]
             val title = choice?.getString("label") ?: fields.first().getString("group")
-            if (title.isNotEmpty()) Text(title, Modifier.padding(top=if(index>0)2.dp else 0.dp), fontWeight = FontWeight.Bold, color = LocalPalette.current.secondary)
+            val heading: @Composable (String) -> Unit = { Text(it, Modifier.padding(top=if(index>0)2.dp else 0.dp), fontWeight = FontWeight.Bold, color = LocalPalette.current.secondary) }
+            opening?.optString("heading")?.takeIf { it.isNotEmpty() }?.let { heading(it); ToolbarChoice(opening, false, false, false, 20, host::dispatch, prefix = "tool", height = metrics.height.value) }
+            if (title.isNotEmpty()) heading(title)
+            if (opening != null && !opening.has("heading")) ToolbarChoice(opening, false, false, false, 20, host::dispatch, prefix = "tool", height = metrics.height.value)
             if (choice == null) fields.forEach { fieldControl(it, false) }
             else {
                 val grid = choice.optInt("columns") > 0

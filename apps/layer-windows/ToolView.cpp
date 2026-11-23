@@ -236,7 +236,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
             if(auto checklist=object(entry,L"Checklist");checklist.Size()){result.Append(O({{L"checklist",S(str(checklist,L"id"))},{L"items",S(itemSchema(array(checklist,L"items")))}}));continue;}
             auto choice=object(entry,L"Choice");
             result.Append(O({{L"id",S(str(choice,L"id"))},{L"segmented",B(flag(choice,L"segmented"))},{L"labeled",B(flag(choice,L"labeled"))},{L"columns",N(num(choice,L"columns"))},
-                {L"beside",S(str(choice,L"beside"))},{L"items",S(itemSchema(array(choice,L"items")))}}));
+                {L"beside",S(str(choice,L"beside"))},{L"before",S(str(choice,L"before"))},{L"heading",B(!str(choice,L"heading").empty())},{L"items",S(itemSchema(array(choice,L"items")))}}));
         }return result;
     }
     static J toolGradient(J const& state){
@@ -302,7 +302,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
             }
             if(!modeRows.empty()){root.Children().Append(modeSection);if(selectionTool&&!compact)selectionActions();}
             root.Children().Append(body);
-            std::map<std::wstring,J> beside;
+            std::map<std::wstring,J> beside;std::map<std::wstring,std::pair<J,StackPanel>> opening;
             for(auto value:extra){auto spec=object(value.GetObject(),L"Choice");if(auto target=str(spec,L"beside");!target.empty())beside.emplace(target.c_str(),spec);}
             for(auto value:extra){
                 if(auto spec=object(value.GetObject(),L"Checklist");spec.Size()){
@@ -322,6 +322,8 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                 }
                 auto spec=object(value.GetObject(),L"Choice");auto items=array(spec,L"items");auto specId=str(spec,L"id");
                 if(!str(spec,L"beside").empty())continue;
+                StackPanel target=body;
+                if(auto anchor=str(spec,L"before");!anchor.empty()){StackPanel holder;opening.emplace(anchor.c_str(),std::make_pair(spec,holder));target=holder;}
                 if(!flag(spec,L"segmented")&&num(spec,L"columns")==0){
                     auto read=[weak,specId]{if(auto self=weak.lock())for(auto option:array(self->data->state,L"tool_extra"))if(auto current=object(option.GetObject(),L"Choice");str(current,L"id")==specId)return current;return J{};};
                     choiceRow(read,L"tool-choice-"+specId,context,[weak,read]{if(auto self=weak.lock())return self->captionWidth({str(read(),L"label")});return 0.;});continue;
@@ -335,7 +337,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                     ColumnDefinition title;title.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(title);
                     ColumnDefinition control;control.Width({1,GridUnitType::Auto});row.ColumnDefinitions().Append(control);
                     caption.TextWrapping(TextWrapping::Wrap);bar.VerticalAlignment(VerticalAlignment::Center);caption.VerticalAlignment(VerticalAlignment::Center);row.Children().Append(caption);
-                    Grid::SetColumn(bar,1);row.Children().Append(bar);body.Children().Append(row);
+                    Grid::SetColumn(bar,1);row.Children().Append(bar);target.Children().Append(row);
                 }
                 AutomationProperties::SetAutomationId(bar,L"tool-choice-"+specId);
                 fields.emplace_back([weak,bar,caption,specId]{if(auto self=weak.lock())for(auto option:array(self->data->state,L"tool_extra"))
@@ -359,7 +361,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                         AutomationProperties::SetItemStatus(pick,chosen?self->data->caption(L"search",L"selected"):hstring());
                     }});
                 }
-                if(!labeled)body.Children().Append(bar);
+                if(!labeled)target.Children().Append(bar);
             }
             auto settings=array(data->state,L"tool_settings");StackPanel numbers{nullptr};bool numbersInline=false;
             for(auto value:settings){
@@ -381,6 +383,13 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                 }
                 if(group!=str(item,L"group_id")){
                     group=str(item,L"group_id");numbers=nullptr;numbersInline=false;auto anchor=beside.find(id.c_str());
+                    auto open=opening.find(id.c_str());bool own=open!=opening.end()&&!str(open->second.first,L"heading").empty();
+                    if(own){
+                        auto title=label(data,str(open->second.first,L"heading"),true);title.Opacity(.55);title.Margin({0,body.Children().Size()?2.:0.,0,0});
+                        body.Children().Append(title);body.Children().Append(open->second.second);auto specId=str(open->second.first,L"id");
+                        fields.emplace_back([weak,title,specId]{if(auto self=weak.lock())for(auto option:array(self->data->state,L"tool_extra"))
+                            if(auto spec=object(option.GetObject(),L"Choice");str(spec,L"id")==specId)title.Text(str(spec,L"heading"));});
+                    }
                     if(!group.empty()||anchor!=beside.end()){
                         auto heading=label(data,anchor!=beside.end()?str(anchor->second,L"label"):str(item,L"group"),true);heading.Opacity(.55);heading.Margin({0,body.Children().Size()?2.:0.,0,0});body.Children().Append(heading);
                         auto specId=anchor!=beside.end()?str(anchor->second,L"id"):hstring();
@@ -389,6 +398,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                             if(!specId.empty())for(auto option:array(self->data->state,L"tool_extra"))if(auto spec=object(option.GetObject(),L"Choice");str(spec,L"id")==specId)title=str(spec,L"label");
                             heading.Text(title);}});
                     }
+                    if(open!=opening.end()&&!own)body.Children().Append(open->second.second);
                     if(anchor!=beside.end()){
                         auto specId=str(anchor->second,L"id");
                         numbersInline=num(anchor->second,L"columns")>0;

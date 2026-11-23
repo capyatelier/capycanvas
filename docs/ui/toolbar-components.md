@@ -130,9 +130,11 @@ It ranges from 0 to 100, defaults to 6 and uses a logarithmic slider with 30 at
 75% travel. Each brush retains its value; selection and coverage-mask tools omit
 it. Command search labels the control Smoothing.
 
-Secondary categories follow a shared order: Tip, Material, Texture, Bristles,
+Secondary categories follow a shared order: Tip, Taper, Material, Texture, Bristles,
 Mixing, Watercolor, Bleed, Liquify and Blending. Brush Color mixing joins the
-secondary Mixing category in Tool Options. Opacity belongs to Blending, after
+secondary Mixing category in Tool Options. For pens, the Taper section opens with
+the Taper type choice (Off, Fixed, Proportional), a labeled row of icon radio
+buttons, and then shows only the sliders for the chosen mode; hidden values are kept. Opacity belongs to Blending, after
 the material controls. Hosts use stable `group_id` values for category boundaries
 and schema identity, with localized `group` text only for headings. Dry media
 therefore show Size, Strength, Texture strength, Material hardness, then
@@ -221,7 +223,11 @@ Iconless checkable actions use a text checkbox, including Center on click.
 The checkbox keeps its caption in Tool Options and moves into overflow
 as a complete control when the lane is too narrow.
 Choices can name a setting through `beside`; settings panels place grids next to
-the numeric group and radio bars directly above it.
+the numeric group and radio bars directly above it. A choice that names a setting
+through `before` is placed just before that setting: as the first row of its
+section, or, when it carries a `heading`, as a section of its own under that
+heading (`tool_settings::section_choice`). Tool Options put a choice named by
+either right before its setting.
 In horizontal toolbars, icon-only actions stay full tiles while every control with words or
 values (dropdowns, radios, number fields, checkboxes) is the 26px panel control height with 5px
 clear on every side, like the workspace switcher pills; Tool Options separates fields with the tile

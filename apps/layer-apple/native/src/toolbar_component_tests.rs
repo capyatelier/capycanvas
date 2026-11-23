@@ -32,7 +32,7 @@ fn apple_stamp_bytes_match_the_canonical_mask_and_known_receipts_omit_pixels() {
         });
         let actual = copied_bytes(info.count, |offset, output, length| unsafe { capy_brush_stamp_copy(stamp, offset, output, length) });
         assert_eq!(actual, expected);
-        assert_eq!(info.size, canonical["size"].as_u64().unwrap() as u32);
+        assert_eq!([info.width, info.height], ["width", "height"].map(|side| canonical[side].as_u64().unwrap() as u32));
         assert_eq!(info.extent, canonical["extent"].as_f64().unwrap() as f32);
         let request = info.request;
         unsafe { capy_brush_stamp_free(stamp) };
