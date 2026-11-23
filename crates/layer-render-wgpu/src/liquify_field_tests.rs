@@ -1024,69 +1024,80 @@ fn fit_preview_defers_persistent_color_until_zero_dab_end_across_tiles() {
     assert_eq!(fit_colors,exact_colors,"zero-dab end must reconstruct full-resolution color exactly");
 }
 
-#[test]
-fn a_moving_fit_preview_encodes_only_the_tiles_its_frame_changes() {
+type MovingStep=(crate::IdMap<(crate::test_support::LiquifyVisit,[u32;2]),u32>,BTreeSet<[u32;2]>,usize,BTreeMap<[u32;2],Vec<u8>>,Vec<[f32;4]>);
+fn moving_fit_contact(reencode:bool)->Vec<MovingStep> {
     let extent=[2048,256];
     let view=layer_render::ViewState{width_px:256,height_px:32,document_to_surface:[0.125,0.,0.,0.125,0.,0.]};
-    let render=|reencode:bool| {
-        let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-        let mut doc=placement::paint_document(extent,"liquify moving fit preview");
-        placement::set_source(&mut doc,layer_core::color::source::rgba8_source(extent,|x,y|[((x*3+y)%200+40) as u8,((x+y*5)%190+40) as u8,(x/9%160+60) as u8,255]));
-        let target=placement::target(&doc);
-        let packet=crate::test_support::packet(doc.scene(),extent);
-        crate::test_support::submit_settled(&mut r,FramePacket{view,reset_layers:true,..packet});
-        let mut style=preset_style(DefaultBrushPreset::LiquifyPush);
-        style.liquify=Some(Arc::new(layer_core::liquify::Context::for_source(placement::paint(&doc),false)));
-        let submit=|r:&mut WgpuRasterizer,frame:FramePacket<'_>| {
-            if reencode && let Some(stroke)=r.liquify.as_mut().and_then(|liquify|liquify.strokes.get_mut(&target)) {stroke.preview_tiles.clear();}
-            crate::test_support::liquify_tiles(||crate::test_support::submit_ready(r,frame).unwrap()).1.into_keys()
-                .map(|(_,coordinate)|coordinate).collect::<BTreeSet<_>>()
-        };
-        let mut steps=Vec::new();
-        let mut predicted_before=BTreeSet::new();
-        for step in 0..10 {
-            let mut real=dab([0.;4]);
-            real.center=Point{x:128.+200.*step as f32,y:128.};
-            real.radii=[72.;2];
-            real.motion=[20.,0.];
-            real.material[3]=1.;
-            let mut predicted=real;
-            predicted.center.x+=8.;
-            let mut persistent=crate::test_support::dab_batch(target,style.clone(),real.bounds());
-            persistent.stroke_id=StrokeId(300);
-            persistent.stroke_start=step==0;
-            persistent.stroke_end=false;
-            let mut preview=persistent.clone();
-            preview.kind=DabBatchKind::Preview;
-            preview.first_dab=1;
-            preview.damage=predicted.bounds();
-            let dabs=[real,predicted];
-            let batches=[persistent,preview];
-            let frame=FramePacket{view,composite_all:false,dabs:&dabs,dab_batches:&batches,..packet};
-            let encoded=submit(&mut r,frame);
-            let idle=FramePacket{dab_batches:&batches[1..],..frame};
-            while crate::scene::scale::tests::publication_pending(&r) {r.wait_idle().unwrap();submit(&mut r,idle);}
-            assert_eq!(r.preview_level,2,"Fit must use a reduced Liquify preview");
-            let predicted_now=page_coordinates(batch_pixel_rect(&batches[1],extent)).collect::<BTreeSet<_>>();
-            let changed=crate::brush_tiles::plan(&batches[0],&dabs[..1],extent,Default::default()).into_iter().map(|tile|tile.coordinate)
-                .chain(predicted_now.iter().copied()).chain(predicted_before.iter().copied()).collect::<BTreeSet<_>>();
-            let footprint=r.liquify.as_ref().unwrap().strokes[&target].dirty().count();
-            predicted_before=predicted_now;
-            let pages=r.preview_pages.iter().map(|page|(page.coordinate,
-                crate::layer_tests::page_bytes(&r,&r.read_color_page(target,page,true,None).unwrap().value().texture))).collect::<BTreeMap<_,_>>();
-            steps.push((encoded,changed,footprint,pages,crate::scene::scale::tests::display_pixels(&r)));
-        }
-        steps
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut doc=placement::paint_document(extent,"liquify moving fit preview");
+    placement::set_source(&mut doc,layer_core::color::source::rgba8_source(extent,|x,y|[((x*3+y)%200+40) as u8,((x+y*5)%190+40) as u8,(x/9%160+60) as u8,255]));
+    let target=placement::target(&doc);
+    let packet=crate::test_support::packet(doc.scene(),extent);
+    crate::test_support::submit_settled(&mut r,FramePacket{view,reset_layers:true,..packet});
+    let mut style=preset_style(DefaultBrushPreset::LiquifyPush);
+    style.liquify=Some(Arc::new(layer_core::liquify::Context::for_source(placement::paint(&doc),false)));
+    let submit=|r:&mut WgpuRasterizer,frame:FramePacket<'_>| {
+        if reencode && let Some(stroke)=r.liquify.as_mut().and_then(|liquify|liquify.strokes.get_mut(&target)) {stroke.preview_tiles.clear();}
+        crate::test_support::liquify_tiles(||crate::test_support::submit_ready(r,frame).unwrap()).1
     };
-    let carried=render(false);
-    let reencoded=render(true);
-    for (step,((encoded,changed,_,pages,display),(_,_,_,all_pages,all_display))) in carried.iter().zip(&reencoded).enumerate() {
+    let mut steps=Vec::new();
+    let mut predicted_before=BTreeSet::new();
+    for step in 0..10 {
+        let mut real=dab([0.;4]);
+        real.center=Point{x:128.+200.*step as f32,y:128.};
+        real.radii=[72.;2];
+        real.motion=[20.,0.];
+        real.material[3]=1.;
+        let mut predicted=real;
+        predicted.center.x+=8.;
+        let mut persistent=crate::test_support::dab_batch(target,style.clone(),real.bounds());
+        persistent.stroke_id=StrokeId(300);
+        persistent.stroke_start=step==0;
+        persistent.stroke_end=false;
+        let mut preview=persistent.clone();
+        preview.kind=DabBatchKind::Preview;
+        preview.first_dab=1;
+        preview.damage=predicted.bounds();
+        let dabs=[real,predicted];
+        let batches=[persistent,preview];
+        let frame=FramePacket{view,composite_all:false,dabs:&dabs,dab_batches:&batches,..packet};
+        let visits=submit(&mut r,frame);
+        let idle=FramePacket{dab_batches:&batches[1..],..frame};
+        while crate::scene::scale::tests::publication_pending(&r) {r.wait_idle().unwrap();submit(&mut r,idle);}
+        assert_eq!(r.preview_level,2,"Fit must use a reduced Liquify preview");
+        let predicted_now=page_coordinates(batch_pixel_rect(&batches[1],extent)).collect::<BTreeSet<_>>();
+        let changed=crate::brush_tiles::plan(&batches[0],&dabs[..1],extent,Default::default()).into_iter().map(|tile|tile.coordinate)
+            .chain(predicted_now.iter().copied()).chain(predicted_before.iter().copied()).collect::<BTreeSet<_>>();
+        let footprint=r.liquify.as_ref().unwrap().strokes[&target].dirty().count();
+        predicted_before=predicted_now;
+        let pages=r.preview_pages.iter().map(|page|(page.coordinate,
+            crate::layer_tests::page_bytes(&r,&r.read_color_page(target,page,true,None).unwrap().value().texture))).collect::<BTreeMap<_,_>>();
+        steps.push((visits,changed,footprint,pages,crate::scene::scale::tests::display_pixels(&r)));
+    }
+    steps
+}
+
+#[test]
+fn a_moving_fit_preview_encodes_only_the_tiles_its_frame_changes() {
+    let carried=moving_fit_contact(false);
+    let reencoded=moving_fit_contact(true);
+    for (step,((visits,changed,_,pages,display),(_,_,_,all_pages,all_display))) in carried.iter().zip(&reencoded).enumerate() {
+        let encoded=visits.keys().filter(|(visit,_)|*visit==crate::test_support::LiquifyVisit::Preview).map(|(_,coordinate)|*coordinate).collect::<BTreeSet<_>>();
         assert!(encoded.is_subset(changed),"step {step}: a frame must encode only its newly dirty and predicted tiles and those its last prediction left: encoded {encoded:?}, changed {changed:?}");
         assert!(pages==all_pages,"step {step}: carried preview pages must match pages encoded again");
         assert!(display==all_display,"step {step}: the display must match one whose preview tiles were all encoded again");
     }
     let (_,changed,footprint,..)=carried.last().unwrap();
     assert!(*footprint>changed.len(),"the contact's footprint must outgrow one frame's change: {footprint} tiles, {} changed",changed.len());
+}
+
+#[test]
+fn a_frame_takes_each_original_once_per_liquify_encode() {
+    for (step,(visits,..)) in moving_fit_contact(true).iter().enumerate() {
+        let taken=visits.iter().filter(|((visit,_),_)|*visit==crate::test_support::LiquifyVisit::Original).map(|((_,coordinate),count)|(*coordinate,*count)).collect::<BTreeMap<_,_>>();
+        assert!(!taken.is_empty(),"step {step}: the frame must read originals");
+        assert!(taken.values().all(|count|*count<=2),"step {step}: the persistent and the preview encode must each take an original once: {taken:?}");
+    }
 }
 
 #[test]
