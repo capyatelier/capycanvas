@@ -18,7 +18,7 @@ pub(super) fn streams_exact(cache: &Cache, r: &WgpuRasterizer, packet: FramePack
         && !packet.scene.order().iter().any(|&handle| packet.scene.visible(handle) && packet.scene.effect(handle).is_some_and(|effect| effect.animated()))
 }
 
-fn refining(r: &WgpuRasterizer) -> bool {
+pub(super) fn refining(r: &WgpuRasterizer) -> bool {
     r.moving_layer.is_none() && !r.transform_preview.as_ref().is_some_and(|preview| preview.moving)
 }
 
@@ -137,7 +137,7 @@ impl Cache {
         let mut naming=false;
         for coordinate in pages::coordinates(self.plan.bounds,self.plan.level) {
             let region=pages::bounds(coordinate,self.plan.level,self.plan.extent).intersect(self.plan.bounds);
-            if held.contains(&region) || self.refused(r,region) {continue;}
+            if held.contains(&region) || self.refusals_hold(r) && self.refused(r,region) {continue;}
             let cell=self.refinement_interest(self.plan.level,region).key;
             for half in &halves {
                 let mut frontier=Vec::new();

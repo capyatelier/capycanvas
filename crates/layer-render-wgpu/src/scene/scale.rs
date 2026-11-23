@@ -311,7 +311,7 @@ pub(crate) struct Cache {
     gesture: Option<contact::Contact>,
     stroked: Option<Arc<SignatureFrame>>,
     presented: pages::Accuracy,
-    refused_at: Option<layer_render::ViewState>,
+    asked: Option<pages::Asked>,
     streaming: refinement::Streaming,
     pivot_waiting: Option<(crate::frame_demand::Input,crate::frame_demand::ArrivalToken)>,
     pivot_refusal: Option<crate::residency::Blocked>,
@@ -703,7 +703,7 @@ impl Cache {
             geometry,
             layer_count: layers,
             overview, preparing: false, declaring: false, exact_tile: None,
-            graph: Default::default(), transform: r.transform_preview.clone(), retired: None, previous: None, standing: None, complete: false, contact: false, gesture: None, stroked: None, presented: pages::Accuracy::Display, refused_at: None,
+            graph: Default::default(), transform: r.transform_preview.clone(), retired: None, previous: None, standing: None, complete: false, contact: false, gesture: None, stroked: None, presented: pages::Accuracy::Display, asked: None,
             streaming: Default::default(), pivot_waiting: None, pivot_refusal: None, reduction_refusal: None, pivot_pending: false, pivot_edit: None, pointer: None,
         }
     }
@@ -1031,7 +1031,7 @@ impl Cache {
         let Encoding { encoder, commands, retained, budget } = encoding;
         scene.placement_display=true;
         let finer=match destination {Destination::Overview(finer,changed)=>Some((finer,changed)),_=>None};
-        if self.refused_at.replace(packet.view)!=Some(packet.view) {self.forget_refusals();}
+        self.ask(pages::Asked {view:packet.view,moving:budget.motion});
         self.derive_cells(finer.map(|(finer,_)|finer));
         if let Some(mut previous)=self.retired.take() {previous.write_back(r,scene,encoder)?;}
         if let Some(previous)=self.previous.as_deref_mut() {previous.write_back(r,scene,encoder)?;}

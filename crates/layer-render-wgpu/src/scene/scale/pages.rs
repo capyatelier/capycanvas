@@ -1392,6 +1392,11 @@ impl Selection {
         !self.waiting && self.composes.iter().all(|region|region.intersect(served).is_empty())
     }
 }
+#[derive(Clone,Copy)]
+pub(super) struct Asked {pub(super) view:layer_render::ViewState,pub(super) moving:bool}
+impl Asked {
+    fn no_higher_than(self,earlier:Self)->bool {self.view==earlier.view && (self.moving || !earlier.moving)}
+}
 #[derive(Default)]
 struct Cell {shown:Option<Shown>,current:bool,blocked:Option<crate::frame_demand::Input>,arrivals:crate::frame_demand::ArrivalToken,name:Option<ContentVersion>,refusal:Option<(crate::residency::Blocked,Option<crate::frame_demand::ArrivalToken>)>,queued:bool,derived:bool,reduced:bool,waits:Vec<super::super::object_cache::ObjectWait>,lag:Option<PixelRect>}
 impl Cell {
@@ -1413,8 +1418,8 @@ impl Cell {
         self.refusal.as_ref().is_some_and(|(refusal,since)|since.is_none_or(|since|since==now) && self.refusal_applies(refusal) && r.refuses(refusal))
     }
     fn parked(&self,r:&WgpuRasterizer)->bool {self.refused(r,r.arrival_token()) && self.refusal.as_ref().is_some_and(|(refusal,_)|!refusal.class().floor_reserved())}
-    fn waiting(&self,r:&WgpuRasterizer)->Option<crate::frame_demand::Input> {
-        if self.refused(r,r.arrival_token()) {return Some(crate::frame_demand::Input::Residency);}
+    fn waiting(&self,r:&WgpuRasterizer,held:bool)->Option<crate::frame_demand::Input> {
+        if held && self.refused(r,r.arrival_token()) {return Some(crate::frame_demand::Input::Residency);}
         self.blocked.filter(|input|match input {
             crate::frame_demand::Input::Name=>self.naming(r),
             input=>waits(r,*input,self.arrivals),
@@ -1808,9 +1813,10 @@ impl Cache {
     pub(super) fn cells_demand(&self,r:&WgpuRasterizer,refining:bool)->Option<crate::frame_demand::Outstanding> {
         use crate::frame_demand::Outstanding::{Blocked,Runnable};
         let (cells,_store,_)=self.cells()?;
+        let held=self.refusals_hold(r);
         let mut blocked=None;
-        for cell in cells.cells.iter().filter(|cell|cell.pending() && !cell.parked(r) && !cell.sleeping() && (refining || cell.queued)) {
-            match cell.waiting(r) {
+        for cell in cells.cells.iter().filter(|cell|cell.pending() && !(held && cell.parked(r)) && !cell.sleeping() && (refining || cell.queued)) {
+            match cell.waiting(r,held) {
                 None=>return Some(Runnable),
                 Some(input)=>blocked=blocked.or(Some(Blocked(input))),
             }
@@ -1836,12 +1842,18 @@ impl Cache {
         use crate::frame_demand::{Input,Outstanding};
         let Some((cells,_store,_))=self.cells() else {return Some(Outstanding::Runnable);};
         let mut pending=cells.cells.iter().filter(|cell|cell.pending()).peekable();
-        if pending.clone().any(|cell|cell.parked(r)) {Some(Outstanding::Blocked(Input::Residency))}
+        if self.refusals_hold(r) && pending.clone().any(|cell|cell.parked(r)) {Some(Outstanding::Blocked(Input::Residency))}
         else if pending.peek().is_some() && pending.all(Cell::sleeping) {None}
         else {Some(Outstanding::Runnable)}
     }
-    pub(super) fn forget_refusals(&self) {
-        for cell in &mut self.cells.lock().unwrap().cells {cell.refusal=None;cell.waits.clear();}
+    pub(super) fn ask(&mut self,asked:Asked) {
+        if !self.asked.replace(asked).is_some_and(|earlier|asked.no_higher_than(earlier)) {
+            for cell in &mut self.cells.lock().unwrap().cells {cell.refusal=None;cell.waits.clear();}
+        }
+    }
+    pub(super) fn refusals_hold(&self,r:&WgpuRasterizer)->bool {
+        let next=r.artwork_frame.as_ref().map(|frame|Asked {view:frame.view,moving:!super::refinement::refining(r)});
+        self.asked.is_none_or(|earlier|next.is_some_and(|next|next.no_higher_than(earlier)))
     }
     pub(super) fn refused(&self,r:&WgpuRasterizer,region:PixelRect)->bool {
         let cells=self.cells.lock().unwrap();
@@ -2248,6 +2260,45 @@ pub(super) mod query_tests {
         crate::test_support::submit_settled(&mut r,frame);
         let main=r.scale_display.as_ref().unwrap();
         assert!(std::iter::once(main).chain(main.overview.as_deref()).all(|cache|table(cache).cells.iter().all(|cell|!cell.pending())),"the resumed refinement completes every cell");
+    }
+
+    #[cfg(not(target_arch="wasm32"))]
+    #[test]
+    fn a_cell_moved_onscreen_after_a_prefetch_refusal_asks_for_frames_until_it_is_exact() {
+        use layer_render::FrameDemand::{Wait,Work};
+        let document=super::super::tests::document_at([2048,512]);
+        let extent=document.composition().size;
+        let mut start=packet(document.scene(),extent);start.composite_all=false;start.view.width_px=64;start.view.height_px=300;
+        let moved=FramePacket {view:layer_render::ViewState {document_to_surface:[1.,0.,0.,1.,-300.,0.],..start.view},..start};
+        let onscreen=|frame:FramePacket<'_>|display_mips::view_bounds(frame.view,extent,0).unwrap();
+        for refused_in_motion in [false,true] {
+            let mut r=crate::memory::memory_tests::renderer(document.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(2<<30),..Default::default()}).unwrap();
+            crate::test_support::submit_settled(&mut r,start);
+            r.set_preparation_wake(Arc::new(||{}));
+            let cache=r.scale_display.as_ref().unwrap();
+            assert!(table(cache).cells.iter().all(|cell|!cell.pending()),"the fixture settles every cell exact");
+            let [parked,composed]=[[1,0],[1,1]].map(|coordinate|bounds(coordinate,cache.plan.level,extent));
+            assert!(parked.intersect(onscreen(start)).is_empty() && !parked.intersect(onscreen(moved)).is_empty(),"the parked cell enters the view");
+            let refused=r.scene_tiers.display.blocked(Class::Prefetch,2<<30).expect("the prefetch does not fit");
+            let since=if refused_in_motion {
+                cache.evict_window(composed);
+                crate::test_support::submit_ready(&mut r,moved).unwrap();crate::test_support::complete(&r);
+                Some(r.arrival_token())
+            } else {None};
+            let cache=r.scale_display.as_ref().unwrap();
+            cache.evict_window(parked);
+            cache.refuse(since,parked,&refused);
+            if !refused_in_motion {
+                assert_eq!(r.next_frame(),Wait,"an offscreen cell refused at Prefetch asks for no frame");
+                crate::test_support::submit_ready(&mut r,moved).unwrap();crate::test_support::complete(&r);
+            }
+            let cache=r.scale_display.as_ref().unwrap();
+            assert!(Cells::reached(cache.plan,parked).into_iter().all(|index|table(cache).cells[index].pending()),"the moved cell is still pending: refused_in_motion={refused_in_motion}");
+            assert_eq!(r.next_frame(),Work,"an onscreen cell is asked at Visible after the motion ends, so its Prefetch refusal cannot park it: refused_in_motion={refused_in_motion}");
+            crate::test_support::submit_settled(&mut r,moved);
+            let cache=r.scale_display.as_ref().unwrap();
+            assert!(Cells::reached(cache.plan,onscreen(moved)).into_iter().all(|index|!table(cache).cells[index].pending()),"every onscreen level-0 cell is exact at Wait: refused_in_motion={refused_in_motion}");
+        }
     }
 
     #[cfg(not(target_arch="wasm32"))]
