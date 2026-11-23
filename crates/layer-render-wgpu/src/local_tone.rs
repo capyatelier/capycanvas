@@ -45,7 +45,8 @@ impl GpuToneGuide {
         {
             return Err("Invalid GPU illumination guide geometry".into());
         }
-        let samples = bytes[16..]
+        let count = self.extent[0] as usize * self.extent[1] as usize;
+        let samples = bytes[16..16 + count * 16]
             .as_chunks::<16>().0.iter()
             .map(|p| {
                 std::array::from_fn(|i| f32::from_ne_bytes(p[i * 4..i * 4 + 4].try_into().unwrap()))
@@ -98,6 +99,7 @@ pub(crate) struct Builder {
     device: PipelineDevice,
     pipelines: Arc<Pipelines>,
     document: [u32; 2],
+    origin: [f32; 2],
     space: RgbSpace,
     sums: Plane,
     original: Vec<Plane>,
@@ -111,7 +113,7 @@ impl Builder {
     pub(crate) fn allocation_bound(document: [u32; 2]) -> Result<u64, String> {
         let extent = guide_extent(document)?;
         let area = |e: [u32; 2]| u64::from(e[0]) * u64::from(e[1]);
-        let mut cells = 2 * area(extent) + 1; // sums and output/header
+        let mut cells = 2 * area(extent) + 2; // sums and output/header/origin
         let mut current = extent;
         loop {
             cells += 3 * area(current); // original, remapped, accumulated detail
@@ -129,10 +131,11 @@ impl Builder {
     pub(crate) fn new(
         device: &PipelineDevice,
         document: [u32; 2],
+        origin: [f32; 2],
         space: RgbSpace,
     ) -> Result<Self, String> {
         let extent = guide_extent(document)?;
-        if 16 + u64::from(extent[0]) * u64::from(extent[1]) * 16
+        if 32 + u64::from(extent[0]) * u64::from(extent[1]) * 16
             > device.limits().max_storage_buffer_binding_size
         {
             return Err("Local tone guide exceeds GPU buffer limit".into());
@@ -147,6 +150,7 @@ impl Builder {
             device: device.clone(),
             pipelines,
             document,
+            origin,
             space,
             sums: Plane::new(device, extent),
             original: planes(),
@@ -349,14 +353,16 @@ impl Builder {
         let extent = self.original[0].extent;
         let output = buffer(
             &self.device,
-            16 + u64::from(extent[0]) * u64::from(extent[1]) * 16,
+            32 + u64::from(extent[0]) * u64::from(extent[1]) * 16,
             "GPU local tone guide",
         );
         // Geometry is integer data. Bitcasting small dimensions through shader
         // floats permits denormal flushing on mobile/WebGPU implementations.
         use wgpu::util::DeviceExt;
         let dimensions = [extent[0], extent[1], self.document[0], self.document[1]];
-        let bytes: Vec<u8> = dimensions.into_iter().flat_map(u32::to_le_bytes).collect();
+        let bytes: Vec<u8> = dimensions.into_iter().flat_map(u32::to_le_bytes)
+            .chain([self.origin[0], self.origin[1], 0., 0.].into_iter().flat_map(f32::to_le_bytes)).collect();
+        let trailer = 16 + u64::from(extent[0]) * u64::from(extent[1]) * 16;
         let header = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -365,6 +371,7 @@ impl Builder {
                 usage: wgpu::BufferUsages::COPY_SRC,
             });
         encoder.copy_buffer_to_buffer(&header, 0, &output, 0, 16);
+        encoder.copy_buffer_to_buffer(&header, 16, &output, trailer, 16);
         let p = dims(extent);
         self.encode(
             encoder,
@@ -515,7 +522,7 @@ mod tests {
         tile: u32,
     ) -> Result<Arc<GpuToneGuide>, String> {
         pollster::block_on(Builder::prepare_pipelines(&r.device))?;
-        let builder = Builder::new(&r.device, extent, r.document_color.space)?;
+        let builder = Builder::new(&r.device, extent, [0.; 2], r.document_color.space)?;
         for y in (0..extent[1]).step_by(tile as usize) {
             for x in (0..extent[0]).step_by(tile as usize) {
                 let size = [tile.min(extent[0] - x), tile.min(extent[1] - y)];
@@ -774,6 +781,8 @@ const FX_LUMA:vec3<f32> =vec3(0.2126390058715104,0.715168678767756,0.07219231536
 fn fx_auxiliary_words(index:u32)->vec4<u32>{return auxiliary[index];}
 fn fx_auxiliary(index:u32)->vec4<f32>{return bitcast<vec4<f32>>(auxiliary[index]);}
 fn fx_parameter(base:u32,index:u32)->vec4<f32>{return vec4(0.);}
+var<private> fx_composition_frame:vec4<f32>;
+fn fx_to_document(point:vec2<f32>)->vec2<f32>{return point;}
 @compute @workgroup_size(1) fn consume(){output[0]=fx_local_adjustment(input[0],vec2(.5),params.amounts.xyz*.01,params.kind.x==1u);}
 "#;
         let shader = renderer.device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -819,7 +828,7 @@ fn fx_parameter(base:u32,index:u32)->vec4<f32>{return vec4(0.);}
                     + f64::from(pixel[2]) * 0.07219231536073371) / f64::from(pixel[3]);
                 let log_y = reference_y.max(2f64.powi(-24)).log2() as f32;
                 let mut custom_bytes = [2u32, 1, 1, 1].into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>();
-                custom_bytes.extend([log_y, log_y - 0.75, 1., -150., log_y, log_y + 0.75, 1., -149.].into_iter().flat_map(f32::to_le_bytes));
+                custom_bytes.extend([log_y, log_y - 0.75, 1., -150., log_y, log_y + 0.75, 1., -149., 0., 0., 0., 0.].into_iter().flat_map(f32::to_le_bytes));
                 let custom = renderer.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("independent clarity guide"), contents: &custom_bytes, usage: wgpu::BufferUsages::STORAGE,
                 });

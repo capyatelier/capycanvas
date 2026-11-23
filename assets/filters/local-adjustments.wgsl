@@ -12,7 +12,7 @@ fn fx_local_gain(value:f32,gain:f32)->f32 {
 }
 fn fx_guide_value(position:vec2<f32>,log_y:f32,offset:u32,fallback:f32)->f32 {
     let size=fx_auxiliary_words(0u);
-    let p=clamp(position,vec2(0.),vec2<f32>(size.zw));
+    let p=clamp(fx_to_document(position)-fx_composition_frame.xy-fx_auxiliary(offset+size.x*size.y).xy,vec2(0.),vec2<f32>(size.zw));
     let scaled=vec2<u32>(floor(p))*size.xy;
     let remainder=(vec2<f32>(scaled%size.zw)+fract(p)*vec2<f32>(size.xy))/vec2<f32>(size.zw)-.5;
     let origin=vec2<i32>(scaled/size.zw)+vec2<i32>(floor(remainder));

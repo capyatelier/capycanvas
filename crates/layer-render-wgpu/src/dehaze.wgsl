@@ -131,5 +131,5 @@ fn combine(left:Moment,right:Moment)->Moment{
     if p.aux.x==0u{store(i,vec4(first.x,second.x,first.yz));}
     else{let y=safe_luma(cell(i).rgb);var darkness=0.;if first.y>0.{darkness=clamp(first.x*y+second.x,0.,1.);}
         store(i+2u,vec4(log2(max(y,exp2(-24.))),darkness,cell(i).a,cell_exponent(i)));
-        if i==0u{dst[0]=vec4(p.size.xy,p.aux.zw);store(1,load_c(0));}}
+        if i==0u{dst[0]=vec4(p.size.xy,p.aux.zw);store(1,load_c(0));store(2u+p.size.x*p.size.y,p.values);}}
 }

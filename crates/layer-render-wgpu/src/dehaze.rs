@@ -11,6 +11,7 @@ pub(crate) struct Builder {
     device:PipelineDevice,
     pipelines:Arc<Pipelines>,
     document:[u32;2],
+    origin:[f32;2],
     extent:[u32;2],
     scratch:[wgpu::Buffer;3],
     guide:wgpu::Buffer,
@@ -25,16 +26,16 @@ impl Builder {
         Ok(u64::from(extent[0])*u64::from(extent[1])*112+65536+4096)
     }
     pub(crate) async fn prepare_pipelines(device:&PipelineDevice)->Result<(),String> {pipelines(device).prepare(device).await}
-    pub(crate) fn new(device:&PipelineDevice,document:[u32;2],space:RgbSpace)->Result<Self,String> {
+    pub(crate) fn new(device:&PipelineDevice,document:[u32;2],origin:[f32;2],space:RgbSpace)->Result<Self,String> {
         use wgpu::util::DeviceExt;
         let extent=guide_extent(document)?;let count=u64::from(extent[0])*u64::from(extent[1]);
-        let largest=(count*32).max(count*16+32).max(65536);
+        let largest=(count*32).max(count*16+48).max(65536);
         let limits=device.limits();
         if largest>limits.max_storage_buffer_binding_size || largest>limits.max_buffer_size {return Err("Dehaze guide exceeds GPU buffer limit".into());}
         let matrix:Vec<u8>=space.linear_transform(RgbSpace::Srgb).into_iter().flat_map(|row|row.into_iter().map(|v|v as f32).chain([0.])).flat_map(f32::to_ne_bytes).collect();
         let transform=device.create_buffer_init(&wgpu::util::BufferInitDescriptor {label:Some("Dehaze working primaries"),contents:&matrix,usage:wgpu::BufferUsages::STORAGE});
-        Ok(Self {device:device.clone(),pipelines:pipelines(device).clone(),document,extent,
-            scratch:std::array::from_fn(|_|buffer(device,count*32,"Dehaze scratch")),guide:buffer(device,count*16+32,"Dehaze guide"),
+        Ok(Self {device:device.clone(),pipelines:pipelines(device).clone(),document,origin,extent,
+            scratch:std::array::from_fn(|_|buffer(device,count*32,"Dehaze scratch")),guide:buffer(device,count*16+48,"Dehaze guide"),
             histogram:buffer(device,65536,"Dehaze rank histogram"),state:std::array::from_fn(|_|buffer(device,32,"Dehaze rank state")),
             air:buffer(device,32,"Dehaze airlight"),transform})
     }
@@ -79,7 +80,7 @@ impl Builder {
         check()?;if air[24..28]!=[0;4] {return Err("Invalid HDR sample in Dehaze analysis".into());}
         let mut encoder=CommandEncoder::new(&self.device,&Default::default());self.minimum(&mut encoder,true);
         for (entry,axis,input,output) in [(7,0,&self.guide,&self.scratch[2]),(7,1,&self.scratch[2],&self.scratch[0]),(8,0,&self.scratch[0],&self.scratch[2]),(8,1,&self.scratch[2],&self.guide)] {
-            check()?;let mut p=dims(self.extent);p.aux=[axis,0,self.document[0],self.document[1]];
+            check()?;let mut p=dims(self.extent);p.aux=[axis,0,self.document[0],self.document[1]];p.values=[self.origin[0],self.origin[1],0.,0.];
             self.encode(&mut encoder,entry,p,[Some(&self.scratch[1]),Some(input),Some(&self.air)],output,groups(self.extent));
         }
         encoder.submit(queue);crate::local_tone::wait_async(&self.device,queue).await?;
@@ -94,7 +95,7 @@ mod tests {
 fn dehaze_constant_area_means_keep_exact_airlight_coordinate_ties(){
     let renderer=crate::WgpuRasterizer::new_native_headless(layer_core::color::DocumentColor{space:RgbSpace::Srgb,depth:layer_core::color::SampleDepth::F32}).unwrap();
     pollster::block_on(Builder::prepare_pipelines(&renderer.device)).unwrap();
-    let builder=Builder::new(&renderer.device,[769,3],RgbSpace::Srgb).unwrap();let air=builder.air.clone();
+    let builder=Builder::new(&renderer.device,[769,3],[0.;2],RgbSpace::Srgb).unwrap();let air=builder.air.clone();
     let texture=renderer.device.create_texture(&wgpu::TextureDescriptor{label:None,size:wgpu::Extent3d{width:769,height:3,depth_or_array_layers:1},mip_level_count:1,sample_count:1,dimension:wgpu::TextureDimension::D2,format:wgpu::TextureFormat::Rgba32Float,usage:wgpu::TextureUsages::TEXTURE_BINDING|wgpu::TextureUsages::COPY_DST,view_formats:&[]});
     let bytes=(0..3).flat_map(|y|(0..769).flat_map(move|x|{let alpha=if y==1 && x%2==0{0.5}else{1.};[0.25*alpha,0.5*alpha,0.75*alpha,alpha].into_iter().flat_map(f32::to_le_bytes)})).collect::<Vec<_>>();
     renderer.queue.write_texture(texture.as_image_copy(),&bytes,wgpu::TexelCopyBufferLayout{offset:0,bytes_per_row:Some(769*16),rows_per_image:None},texture.size());
@@ -110,7 +111,7 @@ fn dehaze_area_mean_preserves_small_bright_fraction_in_both_tile_orders(){
     let tiny=f32::from_bits((2f32.powi(-32)).to_bits()-1);
     let expected=((1f64+768.*f64::from(tiny))/769.).log2();
     for reverse in [false,true]{
-        let builder=Builder::new(&renderer.device,[769,1],RgbSpace::Srgb).unwrap();
+        let builder=Builder::new(&renderer.device,[769,1],[0.;2],RgbSpace::Srgb).unwrap();
         for (x,width) in if reverse {[(768,1),(0,768)]}else{[(0,768),(768,1)]}{
             let texture=renderer.device.create_texture(&wgpu::TextureDescriptor{label:None,size:wgpu::Extent3d{width,height:1,depth_or_array_layers:1},mip_level_count:1,sample_count:1,dimension:wgpu::TextureDimension::D2,format:wgpu::TextureFormat::Rgba32Float,usage:wgpu::TextureUsages::TEXTURE_BINDING|wgpu::TextureUsages::COPY_DST,view_formats:&[]});
             let bytes=(0..width).flat_map(|i|{let v=if x+i==768{tiny}else{1.};[v,v,v,1.].into_iter().flat_map(f32::to_le_bytes)}).collect::<Vec<_>>();

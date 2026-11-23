@@ -59,7 +59,7 @@ impl SnapshotRenderer {
         let mut lease = self.reserve_analysis(output, reserved)?;
         Builder::prepare_pipelines(&self.renderer.device).await?;
         self.check_cancelled().map_err(|e| e.to_string())?;
-        let builder = Builder::new(&self.renderer.device, self.extent, self.color().space)?;
+        let builder = Builder::new(&self.renderer.device, self.extent, self.guide_origin(), self.color().space)?;
         let device = self.renderer.device.clone();
         let queue = self.renderer.queue.clone();
         self.reduce_analysis(output, reserved, |encoder, texture, origin| builder.reduce(encoder, texture, origin)).await?;
@@ -85,6 +85,9 @@ impl SnapshotRenderer {
         wait_async(&device, &queue).await?;
         self.check_cancelled().map_err(|e| e.to_string())?;
         Ok(guide)
+    }
+    fn guide_origin(&self) -> [f32; 2] {
+        self.scene.view().with_offset(self.offset).evaluation_offset64().map(|offset| -offset as f32)
     }
     fn reserve_analysis(&mut self, output: scene::Output, reserved: u64) -> Result<Option<crate::effect_analysis::Lease>, String> {
         if reserved.saturating_add(self.renderer.analysis_bytes()) > self.planned_pixel_bytes {
@@ -153,7 +156,7 @@ impl SnapshotRenderer {
         let mut lease = self.reserve_analysis(output, reserved)?;
         Builder::prepare_pipelines(&self.renderer.device).await?;
         self.check_cancelled().map_err(|e| e.to_string())?;
-        let builder = Builder::new(&self.renderer.device, self.extent, self.color().space)?;
+        let builder = Builder::new(&self.renderer.device, self.extent, self.guide_origin(), self.color().space)?;
         self.reduce_analysis(output, reserved, |encoder, texture, origin| builder.reduce(encoder, texture, origin)).await?;
         let buffer = builder.finish(&self.renderer.queue, || self.check_cancelled().map_err(|e| e.to_string())).await?;
         let retained = lease.as_mut().map(|lease| lease.split(buffer.size()));

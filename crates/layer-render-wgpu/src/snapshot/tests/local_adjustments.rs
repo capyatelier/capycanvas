@@ -28,9 +28,9 @@ fn start_bake_analysis(engine:&mut CanvasEngine<WgpuRasterizer>,target:SourceTar
 
 fn baked_pixel(engine:&CanvasEngine<WgpuRasterizer>,target:SourceTarget,x:u32,y:u32)->[f32;4] {
     let data=engine.document().target_raster(target).unwrap().wait_data().unwrap();
-    let tile=data.tiles.get(&TileKey{plane:layer_core::raster::RasterPlane::Color,coordinate:[0,0]}).unwrap();
+    let tile=data.tiles.get(&TileKey{plane:layer_core::raster::RasterPlane::Color,coordinate:[x/256,y/256]}).unwrap();
     let bytes=tile.wait_backing().unwrap().decode_on_worker().unwrap();
-    let offset=((y*256+x)*16) as usize;
+    let offset=((y%256*256+x%256)*16) as usize;
     std::array::from_fn(|channel|f32::from_le_bytes(bytes[offset+channel*4..offset+channel*4+4].try_into().unwrap()))
 }
 
@@ -52,7 +52,7 @@ fn set(document:&mut Document,target:OccurrenceHandle,key:&str,value:f32) {
 fn named_effect(document:&mut Document,name:&str,effect:EffectInstance,index:usize)->OccurrenceHandle {
     let target=insert_effect(document,effect,index);document.artwork.occurrences.get_mut(target).unwrap().name=name.into();target
 }
-fn constant_document(space:RgbSpace,alpha:f32)->Document {
+fn gray_document(space:RgbSpace,alpha:f32)->Document {
     let extent=[33,17];let mut document=Document::new(PortableId::random(),extent[0],extent[1],
         layer_core::DocumentNames{paint:"Original".into(),paper:"Paper".into()});
     document.artwork.compositions.get_mut(document.artwork.root).unwrap().color=DocumentColor{space,depth:SampleDepth::F32};
@@ -64,6 +64,10 @@ fn constant_document(space:RgbSpace,alpha:f32)->Document {
     for _ in 0..extent[1]{source.push_row(&row).unwrap();}
     paint_mut(&mut document).base=Some(layer_core::authored::PaintBase::new((Arc::new(source.finish().unwrap())).into()));
     hide_paper(&mut document);
+    document
+}
+fn constant_document(space:RgbSpace,alpha:f32)->Document {
+    let mut document=gray_document(space,alpha);
     let original=paint_occurrence(&document);
     let lower=named_effect(&mut document,"Lower",adjustment("shadows_highlights","shadows",50.),0);
     let group=add_group(&mut document,vec![lower,original],0);
@@ -214,6 +218,52 @@ fn cold_merge_prepares_retained_noncontiguous_members_and_preserves_group_offset
     close(baked_pixel(&engine,result,8,6),output(f64::from(0.01125_f32),0.5,0.5),0.5,false);
     assert_eq!(baked_pixel(&engine,result,1,1),[0.;4]);
     assert!(engine.backend().effect_analyses.is_empty(),"isolated bake guides leaked into the live scene");
+}
+
+#[test]
+fn a_custom_adjustment_reads_a_document_guide_at_its_original_records() {
+    for (kind,wgsl) in [
+        ("shadows_highlights","fn custom_guide_reader(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{let y=2.*exp2(fx_auxiliary(1u).x);return vec4<f32>(y*c.a,y*c.a,y*c.a,c.a);}"),
+        ("dehaze","fn custom_guide_reader(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{let atmosphere=fx_auxiliary(1u);if atmosphere.a<=0. {return c;}return vec4<f32>(2.*atmosphere.rgb*c.a,c.a);}"),
+    ] {
+        let mut program=(*crate::tests::fixture(kind).program()).clone();
+        program.id="custom_guide_reader".into();program.entry="custom_guide_reader".into();program.wgsl=wgsl.into();
+        let mut document=gray_document(RgbSpace::Srgb,1.);
+        insert_effect(&mut document,EffectInstance::new(Arc::new(program)),0);
+        let pixel=capture(document).unwrap().read_region([7,5,1,1]).unwrap()[0];
+        close(pixel,2.*f64::from(0.01125_f32),1.,false);
+    }
+}
+
+#[test]
+fn an_off_canvas_merge_reads_the_local_guide_of_each_baked_pixel() {
+    let baked=|left:i64| {
+        let extent=[(320+left) as u32,32];
+        let mut document=Document::new(PortableId::random(),extent[0],extent[1],layer_core::DocumentNames{paint:"Original".into(),paper:"Paper".into()});
+        document.artwork.compositions.get_mut(document.artwork.root).unwrap().color=DocumentColor{space:RgbSpace::Srgb,depth:SampleDepth::F32};
+        let interpretation=SourceInterpretation{channels:SourceChannels::Rgba,depth:SampleDepth::F32,profile:ColorProfile::Builtin(RgbSpace::Srgb),profile_assumed:false};
+        let mut source=SourceBuilder::new([320,32],interpretation,1024*1024).unwrap();
+        let row=(0..320).flat_map(|x|{let y=if x<160 {0.9_f32} else {0.01125};[y,y,y,1.]}).flat_map(f32::to_le_bytes).collect::<Vec<_>>();
+        for _ in 0..32 {source.push_row(&row).unwrap();}
+        paint_mut(&mut document).base=Some(layer_core::authored::PaintBase::new((Arc::new(source.finish().unwrap())).into()));
+        paint_mut(&mut document).domain=[320,32];
+        hide_paper(&mut document);
+        let original=paint_occurrence(&document);
+        document.artwork.occurrences.get_mut(original).unwrap().offset=[left,0];
+        let upper=named_effect(&mut document,"Upper",adjustment("shadows_highlights","shadows",50.),0);
+        document.working.occurrence=Some(upper);
+        let mut engine=engine(document);
+        let result=merge(&mut engine);
+        start_bake_analysis(&mut engine,result);
+        finish(&mut engine).unwrap();
+        baked_pixel(&engine,result,288,16)
+    };
+    let (offset,aligned)=(baked(-256),baked(0));
+    for channel in 0..3 {
+        assert!((offset[channel]-aligned[channel]).abs()<=1e-4*aligned[channel],
+            "a bake starting off the canvas must light its pixel from the guide at that pixel: {offset:?} vs {aligned:?}");
+    }
+    assert!(aligned[0]>1.5*0.01125,"the dark side must be lifted by its own dark guide: {aligned:?}");
 }
 
 #[test]

@@ -87,7 +87,7 @@ fn analysis_guide_reuses_one_resource_for_100_own_edits_and_snapshot_handles_ret
         assert_eq!(candidate.entries.len(), 1);
         let identity = Arc::as_ptr(&candidate.entries[0]) as usize;
         let bytes = candidate.entries[0].resource.buffer.size();
-        assert_eq!(bytes, (if id == "dehaze" { 32 } else { 16 }) + 31 * 23 * 16);
+        assert_eq!(bytes, (if id == "dehaze" { 48 } else { 32 }) + 31 * 23 * 16);
         renderer.apply_effect_analysis(candidate);
         assert_eq!(retained(&renderer), baseline + bytes);
         for amount in 0..100 {
