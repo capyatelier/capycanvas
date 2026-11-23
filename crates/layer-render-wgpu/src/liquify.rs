@@ -520,6 +520,7 @@ impl Liquify {
     fn original(r: &mut WgpuRasterizer, stroke: &Stroke, target: SourceTarget, coordinate: [u32; 2],
         encoder:&mut submission::CommandEncoder,pending:&mut Vec<display_mips::CompleteUpdates>,
         writes:&mut Vec<(Arc<OriginalTile>,resident::Encoding)>) -> Result<Arc<OriginalTile>,GpuRasterError> {
+        #[cfg(test)] crate::test_support::record_liquify_tile(crate::test_support::LiquifyVisit::Original,coordinate);
         let key=layer_core::raster::TileKey {plane:layer_core::raster::RasterPlane::Color,coordinate};
         let (capture,prior)={let mut originals=stroke.field.originals.lock().expect("liquify sources");
             let prior=originals.tiles.get(&coordinate).cloned();
@@ -721,6 +722,7 @@ impl Liquify {
         let mut reductions = Vec::new();
         let mut original_writes=Vec::new();
         let mut preview_versions=BTreeMap::new();
+        let mut taken=BTreeSet::new();
         for tile in context.tiles {
             if !preview && tile.dabs.is_empty() && batch.style.liquify.as_ref().is_none_or(|c| c.amount.is_none()) { continue; }
             if context.target == (BrushEncodingTarget::Preview { from_persistent: true })
@@ -732,7 +734,7 @@ impl Liquify {
                 continue;
             }
             if preview { self.unchanged_previews.remove(&(batch.target, tile.coordinate)); }
-            Self::original(r, stroke, batch.target, tile.coordinate, encoder, &mut reductions,&mut original_writes)?;
+            if taken.insert(tile.coordinate) {Self::original(r, stroke, batch.target, tile.coordinate, encoder, &mut reductions,&mut original_writes)?;}
             let (input_bounds,bounds)=field_input_bounds(batch,dabs,tile.coordinate,extent,stroke.tiles().map(|(at,tile)|(*at,tile.bounds)));
             let input_tiles:Vec<_>=stroke.tiles().filter(|(at,_)|!page_rect(**at).intersect(input_bounds).is_empty())
                 .map(|(at,tile)|(*at,tile.clone())).collect();
@@ -802,10 +804,13 @@ impl Liquify {
             }
         }
         let stroke = self.strokes.get(&batch.target).unwrap();
-        for (_, field) in &outputs {
-            for coordinate in page_coordinates(field.source_bounds(extent, preview)) {
-                Self::original(r, stroke, batch.target, coordinate, encoder, &mut reductions,&mut original_writes)?;
-            }
+        let (mut regions,mut known)=(Vec::new(),BTreeMap::new());
+        let sources=outputs.iter().map(|(_,field)| {
+            let region=field.source_bounds(extent,preview);
+            *known.entry([region.min_x(),region.min_y(),region.max_x(),region.max_y()]).or_insert_with(||{regions.push(region);regions.len()-1})
+        }).collect::<Vec<_>>();
+        for coordinate in regions.iter().flat_map(|region|page_coordinates(*region)) {
+            if taken.insert(coordinate) {Self::original(r, stroke, batch.target, coordinate, encoder, &mut reductions,&mut original_writes)?;}
         }
         let measured = !reductions.is_empty() && r.telemetry.phase_begin(17, &r.device, &r.queue, encoder);
         display_mips::CompleteUpdates::flush_all(&mut reductions, encoder);
@@ -836,18 +841,21 @@ impl Liquify {
         let bytes: Vec<_> = indices.iter().flat_map(|v| v.to_ne_bytes()).collect();
         r.uploads.write(encoder, &index_buffer, &bytes)?;
         let resident=originals.atlases.iter().flatten().next().ok_or(GpuRasterError::Invariant("Liquify original has no atlas"))?;
-        for (coordinate, field) in &outputs {
-            let prior_view=stroke.colored(coordinate).and_then(|tile|tile.read(&receipt).ok()).map(|read|read.value().view.clone());
-            let field_view=field.read(&receipt)?.value().view.clone();
-            let mut chunks=std::collections::BTreeSet::new();
-            for at in page_coordinates(field.source_bounds(extent,preview)) {
+        let region_chunks=regions.iter().map(|region| {
+            let mut chunks=BTreeSet::new();
+            for at in page_coordinates(*region) {
                 if let Some(tile)=originals.tiles.get(&at) {
                     let read=tile.read(&receipt)?;
                     if originals.atlases[tile.index as usize/ORIGINAL_LAYERS as usize].as_ref().is_none_or(|atlas|read.value().texture.raw()!=&atlas.texture) {return Err(GpuRasterError::InvalidExtent);}
                     chunks.insert(tile.index as usize/(ORIGINAL_BINDINGS*ORIGINAL_LAYERS as usize));
                 }
             }
-            let chunks=chunks.into_iter().collect::<Vec<_>>();
+            Ok(chunks.into_iter().collect::<Vec<_>>())
+        }).collect::<Result<Vec<_>,GpuRasterError>>()?;
+        for ((coordinate, field), source) in outputs.iter().zip(sources) {
+            let prior_view=stroke.colored(coordinate).and_then(|tile|tile.read(&receipt).ok()).map(|read|read.value().view.clone());
+            let field_view=field.read(&receipt)?.value().view.clone();
+            let chunks=&region_chunks[source];
             let local = color_bounds.get(coordinate).copied().unwrap_or_else(|| PixelRect::full([PAGE_SIZE; 2]));
             let first_record = r.prepare_records(chunks.iter().enumerate().map(|(index, &chunk)| {
                 let count = (originals.atlases.len() - chunk * ORIGINAL_BINDINGS).min(ORIGINAL_BINDINGS);
