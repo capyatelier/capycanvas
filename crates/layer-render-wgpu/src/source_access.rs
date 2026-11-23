@@ -160,10 +160,10 @@ impl WgpuRasterizer {
 
     pub(super) fn brush_layer_tiles(
         &mut self,inputs:&mut scene::sources::AcceptedInputs,layer:SourceTarget,tiles:&[[u32;2]],
-        preview:Option<(scene::PreviewStage,Option<(scene::PreviewPass,u32)>)>,encoder:&mut crate::submission::CommandEncoder,
+        preview:impl Fn([u32;2])->Option<(scene::PreviewStage,Option<(scene::PreviewPass,u32)>)>,encoder:&mut crate::submission::CommandEncoder,
     )->Result<Vec<Option<wgpu::TextureView>>,GpuRasterError> {
         let mut views=vec![None;tiles.len()];
-        self.layer_tiles(inputs,layer,tiles.iter().copied().enumerate(),&mut views,None,encoder,|inputs,r,layer,at,receipt|inputs.brush_color(r,layer,at,preview,receipt))?;
+        self.layer_tiles(inputs,layer,tiles.iter().copied().enumerate(),&mut views,None,encoder,|inputs,r,layer,at,receipt|inputs.brush_color(r,layer,at,preview(at),receipt))?;
         Ok(views)
     }
 

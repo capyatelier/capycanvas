@@ -928,6 +928,27 @@ fn a_watercolor_prediction_draws_water_from_an_authored_neighbor_it_does_not_pre
 }
 
 #[test]
+fn grouped_watercolor_prediction_transports_each_page_from_its_own_last_deposit() {
+    let extent = [512, 256];
+    let pages = |kind: DabBatchKind| {
+        let layer = paint_document(extent, "grouped watercolor prediction");
+        let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let contacts = [watercolor_contact(100., 128., 30., [0.1, 0.3, 0.8, 1.]), watercolor_contact(400., 128., 30., [0.8, 0.3, 0.1, 1.])];
+        crate::test_support::submit_ready(&mut r, FramePacket { reset_layers: true, ..packet(layer.scene(), extent) }).unwrap();
+        let style = preset_style(layer_core::DefaultBrushPreset::WetWatercolor);
+        crate::test_support::submit_ready(&mut r, FramePacket { dabs: &contacts, composite_all: false,
+            dab_batches: &watercolor_stroke(&layer, &style, 2, &contacts, 0, true, kind), ..packet(layer.scene(), extent) })
+            .unwrap_or_else(|error| panic!("{kind:?} watercolor batches of one update on adjacent pages submit: {error}"));
+        [[0, 0], [1, 0]].map(|coordinate| color_page(&r, &layer, coordinate, kind))
+    };
+    let persistent = pages(DabBatchKind::Persistent);
+    for (predicted, persistent) in pages(DabBatchKind::Preview).iter().zip(&persistent) {
+        let error = predicted.iter().zip(persistent).flat_map(|(a, b)| a.iter().zip(b).map(|(a, b)| (a - b).abs())).fold(0., f32::max);
+        assert!(error < 0.01, "each page of the grouped prediction matches its persistent twin: maximum error {error}");
+    }
+}
+
+#[test]
 fn page_zero_copies_reclear_both_formats_and_reduced_extents() {
     let layer = paint_document([512; 2], "zero page stamps");
     let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();

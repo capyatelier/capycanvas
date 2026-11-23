@@ -3072,12 +3072,14 @@ impl WgpuRasterizer {
             let receipt=encoder.submission();
             let mut inputs=self.brush_inputs.take().ok_or(GpuRasterError::Invariant("brush inputs are not prepared"))?;
             #[cfg(test)] let _record=scene::sources::record_reads(&inputs);
-            let stage=|pass|preview.then_some((scene::PreviewStage::AfterBatch(batch_index),Some((if step==0 {pass}else {scene::PreviewPass::Transport},step.saturating_sub(1)))));
-            let colors=self.brush_layer_tiles(&mut inputs,layer_id,tiles,stage(scene::PreviewPass::Color),encoder)?;
+            let declaration=preview.then(||self.preview_declaration.clone().ok_or(GpuRasterError::NotReady)).transpose()?;
+            let stage=|pass,at|declaration.as_ref().map(|declaration|(if step==0 {declaration.deposition_stage(at,batch_index)}else {scene::PreviewStage::AfterBatch(batch_index)},
+                Some((if step==0 {pass}else {scene::PreviewPass::Transport},step.saturating_sub(1)))));
+            let colors=self.brush_layer_tiles(&mut inputs,layer_id,tiles,|at|stage(scene::PreviewPass::Color,at),encoder)?;
             let mut reads=IdMap::with_capacity_and_hasher(tiles.len(),Default::default());
             for (at,color) in tiles.iter().zip(colors) {
                 #[cfg(test)] for plane in [RasterPlane::Color,RasterPlane::WatercolorWetness] {crate::test_support::record_transport_read((raster::contents::index(plane),*at,batch_index,step));}
-                let wetness=inputs.brush_wetness(self,layer_id,*at,stage(scene::PreviewPass::Wetness),&receipt)?;
+                let wetness=inputs.brush_wetness(self,layer_id,*at,stage(scene::PreviewPass::Wetness,*at),&receipt)?;
                 reads.insert(*at,[color.unwrap_or_else(||self.empty_view.clone()),wetness.map_or_else(||self.empty_scalar_view.clone(),|read|read.tile.view)]);
             }
             self.brush_inputs=Some(inputs);Ok(reads)

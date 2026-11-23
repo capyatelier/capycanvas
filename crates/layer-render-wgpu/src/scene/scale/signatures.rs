@@ -917,6 +917,11 @@ impl PreviewDeclaration {
     fn transport_output(&self,coordinate:[u32;2],stage:PreviewStage)->bool {
         match stage {PreviewStage::AfterBatch(index)=>self.transport_outputs.get(&index).is_some_and(|outputs|outputs.contains(&coordinate)),_=>false}
     }
+    pub fn deposition_stage(&self,coordinate:[u32;2],index:usize)->PreviewStage {
+        let update=self.wetness_before.get(&index);
+        self.commands.iter().filter(|command|command.index<=index && self.wetness_before.get(&command.index)==update && command.outputs.contains(&coordinate))
+            .map(|command|command.index).max().map_or(PreviewStage::AfterBatch(index),PreviewStage::AfterBatch)
+    }
     pub fn source_stage(&self,plane:RasterPlane,index:usize)->PreviewStage {
         PreviewStage::BeforeBatch(if plane==RasterPlane::WatercolorWetness {self.wetness_before.get(&index).copied().unwrap_or(index)}else {index})
     }
