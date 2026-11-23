@@ -15,6 +15,8 @@ use container::{Container, Reader};
 pub(super) use output::{encode, preview};
 use properties::{Color, Geometry, Properties};
 
+pub const AVIF_MAX_DIMENSION: u32 = 32768;
+
 // Chroma remains in its encoded sampling grid until all derived tiles are
 // joined. Converting tiles independently would clamp bilinear filtering at
 // each internal edge and introduce visible seams.

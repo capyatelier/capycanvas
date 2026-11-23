@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ColorFeatureError {
     SelectImportedProfile, ProfileReadLimit, ProfileChanged, ProfileLibraryLimit, ProfileHiddenLimit,
-    ExportDimensions, ExportResolution, ExportQuality, ExportCombination, HdrDocument, ProfileChannels, WebpLimit, DitherDepth,
+    ExportDimensions, ExportResolution, ExportQuality, ExportCombination, HdrDocument, ProfileChannels, WebpLimit, JpegLimit, AvifLimit, DitherDepth,
     PresetProfileMissing, PresetSelectSaved, PresetChooseDestination, PresetLimit, PresetNameUsed, PresetEntryLimit, PresetProfileNameLimit, PresetBuiltinChannels, PresetEmptyProfile, PresetProfileBytesLimit, PresetDuplicateName, PresetFileLimit, PresetUnusedProfile, PresetNameInvalid,
     ProfileMissing,
     ProfileChooseFile,
@@ -53,6 +53,8 @@ impl ColorFeatureError {
             Self::HdrDocument => MessageId::COLOR_EXPORT_HDR_DOCUMENT,
             Self::ProfileChannels => MessageId::COLOR_EXPORT_PROFILE_CHANNELS,
             Self::WebpLimit => MessageId::COLOR_EXPORT_WEBP_LIMIT,
+            Self::JpegLimit => MessageId::COLOR_EXPORT_JPEG_LIMIT,
+            Self::AvifLimit => MessageId::COLOR_EXPORT_AVIF_LIMIT,
             Self::DitherDepth => MessageId::COLOR_EXPORT_DITHER_DEPTH,
             Self::PresetProfileMissing => MessageId::COLOR_PRESET_PROFILE_MISSING,
             Self::PresetSelectSaved => MessageId::COLOR_PRESET_SELECT_SAVED,

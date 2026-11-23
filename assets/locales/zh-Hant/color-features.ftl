@@ -344,13 +344,15 @@ color-profile-read-limit = ICC 描述檔超過 16 MiB。
 color-profile-changed-storage = 儲存的描述檔已變更，請移除或重新匯入。
 color-profile-library-limit = 描述檔資料庫最多可有 128 個描述檔、共 64 MiB；請移除未使用的描述檔。
 color-profile-hidden-limit = 隱藏的描述檔過多，請顯示或移除未使用的項目。
-color-export-dimensions-range = 影像尺寸必須介於 1 到 32768 像素。
+color-export-dimensions-range = 影像尺寸必須介於 1 到 65536 像素。
 color-export-resolution-range = 解析度必須介於每英吋 1 到 65535 像素。
 color-export-quality-range = JPEG 品質必須介於 1 到 100。
 color-export-unsupported-combination = 不支援此匯出組合。
 color-export-hdr-document = HDR 輸出需要 HDR 文件。
 color-export-profile-channels = 描述檔通道與 ICC 資料不符。
 color-export-webp-limit = WebP 匯出每邊最多 16,384 像素。請將尺寸縮小到此範圍內，或選擇其他格式。
+color-export-jpeg-limit = JPEG 匯出每邊最多 65,535 像素。請將尺寸縮小到此範圍內，或選擇其他格式。
+color-export-avif-limit = HDR AVIF 匯出每邊最多 32,768 像素。請將尺寸縮小到此範圍內，或選擇其他格式。
 color-export-dither-depth = 輸出遞色需要 8 位元輸出。
 
 color-preset-profile-missing = 預設描述檔遺失。

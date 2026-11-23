@@ -348,13 +348,15 @@ color-profile-read-limit = Hồ sơ màu ICC vượt quá 16 MiB.
 color-profile-changed-storage = Hồ sơ màu đã thay đổi trong bộ lưu trữ; xóa hoặc nhập lại.
 color-profile-library-limit = Thư viện hồ sơ màu có giới hạn 128 hồ sơ và 64 MiB; xóa hồ sơ không dùng.
 color-profile-hidden-limit = Có quá nhiều hồ sơ màu ẩn; hiện hoặc xóa mục không dùng.
-color-export-dimensions-range = Kích thước ảnh phải từ 1 đến 32768 pixel.
+color-export-dimensions-range = Kích thước ảnh phải từ 1 đến 65536 pixel.
 color-export-resolution-range = Độ phân giải phải từ 1 đến 65535 pixel mỗi inch.
 color-export-quality-range = Chất lượng JPEG phải từ 1 đến 100.
 color-export-unsupported-combination = Tổ hợp thiết lập xuất không được hỗ trợ.
 color-export-hdr-document = Đầu ra HDR cần tài liệu HDR.
 color-export-profile-channels = Kênh hồ sơ màu không khớp dữ liệu ICC.
 color-export-webp-limit = Xuất WebP giới hạn 16384 pixel mỗi cạnh. Đặt kích thước trong giới hạn đó hoặc chọn định dạng khác.
+color-export-jpeg-limit = Xuất JPEG giới hạn 65535 pixel mỗi cạnh. Đặt kích thước trong giới hạn đó hoặc chọn định dạng khác.
+color-export-avif-limit = Xuất HDR AVIF giới hạn 32768 pixel mỗi cạnh. Đặt kích thước trong giới hạn đó hoặc chọn định dạng khác.
 color-export-dither-depth = Phân tán điểm màu đầu ra cần xuất 8 bit.
 
 color-preset-profile-missing = Thiếu hồ sơ màu của thiết lập đặt sẵn.

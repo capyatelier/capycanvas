@@ -2,6 +2,8 @@ use super::jpeg_codec;
 use super::*;
 use libjpeg_turbo_rs::PixelFormat;
 
+pub const JPEG_MAX_DIMENSION: u32 = 65535;
+
 pub(super) fn read_jpeg_with_cancel(
     input: impl Read,
     limits: DecodeLimits,

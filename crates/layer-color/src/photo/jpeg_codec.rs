@@ -87,7 +87,7 @@ pub(super) fn admit(
     metadata: usize,
     budget: usize,
 ) -> Result<usize, String> {
-    super::validate_extent(extent, 32768)?;
+    super::validate_extent(extent, JPEG_MAX_DIMENSION)?;
     let len = (extent[0] as usize)
         .checked_mul(extent[1] as usize)
         .and_then(|n| n.checked_mul(channels))

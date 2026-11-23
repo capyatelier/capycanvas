@@ -18,7 +18,7 @@ struct Layout {
 }
 impl Layout {
     fn new(extent: [u32; 2]) -> Result<Self, String> {
-        validate_extent(extent, 32768)?;
+        validate_extent(extent, AVIF_MAX_DIMENSION)?;
         // Keep individual synchronous encoder calls small. Larger documents
         // use larger cells to stay inside the reader's 4096-item limit, even
         // with both alpha and gain maps. Edge cells repeat the last sample;

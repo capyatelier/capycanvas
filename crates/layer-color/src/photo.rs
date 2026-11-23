@@ -21,6 +21,7 @@ mod jpeg_io;
 mod jpeg_markers;
 mod jpeg_mpf;
 mod avif_io;
+pub use avif_io::AVIF_MAX_DIMENSION;
 mod memory;
 pub use memory::PhotoMemoryBudget;
 mod gainmap;
@@ -47,7 +48,7 @@ mod tiff_io;
 #[cfg(test)]
 mod tiff_policy_tests;
 mod webp_io;
-pub use jpeg_io::{JpegEncodeOptions, write_jpeg, write_jpeg_rows, write_jpeg_rows_async};
+pub use jpeg_io::{JPEG_MAX_DIMENSION, JpegEncodeOptions, write_jpeg, write_jpeg_rows, write_jpeg_rows_async};
 pub use png_io::{write_png, write_png_rows, write_png_rows_async};
 pub use tiff_io::{write_tiff, write_tiff_rows, write_tiff_rows_async};
 pub use webp_io::{WEBP_MAX_DIMENSION, WEBP_SIZE_LIMIT, decode_rgba8_webp, webp_extent, write_webp_rows, write_webp_rows_async};
@@ -262,7 +263,7 @@ fn output_row_bytes(
     extent: [u32; 2],
     interpretation: &SourceInterpretation,
 ) -> Result<usize, String> {
-    validate_extent(extent, 32768)?;
+    validate_extent(extent, layer_core::MAX_EXTENT)?;
     check_channels(interpretation.channels, &interpretation.profile)?;
     Ok(extent[0] as usize * interpretation.pixel_bytes())
 }

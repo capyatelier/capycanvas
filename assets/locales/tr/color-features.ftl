@@ -348,13 +348,15 @@ color-profile-read-limit = ICC profili 16 MiB sınırını aşıyor.
 color-profile-changed-storage = Profil depolamada değişti; kaldırın veya yeniden içe aktarın.
 color-profile-library-limit = Profil kitaplığı sınırı 128 profil ve 64 MiB'dir; kullanılmayan profilleri kaldırın.
 color-profile-hidden-limit = Çok fazla gizli profil var; kullanılmayan kayıtları gösterin veya kaldırın.
-color-export-dimensions-range = Görüntü boyutları 1 ile 32768 piksel arasında olmalıdır.
+color-export-dimensions-range = Görüntü boyutları 1 ile 65536 piksel arasında olmalıdır.
 color-export-resolution-range = Çözünürlük, inç başına 1 ile 65535 piksel arasında olmalıdır.
 color-export-quality-range = JPEG kalitesi 1 ile 100 arasında olmalıdır.
 color-export-unsupported-combination = Desteklenmeyen dışa aktarma birleşimi.
 color-export-hdr-document = HDR çıktısı için HDR belge gerekir.
 color-export-profile-channels = Profil kanalları ICC verileriyle eşleşmiyor.
 color-export-webp-limit = WebP dışa aktarımı her kenarda 16.384 pikselle sınırlıdır. Boyutu bu sınıra sığdırın veya başka biçim seçin.
+color-export-jpeg-limit = JPEG dışa aktarımı her kenarda 65.535 pikselle sınırlıdır. Boyutu bu sınıra sığdırın veya başka biçim seçin.
+color-export-avif-limit = HDR AVIF dışa aktarımı her kenarda 32.768 pikselle sınırlıdır. Boyutu bu sınıra sığdırın veya başka biçim seçin.
 color-export-dither-depth = Çıktıda ton dağılımı için 8 bit çıktı gerekir.
 
 color-preset-profile-missing = Hazır ayar profili eksik.

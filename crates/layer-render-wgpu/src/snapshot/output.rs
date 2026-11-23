@@ -93,8 +93,8 @@ impl SnapshotRenderer {
         Ok(())
     }
     pub fn set_output_extent(&mut self, extent: [u32; 2]) -> Result<(), String> {
-        if extent.into_iter().any(|v| v == 0 || v > 32768) {
-            return Err("Image dimensions must be between 1 and 32768 pixels".into());
+        if extent.into_iter().any(|v| v == 0 || v > layer_core::MAX_EXTENT) {
+            return Err(format!("Image dimensions must be between 1 and {} pixels", layer_core::MAX_EXTENT));
         }
         self.output_extent = extent;
         Ok(())

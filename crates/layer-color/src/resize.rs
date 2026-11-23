@@ -102,8 +102,8 @@ pub struct RowResampler {
 impl RowResampler {
     pub fn new(source: [u32; 2], target: [u32; 2]) -> Result<Self, String> {
         for size in [source, target] {
-            if size.into_iter().any(|v| v == 0 || v > 32768) {
-                return Err("Image dimensions must be between 1 and 32768 pixels".into());
+            if size.into_iter().any(|v| v == 0 || v > layer_core::MAX_EXTENT) {
+                return Err(format!("Image dimensions must be between 1 and {} pixels", layer_core::MAX_EXTENT));
             }
         }
         Ok(Self {
@@ -186,7 +186,7 @@ pub struct AreaPreview {
 }
 impl AreaPreview {
     pub fn new(source: [u32; 2], bounds: [u32; 2]) -> Result<Self, String> {
-        if source.iter().any(|v| !(1..=32768).contains(v))
+        if source.iter().any(|v| !(1..=layer_core::MAX_EXTENT).contains(v))
             || bounds.iter().any(|v| !(1..=1024).contains(v))
         {
             return Err("Invalid preview dimensions".into());
@@ -258,6 +258,7 @@ fn asynchronous_preview_matches_full_area_resampling() {
         ([3, 3], [2, 2]),
         ([3, 2], [512, 512]),
         ([19, 801], [64, 64]),
+        ([layer_core::MAX_EXTENT, 3], [64, 64]),
     ] {
         let pixels: Vec<[f32; 4]> = (0..source[0] * source[1])
             .map(|i| {

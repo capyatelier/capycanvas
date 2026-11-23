@@ -420,6 +420,52 @@ mod tests {
     }
 
     #[test]
+    fn the_widest_drawing_exports_full_size_and_fitted_in_bounded_bands() {
+        use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TILE_SIZE, TileBlob, TileKey};
+        let extent = [layer_core::MAX_EXTENT, 128];
+        let (near, far) = ([200, 40, 10, 255], [10, 60, 220, 255]);
+        let mut document = layer_core::Document::new(layer_core::authored::PortableId::random(), extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        crate::test_support::hide_paper(&mut document);
+        let descriptor = document.composition().color.paint_descriptor();
+        let tile = |rgba: [u8; 4]| RasterTile::backed(TileBlob::encode(descriptor, &rgba.repeat((TILE_SIZE * TILE_SIZE) as usize)).unwrap());
+        *document.target_raster_mut(document.working.target.unwrap()).unwrap() = RasterRevision::backed(RasterData {
+            tiles: [([0, 0], near), ([extent[0] / TILE_SIZE - 1, 0], far)].map(|(coordinate, rgba)| (TileKey { plane: RasterPlane::Color, coordinate }, tile(rgba))).into(),
+            ..Default::default()
+        });
+        let gpu = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        let mut host = NativeHost::new(layer_ui::Platform::Mac).unwrap();
+        *host.session = UiSession::new(Renderer(Some(gpu.into())), document, [8, 6], layer_ui::Platform::Mac).unwrap();
+        crate::test_support::frames_until(&mut host, |_| true);
+        host.dispatch(UiAction::Invoke { command: CommandId::ExportDocument }).unwrap();
+        let request = host.session.state().requests.last().unwrap().id;
+        let mut task = ExportTask::capture(&host.session, request, "Panorama.capy", RgbSpace::Srgb).unwrap();
+        let jpeg = ExportRecipe::web_share().draft_canonical(ExportDraftAction::Format(ExportFormat::Jpeg)).recipe;
+        assert_eq!(task.configure(jpeg), Err(ColorFeatureError::JpegLimit));
+        let control = CaptureControl::with_allocation_tracking();
+        for (size, output) in [(layer_ui::ExportSize::Original, extent), (layer_ui::ExportSize::Fit { bounds: [4096, 4096], enlarge: false }, [4096, 8])] {
+            task.configure(ExportRecipe { size, ..ExportRecipe::web_share() }).unwrap();
+            let mut bytes = Vec::new();
+            task.write(Cursor::new(&mut bytes), control.clone()).unwrap();
+            assert_eq!(control.output_rows(), output[1]);
+            let peaks = control.allocation_peaks().unwrap();
+            assert!(peaks.allocated_bytes < u64::from(extent[0]) * u64::from(extent[1]) * 16, "{peaks:?}");
+            let photo = layer_color::photo::read_photo(Cursor::new(&bytes), layer_ui::photo_decode_limits()).unwrap();
+            assert_eq!(photo.extent, output);
+            let mut rows = photo.rows();
+            let mut row = vec![0; photo.row_bytes()];
+            for y in [0, output[1] - 1] {
+                rows.read(y, &mut row).unwrap();
+                let pixel = |x: u32| &row[x as usize * 4..][..4];
+                for (x, expected) in [(0, near), (output[0] / 2, [0; 4]), (output[0] - 1, far)] {
+                    assert!(pixel(x).iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1), "({x},{y}): {:?}", pixel(x));
+                }
+            }
+        }
+        drop((task, host));
+        layer_render_wgpu::finish_shader_compiler_shutdown();
+    }
+
+    #[test]
     fn gainmap_previews_keep_before_after_and_base() {
         let (host, mut task) = export([4., 2., 1., 1.]);
         let recipe = ExportRecipe::web_share()

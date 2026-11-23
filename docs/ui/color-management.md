@@ -470,9 +470,11 @@ preset actions use standard rows and name their target; unavailable controls
 are absent. JPEG offers opaque backgrounds and hides its fixed 8-bit depth.
 **WebP · lossless** is 8-bit RGB that keeps transparency; gray and CMYK
 delivery profiles leave it out. Its encoder writes at most 16,384 pixels per
-side, so a larger output size disables Export with that reason on GTK; the Web
-and Android dialogs show the same reason when Choose File… is pressed, before
-the save picker opens or any pixels render.
+side, JPEG and HDR JPEG at most 65,535 and HDR AVIF at most 32,768, so a larger
+output size disables Export with that reason on GTK; the Web and Android dialogs
+show the same reason when Choose File… is pressed, before the save picker opens
+or any pixels render. PNG, TIFF and OpenEXR write any drawing at full size, up
+to 65,536 pixels per side, streaming bands of rows.
 
 **Metadata** decides which of an opened photo's descriptive metadata the copy
 keeps: **All** (the default), **Copyright & Contact** or **None**. With All,

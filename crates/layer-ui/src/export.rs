@@ -156,7 +156,7 @@ pub enum ExportSize {
 impl ExportSize {
     pub fn extent(&self, source: [u32; 2]) -> Result<[u32; 2], ColorFeatureError> {
         let validate = |size: [u32; 2]| {
-            if size.into_iter().all(|v| (1..=32768).contains(&v)) {
+            if size.into_iter().all(|v| (1..=layer_core::MAX_EXTENT).contains(&v)) {
                 Ok(())
             } else {
                 Err(ColorFeatureError::ExportDimensions)
@@ -246,8 +246,14 @@ impl ExportRecipe {
     /// write them.
     pub fn output_extent(&self, source: [u32; 2]) -> Result<[u32; 2], ColorFeatureError> {
         let extent = self.size.extent(source)?;
-        if self.format == ExportFormat::Webp && extent.iter().any(|v| *v > layer_color::photo::WEBP_MAX_DIMENSION) {
-            return Err(ColorFeatureError::WebpLimit);
+        let (maximum, refusal) = match self.format {
+            ExportFormat::Webp => (layer_color::photo::WEBP_MAX_DIMENSION, ColorFeatureError::WebpLimit),
+            ExportFormat::Jpeg | ExportFormat::JpegHdr | ExportFormat::JpegHdrMapped => (layer_color::photo::JPEG_MAX_DIMENSION, ColorFeatureError::JpegLimit),
+            ExportFormat::AvifHdr | ExportFormat::AvifHdrMapped => (layer_color::photo::AVIF_MAX_DIMENSION, ColorFeatureError::AvifLimit),
+            _ => return Ok(extent),
+        };
+        if extent.iter().any(|v| *v > maximum) {
+            return Err(refusal);
         }
         Ok(extent)
     }
@@ -580,7 +586,7 @@ pub struct ExportNumericControls {
 impl Default for ExportNumericControls {
     fn default() -> Self {
         Self {
-            dimension: crate::NumericControl::number(1., 32768., 1., 0),
+            dimension: crate::NumericControl::number(1., f64::from(layer_core::MAX_EXTENT), 1., 0),
             ppi: crate::NumericControl::number(1., 65535., 1., 0),
             quality: crate::NumericControl::number(1., 100., 1., 0),
         }
@@ -909,6 +915,22 @@ mod tests {
     }
 
     #[test]
+    fn the_widest_drawing_exports_up_to_each_format_limit() {
+        let source = [layer_core::MAX_EXTENT, 256];
+        for (format, fitted, refusal) in [
+            (ExportFormat::Png, source, None), (ExportFormat::Tiff, source, None),
+            (ExportFormat::Exr, source, None), (ExportFormat::PngHdr, source, None),
+            (ExportFormat::Jpeg, [65535, 256], Some(ColorFeatureError::JpegLimit)), (ExportFormat::JpegHdrMapped, [65535, 256], Some(ColorFeatureError::JpegLimit)),
+            (ExportFormat::AvifHdr, [32768, 128], Some(ColorFeatureError::AvifLimit)), (ExportFormat::Webp, [16384, 64], Some(ColorFeatureError::WebpLimit)),
+        ] {
+            let recipe = ExportRecipe { format, ..ExportRecipe::web_share() };
+            assert_eq!(recipe.output_extent(source), refusal.map_or(Ok(source), Err), "{format:?}");
+            let fit = ExportRecipe { size: ExportSize::Fit { bounds: [fitted[0]; 2], enlarge: false }, ..recipe };
+            assert_eq!(fit.output_extent(source), Ok(fitted), "{format:?}");
+        }
+    }
+
+    #[test]
     fn export_size_fits_orientation_without_distorting_or_changing_the_master() {
         for (source, bounds, enlarge, expected) in [
             ([6000, 4000], [2048, 2048], false, [2048, 1365]),
@@ -936,7 +958,7 @@ mod tests {
             assert_eq!(recipe.depth, SampleDepth::U16);
             assert_eq!(recipe.profile, ExportProfile::builtin(RgbSpace::ProPhoto));
         }
-        for size in [[0, 1], [1, 32769]] {
+        for size in [[0, 1], [1, layer_core::MAX_EXTENT + 1]] {
             assert!(ExportSize::Original.extent(size).is_err());
             let mut recipe = ExportRecipe::web_share();
             recipe.size = ExportSize::Fit {

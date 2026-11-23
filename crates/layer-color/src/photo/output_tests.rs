@@ -10,7 +10,7 @@ fn invalid_output_is_rejected_before_writing_and_provider_failure_stops_rows() {
         profile_assumed: false,
     };
     for tiff in [false, true] {
-        for extent in [[0, 1], [32769, 1], [1, 0]] {
+        for extent in [[0, 1], [layer_core::MAX_EXTENT + 1, 1], [1, 0]] {
             let mut output = Cursor::new(Vec::new());
             let provider = |_, _: &mut [u8]| panic!("invalid output called provider");
             let result = if tiff {
@@ -30,6 +30,28 @@ fn invalid_output_is_rejected_before_writing_and_provider_failure_stops_rows() {
             }
         });
     }
+}
+
+#[test]
+fn writers_accept_the_largest_side_their_format_allows() {
+    let rgba = SourceInterpretation { channels: SourceChannels::Rgba, depth: SampleDepth::U8, profile: ColorProfile::default(), profile_assumed: false };
+    let rgb = SourceInterpretation { channels: SourceChannels::Rgb, ..rgba.clone() };
+    let jpeg = JpegEncodeOptions::from_memory_budget(90, PhotoMemoryBudget::from_limit(1 << 30));
+    let wide = [layer_core::MAX_EXTENT, 2];
+    let fill = |_, row: &mut [u8]| { row.fill(200); Ok(()) };
+    let linear = |_, row: &mut [[f32; 4]]| { row.fill([0.5; 4]); Ok(()) };
+    let (mut png, mut tiff, mut openexr, mut pq, mut jpg) = (Vec::new(), Cursor::new(Vec::new()), Cursor::new(Vec::new()), Vec::new(), Vec::new());
+    write_png_rows(&mut png, wide, &rgba, &Default::default(), fill).unwrap();
+    write_tiff_rows(&mut tiff, wide, &rgba, &Default::default(), fill).unwrap();
+    write_exr_rows(&mut openexr, wide, RgbSpace::Srgb, None, linear).unwrap();
+    write_hdr_png_rows(&mut pq, wide, RgbSpace::Srgb, &Default::default(), false, linear).unwrap();
+    write_jpeg_rows(&mut jpg, [JPEG_MAX_DIMENSION, 2], &rgb, &Default::default(), jpeg, fill).unwrap();
+    for (bytes, extent) in [(png, wide), (tiff.into_inner(), wide), (jpg, [JPEG_MAX_DIMENSION, 2])] {
+        assert_eq!(read_photo(Cursor::new(bytes), DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(1 << 30))).unwrap().extent, extent);
+    }
+    assert_eq!(pq[16..24], [wide[0].to_be_bytes(), wide[1].to_be_bytes()].concat());
+    assert_eq!(exr::block::read(Cursor::new(openexr.into_inner()), true).unwrap().headers()[0].layer_size, exr::math::Vec2(wide[0] as usize, wide[1] as usize));
+    assert!(write_jpeg_rows(Vec::new(), [JPEG_MAX_DIMENSION + 1, 2], &rgb, &Default::default(), jpeg, |_, _| panic!("a refused JPEG requested pixels")).is_err());
 }
 
 fn webp_interpretation(channels: SourceChannels, depth: SampleDepth) -> SourceInterpretation {

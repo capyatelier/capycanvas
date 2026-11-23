@@ -117,7 +117,7 @@ pub fn preview_hdr_rows(
     extent: [u32; 2], bounds: [u32; 2], space: RgbSpace,
     mut read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
 ) -> Result<HdrPreview, String> {
-    validate_extent(extent, 32768)?;
+    validate_extent(extent, layer_core::MAX_EXTENT)?;
     let mut preview = crate::AreaPreview::new(extent, bounds)?;
     let mut row = vec![[0.; 4]; extent[0] as usize];
     let to_srgb = space.linear_transform(RgbSpace::Srgb);
@@ -157,7 +157,7 @@ pub fn write_hdr_png_rows(
     map_out_of_range: bool,
     mut read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
 ) -> Result<crate::OutputStatistics, String> {
-    validate_extent(extent, 32768)?;
+    validate_extent(extent, layer_core::MAX_EXTENT)?;
     let mut info = super::png_io::info(extent, metadata)?;
     info.bit_depth = png::BitDepth::Sixteen;
     info.color_type = png::ColorType::Rgba;

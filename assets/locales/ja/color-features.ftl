@@ -344,13 +344,15 @@ color-profile-read-limit = ICCプロファイルが16 MiBを超えています�
 color-profile-changed-storage = 保存されたプロファイルが変更されています。削除するか、読み込み直してください。
 color-profile-library-limit = プロファイルライブラリの上限は128個、合計64 MiBです。使っていないプロファイルを削除してください。
 color-profile-hidden-limit = 非表示のプロファイルが多すぎます。使っていない項目を表示するか削除してください。
-color-export-dimensions-range = 画像の寸法は1〜32768ピクセルの範囲にしてください。
+color-export-dimensions-range = 画像の寸法は1〜65536ピクセルの範囲にしてください。
 color-export-resolution-range = 解像度は1〜65535ピクセル/インチの範囲にしてください。
 color-export-quality-range = JPEG品質は1〜100の範囲にしてください。
 color-export-unsupported-combination = この書き出しの組み合わせには対応していません。
 color-export-hdr-document = HDR出力にはHDRドキュメントが必要です。
 color-export-profile-channels = プロファイルのチャンネルがICCデータと一致しません。
 color-export-webp-limit = WebPの書き出しは各辺16,384ピクセルまでです。その範囲にサイズを収めるか、別の形式を選択してください。
+color-export-jpeg-limit = JPEGの書き出しは各辺65,535ピクセルまでです。その範囲にサイズを収めるか、別の形式を選択してください。
+color-export-avif-limit = HDR AVIFの書き出しは各辺32,768ピクセルまでです。その範囲にサイズを収めるか、別の形式を選択してください。
 color-export-dither-depth = 出力のディザには8ビット出力が必要です。
 
 color-preset-profile-missing = プリセットのプロファイルがありません。

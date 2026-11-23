@@ -683,7 +683,7 @@ color-profile-library-limit = Batas pustaka profil adalah 128 profil dan 64 MiB;
 
 color-profile-hidden-limit = Terlalu banyak profil tersembunyi; tampilkan atau hapus entri yang tidak digunakan.
 
-color-export-dimensions-range = Dimensi gambar harus antara 1 dan 32768 piksel.
+color-export-dimensions-range = Dimensi gambar harus antara 1 dan 65536 piksel.
 
 color-export-resolution-range = Resolusi harus antara 1 dan 65535 piksel per inci.
 
@@ -696,6 +696,8 @@ color-export-hdr-document = Keluaran HDR memerlukan dokumen HDR.
 color-export-profile-channels = Kanal profil tidak sesuai dengan data ICC.
 
 color-export-webp-limit = Ekspor WebP dibatasi 16.384 piksel per sisi. Sesuaikan ukuran dalam batas tersebut atau pilih format lain.
+color-export-jpeg-limit = Ekspor JPEG dibatasi 65.535 piksel per sisi. Sesuaikan ukuran dalam batas tersebut atau pilih format lain.
+color-export-avif-limit = Ekspor HDR AVIF dibatasi 32.768 piksel per sisi. Sesuaikan ukuran dalam batas tersebut atau pilih format lain.
 
 color-export-dither-depth = Dither keluaran memerlukan keluaran 8-bit.
 

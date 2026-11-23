@@ -237,7 +237,7 @@ pub fn write_exr_rows(
     resolution: Option<layer_core::ImageResolution>,
     mut read: impl FnMut(u32, &mut [[f32; 4]]) -> Result<(), String>,
 ) -> Result<(), String> {
-    validate_extent(extent, 32768)?;
+    validate_extent(extent, layer_core::MAX_EXTENT)?;
     let mut header = Header::new(
         "RGB".into(),
         (extent[0] as usize, extent[1] as usize),

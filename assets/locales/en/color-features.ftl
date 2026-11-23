@@ -348,13 +348,15 @@ color-profile-read-limit = ICC profile exceeds 16 MiB.
 color-profile-changed-storage = Profile changed in storage; remove or reimport it.
 color-profile-library-limit = The profile library limit is 128 profiles and 64 MiB; remove unused profiles.
 color-profile-hidden-limit = Too many hidden profiles; show or remove unused entries.
-color-export-dimensions-range = Image dimensions must be between 1 and 32768 pixels.
+color-export-dimensions-range = Image dimensions must be between 1 and 65536 pixels.
 color-export-resolution-range = Resolution must be between 1 and 65535 pixels per inch.
 color-export-quality-range = JPEG quality must be between 1 and 100.
 color-export-unsupported-combination = Unsupported export combination.
 color-export-hdr-document = HDR delivery requires an HDR document.
 color-export-profile-channels = Profile channels do not match the ICC data.
 color-export-webp-limit = WebP export is limited to 16,384 pixels per side. Fit the size within that or choose another format.
+color-export-jpeg-limit = JPEG export is limited to 65,535 pixels per side. Fit the size within that or choose another format.
+color-export-avif-limit = HDR AVIF export is limited to 32,768 pixels per side. Fit the size within that or choose another format.
 color-export-dither-depth = Output dithering requires 8-bit delivery.
 
 color-preset-profile-missing = Preset profile is missing.

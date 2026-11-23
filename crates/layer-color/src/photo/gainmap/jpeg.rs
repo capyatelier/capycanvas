@@ -5,7 +5,7 @@ use layer_core::color::hdr;
 use libjpeg_turbo_rs::{ColorSpace, Encoder, Image, PixelFormat, Subsampling};
 
 fn admit(extent: [u32; 2], compressed: usize, budget: usize) -> Result<usize, String> {
-    validate_extent(extent, 32768)?;
+    validate_extent(extent, JPEG_MAX_DIMENSION)?;
     // Master/gain floats, JPEG planes and metadata insertion copies coexist.
     // Use u64 so the same admission check also runs on 32-bit WebAssembly.
     let needed = u64::from(extent[0]) * u64::from(extent[1]) * 96

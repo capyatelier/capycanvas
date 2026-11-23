@@ -344,13 +344,15 @@ color-profile-read-limit = ICC 配置文件超过 16 MiB。
 color-profile-changed-storage = 存储中的配置文件已更改，请移除或重新导入。
 color-profile-library-limit = 配置文件库最多可有 128 个配置文件、共 64 MiB；请移除未使用的配置文件。
 color-profile-hidden-limit = 隐藏的配置文件过多，请显示或移除未使用的条目。
-color-export-dimensions-range = 图像尺寸必须在 1 到 32768 像素之间。
+color-export-dimensions-range = 图像尺寸必须在 1 到 65536 像素之间。
 color-export-resolution-range = 分辨率必须在每英寸 1 到 65535 像素之间。
 color-export-quality-range = JPEG 质量必须在 1 到 100 之间。
 color-export-unsupported-combination = 不支持此导出组合。
 color-export-hdr-document = HDR 输出需要 HDR 文档。
 color-export-profile-channels = 配置文件通道与 ICC 数据不匹配。
 color-export-webp-limit = WebP 导出每边最多 16,384 像素。请将尺寸缩小到此范围内，或选择其他格式。
+color-export-jpeg-limit = JPEG 导出每边最多 65,535 像素。请将尺寸缩小到此范围内，或选择其他格式。
+color-export-avif-limit = HDR AVIF 导出每边最多 32,768 像素。请将尺寸缩小到此范围内，或选择其他格式。
 color-export-dither-depth = 输出抖动需要 8 位输出。
 
 color-preset-profile-missing = 预设配置文件缺失。

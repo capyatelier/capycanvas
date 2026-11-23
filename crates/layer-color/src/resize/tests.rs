@@ -171,9 +171,9 @@ fn identity_constants_extended_color_and_transparent_edges_preserve_coverage() {
 #[test]
 fn extreme_aspect_ratios_keep_four_cached_rows_and_read_sources_once() {
     for (source, target) in [
-        ([1, 32768], [1, 1]),
-        ([1, 32768], [17, 31]),
-        ([1, 7], [1, 32768]),
+        ([1, layer_core::MAX_EXTENT], [1, 1]),
+        ([1, layer_core::MAX_EXTENT], [17, 31]),
+        ([1, 7], [1, layer_core::MAX_EXTENT]),
     ] {
         let mut resampler = RowResampler::new(source, target).unwrap();
         let mut output = vec![[0.; 4]; target[0] as usize];
@@ -198,7 +198,7 @@ fn extreme_aspect_ratios_keep_four_cached_rows_and_read_sources_once() {
 
 #[test]
 fn invalid_requests_and_provider_failure_do_not_publish_a_row() {
-    for bad in [[0, 1], [1, 32769]] {
+    for bad in [[0, 1], [1, layer_core::MAX_EXTENT + 1]] {
         assert!(RowResampler::new(bad, [1, 1]).is_err());
         assert!(RowResampler::new([1, 1], bad).is_err());
     }
