@@ -114,6 +114,30 @@ class PassProgressTest(unittest.TestCase):
         log = "BENCH_STEP select.wand error Canvas GPU stopped\nINSTRUMENTATION_CODE: -1\n"
         self.assertEqual(bench_android.instrumentation_error(log, "fill"), "Instrumentation ended before fill")
 
+    def test_completed_pass_saves_logcat_on_step_error(self):
+        entry = {"version": "A", "pass": 1, "cold": False}
+        record = {"adaptive": None, "steps": ["launch"], "device": "tcl", "documents": {},
+                  "versions": {"A": {"app_id": "art.capycanvas.bench.a", "commit": "a"}}}
+        for status in ("ok", "error"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
+                adb = FakeAdb({("logcat", "-d", "-v", "threadtime"): "device log"})
+                adb.prefix = ["adb", "-s", "test"]
+                process = SimpleNamespace(poll=lambda: 0, wait=lambda **_: 0, returncode=0)
+
+                def instrument(args, stdout, **options):
+                    stdout.write(f"BENCH_STEP launch {status} \nINSTRUMENTATION_CODE: -1\n")
+                    return process
+
+                with patch.object(bench_android.subprocess, "Popen", side_effect=instrument), \
+                     patch.object(bench_android.subprocess, "run", return_value=SimpleNamespace(returncode=0)):
+                    result = bench_android.run_pass(adb, record, entry, Path(tmp))
+                self.assertTrue(result["ok"])
+                logcat = Path(tmp) / "A/pass-1/logcat.txt"
+                if status == "error":
+                    self.assertEqual(logcat.read_text(), "device log")
+                else:
+                    self.assertFalse(logcat.exists())
+
     def test_quiet_instrumentation_is_bounded(self):
         process = SimpleNamespace(wait=lambda **_: self.expire())
         log = SimpleNamespace(stat=lambda: SimpleNamespace(st_size=12))

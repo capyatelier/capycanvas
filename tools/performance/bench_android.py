@@ -218,11 +218,11 @@ def run_pass(adb, record, entry, directory):
         result["error"] = "\n".join([str(error), *getattr(error, "__notes__", [])])
     log = log_path.read_text(errors="replace")
     pulled = subprocess.run(adb.prefix + ["pull", f"{remote}/pass-{n}/pass.json", str(output / "pass.json")], capture_output=True).returncode == 0
-    completed = set(re.findall(r"^BENCH_STEP (\S+) ", log, re.M))
+    step_status = dict(re.findall(r"^BENCH_STEP (\S+) (\S+)", log, re.M))
     planned = record["steps"]
     if planned is None:
         planned = [step["id"] for step in json.loads(Path(record["chain"]).read_text())["steps"]]
-    blocked = next((step for step in planned if step not in completed), None)
+    blocked = next((step for step in planned if step not in step_status), None)
     error = result.get("error") or instrumentation_error(log, blocked)
     if error is None and (not pulled or process.returncode):
         error = f"adb exited {process.returncode}" if process.returncode else "Instrumentation did not save pass.json"
@@ -230,7 +230,7 @@ def run_pass(adb, record, entry, directory):
         result.update(error=error, blocked_step=blocked)
         print(f"pass {n} of {entry['version']} stopped at {blocked}: {error}", flush=True)
     result.update(returncode=process.returncode, ok=error is None, seconds=round(time.monotonic() - started))
-    if not result["ok"]:
+    if not result["ok"] or "error" in step_status.values():
         (output / "logcat.txt").write_text(adb("logcat", "-d", "-v", "threadtime", check=False))
     return result
 

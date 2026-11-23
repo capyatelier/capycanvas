@@ -30,6 +30,7 @@ import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.LockSupport
 import kotlin.math.*
 
@@ -84,12 +85,10 @@ class BenchChainInstrumentation : Instrumentation() {
         check(chain.getInt("schema") == 1) { "Unknown chain schema" }
         val output = File(targetContext.getExternalFilesDir(null), "bench-chain/pass-$number").apply { deleteRecursively(); mkdirs() }
         val root = File(targetContext.cacheDir, "bench-chain")
+        check(root.deleteRecursively()) { "Could not clear the benchmark data directory" }
         AppStorage.directoryForTest = root
-        if (cold) {
-            root.deleteRecursively()
-            File(targetContext.cacheDir, "shaders").deleteRecursively()
-            targetContext.deleteSharedPreferences(CanvasHost.preferencesName)
-        }
+        check(targetContext.deleteSharedPreferences(CanvasHost.preferencesName)) { "Could not clear benchmark preferences" }
+        if (cold) File(targetContext.cacheDir, "shaders").deleteRecursively()
         val directory = File(targetContext.cacheDir, "bench-chain-documents").apply { deleteRecursively(); mkdirs() }
         for (name in chain.getJSONObject("documents").keys()) args.getString(name)?.let { remote ->
             staged[name] = runCatching { File(directory, File(remote).name).also { local ->
@@ -520,6 +519,33 @@ class BenchChainInstrumentation : Instrumentation() {
         check(main { state().getJSONObject("camera").getLong("revision") } != before) { "The $kind gesture did not move the camera" }
     }
 
+    private fun fillPoint(point: DoubleArray, area: Area): DoubleArray = main {
+        val camera = state().getJSONObject("camera")
+        val drawing = state().array("tabs").objects().first { it.optBoolean("active") }
+        val halfWidth = drawing.getInt("width") / 2.0
+        val halfHeight = drawing.getInt("height") / 2.0
+        val zoom = camera.getDouble("zoom")
+        val flipped = camera.getJSONArray("flipped")
+        val x = halfWidth * (if (flipped.getBoolean(0)) -zoom else zoom)
+        val y = halfHeight * (if (flipped.getBoolean(1)) -zoom else zoom)
+        val rotation = camera.getDouble("rotation")
+        val cos = cos(rotation)
+        val sin = sin(rotation)
+        val translation = camera.getJSONArray("translation")
+        val centerX = host.surfaceOrigin.x + translation.getDouble(0) + cos * x - sin * y
+        val centerY = host.surfaceOrigin.y + translation.getDouble(1) + sin * x + cos * y
+        val dx = point[0] - centerX
+        val dy = point[1] - centerY
+        val reach = max(abs((cos * dx + sin * dy) / x), abs((cos * dy - sin * dx) / y))
+        if (reach < 1.0) return@main point
+        val scale = .9 / reach
+        val projected = doubleArrayOf(centerX + dx * scale, centerY + dy * scale)
+        check(projected[0] in area.x..(area.x + area.w) && projected[1] in area.y..(area.y + area.h)) {
+            "Fill point does not intersect the visible drawing"
+        }
+        projected
+    }
+
     private fun tap(step: JSONObject) {
         val tool = step.getString("tool")
         val document = tool == "fill"
@@ -532,7 +558,8 @@ class BenchChainInstrumentation : Instrumentation() {
             progress("BENCH_TAP $id ${index + 1}")
             val before = main { if (document) revision() else state().getLong("revision") }
             val a = area()
-            val input = tap(a.at(point.getDouble(0), point.getDouble(1)), true)
+            val target = a.at(point.getDouble(0), point.getDouble(1))
+            val input = tap(if (document) fillPoint(target, a) else target, true)
             val ready = await("$tool tap") { (if (document) revision() else state().getLong("revision")) > before }
             latency(tool, input, ready, surface)
         }
@@ -602,9 +629,37 @@ class BenchChainInstrumentation : Instrumentation() {
 
     private fun panelPlacement() = workspaceLayout().let { "${it.opt("bands")}${it.opt("floating")}${it.opt("collapsed")}" }
 
-    private fun groupDockEdge(tag: String): String? {
-        val group = tag.removePrefix("group-grip-").toIntOrNull() ?: return null
-        return workspaceLayout().array("bands").objects().firstOrNull { it.getJSONObject("root").getInt("id") == group }?.getString("edge")
+    private fun rightDockBands() = workspaceLayout().array("bands").objects().filter { it.getString("edge") == "right" }
+
+    private fun rightDockDrop(group: Int, previousBand: Int?, start: DoubleArray, ready: (DoubleArray) -> Unit) {
+        val workspace = box("workspace") ?: return
+        val divider = previousBand?.let { box("divider-$it") }
+        val density = activity.resources.displayMetrics.density.toDouble()
+        val candidates = if (divider == null) {
+            listOf(start[1], workspace.centerY().toDouble()).map { y ->
+                doubleArrayOf(workspace.right - 4 * density, y)
+            }
+        } else {
+            listOf(44, 56, 68).map { distance ->
+                doubleArrayOf(divider.left - distance * density, divider.centerY().toDouble())
+            }
+        }
+        val item = obj("kind" to "group", "group" to group)
+        val points = candidates + listOf(start)
+        fun find(index: Int) {
+            val point = points.getOrNull(index) ?: return
+            val position = JSONArray(listOf((point[0] - workspace.left) / density, (point[1] - workspace.top) / density))
+            host.query(obj("type" to "drop", "item" to item, "position" to position, "tabs" to JSONArray())) { value ->
+                val target = (value as? JSONObject)?.optJSONObject("target")
+                val matches = if (previousBand == null) {
+                    target?.optString("kind") == "edge" && target.optString("edge") == "right" && target.optBoolean("outer")
+                } else {
+                    target?.optString("kind") == "beside_band" && target.optInt("band") == previousBand
+                }
+                if (matches) ready(point) else find(index + 1)
+            }
+        }
+        find(0)
     }
 
     private fun panelDrag(panel: String, duration: Double) {
@@ -614,25 +669,42 @@ class BenchChainInstrumentation : Instrumentation() {
             await("visible $panel grip", 5_000) { panelGripTags(panel).any { visible(it) } }
             val (tag, before) = main { panelGripTags(panel).first { visible(it) } to panelPlacement() }
             val start = center(tag)
-            val returnToRightDock = temporary && main { groupDockEdge(tag) == "right" }
-            val drop = if (returnToRightDock) main {
-                val workspace = checkNotNull(box("workspace"))
-                doubleArrayOf(workspace.right.toDouble() - 8, workspace.centerY().toDouble())
-            } else start
+            val group = tag.removePrefix("group-grip-").toIntOrNull()
+            val bands = main { rightDockBands() }
+            val slot = bands.indexOfFirst { it.getJSONObject("root").getInt("id") == group }
+            val previousBand = bands.getOrNull(slot - 1)?.getInt("id")
+            val dockDrop = AtomicReference<DoubleArray>()
+            var requestedDock = slot < 0
+            var returning = false
+            var drop: DoubleArray? = start.takeIf { slot < 0 }
             val a = area()
             val float = a.at(.5, .5)
             val radius = .1 * min(a.w, a.h)
             motion(contacts(false, duration) { p ->
+                if (p >= .4 && !requestedDock) {
+                    activity.runOnUiThread { rightDockDrop(requireNotNull(group), previousBand, start, dockDrop::set) }
+                    requestedDock = true
+                }
                 when {
                     p < .25 -> lerp(start, float, p / .25)
                     p < .75 -> (2 * PI * (p - .25) / .5).let { q -> doubleArrayOf(float[0] + radius * sin(q), float[1] - radius * (1 - cos(q))) }
-                    else -> lerp(float, drop, (p - .75) / .25)
+                    else -> {
+                        if (!returning) {
+                            if (slot >= 0) drop = dockDrop.get()
+                            returning = true
+                        }
+                        lerp(float, drop ?: start, (p - .75) / .25)
+                    }
                 }
             }.single())
             await("panel drop")
-            val restored = main { if (returnToRightDock) groupDockEdge(tag) == "right" else panelPlacement() == before }
+            val restored = main {
+                if (slot < 0) panelPlacement() == before
+                else drop != null && rightDockBands().getOrNull(slot)?.getJSONObject("root")?.getInt("id") == group
+            }
             extra().put("target", tag).put("returned_in_place", restored)
             if (!restored && !temporary) command("undo_workspace")
+            check(drop != null) { "No live drop target for the starting $panel dock" }
             check(restored) { "$panel did not return to its starting dock" }
         } finally {
             if (temporary) showDockedPanel(panel, false)
