@@ -1926,11 +1926,11 @@ impl Cache {
             cell.shown=None;cell.invalidate();
         }
     }
-    pub(super) fn cell_reads(&self,target:SourceTarget,region:PixelRect)->crate::IdMap<[u32;2],Arc<[PixelRect]>> {
+    pub(super) fn cell_reads(&self,target:SourceTarget,regions:&[PixelRect])->crate::IdMap<[u32;2],Arc<[PixelRect]>> {
         let Some((_cells,store,template))=self.cells() else {return Default::default();};
         let Some(frame)=store.expected() else {return Default::default();};
         let (plan,input_level)=(self.plan,self.required_input_level());
-        let cells=coordinates(region.intersect(plan.bounds),plan.level).map(|coordinate|(coordinate,bounds(coordinate,plan.level,plan.extent))).collect::<Vec<_>>();
+        let cells=regions.iter().flat_map(|region|coordinates(region.intersect(plan.bounds),plan.level)).map(|coordinate|(coordinate,bounds(coordinate,plan.level,plan.extent))).collect::<Vec<_>>();
         for (coordinate,region) in &cells {drop(frame.expected_key(&Key {coordinate:*coordinate,..template.clone()},*region,input_level));}
         frame.cell_reads(target,&template.expression,plan.level,input_level,&cells)
     }

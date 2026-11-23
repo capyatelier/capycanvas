@@ -422,7 +422,7 @@ impl Prepared {
                 stack.extend(&entry.dependents);
             }
         }
-        reads.into_iter().map(|(cell,reads)|(cell,reads.into())).collect()
+        reads.into_iter().map(|(cell,mut reads)|{reads.sort_unstable_by_key(|read|[read.min_x(),read.min_y(),read.max_x(),read.max_y()]);reads.dedup();(cell,reads.into())}).collect()
     }
     pub(super) fn composed(&self,target:SourceTarget,versions:raster::contents::Versions)->Self {self.advanced(target,versions,None)}
     pub(super) fn advanced(&self,target:SourceTarget,versions:raster::contents::Versions,preview:Option<Arc<PreviewDeclaration>>)->Self {

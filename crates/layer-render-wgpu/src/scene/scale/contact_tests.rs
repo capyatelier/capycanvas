@@ -403,6 +403,60 @@ fn a_cell_a_discarded_contact_left_unnamed_is_not_named_by_a_later_contact_after
 }
 
 #[test]
+fn a_cell_refused_at_pen_down_and_reached_later_in_the_contact_shows_every_dab_it_receives() {
+    let extent=[2048,512];let doc=document_at(extent);let target=primary_target(&doc);
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
+    let cell=PixelRect::new(768,0,1024,256);
+    let glaze=(0..PAGE_SIZE*PAGE_SIZE).flat_map(|_|[0.05f32,0.4,0.1,1.]).flat_map(f32::to_le_bytes).collect::<Vec<_>>();
+    let dabs=[100.,400.,700.,800.,880.].map(|x|stroke_dab(x,128.));
+    let prepared=|r:&mut WgpuRasterizer| {
+        crate::test_support::submit_settled(r,frame);
+        let dab=stroke_dab(900.,60.);
+        crate::test_support::submit_ready(r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&stroke_batch(target,&dab,true,true)),..frame}).unwrap();
+        crate::test_support::submit_settled(r,frame);
+        crate::test_support::upload_layer_page(r,doc.scene(),target,[3,0],&glaze);
+    };
+    let mut r=renderer(&doc);prepared(&mut r);
+    let display=r.scene_tiers.display.clone();
+    let refused=display.blocked(crate::residency::Class::Visible,display.limit()+1).expect("a unit larger than the display grant is refused");
+    {let cache=r.scale_display.as_ref().unwrap();cache.evict_window(cell);cache.refuse(None,cell,&refused);}
+    for (step,dab) in dabs.iter().enumerate() {
+        crate::test_support::submit_ready(&mut r,FramePacket {dabs:std::slice::from_ref(dab),dab_batches:std::slice::from_ref(&stroke_batch(target,dab,step==0,false)),time_seconds:0.01*(step+1) as f32,..frame}).unwrap();
+        if step==0 {
+            let cache=r.scale_display.as_ref().unwrap();
+            let expression=cache.page_key(cache.graph.root.clone().unwrap(),cell).expression;
+            assert!(cache.contact_id().is_some(),"the stroke enters contact at pen-down");
+            assert!(!super::super::signatures::tests::cached_cells(&held_frame(&r),&expression,0).contains_key(&[768,0,1024,256]),"the refused cell has no reader at admission");
+        }
+    }
+    assert!(r.scale_display.as_ref().unwrap().contact_id().is_some(),"the stroke stays in contact");
+    let mut fresh=renderer(&doc);prepared(&mut fresh);
+    let whole=layer_render::DabBatch {dab_count:dabs.len() as u32,damage:dabs.iter().map(|dab|dab.bounds()).reduce(|a,b|a.union(b)).unwrap(),..stroke_batch(target,&dabs[0],true,false)};
+    crate::test_support::submit_ready(&mut fresh,FramePacket {dabs:&dabs,dab_batches:std::slice::from_ref(&whole),time_seconds:0.05,..frame}).unwrap();
+    let (shown,expected)=(display_pixels(&r),display_pixels(&fresh));
+    let error=texels_inside(r.scale_display.as_ref().unwrap().plan,cell).into_iter().map(|(_,index)|max_error(&shown[index..=index],&expected[index..=index])).fold(0f32,f32::max);
+    assert!(error<1e-4,"the cell reached after pen-down differs from a fresh renderer by {error} while the stroke is in contact");
+}
+
+#[test]
+fn growth_on_both_sides_of_a_registered_cell_registers_no_second_reader_for_it() {
+    let extent=[2048,512];let doc=document_at(extent);let target=primary_target(&doc);
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
+    let mut r=renderer(&doc);crate::test_support::submit_settled(&mut r,frame);
+    let middle=PixelRect::new(512,0,768,256);let first=stroke_dab(640.,128.);
+    crate::test_support::submit_ready(&mut r,FramePacket {dabs:std::slice::from_ref(&first),dab_batches:std::slice::from_ref(&stroke_batch(target,&first,true,false)),time_seconds:0.01,..frame}).unwrap();
+    let cache=r.scale_display.as_ref().unwrap();
+    let (contact,registered)=(cache.contact_id(),cache.contact_reader_edges(middle));
+    assert!(contact.is_some() && registered>0,"the contact registers the middle cell's readers at admission");
+    let fronts=[stroke_dab(100.,128.),stroke_dab(1200.,128.)];
+    let batch=layer_render::DabBatch {dab_count:2,damage:fronts[0].bounds().union(fronts[1].bounds()),..stroke_batch(target,&fronts[0],false,false)};
+    crate::test_support::submit_ready(&mut r,FramePacket {dabs:&fronts,dab_batches:std::slice::from_ref(&batch),time_seconds:0.02,..frame}).unwrap();
+    let cache=r.scale_display.as_ref().unwrap();
+    assert_eq!(cache.contact_id(),contact,"the contact grows on both sides");
+    assert_eq!(cache.contact_reader_edges(middle),registered,"growth on both sides registers no second reader for the cell between them");
+}
+
+#[test]
 fn a_zoom_during_a_held_contact_names_its_own_frame_and_settles_like_a_fresh_renderer() {
     let extent=[2048,1024];let doc=document_at(extent);let target=primary_target(&doc);
     let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);

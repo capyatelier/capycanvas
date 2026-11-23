@@ -196,6 +196,11 @@ impl Cache {
         use_tiles(r,self.plan,packet,Some(scene)) && !(self.plan.level>0 && root.fused_transform(r))
     }
     pub(super) fn contact_id(&self)->Option<u64> {self.gesture.as_ref().map(|contact|contact.id)}
+    #[cfg(test)]
+    pub(super) fn contact_reader_edges(&self,region:PixelRect)->usize {
+        let reached=self.reached_cells(region.into());
+        self.gesture.as_ref().map_or(0,|contact|contact.footprints.iter().filter(|(_,cells)|cells.iter().any(|cell|reached.contains(cell))).count())
+    }
     pub(super) fn holds_advanced_frame(&self)->bool {self.gesture.as_ref().is_some_and(|contact|contact.exit.get().is_none() && contact.diverged)}
     pub(super) fn stroke_scope(&self,packet:FramePacket<'_>,touched:&[PixelRect],from:Option<[f32;2]>)->Vec<PixelRect> {
         let (level,extent,bounds)=(self.plan.level,self.plan.extent,self.plan.bounds);let span=PAGE_SIZE<<level;
@@ -375,12 +380,16 @@ impl Cache {
         cells.retain(|cell|!self.pivot_missing(*cell));
         let declared=if cells.is_empty() && tiles.is_empty() {Some(Declared::default())}
             else {self.declare_contact(scene,r,packet,encoder,retained,budget,&frame,&root,target,tiled,level,cells,&|cell|Some(if reached.contains(&cell) {Class::Authored}else {Class::Visible}),&tiles)?};
-        let Some(Declared {cells,inputs,pages,level,cell_reads})=declared else {return Ok(false);};
+        let Some(Declared {cells,inputs,pages:held,level,cell_reads})=declared else {return Ok(false);};
+        let readers=cell_reads.iter().flat_map(|(cell,reads)| {
+            let reached=self.reached_cells(pages::bounds(*cell,self.plan.level,self.plan.extent).into());
+            reads.iter().map(move|read|(*read,reached.clone()))
+        }).collect::<Vec<_>>();
         let contact=self.gesture.as_mut().expect("live contact");
-        contact.cells.extend(cells);contact.cell_reads.extend(cell_reads);
+        contact.cells.extend(cells);contact.cell_reads.extend(cell_reads);contact.footprints.extend(readers);
         if level.is_some() {contact.level=level;contact.reduced.extend(tiles);}
         contact.inputs.adopt(inputs)?;
-        for (key,page) in pages {contact.pages.entry(key).or_insert(page);}
+        for (key,page) in held {contact.pages.entry(key).or_insert(page);}
         Ok(reached.iter().all(|cell|contact.cells.iter().any(|(declared,_)|declared==cell)))
     }
     pub(super) fn lane_halves(&self,packet:FramePacket<'_>)->Vec<pages::Key> {
@@ -449,7 +458,9 @@ impl Cache {
         let level=level.or_else(||requests.iter().find(|(id,_)|*id==target).map(|(_,request)|request.plan.level));
         let reductions=match level.filter(|_|!tiles.is_empty()) {Some(level)=>Self::declare_reductions(scene,r,packet,frame,target,level,tiles,encoder),None=>Ok(Default::default())};
         let Some(inputs)=reductions.ok().and_then(|inputs|inputs.accept_query(r,Some(scene)).ok()) else {return Ok(None);};
-        let cell_reads=self.cell_reads(target,bounds);
+        let cell_reads=self.cell_reads(target,&cells.iter().map(|(cell,_)|*cell).collect::<Vec<_>>());
+        let span=PAGE_SIZE<<self.plan.level;
+        cells.retain(|(cell,_)|cell_reads.contains_key(&[cell.min_x()/span,cell.min_y()/span]));
         Ok(Some(Declared {cells,inputs,pages,level,cell_reads}))
     }
     fn declare_reductions(scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,frame:&Arc<SignatureFrame>,target:SourceTarget,level:u32,tiles:&BTreeSet<[u32;2]>,
