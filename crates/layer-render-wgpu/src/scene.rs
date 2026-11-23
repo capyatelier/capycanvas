@@ -67,7 +67,7 @@ mod bake;
 pub(crate) mod bake_preflight;
 pub(crate) mod resample;
 pub(crate) mod scale;
-pub(crate) use scale::{Capture,Declared,Input,SignatureFrame,PreviewDeclaration,PreviewVersion,PreviewStage,PreviewPass,PreviewQuality,PreviewSeed,PreviewStamps};
+pub(crate) use scale::{Capture,Declared,Donor,Input,SignatureFrame,PreviewDeclaration,PreviewVersion,PreviewStage,PreviewPass,PreviewQuality,PreviewSeed,PreviewStamps};
 
 const FILL_LINES_PIPELINE:usize=9;
 const RECORD_BYTES:usize=fold::RECORD_BYTES as usize;

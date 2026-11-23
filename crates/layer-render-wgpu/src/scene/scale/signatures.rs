@@ -794,6 +794,7 @@ pub(crate) struct PreviewDeclaration {
 }
 #[derive(Default)]
 pub(crate) struct PreviewStamps {accepted:Mutex<IdSet<[u32;2]>>}
+pub(crate) struct Donor {pub page:[u32;2],pub proofs:Vec<resident::Input>}
 #[derive(Clone,Copy,PartialEq,Eq,Hash)]
 struct AcceptedKey {plane:usize,coordinate:[u32;2],stage:PreviewStage,pass:PreviewPass}
 struct CapturedInputs {_proofs:Vec<resident::Input>,version:ContentVersion}
@@ -977,12 +978,18 @@ impl PreviewDeclaration {
         inputs.push(command.definition.clone().ok_or(GpuRasterError::NotReady)?);
         Ok(ContentVersion::derive(recipe(&(self.context,self.target,self.quality,PreviewPass::Reservoir,index)),&inputs))
     }
-    pub fn accept_reservoir_inputs(&self,index:usize,proofs:Vec<resident::Input>)->Result<(),GpuRasterError> {
-        let version=Self::captured_version(PreviewPass::Reservoir,&proofs.iter().map(|input|input.version().clone()).collect::<Vec<_>>());
+    fn donor_version(&self,stage:PreviewStage,donors:&[Donor])->ContentVersion {
+        let mut pages=std::collections::BTreeMap::new();
+        for donor in donors {pages.entry(donor.page).or_insert_with(||donor.proofs.iter().map(|input|input.version().clone()).collect::<Vec<_>>());}
+        let named=pages.into_iter().map(|(page,versions)|ContentVersion::derive(recipe(&(self.target,raster::contents::index(RasterPlane::Color),page,stage)),&versions)).collect::<Vec<_>>();
+        ContentVersion::derive(recipe(&(PreviewPass::Transport,stage)),&named)
+    }
+    pub fn accept_reservoir_inputs(&self,index:usize,donors:Vec<Donor>)->Result<(),GpuRasterError> {
+        let version=self.donor_version(PreviewStage::BeforeBatch(index),&donors);
         let mut accepted=self.reservoir_inputs.lock().unwrap();
         if let Some(existing)=accepted.get(&index) {
             if existing.version.matches(&version)!=Some(true) {return Err(GpuRasterError::Effect("Preview inputs changed after acceptance".into()));}
-        } else {accepted.insert(index,CapturedInputs {_proofs:proofs,version});}
+        } else {accepted.insert(index,CapturedInputs {_proofs:donors.into_iter().flat_map(|donor|donor.proofs).collect(),version});}
         Ok(())
     }
     fn transport_output(&self,coordinate:[u32;2],stage:PreviewStage)->bool {
@@ -1004,9 +1011,16 @@ impl PreviewDeclaration {
         }).map(|command|command.index).max().map_or(PreviewStage::Seed,PreviewStage::AfterBatch)
     }
     pub fn accept_inputs(&self,target:SourceTarget,plane:RasterPlane,coordinate:[u32;2],stage:PreviewStage,pass:PreviewPass,proofs:Vec<resident::Input>)->Result<(),GpuRasterError> {
+        self.accept_reaching_inputs(target,plane,coordinate,stage,pass,proofs,&[])
+    }
+    #[expect(clippy::too_many_arguments,reason="A page's accepted inputs name its plane, page, stage and pass with its local and remote proofs")]
+    pub fn accept_reaching_inputs(&self,target:SourceTarget,plane:RasterPlane,coordinate:[u32;2],stage:PreviewStage,pass:PreviewPass,proofs:Vec<resident::Input>,
+        donors:&[Donor])->Result<(),GpuRasterError> {
         if target!=self.target {return Err(GpuRasterError::MissingPaintLayer(target));}
         let versions=proofs.iter().map(|input|input.version().clone()).collect::<Vec<_>>();
-        let version=Self::captured_version(pass,&versions);let key=AcceptedKey {plane:raster::contents::index(plane),coordinate,stage:self.page_stage(plane,coordinate,stage),pass};
+        let local=Self::captured_version(pass,&versions);
+        let version=if donors.is_empty() {local} else {ContentVersion::derive(recipe(&pass),&[local,self.donor_version(stage,donors)])};
+        let key=AcceptedKey {plane:raster::contents::index(plane),coordinate,stage:self.page_stage(plane,coordinate,stage),pass};
         if key.stage==PreviewStage::Seed && let Some((wanted,_))=self.seed_inputs.get(&key) && wanted.matches(&version)!=Some(true) {return Err(GpuRasterError::Effect("Preview seed proof differs from its declaration".into()));}
         let mut accepted=self.accepted.lock().unwrap();
         if let Some(existing)=accepted.get(&key) {

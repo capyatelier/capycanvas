@@ -1065,6 +1065,10 @@ impl WgpuRasterizer {
                 let coordinates=required.entry(batch.target).or_default();
                 coordinates.extend(tiles.iter().flat_map(|tile|source_access::neighborhood(tile.coordinate,self.material_offsets(batch))));
                 coordinates.extend(tiles.iter().map(|tile|tile.coordinate));
+                if matches!(batch.style.execution,BrushExecution::Wet|BrushExecution::Watercolor)
+                    && let Some(dabs)=packet.dabs.get(batch.first_dab as usize..batch.first_dab as usize+batch.dab_count as usize) {
+                    crate::destination_material::read_pages(packet.dab_batches,index,dabs,packet.scene.target_extent(batch.target),|page|{coordinates.insert(page);});
+                }
                 if BrushPassPlan::for_device(&batch.style,&self.device).state.watercolor_wetness && is_last_watercolor_update_batch(packet.dab_batches,index,packet.scene.target_extent(batch.target)) {
                     coordinates.extend(watercolor_update_damages(packet.dab_batches,index,packet.scene.target_extent(batch.target)).into_iter()
                         .flat_map(page_coordinates).flat_map(|coordinate|source_access::neighborhood(coordinate,TRANSPORT_OFFSETS.map(Some))));

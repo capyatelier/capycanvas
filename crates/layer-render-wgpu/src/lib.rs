@@ -599,6 +599,10 @@ enum MaterialOperation {
 enum MaterialInputs<'a> {
     /// The pages around the destination.
     Neighborhood,
+    /// The colour of one donor page, and nothing else.
+    Donor,
+    /// The colour of the pages around the destination and the brush reservoir.
+    Exchange,
     /// A gathered sample field.
     /// A retouching source's target and reference pages, in the eight slots
     /// around the destination.
@@ -836,6 +840,7 @@ struct BrushReservoir {
     secondary: resident::Resident<PageSurface>,
     active_secondary: bool,
     predicted: Option<[resident::Resident<PageSurface>; 2]>,
+    taps: Option<resident::Resident<PageSurface>>,
 }
 
 
@@ -1247,6 +1252,7 @@ pub struct WgpuRasterizer {
     preview_names: std::cell::RefCell<Option<IdMap<(SourceTarget,usize,[u32;2],scene::PreviewStage),scene::PreviewVersion>>>,
     material_reads: Option<IdMap<(SourceTarget,[u32;2],Option<(scene::PreviewStage,Option<(scene::PreviewPass,u32)>)>),Option<source_access::RawTile>>>,
     transport_jobs: Vec<WatercolorTransportJob>,
+    gathered_taps: Option<resident::Resident<PageSurface>>,
     /// Pages whose wetness the current watercolor update has written.
     watercolor_written: Vec<[u32; 2]>,
     material_jobs: Vec<MaterialJob>,
@@ -1490,6 +1496,7 @@ impl WgpuRasterizer {
             active_secondary: false,
             state:None,
             predicted:None,
+            taps:None,
         };
         let dab_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("layer dab instances"),
@@ -1686,6 +1693,7 @@ impl WgpuRasterizer {
             preview_names: Default::default(),
             material_reads: None,
             transport_jobs: Vec::new(),
+            gathered_taps: None,
             watercolor_written: Vec::new(),
             material_jobs: Vec::new(),
             dry_jobs: Vec::with_capacity(SOURCE_SLOTS),
@@ -2414,13 +2422,15 @@ impl WgpuRasterizer {
         intent: &raster::contents::Intent,
         inputs: MaterialInputs<'_>,
         display: Option<usize>,
-        donors: Option<&mut Vec<resident::Input>>,
+        far: Vec<scene::Donor>,
+        donors: Option<&mut Vec<scene::Donor>>,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<bindings::MaterialSources, GpuRasterError> {
         let result=(|| {
             let reads_preview = target.material_source().is_preview();
             let declares_preview = target.is_preview();
-            let offsets = self.material_offsets(batch);
+            let donating = matches!(inputs, MaterialInputs::Donor | MaterialInputs::Exchange);
+            let offsets = if matches!(inputs, MaterialInputs::Donor) { std::array::from_fn(|i| (i == 4).then_some([0, 0])) } else { self.material_offsets(batch) };
             let mut neighborhood=self.brush_inputs.take().ok_or(GpuRasterError::Invariant("brush inputs are not prepared"))?;
             #[cfg(test)] let _record=scene::sources::record_reads(&neighborhood);
             let source_preview=reads_preview.then_some((scene::PreviewStage::BeforeBatch(batch_index),None));
@@ -2428,8 +2438,8 @@ impl WgpuRasterizer {
             let retained = stable_blender(&batch.style);
             let mut history=Vec::new();
             let declaration=declares_preview.then(||self.preview_declaration.clone().ok_or(GpuRasterError::Invariant("prepared material bind group state is inconsistent"))).transpose()?;
-            let accepting=declaration.as_ref().filter(|_|donors.is_none()).filter(|declaration|declaration.accepts(coordinate));
-            let collecting=accepting.is_some() || donors.is_some();
+            let accepting=declaration.as_ref().filter(|_|!donating).filter(|declaration|declaration.accepts(coordinate));
+            let collecting=accepting.is_some();
             if Self::tracks_stroke_start(batch) {
                 let committed_start = declaration.as_ref().is_some_and(|declaration|declaration.committed_seed(coordinate));
                 let needed = if reads_preview { !committed_start && self.preview_pages.iter().find(|page|page.coordinate==coordinate)
@@ -2503,7 +2513,7 @@ impl WgpuRasterizer {
                     views[slot] = page;
                 }
             }
-            let predicted_coverage = if reads_preview {
+            let predicted_coverage = if reads_preview && !donating {
                 self.preview_coverage_pages
                     .iter()
                     .find(|p| p.matches(coordinate, &batch.style))
@@ -2512,6 +2522,7 @@ impl WgpuRasterizer {
             }
             ;
             let coverage_page=predicted_coverage.or_else(|| {
+                if donating {return None;}
                 layer
                     .coverage_pages
                     .iter()
@@ -2525,7 +2536,7 @@ impl WgpuRasterizer {
                 if collecting {history.push(witness);}Ok(tile.view)
             }).transpose()?;
             let coverage = coverage_page.as_ref().map_or(if retained { &self.empty_view } else { &self.empty_scalar_view }, |view|view);
-            let wetness=if BrushPassPlan::for_device(&batch.style,&self.device).state.watercolor_wetness {
+            let wetness=if !donating && BrushPassPlan::for_device(&batch.style,&self.device).state.watercolor_wetness {
                 let stage=reads_preview.then_some((scene::PreviewStage::BeforeBatch(batch_index),None));
                 let read=neighborhood.brush_wetness(self,batch.target,coordinate,stage,&receipt)?
                     .ok_or(GpuRasterError::Invariant("material wetness input is not prepared"))?;
@@ -2533,7 +2544,8 @@ impl WgpuRasterizer {
                 Some(read.tile.view)
             }else {None};
             let mut auxiliary_state=None;
-            let auxiliary = if let Some(wetness)=&wetness {wetness
+            let auxiliary = if matches!(inputs, MaterialInputs::Donor) {&self.empty_view
+            } else if let Some(wetness)=&wetness {wetness
             } else if retained {
                 current
             } else if pointwise(&batch.style) {
@@ -2562,15 +2574,18 @@ impl WgpuRasterizer {
                     None=>&self.empty_view,
                 }
             }else {&self.empty_view};
-            if let Some(donors)=donors {donors.extend(history.iter().cloned());}
+            if let Some(donors)=donors {
+                donors.extend(offsets.iter().filter_map(|offset|source_access::neighborhood(coordinate,[*offset]).next())
+                    .map(|page|scene::Donor {page,proofs:neighborhood.witnesses(batch.target,RasterPlane::Color,page)}));
+            }
             if let Some(declaration)=accepting {
                 let stage=scene::PreviewStage::AfterBatch(batch_index);
-                declaration.accept_inputs(batch.target,RasterPlane::Color,coordinate,stage,scene::PreviewPass::Color,history.clone())?;
+                declaration.accept_reaching_inputs(batch.target,RasterPlane::Color,coordinate,stage,scene::PreviewPass::Color,history.clone(),&far)?;
                 if BrushPassPlan::for_device(&batch.style,&self.device).state.coverage {
-                    declaration.accept_inputs(batch.target,RasterPlane::Color,coordinate,stage,scene::PreviewPass::Coverage,history.clone())?;
+                    declaration.accept_reaching_inputs(batch.target,RasterPlane::Color,coordinate,stage,scene::PreviewPass::Coverage,history.clone(),&far)?;
                 }
                 if BrushPassPlan::for_device(&batch.style,&self.device).state.watercolor_wetness {
-                    declaration.accept_inputs(batch.target,RasterPlane::WatercolorWetness,coordinate,stage,scene::PreviewPass::Wetness,history)?;
+                    declaration.accept_reaching_inputs(batch.target,RasterPlane::WatercolorWetness,coordinate,stage,scene::PreviewPass::Wetness,history,&far)?;
                 }
             }
             let display = display.map(|slot| self.dry_display_inputs[slot].key(self, views));

@@ -12,7 +12,7 @@ fn exact_strip(extent: [u32; 2]) -> [u32; 2] {
 mod sources;
 mod graph;
 mod signatures;
-pub(crate) use signatures::{Capture,Declared,Input,Prepared as SignatureFrame,PreviewDeclaration,PreviewVersion,PreviewStage,PreviewPass,PreviewQuality,PreviewSeed,PreviewStamps};
+pub(crate) use signatures::{Capture,Declared,Donor,Input,Prepared as SignatureFrame,PreviewDeclaration,PreviewVersion,PreviewStage,PreviewPass,PreviewQuality,PreviewSeed,PreviewStamps};
 mod effects;
 mod refinement;
 mod pages;
