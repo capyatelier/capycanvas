@@ -1,6 +1,7 @@
 use super::*;
 use crate::test_support::{pen, wait_until};
-use layer_core::{BrushSnapshot, Document, DocumentNames, PortableId, authored::SourceTarget, raster::{RasterPlane, TILE_SIZE, TileKey}};
+use layer_core::{BrushSnapshot, Document, DocumentNames, Edit, EffectInstance, EffectValue, PortableId, raster::{RasterPlane, TILE_SIZE, TileKey}};
+use layer_core::authored::{EffectApplication, Occurrence, OccurrenceContent, OccurrenceHandle, RecordChange, SourceTarget, Stack};
 use layer_engine::{CanvasEngine, InputProducer, PenEvent, PenPhase, SampleFlags, ViewTransform, input_queue};
 use layer_render::ViewState;
 
@@ -105,4 +106,111 @@ fn painting_past_the_save_capacity_is_refused_and_the_drawing_still_saves() {
     let mut saved = Vec::new();
     layer_core::package::codec::PreparedPackage::prepare(&capture, None, &cancel).unwrap().write(&mut saved, &cancel).unwrap();
     assert!(!saved.is_empty());
+}
+
+fn settle(engine: &mut CanvasEngine<WgpuRasterizer>, context: &str) {
+    wait_until(format_args!("{context} must settle"), || {
+        engine.render_frame().unwrap_or_else(|error| panic!("{context}: {error}"));
+        engine.backend_mut().wait_idle().unwrap();
+        let backend = engine.backend();
+        let busy = engine.has_pending_document_edits() || backend.next_frame() == layer_render::FrameDemand::Work
+            || !backend.settled() || crate::scene::scale::tests::publication_pending(backend);
+        if busy { Err(()) } else { Ok(()) }
+    });
+}
+
+fn add_effect(engine: &mut CanvasEngine<WgpuRasterizer>, effect: EffectInstance) -> OccurrenceHandle {
+    let document = engine.document();
+    let artwork = &document.artwork;
+    let application = RecordChange::insert(&artwork.effects, EffectApplication::new(effect.program, effect.values, document.composition().size));
+    let occurrence = RecordChange::insert(&artwork.occurrences, Occurrence::new(OccurrenceContent::Effect(application.handle), "Effect"));
+    let root = document.composition().result;
+    let mut entries = artwork.stacks.get(root).unwrap().entries.clone();
+    entries.insert(0, occurrence.handle);
+    let stack = RecordChange::replace(&artwork.stacks, root, Some(Stack { entries })).unwrap();
+    let layer = occurrence.handle;
+    engine.apply_edit(Edit::Batch(vec![Edit::Effect(application), Edit::Occurrence(occurrence), Edit::Stack(stack)])).unwrap();
+    layer
+}
+
+fn set_effect(engine: &mut CanvasEngine<WgpuRasterizer>, layer: OccurrenceHandle, key: &str, value: f32) {
+    let effects = &engine.document().artwork.effects;
+    let handle = engine.document().scene().effect_handle(layer).unwrap();
+    let mut application = effects.get(handle).unwrap().clone();
+    let mut effect = EffectInstance { program: application.program.clone(), values: application.values };
+    effect.set(key, EffectValue::Number(value)).unwrap();
+    application.values = effect.values;
+    let edit = Edit::Effect(RecordChange::replace(effects, handle, Some(application)).unwrap());
+    engine.apply_edit(edit).unwrap();
+}
+
+fn analyze(engine: &mut CanvasEngine<WgpuRasterizer>, layer: OccurrenceHandle) {
+    use layer_render::CanvasRenderer;
+    if engine.document().scene().effect(layer).unwrap().program.analysis().is_none() { return; }
+    let query = layer_core::ArtworkQuery::new(engine.document(), layer_core::ArtworkSource::EffectInput(layer));
+    assert!(engine.backend_mut().request_effect_analysis(query).unwrap());
+    wait_until("the effect analysis must finish", || engine.backend_mut().take_effect_analysis().ok_or(())).unwrap();
+    engine.backend_mut().accept_effect_analysis().unwrap();
+}
+
+fn displayed(engine: &mut CanvasEngine<WgpuRasterizer>, revision: u64, scale: f32, page: u32, context: &str) -> Vec<[f32; 4]> {
+    let origin = ((page - 1) * TILE_SIZE) as f32;
+    engine.set_view(ViewState { document_to_surface: [scale, 0., 0., scale, -origin * scale, 0.], ..VIEW },
+        ViewTransform { revision, surface_to_document: [1. / scale, 0., 0., 1. / scale, origin, 0.] });
+    settle(engine, context);
+    let plan = engine.backend().scale_display.as_ref().unwrap().plan;
+    let pixels = crate::scene::scale::tests::display_pixels(engine.backend());
+    let [left, right] = [page - 1, page + 2].map(|page| ((i64::from(page * TILE_SIZE) - plan.doc_bounds.min[0]) >> plan.level) as usize);
+    assert!(right <= plan.size[0] as usize, "{context}: the view at {scale} must show page {page} and its neighbours");
+    pixels.chunks_exact(plan.size[0] as usize).flat_map(|row| row[left..right].iter().copied()).collect()
+}
+
+fn filters_its_far_edge_like_its_origin(id: &str, key: &str, values: [f32; 2], tolerance: f32) {
+    let extent = [layer_core::MAX_EXTENT, 2 * TILE_SIZE];
+    let pages = [16, extent[0] / TILE_SIZE - 16];
+    let mut document = crate::artwork_sample_tests::document_in(extent, layer_core::color::RgbSpace::Srgb,
+        |x, y| [x as f32 / 2550., y as f32 / 2550., if (x / 16 + y / 16) % 2 == 0 { 0.6 } else { 0.01 }, if (x / 32 + y / 48) % 3 == 0 { 0.4 } else { 1. }]);
+    let paint = crate::artwork_sample_tests::paint_mut(&mut document);
+    let mut data = (*paint.raster.try_data().unwrap().unwrap()).clone();
+    let tile = data.tiles.remove(&TileKey { plane: RasterPlane::Color, coordinate: [0, 0] }).unwrap();
+    data.tiles.extend(pages.map(|page| (TileKey { plane: RasterPlane::Color, coordinate: [page, 0] }, tile.clone())));
+    paint.raster = layer_core::raster::RasterRevision::backed(data);
+    let (_input, consumer) = input_queue(8);
+    let renderer = crate::test_support::texture_limited_renderer(document.composition().color, 8192);
+    let mut engine = CanvasEngine::new(renderer, document, consumer, VIEW, ViewTransform::IDENTITY).unwrap();
+    let scales = [1., 1. / 64.];
+    let mut revision = 0;
+    let mut next = || { revision += 1; revision };
+    let mut shown = scales.map(|scale| displayed(&mut engine, next(), scale, pages[0], "the panorama"));
+    let mut effect = EffectInstance::new(crate::tests::fixture(id).program());
+    effect.set(key, EffectValue::Number(values[0])).unwrap();
+    let layer = add_effect(&mut engine, effect);
+    analyze(&mut engine, layer);
+    for (index, value) in values.into_iter().enumerate() {
+        if index > 0 { set_effect(&mut engine, layer, key, value); }
+        for (scale, before) in scales.iter().zip(&mut shown) {
+            let context = format!("{id} {key}={value} at {scale}");
+            let near = displayed(&mut engine, next(), *scale, pages[0], &context);
+            let far = displayed(&mut engine, next(), *scale, pages[1], &context);
+            assert!(crate::test_support::max_error(&near, before) > 0.01, "{context} must change the picture");
+            let error = crate::test_support::max_error(&near, &far);
+            assert!(error <= tolerance, "{context}: the far edge differs from the same paint near the origin by {error}");
+            *before = near;
+        }
+    }
+}
+
+#[test]
+fn a_panorama_wider_than_the_device_texture_blurs_its_far_edge_like_its_origin() {
+    filters_its_far_edge_like_its_origin("gaussian_blur", "sigma", [12., 100.], 5e-4);
+}
+
+#[test]
+fn a_panorama_wider_than_the_device_texture_dehazes_its_far_edge_like_its_origin() {
+    filters_its_far_edge_like_its_origin("dehaze", "amount", [80., 30.], 1e-5);
+}
+
+#[test]
+fn a_panorama_wider_than_the_device_texture_lifts_shadows_at_its_far_edge_like_its_origin() {
+    filters_its_far_edge_like_its_origin("shadows_highlights", "shadows", [80., 30.], 1e-5);
 }
