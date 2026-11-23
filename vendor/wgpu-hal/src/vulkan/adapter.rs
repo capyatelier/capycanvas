@@ -2325,6 +2325,12 @@ impl super::Instance {
                 super::Workarounds::FORCE_FILL_BUFFER_WITH_SIZE_GREATER_4096_ALIGNED_OFFSET_16,
                 phd_capabilities.properties.vendor_id == db::nvidia::VENDOR,
             );
+            workarounds.set(
+                super::Workarounds::CLEAR_BUFFERS_BY_ZERO_COPY,
+                phd_capabilities
+                    .driver
+                    .is_some_and(|driver| driver.driver_id == vk::DriverId::QUALCOMM_PROPRIETARY),
+            );
         };
 
         if let Some(driver) = phd_capabilities.driver {
@@ -2935,6 +2941,15 @@ impl super::Adapter {
                 .map_err(super::map_host_device_oom_err)?
         };
 
+        let zero_buffer = if self
+            .workarounds
+            .contains(super::Workarounds::CLEAR_BUFFERS_BY_ZERO_COPY)
+        {
+            Some(unsafe { super::command::create_zero_buffer(&raw_device, &self.instance.raw, self.raw) }?)
+        } else {
+            None
+        };
+
         let shared = Arc::new(super::DeviceShared {
             raw: raw_device,
             family_index,
@@ -2970,6 +2985,7 @@ impl super::Adapter {
             texture_identity_factory: super::ResourceIdentityFactory::new(),
             texture_view_identity_factory: super::ResourceIdentityFactory::new(),
             empty_descriptor_set_layout,
+            zero_buffer,
         });
 
         let relay_semaphores = super::RelaySemaphores::new(&shared)?;

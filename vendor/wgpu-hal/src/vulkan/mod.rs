@@ -478,6 +478,7 @@ bitflags::bitflags!(
         /// As such, we need to make sure all calls to vkCmdFillBuffer are aligned to 16 bytes
         /// if they cover a range of 4096 bytes or more.
         const FORCE_FILL_BUFFER_WITH_SIZE_GREATER_4096_ALIGNED_OFFSET_16 = 0x4;
+        const CLEAR_BUFFERS_BY_ZERO_COPY = 0x8;
     }
 );
 
@@ -549,6 +550,7 @@ struct DeviceShared {
     texture_view_identity_factory: ResourceIdentityFactory<vk::ImageView>,
 
     empty_descriptor_set_layout: vk::DescriptorSetLayout,
+    zero_buffer: Option<(vk::Buffer, vk::DeviceMemory)>,
 
     // The `drop_guard` field must be the last field of this struct so it is dropped last.
     // Do not add new fields after it.
@@ -566,6 +568,12 @@ impl Drop for DeviceShared {
             self.raw
                 .destroy_descriptor_set_layout(self.empty_descriptor_set_layout, None)
         };
+        if let Some((buffer, memory)) = self.zero_buffer {
+            unsafe {
+                self.raw.destroy_buffer(buffer, None);
+                self.raw.free_memory(memory, None);
+            }
+        }
         if self.drop_guard.is_none() {
             unsafe { self.raw.destroy_device(None) };
         }
