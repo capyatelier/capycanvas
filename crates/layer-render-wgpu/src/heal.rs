@@ -562,7 +562,9 @@ impl RetouchSources {
     pub(crate) fn step_heal(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder) -> Result<bool, GpuRasterError> {
         let Some(mut job) = self.heal.job.take() else { return Ok(false); };
         let work = job.work.pop_front().unwrap();
-        if let Err(error)=job.encode(self,r,encoder,work.clone()) {job.work.push_front(work);self.heal.job=Some(job);return Err(error);}
+        let encoded=job.encode(self,r,encoder,work.clone());
+        self.cache.drawn();
+        if let Err(error)=encoded {job.work.push_front(work);self.heal.job=Some(job);return Err(error);}
         if job.work.is_empty() {
             self.counts.heals += 1;
             if self.heal.planes.as_ref().is_some_and(|p| p.bytes() > RETAINED_BYTES) { self.heal.planes = None; }
@@ -657,9 +659,10 @@ impl Job {
                             }
                         }
                     };
-                    let reads = mappings.iter().map(|(_, _, mapping)| sources.pages(r, mapping, encoder)).collect::<Result<Vec<_>, _>>()?;
                     let mut jobs = Vec::new();
-                    for ((i, slot, _), (views, _)) in mappings.into_iter().zip(reads) {
+                    for (i, slot, mapping) in mappings {
+                        if !sources.cache.room(&mapping) { flush(encoder, &mut jobs); sources.cache.drawn(); }
+                        let (views, _) = sources.pages(r, &mapping, encoder)?;
                         if kind == CandidatePass::Gather {
                             self.found[i] = create_color_target(&r.device,[PAGE_SIZE;2],"spot healing destination").1;
                             self.copied[i] = create_target(&device, [PAGE_SIZE; 2], wgpu::TextureFormat::Rgba32Float, "spot healing source").1;

@@ -143,8 +143,9 @@ impl WgpuRasterizer {
         let mut chunk_sets = 0u32;
         for (record_index, job) in jobs.iter().enumerate().filter(|_| !transported) {
             let display_slot = gathers.then(|| dry_material::display_set(job.coordinate, self.dry_display_inputs.len()));
-            if display_slot.is_some_and(|set| chunk_sets & 1 << set != 0) {
+            if display_slot.is_some_and(|set| chunk_sets & 1 << set != 0) || retouches && !self.retouch_room(&mappings[record_index]) {
                 self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
+                self.retouch_drawn();
                 let receipt=encoder.submission();written.extend(publications.drain(..).map(|publication:MaterialPublication|publication.encoded(&receipt)));
                 compute_jobs.clear();chunk_sets = 0;
             }

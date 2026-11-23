@@ -154,6 +154,7 @@ struct Slot {
     page: Page,
     coordinate: Option<[u32; 2]>,
     used: u64,
+    bound: bool,
 }
 
 /// Composites of the reference layers below the target, by document page,
@@ -209,23 +210,33 @@ impl ReferenceCache {
         self.slots[index].used = self.clock;
         Some(index)
     }
-    fn claim(&mut self, r: &WgpuRasterizer, coordinate: [u32; 2]) -> usize {
+    fn claim(&mut self, r: &WgpuRasterizer, coordinate: [u32; 2]) -> Result<usize, GpuRasterError> {
         self.clock += 1;
-        let free = self.slots.iter().position(|s| s.coordinate.is_none());
+        let free = self.slots.iter().position(|s| s.coordinate.is_none() && !s.bound);
         let index = match free {
             Some(index) => index,
             None if self.slots.len() < REFERENCE_PAGES => {
-                self.slots.push(Slot { page: Page::new(r, "retouch reference page"), coordinate: None, used: 0 });
+                self.slots.push(Slot { page: Page::new(r, "retouch reference page"), coordinate: None, used: 0, bound: false });
                 self.slots.len() - 1
             }
-            None => (0..self.slots.len()).min_by_key(|i| self.slots[*i].used).unwrap(),
+            None => (0..self.slots.len()).filter(|&i| !self.slots[i].bound).min_by_key(|i| self.slots[*i].used)
+                .ok_or(GpuRasterError::Invariant("every reference page awaits its draw"))?,
         };
         if let Some(evicted) = self.slots[index].coordinate.replace(coordinate) {
             self.pages.remove(&evicted);
         }
         self.slots[index].used = self.clock;
         self.pages.insert(coordinate,(index,layer_core::raster::ContentName::fresh().into()));
-        index
+        Ok(index)
+    }
+    fn room(&self, mapping: &Mapping) -> bool {
+        let waiting = self.slots.iter().filter(|slot| slot.bound).count();
+        let added = block_pages(mapping.blocks[1]).into_iter().flatten()
+            .filter(|coordinate| !self.pages.get(coordinate).is_some_and(|(slot, _)| self.slots[*slot].bound)).count();
+        mapping.references.is_none() || waiting + added <= REFERENCE_PAGES
+    }
+    fn drawn(&mut self) {
+        for slot in &mut self.slots { slot.bound = false; }
     }
     fn release(&mut self, index: usize) {
         if let Some(coordinate) = self.slots[index].coordinate.take() {
@@ -509,7 +520,7 @@ impl RetouchSources {
         if blocking && !wait {
             return Ok(None);
         }
-        let slot = self.cache.claim(r, coordinate);
+        let slot = self.cache.claim(r, coordinate)?;
         let (texture,_,encoding)=self.cache.slots[slot].page.destination(self.cache.pages[&coordinate].1.clone(),&encoder.submission())?;
         let previous = self.cache.analyses.as_ref().and_then(|result| result.as_ref().ok())
             .map(|candidate| std::mem::replace(&mut r.effect_analyses, candidate.entries.clone()));
@@ -539,7 +550,7 @@ impl RetouchSources {
             .is_ok_and(|current|current.matches(&expected)==Some(true)) {
             let packet=frame.packet(r.document_extent);let region=page_rect(coordinate).intersect(PixelRect::full(r.document_extent));
             if !wait && self.capture.would_block(r,packet,region) {return Ok(None);}
-            let slot=self.cache.claim(r,coordinate);
+            let slot=self.cache.claim(r,coordinate)?;
             let (texture,_,encoding)=self.cache.slots[slot].page.destination(self.cache.pages[&coordinate].1.clone(),&encoder.submission())?;
             if let Err(error)=self.capture.region_into(r,packet,region,&texture,encoder) {self.cache.release(slot);return Err(error);}
             encoding.publish(&encoder.submission());self.counts.captures+=1;return Ok(Some(slot));
@@ -549,7 +560,7 @@ impl RetouchSources {
             Err(error) if error.is_preparation_pending() && !wait=>return Ok(None),
             result=>result?,
         };
-        let slot = self.cache.claim(r, coordinate);
+        let slot = self.cache.claim(r, coordinate)?;
         let (_,destination,encoding)=self.cache.slots[slot].page.destination(self.cache.pages[&coordinate].1.clone(),&encoder.submission())?;
         match view {
             Some(view) => {
@@ -622,24 +633,29 @@ impl RetouchSources {
         if page_rect(coordinate).intersect(PixelRect::full(r.document_extent)).is_empty() {
             return Ok(None);
         }
-        if let Some(slot) = self.cache.get(coordinate) {
-            return Ok(Some(self.cache.slots[slot].page.read(&self.cache.pages[&coordinate].1,Some(&encoder.submission()))?.value().view.clone()));
-        }
-        if let Some((layer,versions))=self.lone_reference(r,coordinate)? {
-            return match accepted_raw_page(r,layer,coordinate,Some(versions),encoder) {
-                Err(error) if error.is_preparation_pending() && self.live.is_some()=>{self.miss();Ok(None)},
-                result=>result,
-            };
-        }
-        let slot = self.capture_reference(r, coordinate, self.live.is_none(), encoder)?;
-        if slot.is_none() {
-            self.miss();
-            if self.live.is_none() && let Some(stroke) = stroke {
-                if self.waiting.as_ref().is_none_or(|(waiting, _)| *waiting != stroke) { self.waiting = Some((stroke, Default::default())); }
-                self.waiting.as_mut().unwrap().1.insert(coordinate);
+        let slot = match self.cache.get(coordinate) {
+            Some(slot) => slot,
+            None => {
+                if let Some((layer,versions))=self.lone_reference(r,coordinate)? {
+                    return match accepted_raw_page(r,layer,coordinate,Some(versions),encoder) {
+                        Err(error) if error.is_preparation_pending() && self.live.is_some()=>{self.miss();Ok(None)},
+                        result=>result,
+                    };
+                }
+                let Some(slot) = self.capture_reference(r, coordinate, self.live.is_none(), encoder)? else {
+                    self.miss();
+                    if self.live.is_none() && let Some(stroke) = stroke {
+                        if self.waiting.as_ref().is_none_or(|(waiting, _)| *waiting != stroke) { self.waiting = Some((stroke, Default::default())); }
+                        self.waiting.as_mut().unwrap().1.insert(coordinate);
+                    }
+                    return Ok(None);
+                };
+                slot
             }
-        }
-        slot.map(|slot|self.cache.slots[slot].page.read(&self.cache.pages[&coordinate].1,Some(&encoder.submission())).map(|read|read.value().view.clone())).transpose()
+        };
+        let view = self.cache.slots[slot].page.read(&self.cache.pages[&coordinate].1,Some(&encoder.submission()))?.value().view.clone();
+        self.cache.slots[slot].bound = true;
+        Ok(Some(view))
     }
 
     fn lone_reference(&self,r:&WgpuRasterizer,coordinate:[u32;2])->Result<Option<(SourceTarget,&raster::contents::Versions)>,GpuRasterError> {
@@ -1033,6 +1049,14 @@ impl WgpuRasterizer {
         }
     }
 
+    pub(super) fn retouch_room(&self, mapping: &Mapping) -> bool {
+        self.retouch.as_ref().is_none_or(|retouch| retouch.cache.room(mapping))
+    }
+
+    pub(super) fn retouch_drawn(&mut self) {
+        if let Some(retouch) = &mut self.retouch { retouch.cache.drawn(); }
+    }
+
     /// The pages `mapping` reads, empty where there are none.
     pub(super) fn retouch_pages(
         &mut self,
@@ -1066,6 +1090,7 @@ impl WgpuRasterizer {
         );
         let mut retouch = self.retouch_sources();
         let complete = retouch.encode_gather(self, destination, Gather { region, scale, offset, stroke: None }, &mut encoder);
+        retouch.cache.drawn();
         self.retouch = Some(retouch);
         let complete = complete?;
         self.uploads.finish(&encoder);

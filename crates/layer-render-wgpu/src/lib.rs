@@ -2987,6 +2987,7 @@ impl WgpuRasterizer {
                 && is_last_watercolor_update_batch(context.batches, batch_index, context.target_extent);
             self.material_reads=(!pointwise(&batch.style)).then(IdMap::default);
             let encoded=self.encode_material_batch(encoder, batch_index, batch, context);
+            self.retouch_drawn();
             self.material_reads=None;
             encoded?;
             if watercolor_last {

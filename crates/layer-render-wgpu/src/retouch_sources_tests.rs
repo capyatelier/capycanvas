@@ -442,6 +442,70 @@ fn the_reference_cache_follows_its_frame_and_evicts_the_least_recent_page() {
     assert_eq!(r.retouch.as_ref().map_or(0, |retouch| retouch.storage_bytes()), 0);
 }
 
+const WIDE: [u32; 2] = [2560, 2560];
+
+fn page_tone(x: u32, y: u32) -> [u8; 4] {
+    [(x / PAGE_SIZE * 25) as u8, (y / PAGE_SIZE * 25) as u8, 200, 255]
+}
+
+fn wide_references() -> (Fixture, Retouch) {
+    let mut doc = photo_document(WIDE, page_tone);
+    let edit = occurrence_edit(&doc, PAPER_USE, |o| o.reference = true);
+    doc.apply(edit).unwrap();
+    let mut fixture = Fixture::new(doc);
+    let retouch = Retouch { source: RetouchSource::References, references: Arc::new([PHOTO_USE, PAPER_USE].into()), ..Retouch::default() };
+    let (r, packet) = fixture.frame();
+    r.prepare_retouch(Some(&RetouchPreparation { execution: layer_core::BrushExecution::Clone, target: TARGET, retouch: retouch.clone(), points: Vec::new() }));
+    crate::test_support::submit_settled(r, packet);
+    (fixture, retouch)
+}
+
+#[test]
+fn a_clone_batch_wider_than_the_reference_cache_copies_every_page_it_captured() {
+    let (mut fixture, retouch) = wide_references();
+    let (r, packet) = fixture.frame();
+    let mut style = crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::CloneStamp);
+    style.retouch = Some(retouch);
+    let mut dab = crate::layer_tests::dab([0., 0., 0., 1.]);
+    dab.center = Point { x: 1280., y: 1280. };
+    dab.radii = [1920.; 2];
+    let batch = crate::test_support::dab_batch(TARGET, style, dab.bounds());
+    crate::test_support::submit_ready(r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), composite_all: false, ..packet }).unwrap();
+    assert!(r.retouch.as_ref().unwrap().counts.captures > REFERENCE_PAGES as u64, "the batch reuses a reference page");
+    let pixel = pixels(r, TARGET);
+    for coordinate in page_coordinates(PixelRect::full(WIDE)) {
+        let [x, y] = coordinate.map(|v| v * PAGE_SIZE + PAGE_SIZE / 2);
+        let (got, expected) = (pixel(x, y), page_tone(x, y).map(linear));
+        assert!(close(got, expected), "page {coordinate:?}: {got:?} != {expected:?}");
+    }
+}
+
+#[test]
+fn a_reference_page_bound_to_a_queued_draw_survives_an_internal_submission() {
+    let (mut fixture, _) = wide_references();
+    let r = &mut fixture.r;
+    let mut sources = r.retouch_sources();
+    let mapping = sources.mapping(r, &Gather { region: PixelRect::new(128, 128, 129, 129), scale: [1.; 2], offset: [0.; 2], stroke: None }).unwrap();
+    let mut bound = submission::CommandEncoder::new(&r.device, &Default::default());
+    let (views, complete) = sources.pages(r, &mapping, &mut bound).unwrap();
+    assert!(complete);
+    let donor = views[4].clone().unwrap();
+    r.uploads.finish(&bound);
+    bound.submit(&r.queue);
+    let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
+    for coordinate in page_coordinates(PixelRect::full(WIDE)).filter(|c| c[0] > 1 || c[1] > 1) {
+        sources.capture_reference(r, coordinate, true, &mut encoder).unwrap();
+    }
+    assert!(sources.counts.captures > REFERENCE_PAGES as u64, "the captures reuse reference pages");
+    let output = r.device.create_texture(&wgpu::TextureDescriptor {label:None,size:donor.texture().size(),mip_level_count:1,sample_count:1,
+        dimension:wgpu::TextureDimension::D2,format:donor.texture().format(),usage:wgpu::TextureUsages::COPY_DST|wgpu::TextureUsages::COPY_SRC,view_formats:&[]});
+    encoder.copy_texture_to_texture(donor.texture().as_image_copy(), output.as_image_copy(), output.size());
+    r.uploads.finish(&encoder);
+    encoder.submit(&r.queue);
+    let (got, expected) = (crate::test_support::float_pixels(r, &output)[128 * 256 + 128], page_tone(128, 128).map(linear));
+    assert!(close(got, expected), "the queued draw reads its donor: {got:?} != {expected:?}");
+}
+
 fn scribble(
     engine: &mut CanvasEngine<WgpuRasterizer>,
     input: &mut InputProducer<PenEvent>,
