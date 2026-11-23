@@ -140,7 +140,10 @@ impl ReferenceKey {
     }
     fn matches(&self, frame: &artwork::Frame, members: &BTreeSet<OccurrenceHandle>, extent: [u32; 2]) -> bool {
         let previous=self.scene.view().with_scope(&self.scope);let current=frame.scene.view().with_scope(&self.scope);
+        let composition=|scene:SceneView<'_>|scene.order().iter().filter(|&&h|scene.includes(h))
+            .map(|&h|[Some(h),scene.evaluation_parent(h),scene.clipping_base(h),scene.effect_owner(h)]).collect::<Vec<_>>();
         *self.members == *members && self.extent == extent && self.blend_space == frame.blend_space
+            && (Arc::ptr_eq(&self.scene.index,&frame.scene.index) || composition(previous)==composition(current))
             && self.members.iter().all(|&h| previous.same_occurrence(current,h,true)
                 && previous.visible(h)==current.visible(h) && previous.occurrence_offset(h)==current.occurrence_offset(h)
                 && previous.source_target(h).is_none_or(|target|previous.target_offset(target)==current.target_offset(target)))

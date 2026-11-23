@@ -382,6 +382,28 @@ fn consecutive_spot_heals_each_remove_their_dot() {
 }
 
 #[test]
+fn retouching_after_reordering_the_references_copies_their_new_order() {
+    for preset in [DefaultBrushPreset::HealingBrush, DefaultBrushPreset::CloneStamp] {
+        let mut doc = photo(|_, _| [255, 0, 0, 255]);
+        add_photo(&mut doc, |_, _| [0, 0, 255, 255]);
+        let (mut input, mut engine) = healer(doc, preset, 48., false);
+        source_at(&mut engine, 150., 48.);
+        stroke(&mut engine, &mut input, 1, [600., 48.], [640., 48.]);
+        let before = pixels(engine.backend_mut(), TARGET)(620, 48);
+        assert!(close(before, [0., 0., 1., 1.]), "{preset:?}: blue lies on top: {before:?}");
+        let root = engine.document().composition().result;
+        let mut stack = engine.document().artwork.stacks.get(root).unwrap().clone();
+        stack.entries.swap(1, 2);
+        let edit = Edit::Stack(RecordChange::replace(&engine.document().artwork.stacks, root, Some(stack)).unwrap());
+        engine.apply_edit(edit).unwrap();
+        flush(&mut engine);
+        stroke(&mut engine, &mut input, 20, [600., 190.], [640., 190.]);
+        let after = pixels(engine.backend_mut(), TARGET)(620, 190);
+        assert!(close(after, [1., 0., 0., 1.]), "{preset:?}: red lies on top after the reorder: {after:?}");
+    }
+}
+
+#[test]
 fn healing_matches_tone_on_the_documents_values() {
     let code = |encoded: f32| (encoded * 255.).round() as u8;
     let texture = |x: u32, y: u32| {

@@ -56,23 +56,29 @@ fn over_in(space: layer_core::BlendSpace, top: [f32; 4], below: [f32; 4]) -> [f3
     convert(over(convert(top, layer_core::color::RgbSpace::encode), convert(below, layer_core::color::RgbSpace::encode)), layer_core::color::RgbSpace::decode)
 }
 
-fn photo_document(extent: [u32; 2], pixel: impl Fn(u32, u32) -> [u8; 4]) -> Document {
-    let mut doc = Document::new(PortableId::random(), extent[0], extent[1],
-        layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+fn add_photo(doc: &mut Document, pixel: impl Fn(u32, u32) -> [u8; 4]) -> OccurrenceHandle {
+    let extent = doc.composition().size;
     let paint = RecordChange::insert(&doc.artwork.paint, PaintSource { color_mode: Default::default(),
         domain: extent, base: Some(layer_core::authored::PaintBase::new((rgba8_source(extent, pixel)).into())),
         raster: Default::default(), operations: Default::default(),
     });
-    assert_eq!(SourceTarget::Paint(paint.handle), PHOTO);
     let mut photo = Occurrence::new(OccurrenceContent::Paint(paint.handle), "Photo");
     photo.reference = true;
     let photo = RecordChange::insert(&doc.artwork.occurrences, photo);
-    assert_eq!(photo.handle, PHOTO_USE);
+    let handle = photo.handle;
     let stack_handle = doc.composition().result;
     let mut stack = doc.artwork.stacks.get(stack_handle).unwrap().clone();
-    stack.entries.insert(1, photo.handle);
+    stack.entries.insert(1, handle);
     let stack = RecordChange::replace(&doc.artwork.stacks, stack_handle, Some(stack)).unwrap();
     doc.apply(Edit::Batch(vec![Edit::Paint(paint), Edit::Occurrence(photo), Edit::Stack(stack)])).unwrap();
+    handle
+}
+
+fn photo_document(extent: [u32; 2], pixel: impl Fn(u32, u32) -> [u8; 4]) -> Document {
+    let mut doc = Document::new(PortableId::random(), extent[0], extent[1],
+        layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    assert_eq!(add_photo(&mut doc, pixel), PHOTO_USE);
+    assert_eq!(doc.scene().source_target(PHOTO_USE), Some(PHOTO));
     doc
 }
 
