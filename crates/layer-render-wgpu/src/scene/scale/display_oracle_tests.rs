@@ -7,6 +7,7 @@ const FRAMES: usize = 20;
 const STRICT: f32 = 2e-3;
 const APPROXIMATE: f32 = 0.03;
 const EDGE: f32 = 0.2;
+const INK: f32 = 0.2;
 const REPAIR_FRAMES: usize = 8;
 const PUBLISH_FRAMES: usize = 64;
 const FOUND: usize = 98304;
@@ -219,17 +220,20 @@ impl Oracle {
         Err(format!("the reference did not publish within {PUBLISH_FRAMES} frames"))
     }
 
-    fn mismatches(&mut self, view: ViewState, level: u32) -> Vec<Found> {
-        let side = 1u32 << level;
-        let size = [view.width_px, view.height_px];
-        let origin = [view.document_to_surface[4], view.document_to_surface[5]].map(|offset| (-offset * side as f32).round() as u32);
+    fn reduced(&self, origin: [u32; 2], size: [u32; 2], side: u32) -> Vec<u8> {
         let reduced = texture(&self.reference.device, size, wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC);
         let window = wgpu::util::DeviceExt::create_buffer_init(&*self.reference.device, &wgpu::util::BufferInitDescriptor { label: Some("display oracle window"),
             contents: &[origin[0], origin[1], side, 0].into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>(), usage: wgpu::BufferUsages::UNIFORM });
         let source = crate::test_support::document_texture(&self.reference).create_view(&Default::default());
         dispatch(&self.reference.device, &self.reference.queue, &self.reduce, &[wgpu::BindingResource::TextureView(&source),
             wgpu::BindingResource::TextureView(&reduced.create_view(&Default::default())), window.as_entire_binding()], size);
-        let bytes = crate::layer_tests::page_bytes(&self.reference, &reduced);
+        crate::layer_tests::page_bytes(&self.reference, &reduced)
+    }
+
+    fn mismatches(&mut self, view: ViewState, level: u32) -> (Vec<Found>, Vec<[f32; 4]>) {
+        let side = 1u32 << level;
+        let size = [view.width_px, view.height_px];
+        let bytes = self.reduced(texel_origin(view, side).map(|texel| texel * side), size, side);
         let expected = texture(&self.subject.device, size, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
         self.subject.queue.write_texture(expected.as_image_copy(), &bytes, wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(size[0] * 16), rows_per_image: None }, expected.size());
         let (shown, target) = create_target(&self.subject.device, size, wgpu::TextureFormat::Rgba32Float, "display oracle presented frame");
@@ -241,11 +245,48 @@ impl Oracle {
         let bytes = crate::test_support::buffer_bytes(&self.subject, &found);
         let word = |offset: usize| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
         let count = (word(0) as usize).min(FOUND);
-        (0..count).map(|slot| {
+        let found = (0..count).map(|slot| {
             let entry = 16 + slot * 48;
             let vector = |offset: usize| std::array::from_fn(|channel| f32::from_bits(word(entry + offset + channel * 4)));
             Found { index: word(entry) as usize, error: f32::from_bits(word(entry + 4)), shown: vector(16), expected: vector(32) }
-        }).collect()
+        }).collect();
+        (found, texels(&crate::layer_tests::page_bytes(&self.subject, &shown)))
+    }
+}
+
+fn texel_origin(view: ViewState, side: u32) -> [u32; 2] {
+    [view.document_to_surface[4], view.document_to_surface[5]].map(|offset| (-offset * side as f32).round() as u32 / side)
+}
+
+fn texels(bytes: &[u8]) -> Vec<[f32; 4]> {
+    bytes.as_chunks::<16>().0.iter().map(|texel| std::array::from_fn(|channel| f32::from_le_bytes(texel[channel * 4..channel * 4 + 4].try_into().unwrap()))).collect()
+}
+
+fn difference(a: [f32; 4], b: [f32; 4]) -> f32 { (0..4).map(|channel| (a[channel] - b[channel]).abs()).fold(0., f32::max) }
+
+struct Inked { origin: [u32; 2], width: u32, before: Vec<[f32; 4]>, most: Vec<f32> }
+
+impl Inked {
+    fn new(oracle: &Oracle, views: impl Iterator<Item = ViewState>, level: u32) -> Self {
+        let side = 1u32 << level;
+        let [min, max] = views.map(|view| {
+            let origin = texel_origin(view, side);
+            [origin, [origin[0] + view.width_px, origin[1] + view.height_px]]
+        }).reduce(|[a, b], [c, d]| [[a[0].min(c[0]), a[1].min(c[1])], [b[0].max(d[0]), b[1].max(d[1])]]).unwrap();
+        let size = [max[0] - min[0], max[1] - min[1]];
+        let before = texels(&oracle.reduced(min.map(|texel| texel * side), size, side));
+        Self { origin: min, width: size[0], most: vec![0.; before.len()], before }
+    }
+    fn index(&self, texel: [u32; 2]) -> usize { ((texel[1] - self.origin[1]) * self.width + texel[0] - self.origin[0]) as usize }
+    fn reverts(&self, texel: [u32; 2], found: &Found) -> bool {
+        let index = self.index(texel);
+        self.most[index] > INK && difference(found.shown, self.before[index]) <= APPROXIMATE && difference(found.expected, self.before[index]) > INK
+    }
+    fn present(&mut self, origin: [u32; 2], width: u32, shown: &[[f32; 4]]) {
+        for (surface, value) in shown.iter().enumerate() {
+            let index = self.index([origin[0] + surface as u32 % width, origin[1] + surface as u32 / width]);
+            self.most[index] = self.most[index].max(difference(*value, self.before[index]));
+        }
     }
 }
 
@@ -287,6 +328,7 @@ fn run(name: &str, case: Case) {
     crate::test_support::submit_settled(subject, FramePacket { composite_all: true, ..base });
     crate::test_support::submit_settled(&mut oracle.reference, FramePacket { composite_all: true, ..base });
     assert_eq!(oracle.subject.scale_display.as_ref().unwrap().plan.level, level, "{name}: the view shows level {level}");
+    let mut inked = Inked::new(&oracle, sequence.iter().map(|frame| case.zoom.view(frame.pan)), level);
     let mut owing = BTreeMap::<[u32; 2], usize>::new();
     let mut painted = Vec::new();
     let mut seen = retained_keys(&oracle.subject);
@@ -305,9 +347,10 @@ fn run(name: &str, case: Case) {
         let preview_level = oracle.subject.preview_level;
         let view = frame_packet.view;
         let side = 1u32 << level;
-        let origin = [view.document_to_surface[4], view.document_to_surface[5]].map(|offset| (-offset * side as f32).round() as u32 / side);
+        let origin = texel_origin(view, side);
         let mut owed = BTreeSet::new();
-        for found in oracle.mismatches(view, level) {
+        let (mismatches, shown) = oracle.mismatches(view, level);
+        for found in mismatches {
             let surface = [found.index as u32 % view.width_px, found.index as u32 / view.width_px];
             let texel = [origin[0] + surface[0], origin[1] + surface[1]];
             if texel[0] * side >= EXTENT[0] || texel[1] * side >= EXTENT[1] { continue; }
@@ -317,10 +360,15 @@ fn run(name: &str, case: Case) {
                 || label == Some(false) && near_edge(painted.iter().chain(batch_dabs(frame, DabBatchKind::Preview)), texel, level, (1u32 << level.max(preview_level)) as f32);
             let tolerance = if edge { EDGE } else if label == Some(true) { STRICT } else { APPROXIMATE };
             if found.error <= tolerance { continue; }
-            if label.is_none() { owed.insert(cell); continue; }
+            if label.is_none() {
+                assert!(!inked.reverts(texel, &found), "{name} seed {} frame {index} level {level}: surface texel {surface:?} (display texel {texel:?}, pending cell {cell:?}) shows the picture before the stroke {:?} after an earlier frame showed ink there, where the reference shows {:?}",
+                    case.seed, found.shown, found.expected);
+                owed.insert(cell); continue;
+            }
             panic!("{name} seed {} frame {index} level {level}: surface texel {surface:?} (display texel {texel:?}, cell {cell:?}, {}) shows {:?} where the reference shows {:?}: error {} beyond {tolerance}",
                 case.seed, if edge { "dab edge" } else if label == Some(true) { "exact cell" } else { "reduced cell" }, found.shown, found.expected, found.error);
         }
+        inked.present(origin, view.width_px, &shown);
         owing.retain(|cell, _| owed.contains(cell));
         for cell in owed { *owing.entry(cell).or_default() += 1; }
         if let Some((cell, frames)) = owing.iter().find(|(_, frames)| **frames > REPAIR_FRAMES) {
