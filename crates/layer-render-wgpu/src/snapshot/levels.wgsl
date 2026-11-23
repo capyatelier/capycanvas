@@ -44,12 +44,14 @@ fn measure(@builtin(local_invocation_index) lane:u32,@builtin(workgroup_id) grou
     }
     if lane==0u {
         for(var c=0u;c<3u;c++) {atomicMin(&summary[c],minima[0][c]);atomicMax(&summary[c+3u],maxima[0][c]);}
-        atomicAdd(&summary[6],totals[0].x);atomicOr(&summary[7],totals[0].y);
+        let counted=atomicAdd(&summary[6],totals[0].x);atomicOr(&summary[7],totals[0].y);
+        if counted>0xffffffffu-totals[0].x {atomicAdd(&summary[12296u],1u);}
     }
 }
 @compute @workgroup_size(64)
 fn fold(@builtin(global_invocation_id) id:vec3<u32>) {
     if id.x>=12288u {return;}
-    var sum=0u;for(var group=0u;group<16u;group++) {sum+=atomicLoad(&shards[group*12288u+id.x]);}
-    atomicStore(&summary[8u+id.x],sum);
+    var sum=0u;var carries=0u;
+    for(var group=0u;group<16u;group++) {let counted=atomicLoad(&shards[group*12288u+id.x]);sum+=counted;carries+=u32(sum<counted);}
+    atomicStore(&summary[8u+id.x],sum);atomicStore(&summary[12297u+id.x],carries);
 }

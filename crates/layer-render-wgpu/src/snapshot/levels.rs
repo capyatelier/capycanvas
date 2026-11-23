@@ -34,7 +34,7 @@ impl SnapshotGpu {
         let (mut snapshot,output)=self.artwork_capture(&query,control.clone()).await?;
         let pipeline=LevelsPipeline::new(&self.device);
         self.device.compilation().map_err(|e|e.to_string())?.prepare_all([&pipeline.measure, &pipeline.count, &pipeline.fold]).await?;
-        let initial:Vec<u8>=[u32::MAX,u32::MAX,u32::MAX,0,0,0,0,0].into_iter().chain(std::iter::repeat_n(0,12288)).flat_map(u32::to_le_bytes).collect();
+        let initial:Vec<u8>=[u32::MAX,u32::MAX,u32::MAX,0,0,0,0,0].into_iter().chain(std::iter::repeat_n(0,2*12288+1)).flat_map(u32::to_le_bytes).collect();
         let summary=self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {label:Some("Levels exact summary"),contents:&initial,usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_SRC});
         let shards=self.device.create_buffer(&wgpu::BufferDescriptor {label:Some("Levels quantile shards"),size:16*12288*4,usage:wgpu::BufferUsages::STORAGE,mapped_at_creation:false});
         let mut result=LevelsStatistics {minimum:[0.;3],maximum:[0.;3],bins:std::array::from_fn(|_|vec![0;4096]),pixels:0};
@@ -60,13 +60,41 @@ impl SnapshotGpu {
             let bytes=crate::local_tone::read_buffer_async(&self.device,&self.queue,&summary).await?;
             control.check().map_err(|e|e.to_string())?;
             let words:Vec<_>=bytes.as_chunks::<4>().0.iter().map(|b|u32::from_le_bytes(*b)).collect();
+            let wide=|low:usize,carries:usize|u64::from(words[low])|u64::from(words[carries])<<32;
             if words[7]!=0 {return Err("The artwork contains colors Auto cannot represent".into());}
-            if words[6]==0 {return Err("There are no usable pixels for Auto".into());}
+            if wide(6,12296)==0 {return Err("There are no usable pixels for Auto".into());}
             if phase==0 {
                 let value=|bits:u32|f64::from(f32::from_bits(if bits>>31!=0 {bits^0x80000000} else {!bits}));
-                result.minimum=std::array::from_fn(|i|value(words[i]));result.maximum=std::array::from_fn(|i|value(words[i+3]));result.pixels=u64::from(words[6]);
-            } else {for c in 0..3 {for (out,n) in result.bins[c].iter_mut().zip(&words[8+c*4096..8+(c+1)*4096]) {*out=u64::from(*n);}}}
+                result.minimum=std::array::from_fn(|i|value(words[i]));result.maximum=std::array::from_fn(|i|value(words[i+3]));result.pixels=wide(6,12296);
+            } else {for c in 0..3 {for (bin,out) in result.bins[c].iter_mut().enumerate() {*out=wide(8+c*4096+bin,12297+c*4096+bin);}}}
         }
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::snapshot::statistics::tests::{dispatch, pixels, storage, words};
+    #[test]
+    fn levels_counts_carry_past_four_billion_pixels() {
+        let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let (device, queue) = (&r.device, &r.queue);
+        let pipeline = LevelsPipeline::new(device);
+        pollster::block_on(device.compilation().unwrap().prepare_all([&pipeline.measure, &pipeline.fold])).unwrap();
+        let mut initial = [u32::MAX, u32::MAX, u32::MAX, 0, 0, 0, u32::MAX - 15, 0].to_vec();initial.resize(8 + 2 * 12288 + 1, 0);
+        let summary = storage(device, &initial.into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>());
+        let shards = storage(device, &(1u32 << 31).to_le_bytes().repeat(16 * 12288));
+        let area = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, usage: wgpu::BufferUsages::UNIFORM,
+            contents: &[8u32, 8, 0, 0].into_iter().map(u32::to_le_bytes).chain([0f32, 1., 1., 0.].repeat(3).into_iter().map(f32::to_le_bytes)).flatten().collect::<Vec<_>>() });
+        let view = pixels(device, queue);
+        let group = crate::bindings::group(device, "levels carry", &pipeline.layout, [wgpu::BindingResource::TextureView(&view),
+            area.as_entire_binding(), summary.as_entire_binding(), shards.as_entire_binding()]);
+        dispatch(device, queue, &pipeline.measure, &group, 64);
+        dispatch(device, queue, &pipeline.fold, &group, 192);
+        let counts = words(device, queue, &summary);
+        assert_eq!([counts[6], counts[12296]], [48, 1], "2^32 - 16 counted pixels plus 64 carry once");
+        assert!(counts[8..8 + 12288].iter().all(|low| *low == 0));
+        assert!(counts[12297..].iter().all(|carries| *carries == 8), "16 shards of 2^31 pixels hold 2^35");
     }
 }

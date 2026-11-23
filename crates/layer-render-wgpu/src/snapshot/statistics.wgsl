@@ -222,9 +222,9 @@ fn fold(@builtin(global_invocation_id) id:vec3<u32>) {
         if area.waveform==0u || index>=WAVE_WORDS {return;}
         var count=0u;
         for(var shard=0u;shard<8u;shard++) {count+=atomicLoad(&shards[WAVE_OFFSET+shard*WAVE_WORDS+index]);}
-        summary[id.x]=count;return;
+        summary[1043u+id.x]=count;return;
     }
-    var count=0u;
-    for(var shard=0u;shard<64u;shard++) {count+=atomicLoad(&shards[shard*1043u+id.x]);}
-    summary[id.x]=count;
+    var count=0u;var carries=0u;
+    for(var shard=0u;shard<64u;shard++) {let shard_count=atomicLoad(&shards[shard*1043u+id.x]);count+=shard_count;carries+=u32(count<shard_count);}
+    summary[id.x]=count;summary[1043u+id.x]=carries;
 }

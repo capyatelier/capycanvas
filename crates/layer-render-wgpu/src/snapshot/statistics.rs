@@ -57,7 +57,7 @@ impl SnapshotGpu {
         });
         let waveform_words = if request.waveform {Waveform::WORDS as u64} else {0};
         let shards = buffer("histogram shards", WORDS * SHARDS * 4+4*(1+256*256)+waveform_words*8*4);
-        let summary = buffer("histogram counts", (WORDS+waveform_words)*4);
+        let summary = buffer("histogram counts", (2*WORDS+waveform_words)*4);
         let weights = histogram.color.space.to_xyz()[1];
         let coefficients = [weights[0], 1. - weights[0] - weights[2], weights[2]];
         let boundaries: Vec<_> = [0, 3].into_iter().flat_map(|channel| histogram.boundaries(channel)).chain(coefficients)
@@ -108,7 +108,9 @@ impl SnapshotGpu {
         }
         let bytes = crate::local_tone::read_buffer_async(&self.device, &self.queue, &summary).await?;
         control.check().map_err(|e| e.to_string())?;
-        let words: Vec<_> = bytes[..WORDS as usize*4].as_chunks::<4>().0.iter().map(|b| u64::from(u32::from_le_bytes(*b))).collect();
+        let counts: Vec<_> = bytes[..2*WORDS as usize*4].as_chunks::<4>().0.iter().map(|b| u64::from(u32::from_le_bytes(*b))).collect();
+        let (low, carries) = counts.split_at(WORDS as usize);
+        let words: Vec<_> = low.iter().zip(carries).map(|(low, carries)| low | carries << 32).collect();
         if words[1042] != 0 { return Err("The artwork contains invalid color values".into()); }
         for (i, channel) in histogram.channels.iter_mut().enumerate() {
             channel.bins.copy_from_slice(&words[i*256..(i+1)*256]);
@@ -116,9 +118,55 @@ impl SnapshotGpu {
         }
         histogram.pixels = words[1040];histogram.transparent = words[1041];
         if request.waveform {
-            histogram.waveform=Some(Waveform {counts:bytes[WORDS as usize*4..].as_chunks::<4>().0.iter()
+            histogram.waveform=Some(Waveform {counts:bytes[2*WORDS as usize*4..].as_chunks::<4>().0.iter()
                 .map(|b|u32::from_le_bytes(*b)).collect()});
         }
         Ok(histogram)
     }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    pub(crate) fn storage(device: &PipelineDevice, contents: &[u8]) -> wgpu::Buffer {
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST })
+    }
+    pub(crate) fn words(device: &PipelineDevice, queue: &wgpu::Queue, buffer: &wgpu::Buffer) -> Vec<u32> {
+        pollster::block_on(crate::local_tone::read_buffer_async(device, queue, buffer)).unwrap().as_chunks::<4>().0.iter().map(|b| u32::from_le_bytes(*b)).collect()
+    }
+    pub(crate) fn pixels(device: &PipelineDevice, queue: &wgpu::Queue) -> wgpu::TextureView {
+        let texture = device.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: 8, height: 8, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Rgba32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[] });
+        queue.write_texture(texture.as_image_copy(), &[0.5f32, 0.5, 0.5, 1.].repeat(64).into_iter().flat_map(f32::to_le_bytes).collect::<Vec<_>>(),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(8 * 16), rows_per_image: None }, texture.size());
+        texture.create_view(&Default::default())
+    }
+    pub(crate) fn dispatch(device: &PipelineDevice, queue: &wgpu::Queue, pipeline: &wgpu::ComputePipeline, group: &wgpu::BindGroup, workgroups: u32) {
+        let mut encoder = submission::CommandEncoder::new(device, &Default::default());
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(pipeline); pass.set_bind_group(0, group, &[]); pass.dispatch_workgroups(workgroups, 1, 1); drop(pass);
+        encoder.submit(queue);
+    }
+
+    #[test]
+    fn histogram_counts_carry_past_four_billion_pixels() {
+        let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let (device, queue) = (&r.device, &r.queue);
+        let pipeline = StatisticsPipeline::new(device);
+        pollster::block_on(device.compilation().unwrap().prepare_all([&pipeline.fold])).unwrap();
+        let shards = storage(device, &(1u32 << 31).to_le_bytes().repeat((WORDS * SHARDS) as usize));
+        let summary = storage(device, &vec![0; 2 * WORDS as usize * 4]);
+        let zeros = storage(device, &[0; 48]);
+        let area = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: &[0; 48], usage: wgpu::BufferUsages::UNIFORM });
+        let view = pixels(device, queue);
+        let group = crate::bindings::group(device, "histogram carry", &pipeline.layout, [wgpu::BindingResource::TextureView(&view),
+            area.as_entire_binding(), zeros.as_entire_binding(), shards.as_entire_binding(), summary.as_entire_binding(), zeros.as_entire_binding()]);
+        dispatch(device, queue, &pipeline.fold, &group, (WORDS as u32).div_ceil(64));
+        let counts = words(device, queue, &summary);
+        assert!(counts[..WORDS as usize].iter().all(|low| *low == 0));
+        assert!(counts[WORDS as usize..].iter().all(|carries| *carries == 32), "64 shards of 2^31 pixels hold 2^37");
+    }
+
 }
