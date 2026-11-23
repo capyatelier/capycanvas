@@ -1353,10 +1353,10 @@ impl ImageTransformState {
                     else {layer_core::raster::ContentName::fresh().into()};
                 Ok((coordinate,name))
             }).collect::<Result<std::collections::BTreeMap<_,_>,GpuRasterError>>()?;
-            let mut copied=|coordinate,actual:&crate::submission::Submission| {
+            let mut copied=|coordinate,actual:&crate::submission::Submission,complete| {
                 let (page,version,_)=outputs.get_mut(&coordinate).ok_or(GpuRasterError::Invariant("planned transform output is missing"))?;
                 let name=names[&coordinate].clone();
-                let written=page.revise(version,actual)?.publish(name);
+                let written=page.revise(version,actual)?.completed(complete).publish(name);
                 *version=written.version().clone();Ok(())
             };
             let result=self.draw_windows(r,encoder,channel,transform,taps,&windows,self.has_selection,Some(&mut copied));
@@ -1469,9 +1469,9 @@ impl ImageTransformState {
             }
             let windows=planned.into_iter().map(|window|Window {origin:window.origin,jobs:window.jobs,
                 pages:window.pages.into_iter().map(|(coordinate,target)|(coordinate,Target {texture:outputs[&coordinate].texture.clone(),region:target.region,initialize:target.initialize})).collect()}).collect::<Vec<_>>();
-            let mut copied=|coordinate,actual:&submission::Submission| {
+            let mut copied=|coordinate,actual:&submission::Submission,complete| {
                 let output=outputs.get_mut(&coordinate).ok_or(GpuRasterError::Invariant("planned transform output is missing"))?;
-                output.written=Some(output.encoding.take().ok_or(GpuRasterError::Invariant("transform encoding already consumed"))?.publish(actual));Ok(())
+                output.written=Some(output.encoding.take().ok_or(GpuRasterError::Invariant("transform encoding already consumed"))?.completed(complete).publish(actual));Ok(())
             };
             self.draw_windows(r,encoder,channel,transform,taps,&windows,self.has_selection,Some(&mut copied))?;
             for (coordinate,output) in outputs {
@@ -1573,7 +1573,7 @@ impl ImageTransformState {
         taps: u32,
         windows: &[Window],
         selected: bool,
-        mut copied:Option<&mut dyn FnMut([u32;2],&crate::submission::Submission)->Result<(),GpuRasterError>>,
+        mut copied:Option<&mut dyn FnMut([u32;2],&crate::submission::Submission,bool)->Result<(),GpuRasterError>>,
     ) -> Result<(), GpuRasterError> {
         let format = self.atlas_format(r, channel);
         let scalar = format != r.device.working_format() || channel != 0;
@@ -1628,6 +1628,7 @@ impl ImageTransformState {
             let snapshot = self.sources[channel].as_ref().unwrap();
             let receipt=encoder.submission();
             let batches = source_batches(&window.jobs, |c| snapshot.pages.get(&c).is_some_and(|page|page.readable(&receipt)));
+            let mut complete = true;
             for (n, batch) in batches.into_iter().enumerate() {
                 let mut sources = Vec::with_capacity(batch.len());
                 for (job, _) in &window.jobs[batch.clone()] {
@@ -1639,7 +1640,7 @@ impl ImageTransformState {
                         selection,
                         positions.as_ref(),
                         encoder,
-                    )?);
+                    )?.take(&mut complete));
                 }
                 let draws: Vec<_> = batch
                     .zip(&sources)
@@ -1694,7 +1695,7 @@ impl ImageTransformState {
                         depth_or_array_layers: 1,
                     },
                 );
-                if let Some(copied)=copied.as_mut() {copied(*c,&encoder.submission())?;}
+                if let Some(copied)=copied.as_mut() {copied(*c,&encoder.submission(),complete)?;}
             }
         }
         Ok(())
@@ -1742,7 +1743,7 @@ impl ImageTransformState {
             };
             {
                 let mut captures=std::mem::take(&mut self.captures[0]);
-                let mut copied=|coordinate,receipt:&crate::submission::Submission|captures.get_mut(&coordinate).ok_or(GpuRasterError::Invariant("planned transform capture is missing"))?.written(receipt);
+                let mut copied=|coordinate,receipt:&crate::submission::Submission,complete|captures.get_mut(&coordinate).ok_or(GpuRasterError::Invariant("planned transform capture is missing"))?.written(receipt,complete);
                 let result=self.draw_windows(r,encoder,0,&identity,pixel_transform::PREVIEW_TAPS,&copies,false,Some(&mut copied));
                 self.captures[0]=captures;result?;
             }
@@ -2168,7 +2169,7 @@ impl ImageTransformState {
             let mut sources = Vec::with_capacity(batch.len());
             for (job, _) in &pieces[batch.clone()] {
                 let snapshot = self.sources[0].as_ref().unwrap();
-                sources.push(snapshot.binding(r, &mut self.color, &job.sources, selection, None, encoder)?);
+                sources.push(snapshot.binding(r, &mut self.color, &job.sources, selection, None, encoder)?.uncertified());
             }
             let draws: Vec<_> = batch
                 .zip(&sources)
@@ -2247,7 +2248,7 @@ impl ImageTransformState {
             let fine=input.fine.as_mut().unwrap();
             let index=fine.assign(coordinate)?;
             let kept=input.kept.is_some();
-            if !kept && let Some(tile)=snapshot.original_page(r,coordinate,encoder)?
+            if !kept && let Some(tile)=snapshot.original_page(r,coordinate,encoder)?.map(crate::source_access::Sampled::uncertified)
                 && tile.texture.format()==wgpu::TextureFormat::Rgba32Float {
                 let origin=fine.origin(index,0);
                 encoder.copy_texture_to_texture(tile.texture.as_image_copy(),wgpu::TexelCopyTextureInfo {
@@ -2255,7 +2256,7 @@ impl ImageTransformState {
                     wgpu::Extent3d {width:PAGE_SIZE,height:PAGE_SIZE,depth_or_array_layers:1});
             } else {
                 let selection=self.has_selection.then_some(self.selection.as_ref()).flatten();
-                let source=snapshot.binding(r,&mut self.color,std::slice::from_ref(&coordinate),selection,None,encoder)?;
+                let source=snapshot.binding(r,&mut self.color,std::slice::from_ref(&coordinate),selection,None,encoder)?.uncertified();
                 for (part,plane) in std::iter::once((pixel_transform::Part::Selected,0))
                     .chain(kept.then_some((pixel_transform::Part::Kept,1))) {
                     self.color.encode_identity_display_scratch(&r.device,&mut r.uploads,encoder,pixel_transform::IdentityDisplay {
@@ -2341,7 +2342,7 @@ impl ImageTransformState {
             if shifted { image.clear_scratch(encoder); }
             let mut written = shifted;
             for c in page_coordinates(local).filter(|c| snapshot.contains(*c)) {
-                if let Some(tile) = snapshot.original_page(r, c, encoder)? {
+                if let Some(tile) = snapshot.original_page(r, c, encoder)?.map(crate::source_access::Sampled::uncertified) {
                     let part = page_rect(c).intersect(local);
                     let destination = part.translated(phase).page_local([page.min_x() / PAGE_SIZE, page.min_y() / PAGE_SIZE]);
                     image.copy_to_scratch(encoder, &tile.texture, part.page_local(c), [destination.min_x(), destination.min_y()])?;

@@ -888,6 +888,44 @@ fn a_fill_whose_edge_band_reads_pixels_a_cold_donor_left_behind_is_not_complete(
 }
 
 #[test]
+fn a_frequency_detail_over_a_low_page_a_cold_donor_left_behind_is_not_complete() {
+    let (mut fixture,style)=cold_clone([384.,0.]);
+    committed_miss(&mut fixture,&style);
+    fixture.r.retouch.as_mut().unwrap().take_miss();
+    assert!(!committed_complete(&fixture.r,TARGET,[0,0]),"the committed dab left its page incomplete");
+    let SourceTarget::Paint(low)=TARGET else {unreachable!()};
+    let detail=RasterOperation {placement:layer_core::Affine::IDENTITY,coverage:reveal_all(SIZE),
+        kind:RasterOperationKind::FrequencyDetail {scene:fixture.document.snapshot(),scope:layer_core::SceneScope::Members(vec![PHOTO_USE].into()),offset:Point::default(),low}};
+    let SourceTarget::Paint(high)=PHOTO else {unreachable!()};
+    let paint=fixture.document.artwork.paint.get_mut(high).unwrap();
+    paint.operations=Arc::new(vec![detail]);paint.raster=layer_core::raster::RasterRevision::pending();
+    let (r,packet)=fixture.frame();
+    let command=DabBatch {kind:DabBatchKind::RasterOperation(0),dab_count:0,damage:layer_core::Rect::from_extent(SIZE),
+        ..crate::test_support::dab_batch(PHOTO,crate::tests::test_style(layer_core::BrushExecution::Dry),layer_core::Rect::from_extent(SIZE))};
+    crate::test_support::submit_settled(r,FramePacket {dab_batches:std::slice::from_ref(&command),..packet});
+    assert!(!committed_complete(r,PHOTO,[0,0]),"a detail page that subtracts the committed dab's missing pixels is not complete");
+}
+
+#[test]
+fn a_transform_that_moves_pixels_a_cold_donor_left_behind_onto_a_clean_page_is_not_complete() {
+    let (mut fixture,style)=cold_clone([384.,0.]);
+    committed_miss(&mut fixture,&style);
+    fixture.r.retouch.as_mut().unwrap().take_miss();
+    assert!(!committed_complete(&fixture.r,TARGET,[0,0]),"the committed dab left its page incomplete");
+    let preview=layer_render::TransformPreview {transaction:1,moving:false,target:TARGET,selection:None,
+        transform:layer_core::ImageTransform::affine(layer_core::Affine::translation(Point {x:256.,y:0.}))};
+    fixture.r.set_transform_preview(Some(&preview)).unwrap();
+    let (r,packet)=fixture.frame();
+    crate::test_support::submit_settled(r,packet);
+    let transforms=r.transforms.as_ref().unwrap();
+    let capture=transforms.declared_capture(r,packet.scene,r.transform_preview.as_ref().unwrap()).unwrap();
+    let expected=transforms.requested_version_for_capture(r,&capture,layer_core::raster::RasterPlane::Color,[1,0]).unwrap();
+    let page=r.paint_layers.iter().find(|l|l.id==TARGET).and_then(|l|l.pages.iter().find(|p|p.coordinate==[1,0])).expect("the moved pixels land on a resident page");
+    assert!(!page.active().read(expected,None).expect("the moved page is readable").complete(),
+        "a clean page the transform moved the committed dab's missing pixels onto is not complete");
+}
+
+#[test]
 fn retiring_a_clone_stroke_returns_its_grown_pool_to_the_resting_size() {
     let (mut input, mut engine) = engine(document([1536, 1536]), false);
     engine.set_retouch(Some(RetouchSource::Editing));

@@ -37,9 +37,9 @@ impl SnapshotPage {
         let resident=crate::resident::Resident::unwritten(SnapshotPixels {texture:texture.clone(),view:view.clone()});
         Self {texture,view,named:(resident,expected)}
     }
-    pub fn written(&mut self,receipt:&crate::submission::Submission)->Result<(),GpuRasterError> {
+    pub fn written(&mut self,receipt:&crate::submission::Submission,complete:bool)->Result<(),GpuRasterError> {
         let (resident,expected)=&mut self.named;
-        let written=resident.overwrite(receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?.publish(layer_core::raster::ContentName::fresh());
+        let written=resident.overwrite(receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?.completed(complete).publish(layer_core::raster::ContentName::fresh());
         *expected=written.version().clone();Ok(())
     }
     pub fn copy_named(&self,r:&WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder,reusable:Option<Self>)->Result<Self,GpuRasterError> {
@@ -49,7 +49,7 @@ impl SnapshotPage {
         let mut capture=reusable.filter(|page|page.texture!=self.texture && page.texture.format()==self.texture.format())
             .unwrap_or_else(||super::snapshot_page(&r.device,self.texture.format()));
         let (resident,captured)=&mut capture.named;
-        let write=resident.overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
+        let write=resident.overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?.completed(read.complete());
         encoder.copy_texture_to_texture(read.value().texture.as_image_copy(),write.value().texture.as_image_copy(),read.value().texture.size());
         write.publish(expected.clone());*captured=expected.clone();
         Ok(capture)
@@ -107,11 +107,12 @@ impl TileSnapshot {
         selection: Option<&wgpu::Buffer>,
         positions: Option<&wgpu::TextureView>,
         encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<TransformSource, GpuRasterError> {
+    ) -> Result<source_access::Sampled<TransformSource>, GpuRasterError> {
         let mut tiles = Vec::with_capacity(sources.len());
         let mut leases = Vec::with_capacity(sources.len());
+        let mut complete = true;
         for c in sources {
-            if let Some(tile) = self.original_page(r, *c, encoder)? {
+            if let Some(tile) = self.original_page(r, *c, encoder)?.map(|tile| tile.take(&mut complete)) {
                 leases.extend(r.source_tiles.borrow().lease(&tile.view));
                 tiles.push((*c, tile));
             }
@@ -134,7 +135,7 @@ impl TileSnapshot {
                 &r.empty_view,
             )
             .map_err(GpuRasterError::InvalidTransform)?;
-        Ok(source)
+        Ok(source_access::Sampled::new(source, complete))
     }
     pub fn prepare_pages(&self,r:&mut WgpuRasterizer,coordinates:&[[u32;2]],encoder:&mut crate::submission::CommandEncoder)->Result<Vec<crate::scene::sources::Lease>,GpuRasterError> {
         let mut requested=crate::scene::sources::Inputs::default();
@@ -166,12 +167,9 @@ impl TileSnapshot {
         r: &mut WgpuRasterizer,
         coordinate: [u32; 2],
         encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<Option<crate::source_access::RawTile>, GpuRasterError> {
-        if let Some(page) = self.pages.get(&coordinate).filter(|page|page.readable(&encoder.submission())) {
-            return Ok(Some(crate::source_access::RawTile {
-                texture: page.texture.clone().into(),
-                view: page.view.clone(),
-            }));
+    ) -> Result<Option<source_access::Sampled<source_access::RawTile>>, GpuRasterError> {
+        if let Some(page) = self.pages.get(&coordinate) && let Some(read) = page.named.0.read(&page.named.1, Some(&encoder.submission())) {
+            return Ok(Some(source_access::Sampled::read(&read).map(|view| source_access::RawTile { texture: page.texture.clone().into(), view })));
         }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some((data, space, plane)) = &self.backing
@@ -184,11 +182,11 @@ impl TileSnapshot {
                 && tile.content_version().matches(expected)!=Some(true) {return Err(GpuRasterError::NotReady);}
             let blob = if r.snapshot_worker {tile.wait_backing().map_err(GpuRasterError::Effect)?}
                 else {tile.try_backing().ok_or(GpuRasterError::NotReady)?.map_err(GpuRasterError::Effect)?};
-            return r.backed_raster_tile(&blob, *space, encoder).map(Some);
+            return r.backed_raster_tile(&blob, *space, encoder).map(|tile| Some(source_access::Sampled::new(tile, true)));
         }
         if self.pages.contains_key(&coordinate) && self.base.is_none() {return Err(GpuRasterError::NotReady);}
         match &self.base {
-            Some(original) => r.paint_base_tile(original, coordinate, encoder),
+            Some(original) => r.paint_base_tile(original, coordinate, encoder).map(|tile| tile.map(|tile| source_access::Sampled::new(tile, true))),
             None => Ok(None),
         }
     }

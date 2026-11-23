@@ -16,10 +16,10 @@ struct BakePage {
     intent:crate::raster::contents::Intent,
 }
 impl BakePage {
-    fn publish(&self,scene:&mut Scene,r:&WgpuRasterizer,target:SourceTarget,encoder:&mut submission::CommandEncoder)->Result<(),GpuRasterError> {
+    fn publish(&self,scene:&mut Scene,r:&WgpuRasterizer,target:SourceTarget,complete:bool,encoder:&mut submission::CommandEncoder)->Result<(),GpuRasterError> {
         r.validate_raster_intent(target,&self.intent)?;
         let mut pixels=self.pixels.clone();let receipt=encoder.submission();
-        let write=pixels.write(&self.intent,&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
+        let write=pixels.write(&self.intent,&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?.completed(complete);
         scene.publish_surface(target,write.encoded(layer_core::raster::ContentName::fresh()));Ok(())
     }
 }
@@ -88,20 +88,7 @@ impl Scene {
         if !r.snapshot_worker {
             self.jobs.clear();self.source_jobs.clear();self.used.iter_mut().for_each(scratch::Usage::reset);
             let declaration=self.capture_declaration(r,source)?;
-            for page in &pages {
-                let coordinate=page.coordinate;let destination=&page.image;
-                let mut accepted=self.accept_capture(r,source,Some(Output::Artwork(None)),&declaration,|this,r,accepted|
-                    this.bake_output(r,source,coordinate,coverage,(target,operation,false),low,accepted).map(drop))?;
-                let output=self.bake_output(r,source,coordinate,coverage,(target,operation,false),low,&mut accepted)?;
-                let _output=self.own(output);
-                let output=if target.is_coverage() {
-                    let scalar=self.reserve_format(r,true)?;
-                    self.draw(r,scalar,self.pool[output].view.clone(),Some(destination.view.clone()),[0.,0.,PAGE_SIZE as f32,PAGE_SIZE as f32],[21.,1.,0.,0.],false,Convert::None);
-                    self.free(output);scalar
-                }else {output};
-                self.copy_window_tile(output,destination,coordinate);
-                page.publish(self,r,target,encoder)?;accepted.track(encoder);
-            }
+            for page in &pages {self.bake_page(r,source,page,coverage,(target,operation,false),low,&declaration,encoder)?;}
             return self.encode_jobs(r,encoder);
         }
         self.placement_display = false;
@@ -195,23 +182,27 @@ impl Scene {
             self.jobs.clear();
             self.used.iter_mut().for_each(scratch::Usage::reset);
             let declaration=self.capture_declaration(r,source)?;
-            for page in batch.iter().copied() {
-                let coordinate=page.coordinate;let destination=&page.image;
-                let mut accepted=self.accept_capture(r,source,Some(Output::Artwork(None)),&declaration,|this,r,accepted|
-                    this.bake_output(r,source,coordinate,coverage,command,low,accepted).map(drop))?;
-                let output = self.bake_output(r,source,coordinate,coverage,command,low,&mut accepted)?;
-                let _output = self.own(output);
-                let output = if command.0.is_coverage() {
-                    let scalar = self.reserve_format(r, true)?;
-                    self.draw(r, scalar, self.pool[output].view.clone(), Some(destination.view.clone()),
-                        [0., 0., PAGE_SIZE as f32, PAGE_SIZE as f32], [21., 1., 0., 0.], false, Convert::None);
-                    self.free(output); scalar
-                } else { output };
-                self.copy_window_tile(output, destination, coordinate);
-                page.publish(self,r,command.0,encoder)?;accepted.track(encoder);
-            }
+            for page in batch.iter().copied() {self.bake_page(r,source,page,coverage,command,low,&declaration,encoder)?;}
             self.encode_jobs(r, encoder)?;
         }
         Ok(())
+    }
+
+    #[expect(clippy::too_many_arguments, reason = "Bake operands retain independent source, coverage and command ownership")]
+    fn bake_page(&mut self,r:&mut WgpuRasterizer,source:FramePacket<'_>,page:&BakePage,coverage:&layer_core::CoverageSnapshot,
+        command:layer_masks::CommandCoverage,low:Option<SourceTarget>,declaration:&sources::Declaration,encoder:&mut crate::submission::CommandEncoder,
+    )->Result<(),GpuRasterError> {
+        let coordinate=page.coordinate;let destination=&page.image;
+        let mut accepted=self.accept_capture(r,source,Some(Output::Artwork(None)),declaration,|this,r,accepted|
+            this.bake_output(r,source,coordinate,coverage,command,low,accepted).map(drop))?;
+        let (output,complete)=self.certified(|this|this.bake_output(r,source,coordinate,coverage,command,low,&mut accepted))?;
+        let _output=self.own(output);
+        let output=if command.0.is_coverage() {
+            let scalar=self.reserve_format(r,true)?;
+            self.draw(r,scalar,self.pool[output].view.clone(),Some(destination.view.clone()),[0.,0.,PAGE_SIZE as f32,PAGE_SIZE as f32],[21.,1.,0.,0.],false,Convert::None);
+            self.free(output);scalar
+        }else {output};
+        self.copy_window_tile(output,destination,coordinate);
+        page.publish(self,r,command.0,complete,encoder)?;accepted.track(encoder);Ok(())
     }
 }
