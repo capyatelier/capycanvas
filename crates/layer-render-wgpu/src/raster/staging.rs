@@ -1062,7 +1062,7 @@ impl WgpuRasterizer {
                 coordinates.extend(tiles.iter().map(|tile|tile.coordinate));
                 if BrushPassPlan::for_device(&batch.style,&self.device).state.watercolor_wetness && is_last_watercolor_update_batch(packet.dab_batches,index,packet.scene.target_extent(batch.target)) {
                     coordinates.extend(watercolor_update_damages(packet.dab_batches,index,packet.scene.target_extent(batch.target)).into_iter()
-                        .flat_map(page_coordinates).flat_map(|coordinate|source_access::neighborhood(coordinate,[[0,0],[-1,0],[1,0],[0,-1],[0,1]].map(Some))));
+                        .flat_map(page_coordinates).flat_map(|coordinate|source_access::neighborhood(coordinate,TRANSPORT_OFFSETS.map(Some))));
                 }
                 if let DabBatchKind::RasterOperation(index)=batch.kind {
                     let extent=packet.scene.target_extent(batch.target);let bounds=batch_pixel_rect(batch,extent);

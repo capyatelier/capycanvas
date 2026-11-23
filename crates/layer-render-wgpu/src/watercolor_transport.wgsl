@@ -24,19 +24,17 @@ struct Target {
 @group(1) @binding(0) var<uniform> render_target: Target;
 
 @group(2) @binding(0) var color_center: texture_2d<f32>;
-@group(2) @binding(1) var color_left: texture_2d<f32>;
-@group(2) @binding(2) var color_right: texture_2d<f32>;
-@group(2) @binding(3) var color_up: texture_2d<f32>;
-@group(2) @binding(4) var color_down: texture_2d<f32>;
-@group(2) @binding(5) var wet_center: texture_2d<f32>;
-@group(2) @binding(6) var wet_left: texture_2d<f32>;
-@group(2) @binding(7) var wet_right: texture_2d<f32>;
-@group(2) @binding(8) var wet_up: texture_2d<f32>;
-@group(2) @binding(9) var wet_down: texture_2d<f32>;
-@group(2) @binding(10) var color_output: texture_storage_2d<rgba32float, write>;
-@group(2) @binding(11) var wetness_output: texture_storage_2d<r32float, write>;
-struct TransportRegion { bounds: vec4<u32>, }
-@group(2) @binding(12) var<uniform> region: TransportRegion;
+@group(2) @binding(1) var color_horizontal: texture_2d<f32>;
+@group(2) @binding(2) var color_vertical: texture_2d<f32>;
+@group(2) @binding(3) var color_diagonal: texture_2d<f32>;
+@group(2) @binding(4) var wet_center: texture_2d<f32>;
+@group(2) @binding(5) var wet_horizontal: texture_2d<f32>;
+@group(2) @binding(6) var wet_vertical: texture_2d<f32>;
+@group(2) @binding(7) var wet_diagonal: texture_2d<f32>;
+@group(2) @binding(8) var color_output: texture_storage_2d<rgba32float, write>;
+@group(2) @binding(9) var wetness_output: texture_storage_2d<r32float, write>;
+struct TransportRegion { bounds: vec4<u32>, quadrant: vec4<u32>, }
+@group(2) @binding(10) var<uniform> region: TransportRegion;
 @group(3) @binding(0) var conductance_texture: texture_2d<f32>;
 @group(3) @binding(1) var conductance_sampler: sampler;
 
@@ -57,20 +55,18 @@ fn rotate(point: vec2<f32>, cosine: f32, sine: f32) -> vec2<f32> {
 fn load_color(index: i32, coordinate: vec2<i32>) -> vec4<f32> {
     switch index {
         case 0: { return textureLoad(color_center, coordinate, 0); }
-        case 1: { return textureLoad(color_left, coordinate, 0); }
-        case 2: { return textureLoad(color_right, coordinate, 0); }
-        case 3: { return textureLoad(color_up, coordinate, 0); }
-        default: { return textureLoad(color_down, coordinate, 0); }
+        case 1: { return textureLoad(color_horizontal, coordinate, 0); }
+        case 2: { return textureLoad(color_vertical, coordinate, 0); }
+        default: { return textureLoad(color_diagonal, coordinate, 0); }
     }
 }
 
 fn load_wet(index: i32, coordinate: vec2<i32>) -> f32 {
     switch index {
         case 0: { return textureLoad(wet_center, coordinate, 0).r; }
-        case 1: { return textureLoad(wet_left, coordinate, 0).r; }
-        case 2: { return textureLoad(wet_right, coordinate, 0).r; }
-        case 3: { return textureLoad(wet_up, coordinate, 0).r; }
-        default: { return textureLoad(wet_down, coordinate, 0).r; }
+        case 1: { return textureLoad(wet_horizontal, coordinate, 0).r; }
+        case 2: { return textureLoad(wet_vertical, coordinate, 0).r; }
+        default: { return textureLoad(wet_diagonal, coordinate, 0).r; }
     }
 }
 
@@ -83,13 +79,9 @@ fn page_sample(document_position: vec2<f32>, wetness: bool) -> vec4<f32> {
     let page_offset = vec2<i32>(floor(relative / 256.0));
     let local = vec2<i32>(floor(relative - vec2<f32>(page_offset) * 256.0));
     let coordinate = clamp(local, vec2<i32>(0), vec2<i32>(255));
-    var index = -1;
-    if all(page_offset == vec2<i32>(0, 0)) { index = 0; }
-    if all(page_offset == vec2<i32>(-1, 0)) { index = 1; }
-    if all(page_offset == vec2<i32>(1, 0)) { index = 2; }
-    if all(page_offset == vec2<i32>(0, -1)) { index = 3; }
-    if all(page_offset == vec2<i32>(0, 1)) { index = 4; }
-    if index < 0 { return vec4<f32>(0.0); }
+    let quadrant_side = select(vec2<i32>(1), vec2<i32>(-1), region.quadrant.xy == vec2<u32>(0u));
+    if any((page_offset != vec2<i32>(0)) & (page_offset != quadrant_side)) { return vec4<f32>(0.0); }
+    let index = select(0, 1, page_offset.x != 0) + select(0, 2, page_offset.y != 0);
     if wetness { return vec4<f32>(load_wet(index, coordinate)); }
     return load_color(index, coordinate);
 }
@@ -325,7 +317,7 @@ fn transport_result(position: vec4<f32>) -> TransportOutput {
 
 @compute @workgroup_size(8, 8)
 fn compute_main(@builtin(global_invocation_id) invocation: vec3<u32>) {
-    let coordinate = invocation.xy + select(region.bounds.xy, vec2<u32>(0u), TRANSPORT_PASS == 0u);
+    let coordinate = invocation.xy + select(region.bounds.xy, region.quadrant.xy, TRANSPORT_PASS == 0u);
     let p = vec2<i32>(coordinate);
     if any(coordinate < region.bounds.xy) || any(coordinate >= region.bounds.zw) {
         if TRANSPORT_PASS == 0u {

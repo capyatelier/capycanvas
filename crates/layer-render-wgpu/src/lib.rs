@@ -192,7 +192,8 @@ const SCALAR_PAGE_BYTES: u64 = PAGE_SIZE as u64 * PAGE_SIZE as u64;
 const RESERVOIR_SIZE: u32 = 64;
 const PROCEDURAL_GRAIN_SIZE: u32 = 256;
 const WATERCOLOR_TRANSPORT_STEPS: u32 = 3;
-const TRANSPORT_OFFSETS: [[i32; 2]; 5] = [[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1]];
+const TRANSPORT_OFFSETS: [[i32; 2]; 9] = [[-1, -1], [0, -1], [1, -1], [-1, 0], [0, 0], [1, 0], [-1, 1], [0, 1], [1, 1]];
+const TRANSPORT_QUADRANT: u32 = PAGE_SIZE / 2;
 
 pub(crate) fn initialized_buffer(device: &wgpu::Device, descriptor: &wgpu::util::BufferInitDescriptor<'_>) -> Result<wgpu::Buffer, GpuRasterError> {
     let size = descriptor.contents.len() as u64;
@@ -1241,7 +1242,7 @@ pub struct WgpuRasterizer {
     transport_bindings: scene::RecentBindings<scene::TransportBindingKey>,
     material_holders: bindings::MaterialHolders,
     transport_records: material_sources::TileRecords,
-    transport_regions: Vec<PixelRect>,
+    transport_regions: Vec<[PixelRect; 2]>,
     preview_names: std::cell::RefCell<Option<IdMap<(SourceTarget,usize,[u32;2],scene::PreviewStage),scene::PreviewVersion>>>,
     material_reads: Option<IdMap<(SourceTarget,[u32;2],Option<(scene::PreviewStage,Option<(scene::PreviewPass,u32)>)>),Option<source_access::RawTile>>>,
     transport_jobs: Vec<WatercolorTransportJob>,
@@ -3084,14 +3085,15 @@ impl WgpuRasterizer {
         result.map_err(prepared_brush_error)
     }
 
-    fn transport_bind_group(&mut self,reads:&IdMap<[u32;2],[wgpu::TextureView;2]>,coordinate:[u32;2],color_output:&wgpu::TextureView,wetness_output:&wgpu::TextureView)->wgpu::BindGroup {
-        let views=TRANSPORT_OFFSETS.map(|offset|source_access::neighborhood(coordinate,[Some(offset)]).next().and_then(|at|reads.get(&at)));
+    fn transport_bind_group(&mut self,reads:&IdMap<[u32;2],[wgpu::TextureView;2]>,coordinate:[u32;2],quadrant:PixelRect,color_output:&wgpu::TextureView,wetness_output:&wgpu::TextureView)->wgpu::BindGroup {
+        let [x,y]=[quadrant.min_x(),quadrant.min_y()].map(|at|if at==0 {-1} else {1});
+        let views=[[0,0],[x,0],[0,y],[x,y]].map(|offset|source_access::neighborhood(coordinate,[Some(offset)]).next().and_then(|at|reads.get(&at)));
         let colors=views.map(|read|read.map_or(&self.empty_view,|[color,_]|color));
         let wetness=views.map(|read|read.map_or(&self.empty_scalar_view,|[_,wetness]|wetness));
         let records=self.transport_records.binding();
-        let query:([&wgpu::Buffer;1],[&wgpu::TextureView;12])=([records.buffer],std::array::from_fn(|index|match index {0..5=>colors[index],5..10=>wetness[index-5],10=>color_output,_=>wetness_output}));
+        let query:([&wgpu::Buffer;1],[&wgpu::TextureView;10])=([records.buffer],std::array::from_fn(|index|match index {0..4=>colors[index],4..8=>wetness[index-4],8=>color_output,_=>wetness_output}));
         let (device,layout,size)=(&self.device,&self.transport_layout,records.size);
-        self.transport_bindings.get_by(&query as &dyn scene::ResourceBinding<1,12>,||(query.0.map(Clone::clone),query.1.map(Clone::clone)),|key| {
+        self.transport_bindings.get_by(&query as &dyn scene::ResourceBinding<1,10>,||(query.0.map(Clone::clone),query.1.map(Clone::clone)),|key| {
             #[cfg(test)] test_support::PassCounts {transport_bind_groups:1,..Default::default()}.record();
             bindings::group(device,"layer watercolor transport sources",layout,key.1.iter().map(wgpu::BindingResource::TextureView)
                 .chain([wgpu::BindingResource::Buffer(wgpu::BufferBinding {buffer:&key.0[0],offset:0,size})]))
@@ -3115,8 +3117,7 @@ impl WgpuRasterizer {
         for job in jobs {
             pass.set_bind_group(1, self.paint_target_binding(&batch.style), &[self.layer_target_offset(batch.target, job.coordinate)]);
             pass.set_bind_group(2, &job.sources, &[job.record_offset]);
-            let size = if step == 0 { [PAGE_SIZE; 2] } else { [job.local.width(), job.local.height()] };
-            pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
+            pass.dispatch_workgroups(job.local.width().div_ceil(8), job.local.height().div_ceil(8), 1);
         }
     }
 
@@ -3156,11 +3157,15 @@ impl WgpuRasterizer {
         pending.clear();
         *self.preview_names.get_mut() = preview.then(IdMap::default);
         let result = (|| {
-        regions.extend(updated.iter().map(|coordinate| damages.iter().fold(PixelRect::EMPTY, |combined, damage| {
-            combined.union(damage.intersect(page_rect(*coordinate)))
-        }).page_local(*coordinate)));
+        regions.extend(updated.iter().flat_map(|coordinate| {
+            let local = damages.iter().fold(PixelRect::EMPTY, |combined, damage| combined.union(damage.intersect(page_rect(*coordinate)))).page_local(*coordinate);
+            [[0, 0], [1, 0], [0, 1], [1, 1]].map(|[x, y]| {
+                let quadrant = PixelRect::new(x * TRANSPORT_QUADRANT, y * TRANSPORT_QUADRANT, (x + 1) * TRANSPORT_QUADRANT, (y + 1) * TRANSPORT_QUADRANT);
+                [quadrant, local.intersect(quadrant)]
+            })
+        }));
         let first = self.transport_records.upload(&self.device, &mut self.uploads, encoder,
-            regions.iter().map(|local| material_sources::record(material_sources::rect_words(*local), [])))?;
+            regions.iter().map(|[quadrant, local]| material_sources::record(material_sources::rect_words(*local), [material_sources::rect_words(*quadrant)])))?;
         let texture_key = Self::texture_set_key(&batch.style);
         let transport_texture_bind_group = self
             .texture_sets
@@ -3226,7 +3231,6 @@ impl WgpuRasterizer {
             let mut written=Vec::with_capacity(jobs.len()*2);
             let reads=self.transport_reads(batch.target,&neighbourhood,preview,batch_index,step,encoder)?;
             for (index, job) in jobs.iter().enumerate() {
-                let local = regions[index];
                 let receipt=encoder.submission();
                 let color_intent=self.raster_intent(batch.target,RasterPlane::Color,job.coordinate)?;
                 let wetness_intent=self.raster_intent(batch.target,RasterPlane::WatercolorWetness,job.coordinate)?;
@@ -3247,15 +3251,16 @@ impl WgpuRasterizer {
                 let color_view=color_write.value().view.clone();let wetness_view=wetness_write.value().view.clone();
                 let color_encoding=color_write.encoded(color_ticket.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|ticket|ticket.version().clone()));
                 let wetness_encoding=wetness_write.encoded(wetness_ticket.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|ticket|ticket.version().clone()));
-                let sources=self.transport_bind_group(&reads,job.coordinate,&color_view,&wetness_view);
+                for (quadrant, [corner, local]) in regions[index * 4..index * 4 + 4].iter().enumerate() {
+                    if step != 0 && local.is_empty() { continue; }
+                    let sources=self.transport_bind_group(&reads,job.coordinate,*corner,&color_view,&wetness_view);
+                    pending.push(WatercolorTransportJob {coordinate:job.coordinate,local:if step==0 {*corner} else {*local},
+                        record_offset:self.transport_records.offset(first+index*4+quadrant),sources});
+                }
                 publications.extend([
                     MaterialPublication {kind:MaterialOutputKind::Color,coordinate:job.coordinate,preview:color_ticket,input:color_intent,encoding:color_encoding},
                     MaterialPublication {kind:MaterialOutputKind::Wetness,coordinate:job.coordinate,preview:wetness_ticket,input:wetness_intent,encoding:wetness_encoding},
                 ]);
-                pending.push(WatercolorTransportJob {
-                    coordinate: job.coordinate, local, record_offset: self.transport_records.offset(first + index), sources,
-                });
-
             }
             self.encode_watercolor_transport_jobs(encoder, batch_index, batch, step, &transport_texture_bind_group, &pending);
                     let actual=encoder.submission();written.extend(publications.drain(..).map(|publication:MaterialPublication|publication.encoded(&actual)));

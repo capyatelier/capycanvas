@@ -831,6 +831,14 @@ fn still_watercolor() -> DabStyle {
     DabStyle { transport: None, ..preset_style(layer_core::DefaultBrushPreset::WetWatercolor) }
 }
 
+fn far_watercolor() -> DabStyle {
+    let mut style = preset_style(layer_core::DefaultBrushPreset::WetWatercolor);
+    let transport = style.transport.as_mut().unwrap();
+    transport.distance = 62.;
+    transport.dry_flow = 0.6;
+    style
+}
+
 fn watercolor_stroke(layer: &Document, style: &DabStyle, stroke: u64, contacts: &[Dab], first: usize, start: bool, kind: DabBatchKind) -> Vec<DabBatch> {
     contacts.iter().enumerate().map(|(index, contact)| DabBatch { style: style.clone(), stroke_id: StrokeId(stroke), stroke_start: start && index == 0,
         stroke_end: false, first_dab: (first + index) as u32, damage: contact.bounds(), kind, ..batch(target(layer)) }).collect()
@@ -855,6 +863,31 @@ fn a_watercolor_update_keeps_the_water_of_pixels_its_contacts_miss() {
     send(&mut r, &watercolor_stroke(&layer, &still_watercolor(), 2, &contacts[2..], 2, false, DabBatchKind::Persistent), false);
     assert!(wetness_at(&r, &layer, [330, 330]) > 0., "a later microbatch that misses a pixel keeps the water an earlier one laid");
     assert!(wetness_at(&r, &layer, [385, 385]) > 0., "the later microbatch wets its own core");
+}
+
+#[test]
+fn watercolor_transport_draws_water_from_diagonal_pages() {
+    let extent = [768; 2];
+    let layer = paint_document(extent, "diagonal watercolor donors");
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let corners = [[256., 256.], [512., 256.], [256., 512.], [512., 512.]];
+    let mut contacts: Vec<Dab> = corners.iter().flat_map(|&[x, y]| {
+        let [sx, sy] = [x, y].map(|at| if at < 384. { -1. } else { 1. });
+        (0..25).map(move |index| watercolor_contact(x + sx * (8. + 8. * (index % 5) as f32), y + sy * (8. + 8. * (index / 5) as f32), 6., [1., 0., 0., 1.]))
+    }).collect();
+    contacts.push(watercolor_contact(384., 384., 40., [0.1, 0.3, 0.8, 1.]));
+    let donors: Vec<DabBatch> = (0..corners.len()).map(|corner| DabBatch { style: still_watercolor(), stroke_id: StrokeId(1), stroke_start: corner == 0,
+        stroke_end: false, first_dab: corner as u32 * 25, dab_count: 25, damage: contacts[corner * 25..corner * 25 + 25].iter()
+        .fold(layer_core::Rect::EMPTY, |damage, contact| damage.union(contact.bounds())), ..batch(target(&layer)) }).collect();
+    crate::test_support::submit_ready(&mut r, FramePacket { dabs: &contacts, dab_batches: &donors, reset_layers: true, ..packet(layer.scene(), extent) }).unwrap();
+    let wash = DabBatch { damage: layer_core::Rect { min: Point { x: 318., y: 318. }, max: Point { x: 450., y: 450. } },
+        ..watercolor_stroke(&layer, &far_watercolor(), 2, &contacts[100..], 100, true, DabBatchKind::Persistent)[0].clone() };
+    crate::test_support::submit_ready(&mut r, FramePacket { dabs: &contacts, dab_batches: &[wash], ..packet(layer.scene(), extent) }).unwrap();
+    let wetness = wetness_page(&r, &layer, [1, 1]);
+    let side = PAGE_SIZE as usize;
+    let near_corner = |x: usize, y: usize| x.min(side - 1 - x) < 32 && y.min(side - 1 - y) < 32;
+    let wet = (0..side * side).filter(|index| near_corner(index % side, index / side) && wetness[*index] > 0.).count();
+    assert!(wet > 0, "water crosses page corners from diagonal donors");
 }
 
 #[test]

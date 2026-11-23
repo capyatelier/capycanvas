@@ -233,10 +233,10 @@ impl Recipes {
         let watercolor_layout = bindings::layout(device, "layer watercolor pigment and wetness neighborhood",
             &(0..10).map(|i| bindings::texture(i, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, false)).collect::<Vec<_>>());
         let transport_layout = bindings::layout(device, "layer watercolor transport sources",
-            &(0..10).map(|i| bindings::texture(i, wgpu::ShaderStages::COMPUTE, false)).chain([
-                bindings::storage_texture(10, wgpu::ShaderStages::COMPUTE, device.working_format(), wgpu::StorageTextureAccess::WriteOnly),
-                bindings::storage_texture(11, wgpu::ShaderStages::COMPUTE, device.scalar_format(), wgpu::StorageTextureAccess::WriteOnly),
-                bindings::buffer(12, wgpu::ShaderStages::COMPUTE, wgpu::BufferBindingType::Uniform, true, NonZeroU64::new(160)),
+            &(0..8).map(|i| bindings::texture(i, wgpu::ShaderStages::COMPUTE, false)).chain([
+                bindings::storage_texture(8, wgpu::ShaderStages::COMPUTE, device.working_format(), wgpu::StorageTextureAccess::WriteOnly),
+                bindings::storage_texture(9, wgpu::ShaderStages::COMPUTE, device.scalar_format(), wgpu::StorageTextureAccess::WriteOnly),
+                bindings::buffer(10, wgpu::ShaderStages::COMPUTE, wgpu::BufferBindingType::Uniform, true, NonZeroU64::new(160)),
             ]).collect::<Vec<_>>());
         let pipelines = create_pipelines(
             device,
