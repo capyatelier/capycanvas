@@ -7305,6 +7305,92 @@ mod tests {
         (input, engine, last)
     }
 
+    fn ink_gap(dab: &Dab, point: Point) -> f32 {
+        let [dx, dy] = dab.motion;
+        let (qx, qy) = (point.x - dab.center.x + dx, point.y - dab.center.y + dy);
+        let (from, grow) = (0.96 * dab.previous[0], 0.96 * (dab.radii[0] - dab.previous[0]));
+        let length = dx * dx + dy * dy;
+        let along = qx * dx + qy * dy;
+        let t = if length <= grow * grow {
+            if grow > 0. { 1. } else { 0. }
+        } else {
+            let height = (qx * qx + qy * qy - along * along / length).max(0.).sqrt();
+            ((along + grow * height / (1. - grow * grow / length).sqrt()) / length).clamp(0., 1.)
+        };
+        (qx - t * dx).hypot(qy - t * dy) - (from + t * grow)
+    }
+
+    fn inked(dabs: &[Dab], point: Point) -> bool {
+        dabs.iter().any(|dab| ink_gap(dab, point) <= 0.)
+    }
+
+    fn ink_bounds(dab: &Dab) -> ([f32; 2], [f32; 2]) {
+        let reach = dab.radii[0].max(dab.previous[0]);
+        let start = [dab.center.x - dab.motion[0], dab.center.y - dab.motion[1]];
+        ([dab.center.x.min(start[0]) - reach, dab.center.y.min(start[1]) - reach],
+            [dab.center.x.max(start[0]) + reach, dab.center.y.max(start[1]) + reach])
+    }
+
+    fn ink_lost_while_landing(brush: BrushSnapshot, scale: f32, turn: f32, events: usize) -> Vec<usize> {
+        let (mut input, mut engine) = engine_with(
+            RecordingRenderer::default(),
+            Document::new(layer_core::authored::PortableId::random(), 9504, 6336, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
+            ViewState { document_to_surface: [scale, 0., 0., scale, 0., 0.], ..view((9504. * scale) as u32, (6336. * scale) as u32) },
+            ViewTransform { revision: 1, surface_to_document: [1. / scale, 0., 0., 1. / scale, 0., 0.] },
+        );
+        engine.set_brush(brush).unwrap();
+        engine.set_instant_feedback(InstantFeedbackConfig { use_platform_prediction: false, prediction_horizon_micros: 16_000, ..Default::default() }).unwrap();
+        let mut frames = Vec::new();
+        let mut clock = 1_000_000_000;
+        for sample in pen_stroke(1, events - 1, clock, |i| {
+            let angle = i as f32 * turn;
+            ([scale * (4752. + 2851. * angle.cos()), scale * (3168. + 1900. * angle.sin())], 1.)
+        }) {
+            input.push(sample).unwrap();
+            while clock <= sample.timestamp_ns || sample.phase == PenPhase::Up && engine.completed_stroke.is_none() {
+                engine.render_frame_for(clock, clock + 8_000_000).unwrap();
+                frames.push((engine.backend.persistent.len(), engine.backend.preview.clone(), engine.pending_up.is_some()));
+                clock += 8_333_333;
+            }
+        }
+        let ink = &engine.backend.persistent;
+        frames.windows(2).filter(|pair| pair[1].2).map(|pair| {
+            let (before, (persistent, preview, _)) = (&pair[0].1, &pair[1]);
+            let step = before.iter().map(|dab| dab.radii[0].max(dab.previous[0])).fold(0., f32::max) / 16.;
+            before.iter().map(|dab| {
+                let (lo, hi) = ink_bounds(dab);
+                let near = |dab: &&Dab| {
+                    let (a, b) = ink_bounds(dab);
+                    a[0] <= hi[0] && a[1] <= hi[1] && b[0] >= lo[0] && b[1] >= lo[1]
+                };
+                let committed: Vec<Dab> = ink.iter().filter(near).copied().collect();
+                let shown: Vec<Dab> = preview.iter().chain(&ink[..*persistent]).filter(near).copied().collect();
+                let [x, y] = [(lo[0] / step).ceil() as i32, (lo[1] / step).ceil() as i32];
+                let columns = (hi[0] / step).floor() as i32 - x + 1;
+                (0..columns * ((hi[1] / step).floor() as i32 - y + 1))
+                    .map(|index| Point { x: (x + index % columns) as f32 * step, y: (y + index / columns) as f32 * step })
+                    .filter(|point| ink_gap(dab, *point) <= 0. && inked(&committed, *point) && !inked(&shown, *point))
+                    .count()
+            }).sum()
+        }).collect()
+    }
+
+    #[test]
+    fn landing_frames_keep_ink_the_final_stroke_shares_with_the_frame_before() {
+        let pen = default_brush(DefaultBrushPreset::GPen);
+        let taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: [10., 10.], ..Default::default() };
+        let lost: Vec<_> = [
+            ("wide", BrushSnapshot { diameter: 2000., ..pen.clone() }, 0.3, 0.0166, 228),
+            ("tapered", BrushSnapshot { diameter: 100., taper, ..pen.clone() }, 1., 0.0166, 228),
+            ("thin", pen.clone(), 1., 0.0166, 228),
+            ("fast", pen, 1., 0.0497, 76),
+        ]
+        .into_iter()
+        .map(|(label, brush, scale, turn, events)| (label, ink_lost_while_landing(brush, scale, turn, events)))
+        .collect();
+        assert!(lost.iter().all(|(_, lost)| !lost.is_empty() && lost.iter().all(|lost| *lost == 0)), "samples the frame before and the final stroke both ink: {lost:?}");
+    }
+
     #[test]
     fn pen_up_settlement_uses_frame_clock_with_old_event_times() {
         let offset = 30 * 24 * 60 * 60 * 1_000_000_000;

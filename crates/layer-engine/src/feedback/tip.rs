@@ -3,7 +3,7 @@ use crate::brush::{
     CurvePreview, DabGenerator, HeldStroke, LiftPreview, PositionField, has_completions, lock_dab_tail,
     taper_prediction,
 };
-use layer_core::{BrushSnapshot, StrokePoint};
+use layer_core::{BrushAccumulation, BrushExecution, BrushSnapshot, StrokePoint};
 use layer_render::Dab;
 
 #[derive(Clone, Debug, Default)]
@@ -12,6 +12,7 @@ pub(crate) struct PreviewTip {
     pub curve_preview: CurvePreview,
     pub preview_taper: bool,
     pub frame_lift: Option<LiftPreview>,
+    last_prediction: Vec<Dab>,
 }
 
 pub(crate) struct TipInput<'a> {
@@ -44,7 +45,7 @@ impl PreviewTip {
             input.now
         };
         let lift = self.frame_lift.take();
-        generator.preview_lift(
+        let source = generator.preview_lift(
             input.brush,
             input.pending,
             input.ending.is_some(),
@@ -59,7 +60,16 @@ impl PreviewTip {
                 }
                 source
             },
-        )
+        );
+        if coverage_merges(input.brush) {
+            if input.ending.is_some() {
+                output.splice(start..start, self.last_prediction.iter().copied());
+            } else {
+                self.last_prediction.clear();
+                self.last_prediction.extend_from_slice(&output[start..]);
+            }
+        }
+        source
     }
 
     fn build_main(
@@ -140,4 +150,8 @@ impl PreviewTip {
         }
         (output.len() > start).then_some(estimate.source)
     }
+}
+
+fn coverage_merges(brush: &BrushSnapshot) -> bool {
+    brush.execution == BrushExecution::Dry && brush.rendering.accumulation == BrushAccumulation::Uniform
 }
