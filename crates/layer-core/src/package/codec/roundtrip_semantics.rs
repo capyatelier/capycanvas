@@ -389,7 +389,7 @@ fn persistent_offsets_preserve_sources_overrides_and_independent_history() {
     );
     assert_eq!(serialize(&prepare(&reopened, false)), bytes);
     let document = Document::from_artwork(reopened).unwrap();
-    assert!(document.validate(ProjectLimits { tiles: 1, ..Default::default() }).is_err());
+    assert!(document.validate(ProjectLimits { raster_bytes: 1, ..Default::default() }).is_err());
 }
 #[test]
 fn native_sources_preserve_u16_profiles_hidden_rgb_and_shared_ownership() {
@@ -464,9 +464,7 @@ fn independent_editable_sources_charge_each_raster_instance() {
     let stack = artwork.compositions.get(artwork.root).unwrap().result;
     artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
     let document = Document::from_artwork(artwork.clone()).unwrap();
-    for limit in [ProjectLimits { raster_bytes: bytes, ..Default::default() }, ProjectLimits { tiles: 1, ..Default::default() }] {
-        assert!(document.validate(limit).is_err());
-    }
+    assert!(document.validate(ProjectLimits { raster_bytes: bytes, ..Default::default() }).is_err());
     let restored = Document::from_artwork(editable(serialize(&prepare(&artwork, false)))).unwrap();
     assert!(restored.validate(ProjectLimits { raster_bytes: bytes, ..Default::default() }).is_err());
 }
@@ -509,11 +507,10 @@ fn rasterized_image_role_roundtrips_and_rejects_wrong_document_interpretation() 
     }
 }
 #[test]
-fn retained_originals_cannot_bypass_asset_tile_or_dimension_limits() {
+fn retained_originals_cannot_bypass_asset_or_dimension_limits() {
     let restored = Document::from_artwork(editable(serialize(&prepare(&source_fixture(), false)))).unwrap();
     for limits in [
         ProjectLimits { asset_bytes: 128, ..Default::default() },
-        ProjectLimits { tiles: 3, ..Default::default() },
         ProjectLimits { dimension: 256, ..Default::default() },
     ] {
         assert!(restored.validate(limits).is_err());

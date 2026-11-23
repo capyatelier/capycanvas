@@ -11,6 +11,7 @@ pub fn refusal_message(error: &str) -> Option<MessageId> {
     match error {
         layer_core::MEMORY_BUDGET_EXCEEDED => Some(MessageId::DOCUMENTS_REFUSAL_ADMISSION_BUDGET),
         crate::DRAWING_MEMORY_EXCEEDED => Some(MessageId::DOCUMENTS_TOO_LARGE_MEMORY),
+        layer_core::package::storage_budget::STORAGE_UNAVAILABLE => Some(MessageId::DOCUMENTS_REFUSAL_DISK_SPACE),
         _ => None,
     }
 }
@@ -685,10 +686,11 @@ mod localization_tests {
     }
 
     #[test]
-    fn memory_refusal_notices_follow_the_active_language() {
+    fn memory_and_disk_refusal_notices_follow_the_active_language() {
         for (text,message) in [
             (layer_core::MEMORY_BUDGET_EXCEEDED.to_string(),MessageId::DOCUMENTS_REFUSAL_ADMISSION_BUDGET),
             (crate::DRAWING_MEMORY_EXCEEDED.to_string(),MessageId::DOCUMENTS_TOO_LARGE_MEMORY),
+            (layer_core::package::storage_budget::STORAGE_UNAVAILABLE.to_string(),MessageId::DOCUMENTS_REFUSAL_DISK_SPACE),
         ] {
             let mut s=session(Platform::Windows);s.set_localization(Localizer::shared(UiLanguage::Italian));
             s.notify(text);

@@ -29,7 +29,7 @@ impl PackedArtwork {
     }
     pub(super) fn into_js(mut self)->JsValue {self.admission=None;self.offer=None;self.value.clone()}
 }
-pub(super) fn limits(dimension:u32)->ProjectLimits {seed_memory_budget();ProjectLimits {dimension,tiles:8192,..ProjectLimits::for_import()}}
+pub(super) fn limits(dimension:u32)->ProjectLimits {seed_memory_budget();ProjectLimits {dimension,..ProjectLimits::for_import()}}
 
 #[derive(Serialize,Deserialize)]
 struct Envelope {transfer:TransferDescriptor,chunks:Vec<usize>,#[serde(default,skip_serializing_if="Option::is_none")]offer:Option<String>}
@@ -94,7 +94,7 @@ async fn unpack_with_selection(metadata:&str,buffers:js_sys::Array)->Result<(Art
     let mut offer=SourceOffer(envelope.offer.clone());
     let count=envelope.chunks.iter().try_fold(0usize,|sum,n|sum.checked_add(*n)).ok_or_else(||js("Transfer chunk count overflow"))?;
     if count!=buffers.length() as usize{return Err(js("Incomplete artwork transfer"));}
-    let admitted_limits=ProjectLimits {tiles:8192,..Default::default()};
+    let admitted_limits=ProjectLimits::default();
     let sources=crate::store_transport::adopt_sources(envelope.offer.as_deref(),envelope.transfer.backings()).await.map_err(js)?;
     offer.0=None;
     let mut sources=sources.into_iter();

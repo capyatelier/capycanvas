@@ -194,6 +194,7 @@ documents-pixel-size = { $width } × { $height } px
 documents-prints-at = Khổ in { $width } × { $height } { $unit }
 documents-too-large-side = Quá lớn cho thiết bị này: mỗi cạnh tối đa { $maximum } px
 documents-too-large-memory = Quá lớn so với bộ nhớ còn trống của thiết bị này
+documents-refusal-disk-space = Không đủ dung lượng đĩa trống. Hãy giải phóng dung lượng đĩa rồi thử lại.
 documents-megapixels = { $megapixels } MP
 documents-layer-memory = { $size } mỗi lớp
 documents-layer-memory-available = { $size } mỗi lớp · còn trống { $available }

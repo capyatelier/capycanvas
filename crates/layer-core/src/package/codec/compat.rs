@@ -39,7 +39,25 @@ pub(crate) fn generate(directory:&Path) {
         std::fs::write(directory.join(name),serialize(&prepare(&editable(std::fs::read(fixtures.join(name)).unwrap()),true))).unwrap();
     }
     std::fs::copy(fixtures.join(VIEW_ONLY),directory.join("newer").join(VIEW_ONLY)).unwrap();
+    for (name,extent,layers) in [("past-old-tile-count.capy",[128*TILE_SIZE,65*TILE_SIZE],2)] {
+        std::fs::write(directory.join("newer").join(name),serialize(&prepare(&photo_layers(extent,layers),false))).unwrap();
+    }
     sweep::generate(directory);
+}
+
+fn photo_layers(extent:[u32;2],layers:usize)->Artwork {
+    let tile=crate::color::source::rgba8_source([TILE_SIZE;2],|x,y|[x as u8,y as u8,96,255]).tiles[&[0;2]].clone();
+    let interpretation=SourceInterpretation {channels:SourceChannels::Rgba,depth:SampleDepth::U8,profile:ColorProfile::Builtin(RgbSpace::Srgb),profile_assumed:false};
+    let mut artwork=Artwork::new(extent).unwrap();
+    for _ in 0..layers {
+        let image=Image::new(Arc::new(SourceImage {extent,resolution:None,interpretation:interpretation.clone(),
+            tiles:(0..extent[1]/TILE_SIZE).flat_map(|y|(0..extent[0]/TILE_SIZE).map(move |x|[x,y])).map(|coordinate|(coordinate,tile.clone())).collect()}));
+        let source=artwork.paint.insert(PortableId::random(),PaintSource {color_mode:Default::default(),domain:extent,base:Some(PaintBase::new(image)),raster:Default::default(),operations:Default::default()}).unwrap();
+        let occurrence=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(source),"Photo")).unwrap();
+        let stack=artwork.compositions.get(artwork.root).unwrap().result;
+        artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
+    }
+    artwork
 }
 
 #[test]

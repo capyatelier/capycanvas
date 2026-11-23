@@ -131,16 +131,16 @@ impl ObjectVersion {
         let mut size=crate::json_len(&self.record).saturating_add(32);
         let field=indexed_field(&self.record);
         if let Some(indices)=&self.index {
-            let limit=match field {Some("tiles")=>limits.tiles,Some(_)=>super::vector_records::MAX_RECORDS,None=>return Err("Invalid session index".into())};
+            let limit=match field {Some("tiles")=>None,Some(_)=>Some(super::vector_records::MAX_RECORDS),None=>return Err("Invalid session index".into())};
             if field.is_some_and(|field|self.record["data"].get(field).is_some()) || indices.is_empty()
-                || indices.len()>limit {return Err("Invalid session index".into());}
+                || limit.is_some_and(|limit|indices.len()>limit) {return Err("Invalid session index".into());}
             let mut entries=0usize;
             for chunk in indices {
                 let chunk=chunks.get(*chunk).ok_or("Unknown session index chunk")?;
                 if chunk.is_empty() || chunk.len()>INDEX_CHUNK {return Err("Invalid session index chunk".into());}
                 entries=entries.saturating_add(chunk.len());size=size.saturating_add(crate::json_len(chunk));
             }
-            if entries>limit {return Err("Session index exceeds admission".into());}
+            if limit.is_some_and(|limit|entries>limit) {return Err("Session index exceeds admission".into());}
         } else if field.is_some_and(|field|self.record["data"].get(field).is_some()) {return Err("Unexpected session index".into());}
         if size as u64>limits.metadata_bytes {return Err("Expanded session object exceeds admission".into());}
         Ok(size)
@@ -391,7 +391,7 @@ pub(crate) fn open_stored_parts(metadata:&[u8],store:&super::session_store::Stor
 }
 fn open_parts_checked_with_budget(metadata:&[u8],resource_pack:ImmutableBacking,limits:ProjectLimits,cancel:&AtomicBool,programs:&super::TrustedPrograms,budget:crate::MemoryBudget,
     store:Option<&super::session_store::StoreResources>)->Result<OpenSession,OpenFailure> {
-    active(cancel)?;let limits=limits.for_recovery();
+    active(cancel)?;
     let value=super::parse_json(metadata,limits.metadata_bytes.min(usize::MAX as u64) as usize)?;
     validate_format(&value)?;
     let record:SessionRecord=serde_json::from_value(value).map_err(|e|e.to_string())?;

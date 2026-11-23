@@ -194,6 +194,7 @@ documents-pixel-size = { $width } × { $height } px
 documents-prints-at = Baskı boyutu { $width } × { $height } { $unit }
 documents-too-large-side = Bu cihaz için çok büyük: kenarlar en fazla { $maximum } px olabilir
 documents-too-large-memory = Bu cihazın kullanılabilir belleği için çok büyük
+documents-refusal-disk-space = Yeterli boş disk alanı yok. Diskte yer açın ve yeniden deneyin.
 documents-megapixels = { $megapixels } MP
 documents-layer-memory = Katman başına { $size }
 documents-layer-memory-available = Katman başına { $size } · { $available } kullanılabilir

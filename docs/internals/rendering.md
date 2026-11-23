@@ -98,7 +98,7 @@ Canvas geometry commands build one batch in
   selection, or a rectangle around all of its pages) leaves the pages outside its
   forward bounds empty. The renderer drops them, in every plane, from the GPU and
   from the data the next publication copies, so a reduction or turn publishes no
-  transparent tiles and they don't count toward the tile limit. A layer that keeps
+  transparent tiles and they take no drawing storage. A layer that keeps
   its base keeps its pages, since they cover it. A mask's transform creates the
   pages it draws, so its source is only the pages the mask held.
 - Delete Cropped Paint Pixels trims each paint layer and mask to the tiles its

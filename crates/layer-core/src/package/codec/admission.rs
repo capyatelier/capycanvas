@@ -24,7 +24,7 @@ fn shared_original_references_do_not_consume_evaluation_graph_edges() {
 }
 
 #[test]
-fn admitted_layer_tile_and_dependency_boundaries_reopen() {
+fn admitted_layer_dimension_and_dependency_boundaries_reopen() {
     let limits=crate::ProjectLimits::default();
     let color=DocumentColor::default();
     let tile=Arc::new(TileBlob::encode(color.paint_descriptor(),&vec![0;256*256*4]).unwrap());
@@ -36,12 +36,13 @@ fn admitted_layer_tile_and_dependency_boundaries_reopen() {
     assert!(crate::Document::from_artwork(artwork.clone()).unwrap().admit(limits).is_err());
     assert!(PreparedPackage::prepare(&capture(&artwork),None,&AtomicBool::new(false)).is_err());
 
-    let mut artwork=Artwork::new([limits.dimension;2]).unwrap();
+    let extent=[limits.dimension,TILE_SIZE];
+    let mut artwork=Artwork::new(extent).unwrap();
     let tile=crate::color::source::rgba8_source([256;2],|_,_|[0;4]).tiles[&[0;2]].clone();
-    let original=Arc::new(SourceImage {extent:[limits.dimension;2],resolution:None,
+    let original=Arc::new(SourceImage {extent,resolution:None,
         interpretation:SourceInterpretation {channels:SourceChannels::Rgba,depth:SampleDepth::U8,profile:ColorProfile::Builtin(RgbSpace::Srgb),profile_assumed:false},
-        tiles:(0..limits.tiles).map(|i|([i as u32%128,i as u32/128],tile.clone())).collect()});
-    paint(&mut artwork,[limits.dimension;2],Some(Image::new(original)),Default::default());
+        tiles:(0..limits.dimension/TILE_SIZE).map(|x|([x,0],tile.clone())).collect()});
+    paint(&mut artwork,extent,Some(Image::new(original)),Default::default());
     admitted_roundtrip(&artwork);
 
     let mut artwork=Artwork::new([1;2]).unwrap();

@@ -1103,6 +1103,43 @@ fn failed_store_open_samples_without_creating_until_capacity_or_cleanup_changes(
 }
 
 #[test]
+fn images_past_sixteen_thousand_tiles_are_admitted_by_free_disk_space_alone() {
+    use layer_core::{color::source::{SourceImage,SourceInterpretation,SourceChannels},raster::TileBlob};
+    use std::{future::Future,pin::Pin,task::{Context,Poll,Waker}};
+    const MIB:u64=1024*1024;
+    let interpretation=SourceInterpretation {channels:SourceChannels::Rgba,depth:layer_core::color::SampleDepth::U8,profile:Default::default(),profile_assumed:false};
+    let shades:Vec<_>=(0..64u8).map(|shade|Arc::new(TileBlob::encode(interpretation.descriptor(),&[shade,32,64,255].repeat(256*256)).unwrap())).collect();
+    let grid=[128u32,65];
+    let image=|seed:usize|SourceImage {extent:grid.map(|n|n*256),resolution:None,interpretation:interpretation.clone(),
+        tiles:(0..grid[0]*grid[1]).map(|index|([index%grid[0],index/grid[0]],shades[(index as usize+seed)%shades.len()].clone())).collect()};
+    let import=|space:u64| {
+        let mut fixture=Fixture::new();let queued=fixture.queue.clone();let wakes=fixture.wakes.clone();
+        fixture.stores=SessionStores::with_opener(fixture.root.clone(),quota_opener(Arc::new(std::sync::atomic::AtomicU64::new(space)),Arc::new(AtomicBool::new(false)),Arc::new(AtomicUsize::new(0))),
+            Arc::new(move |work|queued.lock().unwrap().push_back(work)),Arc::new(move ||{wakes.fetch_add(1,Ordering::SeqCst);}),||0,fixture.activity.clone());
+        let writer=fixture.stores.asset_writer(1).unwrap();let binding=writer.binding().unwrap();
+        let budget=layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {total_bytes:Some(4096*MIB),available_bytes:Some(4096*MIB),..Default::default()});
+        let mut images=layer_ui::ImageImportBatch::with_budget(Default::default(),layer_core::color::RgbSpace::ProPhoto,layer_ui::photo_decode_limits(),budget).with_writer(writer);
+        for seed in 0..2 {images.append(format!("Panorama {seed}"),image(seed),false).unwrap();}
+        let mut finish=Box::pin(images.finish_storage());let mut context=Context::from_waker(Waker::noop());
+        assert!(finish.as_mut().poll(&mut context).is_pending());fixture.run();
+        let Poll::Ready(stored)=Pin::as_mut(&mut finish).poll(&mut context) else {panic!("the import write must finish")};drop(finish);
+        let packed=std::fs::read_dir(binding.path().join("packs")).map_or(0,|entries|entries.map(|entry|entry.unwrap().metadata().unwrap().len()).sum::<u64>());
+        (stored.and_then(|_|layer_ui::clipboard_document(images.take_sources(false)?,Default::default(),&layer_ui::Localizer::shared(layer_ui::UiLanguage::English))),packed)
+    };
+    let (refused,written)=import(64*MIB);
+    let error=refused.unwrap_err();
+    assert_eq!(error,layer_core::package::storage_budget::STORAGE_UNAVAILABLE);
+    assert_eq!(layer_ui::refusal_message(&error),Some(layer_ui::MessageId::DOCUMENTS_REFUSAL_DISK_SPACE));
+    assert_eq!(written,0,"a refused import writes nothing");
+    let (admitted,written)=import(1024*MIB);
+    let document=admitted.unwrap();
+    assert!(written>0);
+    let tiles:usize=document.artwork.objects.iter().map(|(_,_,object)|object.image.storage().tiles.len()).sum();
+    assert!(tiles>16_384,"{tiles} tiles");
+    document.admit(layer_core::ProjectLimits::default()).unwrap();
+}
+
+#[test]
 fn disk_refusal_preserves_each_write_kind_and_waits_for_changed_space_without_retrying_frames() {
     use layer_core::package::storage_budget::STORAGE_UNAVAILABLE;
     use std::sync::atomic::AtomicU64;

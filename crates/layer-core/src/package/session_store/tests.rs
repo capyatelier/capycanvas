@@ -241,28 +241,45 @@
         captured(&capture, json!({"marker": marker}))
     }
     #[test]
-    fn a_checkpoint_above_the_tile_count_limit_loads() {
-        use crate::raster::{RasterWatercolor,TILE_SIZE};
-        let limits=ProjectLimits::default();let side=limits.dimension.div_ceil(TILE_SIZE);
-        let mut document=Document::new(PortableId::random(),limits.dimension,limits.dimension,DocumentNames {paint:"ink".into(),paper:"paper".into()});
-        let target=document.working.target.unwrap();
-        let tile=|plane:RasterPlane,value:u8| {
-            let descriptor=plane.descriptor(Default::default());
-            RasterTile::backed(TileBlob::encode(descriptor,&vec![value;descriptor.byte_len([TILE_SIZE;2]).unwrap()]).unwrap())
-        };
-        let color=tile(RasterPlane::Color,7);
-        let mut tiles:BTreeMap<_,_>=(0..side*side).map(|index|(TileKey {plane:RasterPlane::Color,coordinate:[index%side,index/side]},color.clone())).collect();
-        tiles.insert(TileKey {plane:RasterPlane::WatercolorWetness,coordinate:[0,0]},tile(RasterPlane::WatercolorWetness,3));
-        assert_eq!(tiles.len(),limits.tiles+1);
-        *document.target_raster_mut(target).unwrap()=RasterRevision::backed(RasterData {tiles:tiles.into(),watercolor:Some(RasterWatercolor {wet_edge:0.5,burnt_edge:0.5,edge_width:2.})});
+    fn a_multi_layer_drawing_past_sixteen_thousand_tiles_saves_closes_and_reopens_identically() {
+        use crate::{package::codec::{OpenOutcome,PreparedPackage},raster::TILE_SIZE};
+        let grid=[128u32,65];
+        let mut document=Document::new(PortableId::random(),grid[0]*TILE_SIZE,grid[1]*TILE_SIZE,DocumentNames {paint:"ink".into(),paper:"paper".into()});
+        let layer=document.working.occurrence.unwrap();
+        let (edit,_)=document.duplicate_layers_edit(&[layer]).unwrap();document.apply(edit).unwrap();
+        let descriptor=RasterPlane::Color.descriptor(document.composition().color);
+        let shades:Vec<_>=(0..256u32).map(|shade| {
+            let mut bytes=vec![0;descriptor.byte_len([TILE_SIZE;2]).unwrap()];bytes[..4].copy_from_slice(&shade.to_le_bytes());
+            RasterTile::backed(TileBlob::encode(descriptor,&bytes).unwrap())
+        }).collect();
+        let paint:Vec<_>=document.scene().targets().filter(|target|matches!(target,crate::authored::SourceTarget::Paint(_))).collect();
+        assert_eq!(paint.len(),2);
+        for (seed,target) in paint.iter().enumerate() {
+            *document.target_raster_mut(*target).unwrap()=RasterRevision::backed(RasterData {tiles:(0..grid[0]*grid[1]).map(|index|
+                (TileKey {plane:RasterPlane::Color,coordinate:[index%grid[0],index/grid[0]]},shades[(index as usize*7+seed)%shades.len()].clone())).collect(),..Default::default()});
+        }
+        let tiles=|document:&Document|document.artwork.paint.iter().map(|(_,id,source)|(id,source.raster.wait_data().unwrap().tiles.iter()
+            .map(|(key,tile)|(*key,tile.wait_backing().unwrap().compressed_on_worker().unwrap().to_vec())).collect::<BTreeMap<_,_>>())).collect::<BTreeMap<_,_>>();
+        let expected=tiles(&document);
+        assert!(expected.values().map(BTreeMap::len).sum::<usize>()>16_384);
+        document.admit(ProjectLimits::default()).unwrap();
+        let cancel=AtomicBool::new(false);
+        let artwork=Arc::new(document.artwork.clone());
+        let capture=artwork.capture(crate::authored::CaptureCheckpoint {owner:1,document:artwork.id,session_generation:1,artwork_generation:1,working_generation:1,edit_checkpoint:1}).unwrap();
+        let mut saved=Vec::new();PreparedPackage::prepare(&capture,None,&cancel).unwrap().write(&mut saved,&cancel).unwrap();
+        let backing=crate::package::ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(saved))).unwrap();
+        let OpenOutcome::Candidate {artwork,..}=crate::package::codec::open(backing,ProjectLimits::default(),&cancel).unwrap() else {panic!("the saved drawing must reopen editable")};
+        let reopened=Document::from_artwork(artwork).unwrap();
+        reopened.admit(ProjectLimits::default()).unwrap();
+        assert_eq!(tiles(&reopened),expected);
         let editor=Editor::new(document);
         let capture=editor.capture_session(editor.capture(1,Default::default()).unwrap()).unwrap();
-        let directory=Directory::new();let cancel=AtomicBool::new(false);
+        let directory=Directory::new();
         SessionStore::open(&directory.0).wait().unwrap().checkpoint(&capture,json!({}).into(),&cancel).wait().unwrap();
-        let loaded=SessionStore::open(&directory.0).wait().unwrap().load(limits,&cancel).wait().unwrap().unwrap();
+        let loaded=SessionStore::open(&directory.0).wait().unwrap().load(ProjectLimits::default(),&cancel).wait().unwrap().unwrap();
         let restored=loaded.editor.document();
-        assert_eq!(restored.scene().raster(target).unwrap().try_data().unwrap().unwrap().tiles.len(),limits.tiles+1);
-        assert_eq!(restored.admit(limits).unwrap_err(),"Artwork exceeds the tile count limit");
+        restored.admit(ProjectLimits::default()).unwrap();
+        assert_eq!(tiles(restored),expected);
     }
     #[test]
     fn a_checkpoint_past_the_size_bound_drops_only_the_oldest_undo_states() {

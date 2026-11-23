@@ -175,9 +175,8 @@ impl Document {
         let color = self.composition().color;
         let color_bytes = color.paint_descriptor().byte_len([raster::TILE_SIZE; 2]).unwrap() as u64;
         let mask_bytes = color.coverage_descriptor().byte_len([raster::TILE_SIZE; 2]).unwrap() as u64;
-        let planes = if scalar { 1 } else { 3 + u64::from(coverage.is_some()) };
         let bytes = if scalar { mask_bytes } else { color_bytes + (2 + u64::from(coverage.is_some())) * mask_bytes };
-        if pages * planes > limits.tiles as u64 || pages * bytes > limits.raster_bytes {
+        if pages * bytes > limits.raster_bytes {
             return Err("The transformed pixels exceed the drawing's memory limit".into());
         }
         let parents = scene.layer_origin(scene.parent(owner));

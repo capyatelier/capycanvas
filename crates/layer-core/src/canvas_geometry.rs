@@ -244,7 +244,6 @@ pub enum CanvasGeometryError {
     Empty,
     CanvasTooLarge { limit: u32 },
     ExtentTooLarge { limit: u32 },
-    TooManyTiles { limit: usize },
     RasterTooLarge,
     Pending,
     Unsupported(&'static str),
@@ -253,7 +252,7 @@ pub enum CanvasGeometryError {
 impl CanvasGeometryError {
     /// Whether dropping hidden pixels could bring the edit within the limits.
     pub fn exceeds_raster_limits(&self) -> bool {
-        matches!(self, Self::TooManyTiles { .. } | Self::RasterTooLarge)
+        matches!(self, Self::RasterTooLarge)
     }
 }
 impl fmt::Display for CanvasGeometryError {
@@ -265,7 +264,6 @@ impl fmt::Display for CanvasGeometryError {
                 write!(f, "The canvas can be at most {limit} px on each side")
             }
             Self::ExtentTooLarge { limit } => write!(f, "A layer would reach past {limit} px, including its hidden pixels"),
-            Self::TooManyTiles { limit } => write!(f, "The drawing would need more than {limit} tiles, including hidden pixels"),
             Self::RasterTooLarge => f.write_str("The drawing's pixels, including hidden ones, exceed the memory limit"),
             Self::Pending => f.write_str("Raster backing is busy; retry the edit"),
             Self::Unsupported(message) => f.write_str(message),
@@ -963,30 +961,18 @@ impl Document {
         })())
     }
     fn check_raster_limits(&self, predicted: &BTreeMap<SourceTarget, usize>, limits: ProjectLimits) -> Result<(), CanvasGeometryError> {
-        let mut tiles = 0usize;
         let mut bytes = 0u64;
-        let mut sources = BTreeSet::new();
         let color = self.composition().color;
-        for (_, _, p) in self.artwork.paint.iter() {
-            if let Some(source) = p.base.as_ref().map(|b|b.image.storage()).filter(|s| sources.insert(Arc::as_ptr(s) as usize)) {
-                tiles = tiles.saturating_add(source.tiles.len());
-            }
-        }
         for target in self.scene().targets().filter(|t| !matches!(t, SourceTarget::Selection(_))) {
             if let Some(count) = predicted.get(&target) {
                 let plane = if matches!(target, SourceTarget::Coverage(_)) { RasterPlane::Mask } else { RasterPlane::Color };
                 let page = plane.descriptor(color).byte_len([TILE_SIZE; 2]).unwrap_or(0) as u64;
-                tiles = tiles.saturating_add(*count);
                 bytes = bytes.saturating_add(page.saturating_mul(*count as u64));
             } else if let Some(Ok(data)) = self.target_raster(target).and_then(|r| r.try_data()) {
-                tiles = tiles.saturating_add(data.tiles.len());
                 for tile in data.tiles.values() {
                     bytes = bytes.saturating_add(tile.descriptor().byte_len([TILE_SIZE; 2]).unwrap_or(0) as u64);
                 }
             }
-        }
-        if tiles > limits.tiles {
-            return Err(CanvasGeometryError::TooManyTiles { limit: limits.tiles });
         }
         if bytes > limits.raster_bytes {
             return Err(CanvasGeometryError::RasterTooLarge);

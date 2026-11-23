@@ -194,6 +194,7 @@ documents-pixel-size = { $width } × { $height } px
 documents-prints-at = При печати { $width } × { $height } { $unit }
 documents-too-large-side = Слишком большой для этого устройства: сторона не длиннее { $maximum } px
 documents-too-large-memory = Слишком большой для свободной памяти этого устройства
+documents-refusal-disk-space = Недостаточно свободного места на диске. Освободите место и повторите попытку.
 documents-megapixels = { $megapixels } MP
 documents-layer-memory = { $size } на слой
 documents-layer-memory-available = { $size } на слой · доступно { $available }

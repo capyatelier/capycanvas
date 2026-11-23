@@ -112,7 +112,7 @@ pub fn decode_selection(value: &Value, resources: &mut impl SelectionResourceRea
                 return Err("Invalid selection coverage".into());
             }
             if extent.iter().any(|v| *v > limits.dimension || *v > crate::MAX_EXTENT)
-                || decoded_bytes > limits.raster_bytes || usize::try_from(decoded_bytes).is_err() || chunks.len() > limits.tiles {
+                || decoded_bytes > limits.raster_bytes || usize::try_from(decoded_bytes).is_err() {
                 return Err(DecodeError::Unsupported("Selection exceeds coverage admission".into()));
             }
             let mut loaded = Vec::new();
@@ -286,8 +286,7 @@ mod tests {
     fn selection_allocation_and_descriptor_limits_precede_resource_reads() {
         let mut resources = Resources::default();
         let wire = encode_selection(&pixels([8,1], false), &mut resources).unwrap();
-        for limits in [ProjectLimits{raster_bytes:3,..Default::default()},
-            ProjectLimits{tiles:0,..Default::default()}, ProjectLimits{dimension:7,..Default::default()}] {
+        for limits in [ProjectLimits{raster_bytes:3,..Default::default()}, ProjectLimits{dimension:7,..Default::default()}] {
             resources.limits = Some(limits);
             unsupported(decode_selection(&wire, &mut resources));
             assert_eq!(resources.reads, 0);

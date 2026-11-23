@@ -78,7 +78,6 @@ fn decode_raster(data:&Map<String,Value>,domain:[u32;2],mask:bool,color:Document
     let mut raster=RasterData {tiles:Default::default(),watercolor:data.get("material").map(material).transpose()?.flatten()};
     if let Some(tiles)=data.get("tiles") {
         let tiles=list(tiles)?;
-        if tiles.len()>reader.limits.tiles {return Err(DecodeError::Unsupported("Too many raster tiles".into()));}
         for value in tiles {
             let tile=fields(value,&["coordinate","plane","resource"])?;
             let key=TileKey {coordinate:coordinate(v::required(tile,"coordinate")?)?,plane:parse_plane(v::required(tile,"plane")?)?};
@@ -113,7 +112,6 @@ fn decode_image(identity:PortableId,value:&Value,reader:&mut ResourceReader<'_>)
         return Err(DecodeError::Unsupported("HDR source interpretation is unsupported".into()));
     }
     let mut tiles=BTreeMap::new(); let records=list(v::required(data,"tiles")?)?;
-    if records.len()>reader.limits.tiles {return Err(DecodeError::Unsupported("Too many original tiles".into()));}
     for value in records {
         let data=fields(value,&["coordinate","resource"])?; let coordinate=coordinate(v::required(data,"coordinate")?)?;
         if tiles.contains_key(&coordinate) || coordinate[0]>=extent[0].div_ceil(TILE_SIZE) || coordinate[1]>=extent[1].div_ceil(TILE_SIZE) {return Err("Invalid original tile index".into());}

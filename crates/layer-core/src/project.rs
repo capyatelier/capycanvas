@@ -64,7 +64,6 @@ pub struct ProjectLimits {
     pub metadata_bytes: u64,
     pub asset_bytes: u64,
     pub raster_bytes: u64,
-    pub tiles: usize,
     pub dimension: u32,
     pub layers: usize,
 }
@@ -74,7 +73,6 @@ impl Default for ProjectLimits {
             metadata_bytes: 64 * 1024 * 1024,
             asset_bytes: u64::MAX,
             raster_bytes: u64::MAX,
-            tiles: 16384,
             dimension: crate::MAX_EXTENT,
             layers: 4096,
         }
@@ -84,9 +82,6 @@ impl Default for ProjectLimits {
 impl ProjectLimits {
     pub fn for_import() -> Self {
         Self::default()
-    }
-    pub fn for_recovery(self) -> Self {
-        Self { tiles: usize::MAX, ..self }
     }
 }
 
@@ -120,11 +115,10 @@ impl Document {
         let mut roots=RootInventory::default();roots.document(self);
         let mut sources=color::source::SourceAccounting::default();
         let mut resources=history_budget::Accounting::default();
-        let mut asset_bytes=0u64;let mut source_tiles=0usize;let mut source_owners=BTreeSet::new();
+        let mut asset_bytes=0u64;
         for image in roots.images {asset_bytes=asset_bytes.saturating_add(sources.charge_image(image) as u64);}
         for source in roots.sources {
             if source.extent.iter().any(|v|*v>limits.dimension){return Err("Source image exceeds the dimension limit".into());}
-            if source_owners.insert(Arc::as_ptr(source) as usize){source_tiles=source_tiles.saturating_add(source.tiles.len());}
             asset_bytes=asset_bytes.saturating_add(sources.charge(source) as u64);
         }
         for resource in roots.resources {asset_bytes=asset_bytes.saturating_add(resources.charge_resource(resource) as u64);}
@@ -141,19 +135,15 @@ impl Document {
             selection_bytes=selection_bytes.saturating_add(resources.charge_selection(selection) as u64);
         }
         if selection_bytes>limits.raster_bytes{return Err(crate::MEMORY_BUDGET_EXCEEDED.into());}
-        let mut tiles=source_tiles;let mut raster_bytes=selection_bytes;
+        let mut raster_bytes=selection_bytes;
         for target in self.scene().targets(){
             if self.scene().target_extent(target).iter().any(|v|*v>limits.dimension){return Err("Target exceeds the dimension limit".into());}
             let Some(revision)=self.scene().raster(target) else{continue;};
             match revision.try_data(){
-                Some(Ok(data))=>{
-                    tiles=tiles.saturating_add(data.tiles.len());
-                    for tile in data.tiles.values(){raster_bytes=raster_bytes.saturating_add(tile.descriptor().byte_len([raster::TILE_SIZE;2]).ok_or("Unsupported raster pixels")? as u64);}
-                }
+                Some(Ok(data))=>for tile in data.tiles.values(){raster_bytes=raster_bytes.saturating_add(tile.descriptor().byte_len([raster::TILE_SIZE;2]).ok_or("Unsupported raster pixels")? as u64);},
                 Some(Err(error))=>return Err(error),None=>raster_bytes=raster_bytes.saturating_add(revision.pending_bytes() as u64),
             }
         }
-        if tiles>limits.tiles{return Err("Artwork exceeds the tile count limit".into());}
         if raster_bytes>limits.raster_bytes{return Err(crate::MEMORY_BUDGET_EXCEEDED.into());}
         crate::package::codec::admit_metadata(&self.artwork,limits)?;
         Ok(())

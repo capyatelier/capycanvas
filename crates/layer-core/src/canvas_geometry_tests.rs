@@ -68,6 +68,15 @@ fn limits() -> GeometryLimits {
     GeometryLimits { project: ProjectLimits::default(), device_dimension: 16384 }
 }
 
+fn raster_limit(bytes: u64) -> GeometryLimits {
+    GeometryLimits { project: ProjectLimits { raster_bytes: bytes, ..Default::default() }, ..limits() }
+}
+
+fn held_bytes(doc: &Document) -> u64 {
+    doc.scene().targets().filter_map(|t| doc.target_raster(t)?.try_data()?.ok())
+        .flat_map(|data| data.tiles.values().map(|tile| tile.descriptor().byte_len([TILE_SIZE; 2]).unwrap() as u64).collect::<Vec<_>>()).sum()
+}
+
 fn rect(origin: [i32; 2], size: [u32; 2]) -> CanvasGeometry {
     CanvasGeometry::crop(CanvasRect { origin, size })
 }
@@ -195,11 +204,8 @@ fn hidden_pixels_survive_a_crop_and_return_when_the_canvas_grows_back() {
     editor.perform(Edit::Batch(back.edits)).unwrap();
     assert!(editor.document().extents_cover_canvas());
     same_state(editor.document(), &doc);
-    let usage = |d: &Document| d.canvas_geometry_plan(&rect([0, 0], [1, 1]), GeometryLimits {
-        project: ProjectLimits { tiles: 3, ..Default::default() },
-        ..limits()
-    });
-    assert_eq!(usage(&cropped).unwrap_err(), CanvasGeometryError::TooManyTiles { limit: 3 });
+    let usage = |d: &Document| d.canvas_geometry_plan(&rect([0, 0], [1, 1]), raster_limit(held_bytes(d) - 1));
+    assert_eq!(usage(&cropped).unwrap_err(), CanvasGeometryError::RasterTooLarge);
 }
 
 #[test]
@@ -216,7 +222,7 @@ fn limits_are_refused_before_anything_changes() {
     assert_eq!(refuse(rect([-900, 0], [1000, 256]), small), CanvasGeometryError::ExtentTooLarge { limit: 1000 });
     assert_eq!(refuse(rect([0, 0], [512, 256]), limits()), CanvasGeometryError::Unchanged);
     assert_eq!(refuse(rect([0, 0], [0, 256]), limits()), CanvasGeometryError::Empty);
-    let bytes = GeometryLimits { project: ProjectLimits { raster_bytes: 1024, ..Default::default() }, ..limits() };
+    let bytes = raster_limit(1024);
     assert_eq!(refuse(rect([0, 0], [10, 10]), bytes), CanvasGeometryError::RasterTooLarge);
     let mut singular = rect([0, 0], [10, 10]);
     singular.linear = Affine64([2., 0., 4., 0., 0., 0.]);
@@ -298,12 +304,12 @@ fn deleting_cropped_pixels_keeps_only_the_window_tiles_and_erases_edge_strips() 
 }
 
 #[test]
-fn a_tile_limit_refusal_clears_when_cropped_pixels_are_deleted() {
+fn a_raster_limit_refusal_clears_when_cropped_pixels_are_deleted() {
     let doc = tiled();
-    let tight = GeometryLimits { project: ProjectLimits { tiles: 20, ..Default::default() }, ..limits() };
+    let tight = raster_limit(held_bytes(&doc) - 1);
     let crop = rect([300, 260], [400, 300]);
     let error = doc.canvas_geometry_plan(&crop, tight).unwrap_err();
-    assert_eq!(error, CanvasGeometryError::TooManyTiles { limit: 20 });
+    assert_eq!(error, CanvasGeometryError::RasterTooLarge);
     assert!(error.exceeds_raster_limits());
     doc.canvas_geometry_plan(&deleting([300, 260], [400, 300]), tight).unwrap();
     let whole = doc.canvas_geometry_plan(&deleting([0, 0], [1024, 768]), limits());
@@ -428,8 +434,7 @@ fn straightening_with_deleted_pixels_frames_the_canvas_and_erases_beyond_it() {
         (true, [800., 0., extent[0] as f32, extent[1] as f32]),
         (true, [0., 600., 800., extent[1] as f32]),
     ]);
-    let tight = GeometryLimits { project: ProjectLimits { tiles: 20, ..Default::default() }, ..limits() };
-    assert_eq!(doc.canvas_geometry_plan(&geometry, tight).unwrap_err(), CanvasGeometryError::TooManyTiles { limit: 20 });
+    assert_eq!(doc.canvas_geometry_plan(&geometry, raster_limit(held_bytes(&doc) - 1)).unwrap_err(), CanvasGeometryError::RasterTooLarge);
 }
 
 const ORIENTATIONS: [ImageOrientation; 5] = [
@@ -646,14 +651,14 @@ fn image_size_scales_layers_selections_guides_and_effect_reference() {
 #[test]
 fn resampled_tile_predictions_count_only_the_result() {
     let doc = tiled();
-    let limits_with = |tiles| GeometryLimits { project: ProjectLimits { tiles, ..Default::default() }, ..limits() };
+    let color = doc.composition().color;
+    let pages = |tiles: u64| tiles * (RasterPlane::Color.descriptor(color).byte_len([TILE_SIZE; 2]).unwrap()
+        + RasterPlane::Mask.descriptor(color).byte_len([TILE_SIZE; 2]).unwrap()) as u64;
     let half = CanvasGeometry::resize([1024, 768], [512, 384], Interpolation::Bicubic);
-    doc.canvas_geometry_plan(&half, limits_with(12)).unwrap();
-    assert_eq!(doc.canvas_geometry_plan(&half, limits_with(11)).unwrap_err(), CanvasGeometryError::TooManyTiles { limit: 11 });
+    doc.canvas_geometry_plan(&half, raster_limit(pages(6))).unwrap();
+    assert_eq!(doc.canvas_geometry_plan(&half, raster_limit(pages(6) - 1)).unwrap_err(), CanvasGeometryError::RasterTooLarge);
     let double = CanvasGeometry::resize([1024, 768], [2048, 1536], Interpolation::Bicubic);
-    assert_eq!(doc.canvas_geometry_plan(&double, limits_with(95)).unwrap_err(), CanvasGeometryError::TooManyTiles { limit: 95 });
-    doc.canvas_geometry_plan(&double, limits_with(96)).unwrap();
-    let bytes = |megabytes: u64| GeometryLimits { project: ProjectLimits { raster_bytes: megabytes << 20, ..Default::default() }, ..limits() };
+    let bytes = |megabytes: u64| raster_limit(megabytes << 20);
     assert_eq!(doc.canvas_geometry_plan(&double, bytes(14)).unwrap_err(), CanvasGeometryError::RasterTooLarge);
     doc.canvas_geometry_plan(&double, bytes(15)).unwrap();
 }

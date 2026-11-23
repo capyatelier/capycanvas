@@ -191,6 +191,7 @@ documents-pixel-size = { $width } × { $height } px
 documents-prints-at = ขนาดพิมพ์ { $width } × { $height } { $unit }
 documents-too-large-side = ใหญ่เกินไปสำหรับอุปกรณ์นี้: แต่ละด้านยาวได้ไม่เกิน { $maximum } px
 documents-too-large-memory = ใหญ่เกินหน่วยความจำที่ว่างอยู่ของอุปกรณ์นี้
+documents-refusal-disk-space = พื้นที่ว่างในดิสก์ไม่เพียงพอ เพิ่มพื้นที่ว่างในดิสก์แล้วลองอีกครั้ง
 documents-megapixels = { $megapixels } MP
 documents-layer-memory = { $size } ต่อเลเยอร์
 documents-layer-memory-available = { $size } ต่อเลเยอร์ · ว่าง { $available }

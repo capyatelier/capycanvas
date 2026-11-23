@@ -191,6 +191,7 @@ documents-pixel-size = { $width } × { $height } px
 documents-prints-at = Formato di stampa { $width } × { $height } { $unit }
 documents-too-large-side = Troppo grande per questo dispositivo: i lati arrivano al massimo a { $maximum } px
 documents-too-large-memory = Troppo grande per la memoria disponibile su questo dispositivo
+documents-refusal-disk-space = Spazio libero sul disco insufficiente. Libera spazio sul disco e riprova.
 documents-megapixels = { $megapixels } MP
 documents-layer-memory = { $size } per livello
 documents-layer-memory-available = { $size } per livello · { $available } disponibili

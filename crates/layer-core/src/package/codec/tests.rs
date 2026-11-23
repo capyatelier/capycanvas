@@ -337,12 +337,10 @@ fn selection_admission_preserves_a_valid_package() {
     artwork.selections.insert(identity(1),SavedSelection {selection:Selection::pixels(Arc::new(
         SelectionPixels::bytes([8,1],[0,0,8,1],vec![u32::MAX;2]).unwrap()))}).unwrap();
     let bytes=serialize(&prepare(&artwork,false));
-    for limits in [crate::ProjectLimits {raster_bytes:3,..Default::default()},crate::ProjectLimits {tiles:0,..Default::default()}] {
-        let OpenOutcome::Preserved {source,..}=open(backing(bytes.clone()),limits,&AtomicBool::new(false)).unwrap()
-            else {panic!("selection admission must preserve the package")};
-        let mut copied=Vec::new();copy_original(&source,&mut copied,&AtomicBool::new(false)).unwrap();assert_eq!(copied,bytes);
-        assert_eq!(editable(copied).selections.len(),1);
-    }
+    let OpenOutcome::Preserved {source,..}=open(backing(bytes.clone()),crate::ProjectLimits {raster_bytes:3,..Default::default()},&AtomicBool::new(false)).unwrap()
+        else {panic!("selection admission must preserve the package")};
+    let mut copied=Vec::new();copy_original(&source,&mut copied,&AtomicBool::new(false)).unwrap();assert_eq!(copied,bytes);
+    assert_eq!(editable(copied).selections.len(),1);
 }
 
 #[test]

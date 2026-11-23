@@ -108,7 +108,6 @@ fn layer_transform_plan_admission_failure_never_changes_source_raster_or_mask() 
     let before = doc.clone();
     for limit in [
         ProjectLimits { dimension: 32, ..Default::default() },
-        ProjectLimits { tiles: 1, ..Default::default() },
         ProjectLimits { raster_bytes: 1, ..Default::default() },
     ] {
         assert!(doc.layer_transform_plan(fixture::target(&doc, "Ink"), &stretch(), None, limit).is_err());

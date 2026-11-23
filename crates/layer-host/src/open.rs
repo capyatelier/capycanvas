@@ -100,23 +100,6 @@ impl OpenEnvironment {
     /// Returns a candidate whose canvas and configured brush are ready to draw.
     pub fn prepare(
         &self,
-        project: Document,
-        cancelled: impl Fn() -> bool,
-    ) -> Result<Box<UiSession<Renderer>>, String> {
-        self.prepare_within(ProjectLimits::default(), project, cancelled)
-    }
-
-    pub fn prepare_recovered(
-        &self,
-        project: Document,
-        cancelled: impl Fn() -> bool,
-    ) -> Result<Box<UiSession<Renderer>>, String> {
-        self.prepare_within(ProjectLimits::default().for_recovery(), project, cancelled)
-    }
-
-    fn prepare_within(
-        &self,
-        limits: ProjectLimits,
         mut project: Document,
         cancelled: impl Fn() -> bool,
     ) -> Result<Box<UiSession<Renderer>>, String> {
@@ -124,7 +107,7 @@ impl OpenEnvironment {
             if cancelled() {Err("Document operation cancelled".to_string())}else {Ok(())}
         };
         check()?;
-        project.validate(ProjectLimits { dimension: self.limits().dimension, ..limits })?;
+        project.validate(self.limits())?;
         let writer=self.asset_writer.as_ref().map(|writer|writer.for_document(&project)).transpose()?;
         if let Some(writer)=&writer {pollster::block_on(writer.prepare_document(&mut project))?;}
         else {project.reserve_import()?;}
@@ -280,7 +263,7 @@ mod tests {
     }
 
     #[test]
-    fn a_recovered_drawing_above_the_tile_count_limit_passes_validation() {
+    fn a_drawing_past_sixteen_thousand_tiles_passes_validation() {
         use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey,TILE_SIZE};
         let english=layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
         let gpu=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
@@ -288,23 +271,19 @@ mod tests {
         let admission=layer_ui::DocumentSessions::<()>::default().admission(&session.retained_document_tiles());
         let mut environment=OpenEnvironment::capture(&session,admission,RendererOptions::default()).unwrap();
         environment.asset_writer=None;
-        let dimension=environment.limits().dimension;let side=dimension.div_ceil(TILE_SIZE);
-        let mut project=Document::new(layer_core::PortableId::random(),dimension,dimension,layer_core::DocumentNames {paint:"ink".into(),paper:"paper".into()});
+        let grid=[128,65];
+        let mut project=Document::new(layer_core::PortableId::random(),grid[0]*TILE_SIZE,grid[1]*TILE_SIZE,layer_core::DocumentNames {paint:"ink".into(),paper:"paper".into()});
         let descriptor=project.composition().color.paint_descriptor();
         let tile=RasterTile::backed(TileBlob::encode(descriptor,&vec![7;descriptor.byte_len([TILE_SIZE;2]).unwrap()]).unwrap());
         *project.target_raster_mut(project.working.target.unwrap()).unwrap()=RasterRevision::backed(RasterData {
-            tiles:(0..side*side).map(|index|(TileKey {plane:RasterPlane::Color,coordinate:[index%side,index/side]},tile.clone())).collect(),
+            tiles:(0..grid[0]*grid[1]).map(|index|(TileKey {plane:RasterPlane::Color,coordinate:[index%grid[0],index/grid[0]]},tile.clone())).collect(),
             ..Default::default()
         });
         let layer=project.working.occurrence.unwrap();
-        for _ in 0..ProjectLimits::default().tiles/(side*side) as usize {
-            let (edit,_)=project.duplicate_layers_edit(&[layer]).unwrap();project.apply(edit).unwrap();
-        }
+        let (edit,_)=project.duplicate_layers_edit(&[layer]).unwrap();project.apply(edit).unwrap();
         let checks=std::cell::Cell::new(0);
         let stop_after_validation=||{checks.set(checks.get()+1);checks.get()>1};
-        assert_eq!(environment.prepare(project.clone(),stop_after_validation).err().as_deref(),Some("Artwork exceeds the tile count limit"));
-        checks.set(0);
-        assert_eq!(environment.prepare_recovered(project,stop_after_validation).err().as_deref(),Some("Document operation cancelled"));
+        assert_eq!(environment.prepare(project,stop_after_validation).err().as_deref(),Some("Document operation cancelled"));
         drop((environment,session));
         layer_render_wgpu::finish_shader_compiler_shutdown();
     }
