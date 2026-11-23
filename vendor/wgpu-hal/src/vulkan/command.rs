@@ -6,6 +6,106 @@ use hashbrown::hash_map::Entry;
 
 const ALLOCATION_GRANULARITY: u32 = if cfg!(target_os = "android") { 1 } else { 16 };
 const DST_IMAGE_LAYOUT: vk::ImageLayout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
+const ZERO_BUFFER_BYTES: u64 = 256 * 1024;
+
+pub(super) unsafe fn create_zero_buffer(
+    device: &ash::Device,
+    instance: &ash::Instance,
+    physical_device: vk::PhysicalDevice,
+) -> Result<(vk::Buffer, vk::DeviceMemory), crate::DeviceError> {
+    let buffer = unsafe {
+        device.create_buffer(
+            &vk::BufferCreateInfo::default()
+                .size(ZERO_BUFFER_BYTES)
+                .usage(vk::BufferUsageFlags::TRANSFER_SRC)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE),
+            None,
+        )
+    }
+    .map_err(super::map_host_device_oom_err)?;
+    let requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
+    let properties = unsafe { instance.get_physical_device_memory_properties(physical_device) };
+    let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+    let memory = (0..properties.memory_type_count)
+        .find(|&index| {
+            requirements.memory_type_bits & (1 << index) != 0
+                && properties.memory_types[index as usize].property_flags.contains(host)
+        })
+        .ok_or(crate::DeviceError::Unexpected)
+        .and_then(|index| {
+            unsafe {
+                device.allocate_memory(
+                    &vk::MemoryAllocateInfo::default()
+                        .allocation_size(requirements.size)
+                        .memory_type_index(index),
+                    None,
+                )
+            }
+            .map_err(super::map_host_device_oom_err)
+        });
+    let memory = match memory {
+        Ok(memory) => memory,
+        Err(error) => {
+            unsafe { device.destroy_buffer(buffer, None) };
+            return Err(error);
+        }
+    };
+    let written = unsafe { device.map_memory(memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty()) }
+        .map(|mapped| unsafe {
+            core::ptr::write_bytes(mapped.cast::<u8>(), 0, requirements.size as usize);
+            device.unmap_memory(memory);
+        })
+        .and_then(|()| unsafe { device.bind_buffer_memory(buffer, memory, 0) });
+    if let Err(error) = written {
+        unsafe {
+            device.destroy_buffer(buffer, None);
+            device.free_memory(memory, None);
+        }
+        return Err(super::map_host_device_oom_err(error));
+    }
+    Ok((buffer, memory))
+}
+
+unsafe fn record_buffer_clear(
+    device: &ash::Device,
+    command: vk::CommandBuffer,
+    workarounds: super::Workarounds,
+    zero: Option<vk::Buffer>,
+    buffer: vk::Buffer,
+    range: crate::MemoryRange,
+) {
+    let range_size = range.end - range.start;
+    if let Some(zero) = zero.filter(|_| workarounds.contains(super::Workarounds::CLEAR_BUFFERS_BY_ZERO_COPY)) {
+        let regions = range
+            .clone()
+            .step_by(ZERO_BUFFER_BYTES as usize)
+            .map(|offset| vk::BufferCopy {
+                src_offset: 0,
+                dst_offset: offset,
+                size: (range.end - offset).min(ZERO_BUFFER_BYTES),
+            })
+            .collect::<smallvec::SmallVec<[vk::BufferCopy; 4]>>();
+        if !regions.is_empty() {
+            unsafe { device.cmd_copy_buffer(command, zero, buffer, &regions) };
+        }
+    } else if workarounds.contains(
+        super::Workarounds::FORCE_FILL_BUFFER_WITH_SIZE_GREATER_4096_ALIGNED_OFFSET_16,
+    ) && range_size >= 4096
+        && !range.start.is_multiple_of(16)
+    {
+        let rounded_start = wgt::math::align_to(range.start, 16);
+        let prefix_size = rounded_start - range.start;
+
+        unsafe { device.cmd_fill_buffer(command, buffer, range.start, prefix_size, 0) };
+
+        // This will never be zero, as rounding can only add up to 12 bytes, and the total size is 4096.
+        let suffix_size = range.end - rounded_start;
+
+        unsafe { device.cmd_fill_buffer(command, buffer, rounded_start, suffix_size, 0) };
+    } else {
+        unsafe { device.cmd_fill_buffer(command, buffer, range.start, range_size, 0) };
+    }
+}
 
 impl super::Texture {
     fn map_buffer_copies<T>(&self, regions: T) -> impl Iterator<Item = vk::BufferImageCopy>
@@ -335,44 +435,16 @@ impl crate::CommandEncoder for super::CommandEncoder {
     }
 
     unsafe fn clear_buffer(&mut self, buffer: &super::Buffer, range: crate::MemoryRange) {
-        let range_size = range.end - range.start;
-        if self.device.workarounds.contains(
-            super::Workarounds::FORCE_FILL_BUFFER_WITH_SIZE_GREATER_4096_ALIGNED_OFFSET_16,
-        ) && range_size >= 4096
-            && !range.start.is_multiple_of(16)
-        {
-            let rounded_start = wgt::math::align_to(range.start, 16);
-            let prefix_size = rounded_start - range.start;
-
-            unsafe {
-                self.device.raw.cmd_fill_buffer(
-                    self.active,
-                    buffer.raw,
-                    range.start,
-                    prefix_size,
-                    0,
-                )
-            };
-
-            // This will never be zero, as rounding can only add up to 12 bytes, and the total size is 4096.
-            let suffix_size = range.end - rounded_start;
-
-            unsafe {
-                self.device.raw.cmd_fill_buffer(
-                    self.active,
-                    buffer.raw,
-                    rounded_start,
-                    suffix_size,
-                    0,
-                )
-            };
-        } else {
-            unsafe {
-                self.device
-                    .raw
-                    .cmd_fill_buffer(self.active, buffer.raw, range.start, range_size, 0)
-            };
-        }
+        unsafe {
+            record_buffer_clear(
+                &self.device.raw,
+                self.active,
+                self.device.workarounds,
+                self.device.zero_buffer.map(|(zero, _)| zero),
+                buffer.raw,
+                range,
+            )
+        };
     }
 
     unsafe fn copy_buffer_to_buffer<T>(
@@ -1556,4 +1628,65 @@ fn check_dst_image_layout() {
         conv::derive_image_layout(wgt::TextureUses::COPY_DST, wgt::TextureFormat::Rgba8Unorm),
         DST_IMAGE_LAYOUT
     );
+}
+
+#[cfg(test)]
+mod buffer_clear_tests {
+    use super::*;
+    use ash::vk::Handle as _;
+    use core::ffi::{c_char, c_void, CStr};
+    use std::{cell::RefCell, vec::Vec};
+
+    #[derive(Debug)]
+    enum Recorded {
+        Fill,
+        Copy { source: u64, regions: Vec<(u64, u64, u64)> },
+    }
+    std::thread_local! { static RECORDED: RefCell<Vec<Recorded>> = const { RefCell::new(Vec::new()) }; }
+
+    unsafe extern "system" fn fill(_: vk::CommandBuffer, _: vk::Buffer, _: vk::DeviceSize, _: vk::DeviceSize, _: u32) {
+        RECORDED.with_borrow_mut(|recorded| recorded.push(Recorded::Fill));
+    }
+    unsafe extern "system" fn copy(_: vk::CommandBuffer, source: vk::Buffer, _: vk::Buffer, count: u32, regions: *const vk::BufferCopy) {
+        let regions = unsafe { core::slice::from_raw_parts(regions, count as usize) }
+            .iter()
+            .map(|region| (region.src_offset, region.dst_offset, region.size))
+            .collect();
+        RECORDED.with_borrow_mut(|recorded| recorded.push(Recorded::Copy { source: source.as_raw(), regions }));
+    }
+    unsafe extern "system" fn device_proc(_: vk::Device, name: *const c_char) -> vk::PFN_vkVoidFunction {
+        let name = unsafe { CStr::from_ptr(name) };
+        if name == c"vkCmdFillBuffer" {
+            Some(unsafe { mem::transmute::<vk::PFN_vkCmdFillBuffer, unsafe extern "system" fn()>(fill) })
+        } else if name == c"vkCmdCopyBuffer" {
+            Some(unsafe { mem::transmute::<vk::PFN_vkCmdCopyBuffer, unsafe extern "system" fn()>(copy) })
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn qualcomm_buffer_clears_copy_from_the_zero_buffer_without_filling() {
+        let instance = ash::InstanceFnV1_0::load(|name| {
+            if name == c"vkGetDeviceProcAddr" { device_proc as *const c_void } else { core::ptr::null() }
+        });
+        let device = unsafe { ash::Device::load(&instance, vk::Device::from_raw(1)) };
+        let zero = vk::Buffer::from_raw(7);
+        for range in [0..4, 16..4112, 4..3 * ZERO_BUFFER_BYTES + 20] {
+            unsafe {
+                record_buffer_clear(&device, vk::CommandBuffer::from_raw(3), super::super::Workarounds::CLEAR_BUFFERS_BY_ZERO_COPY,
+                    Some(zero), vk::Buffer::from_raw(9), range.clone())
+            };
+            let recorded = RECORDED.with_borrow_mut(mem::take);
+            let [Recorded::Copy { source, regions }] = recorded.as_slice() else { panic!("{range:?} recorded {recorded:?}") };
+            assert_eq!(*source, zero.as_raw());
+            let mut next = range.start;
+            for &(source_offset, offset, size) in regions {
+                assert_eq!((source_offset, offset), (0, next));
+                assert!(size > 0 && size <= ZERO_BUFFER_BYTES);
+                next += size;
+            }
+            assert_eq!(next, range.end);
+        }
+    }
 }

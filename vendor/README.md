@@ -280,6 +280,23 @@ cargo test --offline --manifest-path vendor/wgpu-hal/Cargo.toml --features vulka
 These tests exercise the worker on the desktop. Android compilation and device
 motion, memory, idle/resume and teardown journeys still verify the Android path.
 
+`wgpu-qualcomm-buffer-clears.patch` never records `vkCmdFillBuffer` on the
+Qualcomm proprietary Vulkan driver (`VK_DRIVER_ID_QUALCOMM_PROPRIETARY`). On an
+Adreno 735 with driver 0x802fa01f, fills and copies of one range inside one
+submission ran out of order despite transfer barriers, in both directions: a copy
+read the bytes from before a preceding fill, and a later fill reached a copy
+recorded before it. wgpu's lazy zero initialization and `clear_buffer` then left a
+previous allocation's bytes in new buffers. Hal `clear_buffer`, which both use,
+instead copies from a 256 KiB buffer zeroed in host-visible coherent memory when
+the device opens, in as many regions as the range needs. Other drivers keep fills
+and the NVIDIA alignment workaround. The command-recording test runs without a GPU:
+
+```sh
+cargo test --offline --manifest-path vendor/wgpu-hal/Cargo.toml --features vulkan \
+  --lib vulkan::command::buffer_clear_tests \
+  --config 'patch.crates-io.wgpu-types.path="vendor/wgpu-types"'
+```
+
 `wgpu-dx12-allocation-report.patch` returns no allocator report when D3D12
 suballocation is disabled. Committed resources are absent from the suballocator
 report, so reporting its empty allocation list would misrepresent live resources.
