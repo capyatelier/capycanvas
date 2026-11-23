@@ -86,6 +86,16 @@ pub(crate) fn material_reads<T>(run:impl FnOnce()->T)->(T,crate::IdMap<MaterialR
     let value=run();
     (value,MATERIAL_READS.with(|reads|reads.borrow_mut().take().unwrap_or_default()))
 }
+#[derive(Clone,Copy,PartialEq,Eq,Hash,Debug)]
+pub(crate) enum LiquifyVisit {Preview}
+type LiquifyTile=(LiquifyVisit,[u32;2]);
+std::thread_local! {static LIQUIFY_TILES:std::cell::RefCell<Option<crate::IdMap<LiquifyTile,u32>>>=const {std::cell::RefCell::new(None)};}
+pub(crate) fn record_liquify_tile(visit:LiquifyVisit,coordinate:[u32;2]) {LIQUIFY_TILES.with(|tiles|if let Some(tiles)=tiles.borrow_mut().as_mut() {*tiles.entry((visit,coordinate)).or_default()+=1;});}
+pub(crate) fn liquify_tiles<T>(run:impl FnOnce()->T)->(T,crate::IdMap<LiquifyTile,u32>) {
+    LIQUIFY_TILES.with(|tiles|*tiles.borrow_mut()=Some(Default::default()));
+    let value=run();
+    (value,LIQUIFY_TILES.with(|tiles|tiles.borrow_mut().take().unwrap_or_default()))
+}
 type SourcePreparation=(layer_core::SourceTarget,u32,[u32;2]);
 std::thread_local! {static SOURCE_PREPARATIONS:std::cell::RefCell<Option<crate::IdMap<SourcePreparation,u32>>>=const {std::cell::RefCell::new(None)};}
 pub(crate) fn record_source_preparation(page:SourcePreparation) {SOURCE_PREPARATIONS.with(|pages|if let Some(pages)=pages.borrow_mut().as_mut() {*pages.entry(page).or_default()+=1;});}
