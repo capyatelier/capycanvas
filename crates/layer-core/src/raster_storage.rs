@@ -253,10 +253,17 @@ impl RetainedTiles {
         result
     }
     pub fn check_integrity(&self)->Result<(),String> {
+        self.check_stored_bytes()?;
+        for raster in &self.rasters {
+            if let Some(data)=raster.try_data() {for tile in data?.tiles.values() {tile.try_backing().transpose()?;}}
+        }
+        Ok(())
+    }
+    pub(crate) fn check_stored_bytes(&self)->Result<(),String> {
         for blob in &self.sources {blob.compressed.healthy()?;}
         for raster in &self.rasters {
-            if let Some(data)=raster.try_data() {for tile in data?.tiles.values() {
-                if let Some(blob)=tile.try_backing() {blob?.compressed.healthy()?;}
+            if let Some(Ok(data))=raster.try_data() {for tile in data.tiles.values() {
+                if let Some(Ok(blob))=tile.try_backing() {blob.compressed.healthy()?;}
             }}
         }
         for backing in &self.backings {backing.healthy()?;}Ok(())

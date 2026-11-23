@@ -95,13 +95,20 @@ pub(crate) struct Recorder {
     pub(crate) motion_path_updates: usize,
     pub(crate) memory_refusals: u64,
     pub(crate) memory_refusal_next_frame: bool,
+    pub(crate) capture_failure: Option<&'static str>,
 }
 impl CanvasRenderer for Recorder {
     type Error = BackendError;
     fn stroke_memory_refusals(&self) -> u64 { self.memory_refusals }
     fn poll_pending(&mut self, _view: layer_render::ViewState) -> Result<(), Self::Error> {
         self.memory_refusals += u64::from(std::mem::take(&mut self.memory_refusal_next_frame));
-        Ok(())
+        match self.capture_failure {
+            Some(error) if self.frame_scene.as_ref().is_some_and(|scene| {
+                let scene = scene.view();
+                scene.targets().filter_map(|target| scene.raster(target)).any(|raster| raster.failed())
+            }) => Err(BackendError(error)),
+            _ => Ok(()),
+        }
     }
     fn prepare_regions(&mut self, preparation: Option<&layer_render::RegionPreparation>) { self.region_preparation=preparation.cloned(); }
     fn evaluation_context(&self) -> EvaluationContext { self.evaluation.clone() }
@@ -315,7 +322,8 @@ impl CanvasRenderer for Recorder {
                 let descriptor = plane.descriptor_for(self.document_color(), packet.scene.color_mode(target));
                 let bytes = vec![if descriptor.sample == layer_core::color::SampleType::Float { 0 } else { 128 }; descriptor.byte_len([TILE_SIZE; 2]).unwrap()];
                 let mut data = RasterData::default();
-                data.tiles.insert(TileKey { plane, coordinate: [0, 0] }, RasterTile::backed(TileBlob::encode(descriptor, &bytes).unwrap()));
+                let tile = if self.capture_failure.is_some() { RasterTile::pending(descriptor) } else { RasterTile::backed(TileBlob::encode(descriptor, &bytes).unwrap()) };
+                data.tiles.insert(TileKey { plane, coordinate: [0, 0] }, tile);
                 revision.publish(Ok(data)).unwrap();
             }
         }
