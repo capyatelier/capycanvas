@@ -26,8 +26,9 @@ TABLETS = {
     "DTHA140": ("movinkpad14", "top"),
     "KP1202": ("huion", None),
     "MNP1095": ("xppen", "mid"),
+    "SM_T878U": ("sm_t878u", "high"),
 }
-TIERS = ("low", "mid", "top")
+TIERS = ("low", "mid", "high", "top")
 AUTOMATION_HINT = ("UI tests failed. If the log says 'Timed out while enabling automation mode', unlock the device and "
                    "approve its Automation Mode prompt, then run again. See docs/development/devices.md#apple.")
 

@@ -68,7 +68,7 @@ class VersionTest(unittest.TestCase):
 
 class DeviceTest(unittest.TestCase):
     def test_guarantee_size_follows_canvas_pixels(self):
-        self.assertEqual([bench_android.guarantee_size(*bench_android.CANVAS[tier]) for tier in ("low", "mid", "top")], [1024, 1536, 2048])
+        self.assertEqual([bench_android.guarantee_size(*bench_android.CANVAS[tier]) for tier in ("low", "mid", "high", "top")], [1024, 1536, 2048, 2048])
         self.assertEqual(bench_android.guarantee_size(5000, 4000), 1536)
         self.assertEqual(bench_android.guarantee_size(8000, 5000), 2048)
 

@@ -14,7 +14,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 SOURCE = Path('/mnt/localssd/capy-bench/src/v1.0.15')
 FIXTURES = Path.home() / 'capy-bench' / 'fixtures'
-TIERS = [(4248, 2832), (6000, 4000), (9504, 6336)]
+TIERS = [(4248, 2832), (6000, 4000), (7360, 4912), (9504, 6336)]
 NAMES = ('heavy', 'vector')
 GENERATOR = ('crates/layer-core/examples/bench_fixtures.rs', 'crates/layer-core/examples/capy_fixture/mod.rs')
 

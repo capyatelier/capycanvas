@@ -9,15 +9,15 @@ tables and hardware specifications.
 
 ## Goals
 
-| | Low | Mid | Top |
-| --- | --- | --- | --- |
-| Reference device | TCL TAB 11 Gen 2 (9465X) | Wacom MovinkPad 11 (DTHA116) | Wacom MovinkPad Pro 14 (DTHA140) |
-| GPU, memory bandwidth | Mali-G52 MC2, 14.4 GB/s | Mali-G57 MC2, 17.1 GB/s | Adreno 735, 67.2 GB/s |
-| Target canvas | 12 MP, 4248 × 2832 | 24 MP, 6000 × 4000 | 61 MP, 9504 × 6336 |
-| Minimum sustained rate | **60 fps** | **90 fps** | **120 fps** |
-| Simple brushes guaranteed to | 1024 px (goal 2048 px) | 1536 px | 2048 px |
-| Complex brushes guaranteed to | 1024 px | 1024 px | 1024 px |
-| Very complex brushes guaranteed to | 512 px | 512 px | 512 px |
+| | Low | Mid | High (optional) | Top |
+| --- | --- | --- | --- | --- |
+| Reference device | TCL TAB 11 Gen 2 (9465X) | Wacom MovinkPad 11 (DTHA116) | Samsung Galaxy Tab S7 (SM-T878U) | Wacom MovinkPad Pro 14 (DTHA140) |
+| GPU, memory bandwidth | Mali-G52 MC2, 14.4 GB/s | Mali-G57 MC2, 17.1 GB/s | Adreno 650, 43.8 GB/s | Adreno 735, 67.2 GB/s |
+| Target canvas | 12 MP, 4248 × 2832 | 24 MP, 6000 × 4000 | 36 MP, 7360 × 4912 | 61 MP, 9504 × 6336 |
+| Minimum sustained rate | **60 fps** | **90 fps** | **120 fps** | **120 fps** |
+| Simple brushes guaranteed to | 1024 px (goal 2048 px) | 1536 px | 2048 px | 2048 px |
+| Complex brushes guaranteed to | 1024 px | 1024 px | 1024 px | 1024 px |
+| Very complex brushes guaranteed to | 512 px | 512 px | 512 px | 512 px |
 
 - **Every motion holds the tier rate on the tier canvas.** That includes strokes,
   pan, zoom and rotate, transform and placement drags, selections, slider
@@ -47,6 +47,9 @@ tables and hardware specifications.
 - **Hardware at or above a tier must meet that tier's targets.** To place a
   device, compare its memory bandwidth and GPU throughput with the
   [tier hardware](performance/hardware.md).
+- **The High tier is optional.** Its targets guide work on Snapdragon 865-class
+  tablets, but a change need not measure or meet them to qualify. Hardware
+  between Mid and Top must still meet the Mid targets.
 
 Phones use the same hardware rule. The Galaxy Note 10 (SM-N970U1, Adreno 640)
 is the low-tier phone reference at 60 fps, including phone chrome motion.
@@ -59,10 +62,10 @@ These budgets leave time for presentation and scheduling within the tier's frame
 period. They guide optimization; passing them does not replace the moving-frame
 measurements below.
 
-| Work per moving frame | Low | Mid | Top |
-| --- | --- | --- | --- |
-| CPU input, update and submission | 4 ms | 3 ms | 2 ms |
-| GPU painting, composition and presentation | 12 ms | 8 ms | 6 ms |
+| Work per moving frame | Low | Mid | High (optional) | Top |
+| --- | --- | --- | --- | --- |
+| CPU input, update and submission | 4 ms | 3 ms | 2 ms | 2 ms |
+| GPU painting, composition and presentation | 12 ms | 8 ms | 6 ms | 6 ms |
 
 Background refinement must yield to fresh input. Aim for at most one frame of
 additional delay when drawing resumes, and require new operations to meet their
@@ -201,6 +204,6 @@ startup and host presentation still need their complete qualification matrices.
 | [Measuring performance](performance/measuring.md) | Frame definitions, pass criteria, the soft-target bandwidth rule and benchmark commands |
 | [Tier hardware](performance/hardware.md) | SoC, CPU, GPU, registers, tile memory, bandwidth, RAM, display and public benchmark scores, with comparable hardware |
 | [Brush classes](performance/brush-classes.md) | Class of each preset and the reason for it |
-| [Low tier](performance/low-tier.md), [Mid tier](performance/mid-tier.md), [Top tier](performance/top-tier.md) | Every operation and brush with its target and newest measurement |
+| [Low tier](performance/low-tier.md), [Mid tier](performance/mid-tier.md), [High tier](performance/high-tier.md) (optional), [Top tier](performance/top-tier.md) | Every operation and brush with its target and newest measurement |
 | [Responsiveness](performance/responsiveness.md) | Latency limits for taps, pen-down, undo, selections, launch and open |
 | [Known gaps](performance/known-gaps.md) | Failures, unmeasured areas and missing harnesses |

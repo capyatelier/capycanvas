@@ -16,7 +16,7 @@ without disturbing anyone else. Shared machine resources are in
 | `movinkpad14` | Wacom MovinkPad Pro 14 (DTHA140) | Top tier reference | Adreno 735 |
 | `huion` | Huion Kamvas Pad 12 (KP1202) | Pen input testing | Mali-G57 |
 | `xppen` | XP-Pen Magic Note Pad (MNP1095) | Mid tier, same SoC as its reference; pen input testing | Mali-G57 |
-| `sm_t878u` | Samsung Galaxy Tab S7 (SM-T878U) | Android 13 without shared presentation | Adreno 650 |
+| `sm_t878u` | Samsung Galaxy Tab S7 (SM-T878U) | Optional High tier reference; Android 13 without shared presentation | Adreno 650 |
 
 [Tier hardware](../performance/hardware.md) has the full specifications.
 Device quirks that affect tests:

@@ -22,11 +22,11 @@ _spec = importlib.util.spec_from_file_location("devices", DEVICES_TOOL)
 devices = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(devices)
 
-CANVAS = {"low": (4248, 2832), "mid": (6000, 4000), "top": (9504, 6336)}
-PHOTO_MP = {"low": 12, "mid": 24, "top": 61}
+CANVAS = {"low": (4248, 2832), "mid": (6000, 4000), "high": (7360, 4912), "top": (9504, 6336)}
+PHOTO_MP = {"low": 12, "mid": 24, "high": 36, "top": 61}
 DEVICES = {name: dict(tier=tier, refresh_hz=hz, photo=f"/data/local/tmp/capy-tier-{PHOTO_MP[tier]}mp.jpg", adaptive=name == "movinkpad11")
            for name, tier, hz in [("tcl", "low", 60), ("movinkpad11", "mid", 90), ("movinkpad14", "top", 120), ("sm_n970u1", "low", 60),
-                                  ("huion", "low", 60), ("xppen", "low", 60), ("sm_t878u", "low", 60)]}
+                                  ("huion", "low", 60), ("xppen", "mid", 90), ("sm_t878u", "high", 120)]}
 SOURCE_PHOTO = Path.home() / "Downloads/sony_a7r_v_29.jpg"
 PHOTOS = Path.home() / "capy-bench/photos"
 REMOTE_CHAIN = "/data/local/tmp/capy-bench-chain.json"
@@ -39,7 +39,7 @@ READY_TIMEOUT_S = 600
 
 def guarantee_size(width, height):
     pixels = width * height
-    return 1024 if pixels < 20_000_000 else 1536 if pixels < 40_000_000 else 2048
+    return 1024 if pixels < 20_000_000 else 1536 if pixels < 30_000_000 else 2048
 
 
 def tier_photo(tier):

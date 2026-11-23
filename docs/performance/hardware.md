@@ -7,27 +7,27 @@ CPU figures come from the attached units, read over `adb`. Benchmark scores are
 SoC-level medians from notebookcheck and nanoreview; Geekbench Browser was not
 reachable.
 
-| | Low | Mid | Top |
-| --- | --- | --- | --- |
-| Device | TCL TAB 11 Gen 2 or NXTPAPER 11 Gen 2 (model 9465X) | Wacom MovinkPad 11 (DTHA116) | Wacom MovinkPad Pro 14 (DTHA140) |
-| Android | 15 | 14 | 15 |
-| SoC | MediaTek MT8786 (Helio G80 class), 12 nm | MediaTek MT8781 (Helio G99 class), 6 nm | Qualcomm Snapdragon 8s Gen 3 (SM8635), 4 nm |
-| CPU | 2 × Cortex-A75 2.0 GHz + 6 × A55 1.8 GHz | 2 × Cortex-A76 2.2 GHz + 6 × A55 2.0 GHz | 1 × Cortex-X4 3.0 GHz + 4 × A720 2.8 GHz + 3 × A520 2.0 GHz |
-| GPU | Arm Mali-G52 MC2 (Bifrost), 950 MHz | Arm Mali-G57 MC2 (Valhall), about 1.0 GHz | Qualcomm Adreno 735, 1.1 GHz |
-| FP32 lanes | 48 (2 cores × 3 engines × 8) | 64 (2 cores × 2 engines × 16) | 768 (3 SPs × 256) |
-| Peak FP32 | 91 GFLOPS | 128 GFLOPS | 1.69 TFLOPS |
-| Register file | About 96 KiB: 16 KiB per execution engine (derived) | Not published | About 576 KiB: 192 KiB per SP (derived from Mesa) |
-| On-chip tile memory | About 8 KiB per core | About 8 KiB per core (derived) | 1.5 MiB GMEM |
-| Memory | LPDDR4X-3600, 2 × 16-bit, 14.4 GB/s | LPDDR4X-4266, 2 × 16-bit, 17.1 GB/s | LPDDR5X-8400, 4 × 16-bit, 67.2 GB/s |
-| RAM | 6 GB | 8 GB | 12 GB |
-| Display | 10.95 in IPS, 1200 × 1920, 60 Hz | 11.45 in IPS, 1440 × 2200, 60/90 Hz | 14 in OLED, 1800 × 2880, 60/120 Hz |
-| Pen | TCL T-Pen, active capacitive, 4096 levels | Wacom Pro Pen 3, EMR, 8192 levels | Wacom Pro Pen 3, EMR, 8192 levels |
-| Geekbench 6 CPU (single / multi) | 406 / 1456 | 727 / 2047 | 1923 / 5179 (this unit: 2016 / 5335) |
-| Geekbench 6 GPU (Vulkan / OpenCL) | 997 / 1065 | 1294 / 1410 | 9942 / 9159 |
-| 3DMark Wild Life Extreme | 172 | 335 | 3076 |
-| 3DMark Steel Nomad Light | not published | 132 | 1064 |
-| GFXBench Aztec Ruins Normal, offscreen | 9.2 fps | 16 fps | 122 fps |
-| Comparable hardware | Snapdragon 680 phones; GPU about a third of an Apple A10 | Snapdragon 720G class (Adreno 618); GPU about half an Apple A10 | Intel Iris Xe (96 EU) laptop; GPU about 65% of an M1 iPad Pro |
+| | Low | Mid | High (optional) | Top |
+| --- | --- | --- | --- | --- |
+| Device | TCL TAB 11 Gen 2 or NXTPAPER 11 Gen 2 (model 9465X) | Wacom MovinkPad 11 (DTHA116) | Samsung Galaxy Tab S7 (SM-T878U) | Wacom MovinkPad Pro 14 (DTHA140) |
+| Android | 15 | 14 | 13 | 15 |
+| SoC | MediaTek MT8786 (Helio G80 class), 12 nm | MediaTek MT8781 (Helio G99 class), 6 nm | Qualcomm Snapdragon 865+ (SM8250), 7 nm | Qualcomm Snapdragon 8s Gen 3 (SM8635), 4 nm |
+| CPU | 2 × Cortex-A75 2.0 GHz + 6 × A55 1.8 GHz | 2 × Cortex-A76 2.2 GHz + 6 × A55 2.0 GHz | 1 × Cortex-A77 3.09 GHz + 3 × A77 2.42 GHz + 4 × A55 1.8 GHz | 1 × Cortex-X4 3.0 GHz + 4 × A720 2.8 GHz + 3 × A520 2.0 GHz |
+| GPU | Arm Mali-G52 MC2 (Bifrost), 950 MHz | Arm Mali-G57 MC2 (Valhall), about 1.0 GHz | Qualcomm Adreno 650, 670 MHz | Qualcomm Adreno 735, 1.1 GHz |
+| FP32 lanes | 48 (2 cores × 3 engines × 8) | 64 (2 cores × 2 engines × 16) | Not published | 768 (3 SPs × 256) |
+| Peak FP32 | 91 GFLOPS | 128 GFLOPS | About 1.4 TFLOPS (1.2 published at 587 MHz, scaled to 670 MHz) | 1.69 TFLOPS |
+| Register file | About 96 KiB: 16 KiB per execution engine (derived) | Not published | Not published | About 576 KiB: 192 KiB per SP (derived from Mesa) |
+| On-chip tile memory | About 8 KiB per core | About 8 KiB per core (derived) | Not published | 1.5 MiB GMEM |
+| Memory | LPDDR4X-3600, 2 × 16-bit, 14.4 GB/s | LPDDR4X-4266, 2 × 16-bit, 17.1 GB/s | LPDDR5-5472, 4 × 16-bit, 43.8 GB/s (top DDR step 2736 MHz, read over adb) | LPDDR5X-8400, 4 × 16-bit, 67.2 GB/s |
+| RAM | 6 GB | 8 GB | 6 GB | 12 GB |
+| Display | 10.95 in IPS, 1200 × 1920, 60 Hz | 11.45 in IPS, 1440 × 2200, 60/90 Hz | 11 in LCD, 1600 × 2560, 48/60/96/120 Hz | 14 in OLED, 1800 × 2880, 60/120 Hz |
+| Pen | TCL T-Pen, active capacitive, 4096 levels | Wacom Pro Pen 3, EMR, 8192 levels | Samsung S Pen, EMR, 4096 levels | Wacom Pro Pen 3, EMR, 8192 levels |
+| Geekbench 6 CPU (single / multi) | 406 / 1456 | 727 / 2047 | Not measured | 1923 / 5179 (this unit: 2016 / 5335) |
+| Geekbench 6 GPU (Vulkan / OpenCL) | 997 / 1065 | 1294 / 1410 | Not measured | 9942 / 9159 |
+| 3DMark Wild Life Extreme | 172 | 335 | Not measured | 3076 |
+| 3DMark Steel Nomad Light | not published | 132 | Not measured | 1064 |
+| GFXBench Aztec Ruins Normal, offscreen | 9.2 fps | 16 fps | Not measured | 122 fps |
+| Comparable hardware | Snapdragon 680 phones; GPU about a third of an Apple A10 | Snapdragon 720G class (Adreno 618); GPU about half an Apple A10 | Snapdragon 865 phones; GPU about 0.8 of the top tier's, bandwidth about 0.65 | Intel Iris Xe (96 EU) laptop; GPU about 65% of an M1 iPad Pro |
 
 The XP-Pen Magic Note Pad (MNP1095: MT8781, 6 GB, 1200 × 1920, Android 15)
 has the mid tier's SoC and CPU and counts as mid tier.
@@ -41,6 +41,8 @@ has the mid tier's SoC and CPU and counts as mid tier.
 - **The mid tier is closer to the low tier than to the top.** Its GPU throughput
   is only 1.4–2 times the low tier's, and its bandwidth 1.2 times. Yet it must
   draw 1.5 times the frame rate on twice the canvas.
+- **The High tier is optional.** It sits between Mid and Top; hardware there
+  must still meet the Mid targets.
 - **The top tier leaves more room.** It has about 18 times the low tier's GPU
   throughput and 4.7 times its bandwidth.
 - **Desktop and Apple hosts use the same tables.** Choose the tier that the

@@ -14,8 +14,8 @@ from android_brush_metrics import quantile
 TRIM_NS = 100_000_000
 PRESENTED_WITHIN_NS = 2_000_000_000
 LOW_MEMORY_KIB = 1 << 20
-TIER_RATES = {"low": 60, "mid": 90, "top": 120}
-TIERS = {"tcl": ("low", 60.0), "movinkpad11": ("mid", 90.0), "movinkpad14": ("top", 120.0), "sm_n970u1": ("low", 60.0)}
+TIER_RATES = {"low": 60, "mid": 90, "high": 120, "top": 120}
+TIERS = {"tcl": ("low", 60.0), "movinkpad11": ("mid", 90.0), "xppen": ("mid", 90.0), "sm_t878u": ("high", 120.0), "movinkpad14": ("top", 120.0), "sm_n970u1": ("low", 60.0)}
 MEMORY = (("os_available_min_kib", "os_available_kib", min), ("app_rss_max_kib", "app_rss_kib", max),
           ("gpu_max_kib", "gpu_kib", max))
 UNITS = {"fps": "fps", "s": "1/s", "ms": "ms", "kib": "KiB", "bytes": "bytes"}

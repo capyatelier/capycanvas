@@ -16,6 +16,7 @@ LOW0001                device usb:1-1 product:Ares model:9465X device:Ares trans
 PEN0001                device usb:1-5 product:xppen model:MNP1095 device:xppen transport_id:5
 MID0001                device usb:1-2 product:RosePlus model:DTHA116 device:RosePlus transport_id:2
 TOP0001                device usb:1-3 product:pro model:DTHA140 device:pro transport_id:3
+HIGH0001               device usb:1-6 product:gts7xl model:SM_T878U device:gts7xl transport_id:6
 OFF0001                unauthorized usb:1-4 transport_id:4
 """
 
@@ -50,6 +51,7 @@ class DevicesTest(unittest.TestCase):
         self.assertRegex(output, r"movinkpad11\s+DTHA116\s+mid tier")
         self.assertRegex(output, r"xppen\s+MNP1095\s+mid tier")
         self.assertRegex(output, r"movinkpad14\s+DTHA140\s+top tier")
+        self.assertRegex(output, r"sm_t878u\s+SM_T878U\s+high tier")
         self.assertNotIn("OFF0001", output)
 
     def test_reservation_excludes_other_owners_until_released(self):
