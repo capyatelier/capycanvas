@@ -6110,7 +6110,7 @@ fn advanced_brush_shader(device: &PipelineDevice) -> Deferred<wgpu::ShaderModule
                     include_str!("brush_types.wgsl"), include_str!("advanced_brush.wgsl"),
                     include_str!("brush_math.wgsl"), include_str!("paper_sample.wgsl"), include_str!("contact_field.wgsl"),
                     include_str!("analytic_coverage.wgsl"), include_str!("brush_coverage.wgsl"),
-                    include_str!("contact.wgsl"), include_str!("relief_transfer.wgsl"),include_str!("relief.wgsl"), include_str!("relief_fine.wgsl"),
+                    include_str!("contact.wgsl"), &dry_material::relief_source(u32::MAX),
                     include_str!("selection_clip.wgsl"),
                 ])),
             })

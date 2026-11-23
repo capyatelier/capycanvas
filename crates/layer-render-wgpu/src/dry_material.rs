@@ -111,19 +111,22 @@ pub(super) enum Entries {
     Blend(crate::destination_material::Blender),
 }
 
-pub(super) fn coverage_source(flags:u32)->Cow<'static,str> {
-    let has=|bit:u32| flags==u32::MAX || flags&bit!=0;
+pub(super) fn relief_source(flags:u32)->Cow<'static,str> {
     let fine=flags==u32::MAX || flags&FINE_TIP!=0;
     let contact=if fine {include_str!("relief_fine.wgsl")} else {include_str!("relief_coarse.wgsl")};
     let completed=flags==u32::MAX || flags&COMPLETION!=0;
     let completion=if completed {format!("{}\n{}\n{}",contact.replace("fn relief_contact(","fn relief_segment_contact("),include_str!("relief_completion.wgsl"),
         if fine {include_str!("relief_completion_fine.wgsl")} else {"fn relief_contact(dab:Dab,world:vec2<f32>,paper:f32,held:f32,required:bool)->vec2<f32> {\n    if dab.texture_sign.x!=2.0 {return relief_segment_contact(dab,world,paper,held,required);}\n    return completion_exposure(dab,world,paper);\n}"})} else {String::new()};
-    let relief_contact=if completed {completion.as_str()} else {contact};
+    compose_wgsl(&[include_str!("relief_transfer.wgsl"),include_str!("relief.wgsl"),if completed {completion.as_str()} else {contact}])
+}
+
+pub(super) fn coverage_source(flags:u32)->Cow<'static,str> {
+    let has=|bit:u32| flags==u32::MAX || flags&bit!=0;
     if flags!=u32::MAX && flags&64!=0 {
         compose_wgsl(&[include_str!("brush_math.wgsl"),include_str!("paper_sample.wgsl"),include_str!("contact_field.wgsl"),
-            include_str!("relief_transfer.wgsl"),include_str!("relief.wgsl"),relief_contact,include_str!("bristle_absent.wgsl"),include_str!("dry_footprint.wgsl"),include_str!("brush_alpha.wgsl")])
+            &relief_source(flags),include_str!("bristle_absent.wgsl"),include_str!("dry_footprint.wgsl"),include_str!("brush_alpha.wgsl")])
     } else {
-        let relief=if has(64) {compose_wgsl(&[include_str!("relief_transfer.wgsl"),include_str!("relief.wgsl"),relief_contact])} else {include_str!("relief_absent.wgsl").into()};
+        let relief=if has(64) {relief_source(flags)} else {include_str!("relief_absent.wgsl").into()};
         compose_wgsl(&[include_str!("brush_math.wgsl"),include_str!("paper_sample.wgsl"),include_str!("analytic_coverage.wgsl"),
             include_str!("brush_coverage.wgsl"),include_str!("contact_field.wgsl"),
             if has(1) {include_str!("contact.wgsl")} else {include_str!("contact_absent.wgsl")},&relief,

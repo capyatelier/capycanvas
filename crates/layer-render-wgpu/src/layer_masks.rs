@@ -578,6 +578,44 @@ mod tests {
         }
         assert_eq!(results[0],results[1]);
     }
+
+    #[test]
+    fn a_dry_mask_completion_covers_what_the_same_painted_completion_deposits() {
+        let extent=[256;2];
+        let style=crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::Pencil);
+        assert!(crate::dry_material::dry_flow(&style));
+        for (incoming,weight) in [([-1.,0.],1.),([1.,0.],1.),([-1.,0.],0.)] {
+            let mut document=placement::paint_document(extent,"Completion mask");
+            let mut mask=placement::reveal_all(extent,[0;2]);
+            mask.source.default_coverage=0.;
+            placement::set_mask(&mut document,mask);
+            let body=layer_render::Dab {center:layer_core::Point {x:128.,y:128.},radii:[12.;2],previous:[12.,12.,1.,0.],motion:[6.,0.],
+                contact:[1.,0.,0.,0.],previous_contact:[1.,0.,0.,0.],..crate::layer_tests::dab([1.;4])};
+            let end=[body.completion(incoming,[0.;2],weight)];
+            let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+            crate::test_support::submit_ready(&mut r,FramePacket {reset_layers:true,..crate::test_support::packet(document.scene(),extent)}).unwrap();
+            let covered=SourceTarget::Coverage(placement::mask_snapshot(&document).target);
+            let painted=placement::target(&document);
+            for (stroke,target) in [(1,covered),(2,painted)] {
+                let mut batch=crate::test_support::dab_batch(target,style.clone(),end[0].bounds());
+                batch.stroke_id=layer_core::StrokeId(stroke);
+                crate::test_support::submit_ready(&mut r,FramePacket {dabs:&end,dab_batches:std::slice::from_ref(&batch),
+                    ..crate::test_support::packet(document.scene(),extent)}).unwrap();
+            }
+            let coverage:Vec<f32>=crate::test_support::mask_page_bytes(&r,covered,[0,0]).as_chunks::<4>().0.iter().map(|v|f32::from_le_bytes(*v)).collect();
+            let page=r.paint_layers.iter().find(|layer|layer.id==painted).unwrap().pages.iter().find(|page|page.coordinate==[0,0]).unwrap();
+            let deposit=crate::test_support::float_pixels(&r,&r.read_color_page(painted,page,false,None).unwrap().value().texture);
+            let peak=deposit.iter().map(|p|p[3]).fold(0f32,f32::max);
+            assert_eq!(peak>0.1,weight>0.,"incoming={incoming:?} weight={weight}: the painted completion deposits {peak}");
+            for side in [-1f32,1.] {
+                let at=((128*PAGE_SIZE) as f32+128.+side*9.) as usize;
+                assert!((coverage[at]-deposit[at][3]).abs()<2e-3,
+                    "incoming={incoming:?} weight={weight} side={side}: mask {} against painted {}",coverage[at],deposit[at][3]);
+            }
+            let error=coverage.iter().zip(&deposit).map(|(c,p)|(c-p[3]).abs()).fold(0f32,f32::max);
+            assert!(error<2e-3,"incoming={incoming:?} weight={weight}: the mask differs from the painted completion by {error}");
+        }
+    }
 }
 
 impl WgpuRasterizer {

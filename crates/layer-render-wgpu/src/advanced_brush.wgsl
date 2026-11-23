@@ -51,6 +51,7 @@ struct VertexOutput {
     @location(11) @interpolate(flat) geometry: vec4<f32>,
     @location(12) @interpolate(flat) motion: vec2<f32>,
     @location(13) @interpolate(flat) cached_material: vec4<f32>,
+    @location(14) @interpolate(flat) contact_sign: vec2<f32>,
 }
 
 @vertex
@@ -104,6 +105,7 @@ fn vertex_main(input: VertexInput) -> VertexOutput {
     output.geometry = vec4<f32>(input.radii, input.rotation);
     output.motion = input.motion;
     output.cached_material = input.material;
+    output.contact_sign = input.texture_sign;
     return output;
 }
 
@@ -113,7 +115,7 @@ fn advanced_color(input: VertexOutput, opacity: f32) -> vec4<f32> {
         var coverage = 0.0;
         if contact_feature(64u,style.contact_a.z>0.5) {
             let dab=Dab(input.center,input.geometry.xy,input.geometry.zw,input.motion,input.color,
-                input.flow_hardness.x,1.0,vec2<f32>(1.0),input.cached_material,input.previous,
+                input.flow_hardness.x,1.0,input.contact_sign,input.cached_material,input.previous,
                 input.contact,input.previous_contact,input.material,
                 vec4<f32>(input.texture_sign,input.flow_hardness.y,input.min_radius));
             coverage=relief_contact(dab,input.world,field.y,0.0,true).x;
