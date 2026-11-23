@@ -27,7 +27,8 @@ impl Navigator {
     pub(crate) fn outstanding(&self,r:&WgpuRasterizer)->Option<crate::frame_demand::Outstanding> {
         if self.held(r) || !self.pending() || r.scale_display.as_ref().is_some_and(|display|self.behind_contact(display)) {return None;}
         let cache=self.cache.as_ref()?;
-        cache.cells_demand(r,false).or_else(||cache.residual_demand(r))
+        cache.cells_demand(r,false).or_else(||cache.residual_demand(r)
+            .filter(|demand|self.view().is_none() || *demand!=crate::frame_demand::Outstanding::Blocked(crate::frame_demand::Input::Residency)))
     }
     pub fn waiting_for_name(&self)->bool {
         self.cache.as_ref().is_some_and(|cache|cache.presented_matches_expected().is_none())

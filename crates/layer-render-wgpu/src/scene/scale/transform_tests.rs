@@ -735,12 +735,15 @@ fn selection_standby_waits_for_cold_samples_without_deferring_the_ready_frame() 
 struct Refusing {engine:layer_engine::CanvasEngine<WgpuRasterizer>,wakes:std::sync::mpsc::Receiver<()>,layer:SourceTarget,_held:Option<layer_core::MemoryOwner>}
 impl Refusing {
     fn filled() -> Self {
-        let extent=[9504,6336];let viewport=[2560u32,1600];
+        Self::filled_in([9504,6336],|color|crate::memory::memory_tests::renderer(color,layer_core::DeviceMemoryFacts {budget_bytes:Some(4<<30),..Default::default()}).unwrap())
+    }
+    fn filled_in(extent:[u32;2],renderer:impl FnOnce(layer_core::color::DocumentColor)->WgpuRasterizer) -> Self {
+        let viewport=[2560u32,1600];
         let mut artwork=Artwork::new(extent).unwrap();
         let (occurrence,layer)=crate::test_support::add_paint(&mut artwork,"Paint",extent);
         let mut doc=Document::from_artwork(artwork).unwrap();
         doc.working.target=Some(layer);doc.working.occurrence=Some(occurrence);
-        let mut r=crate::memory::memory_tests::renderer(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(4<<30),..Default::default()}).unwrap();
+        let mut r=renderer(doc.composition().color);
         let (woken,wakes)=std::sync::mpsc::channel();
         r.set_preparation_wake(Arc::new(move||{let _=woken.send(());}));
         let zoom=(viewport[0] as f32/extent[0] as f32).min(viewport[1] as f32/extent[1] as f32);
@@ -752,7 +755,6 @@ impl Refusing {
         refusing.engine.append_raster_operation(layer,layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,
             kind:layer_core::RasterOperationKind::Fill {color:[0.8,0.2,0.1,1.],texture:Default::default(),alpha_locked:false,edges:None,underfill:None}}).unwrap();
         refusing.settle().expect("the filled layer settles");
-        assert!(refusing.engine.backend().scale_display.as_ref().is_some_and(|cache|cache.plan.level>0 && cache.evaluation==Evaluation::Display));
         refusing
     }
     fn until(&mut self,done:impl Fn(&layer_engine::CanvasEngine<WgpuRasterizer>)->bool)->Result<(),String> {
@@ -796,6 +798,7 @@ impl Refusing {
 #[test]
 fn a_preview_the_grant_refuses_lets_the_canvas_settle() {
     let mut canvas=Refusing::filled();
+    assert!(canvas.engine.backend().scale_display.as_ref().is_some_and(|cache|cache.plan.level>0 && cache.evaluation==Evaluation::Display));
     let inputs=canvas.engine.backend().transforms.as_ref().unwrap().storage_bytes();
     canvas.leave(128<<20);
     canvas.show(canvas.pose(false,0.));
@@ -825,4 +828,23 @@ fn a_prepared_preview_input_is_admitted_once_so_later_poses_draw() {
             .expect("a moved pose draws from the input the preview already holds");
     }
     assert_eq!(canvas.engine.backend().refused_transform,None,"no pose was refused");
+}
+
+#[test]
+fn a_navigator_the_grant_refuses_keeps_its_picture_and_lets_the_canvas_settle() {
+    let total=8_070_660u64<<10;
+    let mut canvas=Refusing::filled_in([4248,2832],|color| {
+        let budget=layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {total_bytes:Some(total),available_bytes:Some(1_486_000<<10),
+            low_memory_bytes:Some(216<<20),tablet:true,..Default::default()});
+        *WgpuRasterizer::new_native_headless_in(color,layer_core::DeviceMemoryFacts {heap_bytes:Some(total),unified:true,..Default::default()},budget).unwrap()
+    });
+    assert!(canvas.engine.backend().navigator.view().is_some(),"the filled layer has a Navigator picture");
+    canvas.show(canvas.pose(false,0.));
+    canvas.settle().expect("a Navigator refresh the grant refuses must not hold the canvas");
+    let navigator=&canvas.engine.backend().navigator;
+    assert!(navigator.pending(),"the grant refused the Navigator's refresh");
+    assert!(navigator.view().is_some(),"the Navigator keeps its last picture");
+    canvas.engine.set_transform_preview(None).unwrap();canvas.engine.render_frame().unwrap();
+    canvas.settle().expect("cancelling the preview settles");
+    assert!(!canvas.engine.backend().navigator.pending(),"the Navigator's picture is current once the preview ends");
 }
