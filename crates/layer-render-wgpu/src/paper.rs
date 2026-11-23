@@ -943,6 +943,53 @@ mod tests {
         seam / interior.max(1.)
     }
 
+    fn slope_pass(renderer: &WgpuRasterizer, programs: &SlopePrograms, mip: bool, input: &wgpu::TextureView, [width, height]: [u32; 2]) -> (wgpu::Texture, Vec<[f32; 2]>) {
+        let target = renderer.device.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: SLOPE_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC, view_formats: &[] });
+        let uniform = initialized_buffer(&renderer.device, &wgpu::util::BufferInitDescriptor { label: None,
+            contents: &[1f32, 0., 0., 0.].iter().flat_map(|v| v.to_ne_bytes()).collect::<Vec<_>>(), usage: wgpu::BufferUsages::UNIFORM }).unwrap();
+        let group = bindings::group(&renderer.device, "paper slope", &programs.layout, [uniform.as_entire_binding(), wgpu::BindingResource::TextureView(input)]);
+        let row = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let readback = renderer.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: u64::from(row * height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+        let mut encoder = renderer.device.create_command_encoder(&Default::default());
+        {
+            let view = target.create_view(&Default::default());
+            let mut pass = Papers::pass(&mut encoder, &view, wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT));
+            pass.set_pipeline(if mip { &programs.mip } else { &programs.slope });
+            pass.set_bind_group(0, &group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        encoder.copy_texture_to_buffer(target.as_image_copy(), wgpu::TexelCopyBufferInfo { buffer: &readback,
+            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: None } }, target.size());
+        renderer.queue.submit([encoder.finish()]);
+        readback.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        renderer.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        let data = readback.slice(..).get_mapped_range().unwrap();
+        let half = |bytes: &[u8]| layer_core::color::f16::from_bits(u16::from_le_bytes([bytes[0], bytes[1]])).to_f32();
+        let slopes = data.chunks(row as usize).flat_map(|r| r[..(width * 4) as usize].chunks(4).map(|t| [half(&t[..2]), half(&t[2..])]).collect::<Vec<_>>()).collect();
+        drop(data);
+        (target, slopes)
+    }
+
+    #[test]
+    fn an_odd_slope_mip_averages_the_whole_period() {
+        let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let programs = SlopePrograms::new(&renderer.device);
+        pollster::block_on(renderer.compilation.prepare_all([&programs.slope, &programs.mip])).unwrap();
+        let heights = renderer.device.create_texture(&wgpu::TextureDescriptor { label: None,
+            size: wgpu::Extent3d { width: 3, height: 1, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[] });
+        renderer.queue.write_texture(heights.as_image_copy(), &[255, 0, 0],
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(3), rows_per_image: None }, heights.size());
+        let (native, slopes) = slope_pass(&renderer, &programs, false, &heights.create_view(&Default::default()), [3, 1]);
+        assert_eq!(slopes, [[0., 0.], [-0.5, 0.], [0.5, 0.]]);
+        let (_, reduced) = slope_pass(&renderer, &programs, true, &native.create_view(&Default::default()), [1, 1]);
+        assert_eq!(reduced, [[0., 0.]], "the reduced slope of a whole period is its mean");
+    }
+
     #[test]
     fn every_built_in_paper_bakes_a_seamless_tile_with_its_relief() {
         let mut renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();

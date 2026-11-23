@@ -27,7 +27,22 @@ fn paper_slope(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32>
 
 @fragment
 fn paper_slope_mip(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    let q = vec2<i32>(floor(position.xy)) * 2;
-    let sum = slope_texel(q).xy + slope_texel(q + vec2(1, 0)).xy + slope_texel(q + vec2(0, 1)).xy + slope_texel(q + vec2(1, 1)).xy;
-    return vec4<f32>(sum * .25, 0., 1.);
+    let source = vec2<i32>(textureDimensions(slope_source));
+    let reduced = max(source / 2, vec2(1));
+    let q = vec2<i32>(floor(position.xy));
+    if all(source == reduced * 2) {
+        let p = q * 2;
+        let sum = slope_texel(p).xy + slope_texel(p + vec2(1, 0)).xy + slope_texel(p + vec2(0, 1)).xy + slope_texel(p + vec2(1, 1)).xy;
+        return vec4<f32>(sum * .25, 0., 1.);
+    }
+    let low = vec2<f32>(q * source) / vec2<f32>(reduced);
+    let high = vec2<f32>((q + 1) * source) / vec2<f32>(reduced);
+    var sum = vec2(0.);
+    for (var y = i32(floor(low.y)); f32(y) < high.y; y++) {
+        let height = min(high.y, f32(y + 1)) - max(low.y, f32(y));
+        for (var x = i32(floor(low.x)); f32(x) < high.x; x++) {
+            sum += slope_texel(vec2(x, y)).xy * (min(high.x, f32(x + 1)) - max(low.x, f32(x))) * height;
+        }
+    }
+    return vec4<f32>(sum / ((high.x - low.x) * (high.y - low.y)), 0., 1.);
 }
