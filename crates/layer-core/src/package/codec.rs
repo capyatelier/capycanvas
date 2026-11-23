@@ -58,6 +58,18 @@ fn metadata(artwork:&Artwork,resources:&mut ResourceInventory) -> Result<Option<
     }
     Ok((!fields.is_empty()).then_some(Value::Object(fields)))
 }
+pub(crate) fn tile_record_cost()->[usize;2] {
+    static COST:std::sync::OnceLock<[usize;2]>=std::sync::OnceLock::new();
+    *COST.get_or_init(|| {
+        fn values(value:&Value)->usize {1+match value {Value::Array(items)=>items.iter().map(values).sum(),Value::Object(fields)=>fields.values().map(values).sum(),_=>0}}
+        let id=PortableId::from_bytes([u8::MAX;16]);
+        let coordinate=crate::MAX_EXTENT.div_ceil(crate::raster::TILE_SIZE);
+        let records=[json!({"coordinate":[coordinate,coordinate],"plane":"watercolor_wetness","resource":resources::reference(id)}),
+            json!({"id":id,"type":"capy.raster-tile/1","data":{"channels":"gray_alpha","depth":"f32","transfer":"profile","alpha":"straight"},"encoding":"capy.deflate-tile/1",
+                "location":{"pack":format!("packs/{id}.bin"),"offset":u64::MAX.to_string()},"bytes":crate::raster::MAX_COMPRESSED_TILE_BYTES.to_string(),"crc32":"ffffffff"})];
+        [records.iter().map(|record|crate::json_len(record)+1).sum(),records.iter().map(values).sum()]
+    })
+}
 pub(crate) fn admit_metadata(artwork:&Artwork,limits:crate::ProjectLimits)->Result<(),String> {
     if artwork.paint.iter().any(|(_,_,p)|!p.operations.is_empty()) || artwork.coverage.iter().any(|(_,_,p)|!p.operations.is_empty()) {return Ok(());}
     for raster in artwork.paint.iter().map(|(_,_,p)|&p.raster).chain(artwork.coverage.iter().map(|(_,_,p)|&p.raster)) {

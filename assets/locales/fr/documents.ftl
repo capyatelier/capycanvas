@@ -195,6 +195,7 @@ documents-prints-at = Taille d’impression : { $width } × { $height } { $unit
 documents-too-large-side = Trop grand pour cet appareil : les côtés ne dépassent pas { $maximum } px
 documents-too-large-memory = Trop grand pour la mémoire disponible sur cet appareil
 documents-refusal-disk-space = Espace disque libre insuffisant. Libérer de l’espace disque et réessayer.
+documents-refusal-save-capacity = Ce dessin contient autant de pixels qu’un fichier de dessin peut en enregistrer. Supprimer, fusionner ou recadrer des calques pour faire de la place.
 documents-megapixels = { $megapixels } MP
 documents-layer-memory = { $size } par calque
 documents-layer-memory-available = { $size } par calque · { $available } disponibles

@@ -119,6 +119,7 @@ pub type Revision = u64;
 /// Largest canvas or layer extent, in pixels per side.
 pub const MAX_EXTENT: u32 = 65536;
 pub const MEMORY_BUDGET_EXCEEDED: &str = "The drawing exceeds the memory limit";
+pub const SAVE_CAPACITY_EXCEEDED: &str = "The drawing holds the most pixels a drawing file can save";
 
 #[derive(
     Clone,
@@ -2614,6 +2615,7 @@ impl Editor {
         retained.validate_resources().map_err(DocumentError::InvalidArtwork)?;
         let mut candidate = self.document.clone();
         let inverse = HistoryEntry::new(candidate.apply(edit)?, self.checkpoint);
+        candidate.admit_saved_tiles(self.document.saved_tiles())?;
         let mut restored = candidate.clone();
         let forward = HistoryEntry::new(restored.apply(inverse.edit.clone())?, self.checkpoint);
         let inventory=if added_assets && admission {

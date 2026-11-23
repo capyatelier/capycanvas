@@ -195,6 +195,7 @@ documents-prints-at = 列印尺寸 { $width } × { $height } { $unit }
 documents-too-large-side = 對此裝置而言太大：邊長最多 { $maximum } px
 documents-too-large-memory = 超出此裝置的可用記憶體
 documents-refusal-disk-space = 磁碟可用空間不足。請釋放磁碟空間後再試一次。
+documents-refusal-save-capacity = 此繪圖的像素已達繪圖檔案可儲存的上限。請刪除、合併或裁切圖層以騰出空間。
 documents-megapixels = { $megapixels } MP
 documents-layer-memory = 每個圖層 { $size }
 documents-layer-memory-available = 每個圖層 { $size } · 可用 { $available }

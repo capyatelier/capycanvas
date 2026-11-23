@@ -12,6 +12,7 @@ pub fn refusal_message(error: &str) -> Option<MessageId> {
         layer_core::MEMORY_BUDGET_EXCEEDED => Some(MessageId::DOCUMENTS_REFUSAL_ADMISSION_BUDGET),
         crate::DRAWING_MEMORY_EXCEEDED => Some(MessageId::DOCUMENTS_TOO_LARGE_MEMORY),
         layer_core::package::storage_budget::STORAGE_UNAVAILABLE => Some(MessageId::DOCUMENTS_REFUSAL_DISK_SPACE),
+        layer_core::SAVE_CAPACITY_EXCEEDED => Some(MessageId::DOCUMENTS_REFUSAL_SAVE_CAPACITY),
         _ => None,
     }
 }
@@ -691,6 +692,7 @@ mod localization_tests {
             (layer_core::MEMORY_BUDGET_EXCEEDED.to_string(),MessageId::DOCUMENTS_REFUSAL_ADMISSION_BUDGET),
             (crate::DRAWING_MEMORY_EXCEEDED.to_string(),MessageId::DOCUMENTS_TOO_LARGE_MEMORY),
             (layer_core::package::storage_budget::STORAGE_UNAVAILABLE.to_string(),MessageId::DOCUMENTS_REFUSAL_DISK_SPACE),
+            (layer_core::SAVE_CAPACITY_EXCEEDED.to_string(),MessageId::DOCUMENTS_REFUSAL_SAVE_CAPACITY),
         ] {
             let mut s=session(Platform::Windows);s.set_localization(Localizer::shared(UiLanguage::Italian));
             s.notify(text);

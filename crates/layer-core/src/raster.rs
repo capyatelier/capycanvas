@@ -588,6 +588,7 @@ pub struct RasterRevision(Arc<RasterPublication>, Arc<Mutex<Option<Arc<crate::li
 struct RasterPublication {
     data: Publication<RasterData>,
     pending_bytes: AtomicU64,
+    pending_tiles: AtomicU64,
 }
 impl Default for RasterRevision {
     fn default() -> Self {
@@ -633,6 +634,7 @@ impl RasterRevision {
         Self(Arc::new(RasterPublication {
             data: Publication::default(),
             pending_bytes: AtomicU64::new(bytes),
+            pending_tiles: AtomicU64::new(u64::MAX),
         }), Arc::default())
     }
     /// A producer admitting a larger native publication must account its
@@ -640,6 +642,16 @@ impl RasterRevision {
     /// published tile identities replace the reservation in history accounting.
     pub fn reserve_pending_bytes(&self, bytes: u64) {
         self.0.pending_bytes.fetch_max(bytes, Ordering::Relaxed);
+    }
+    pub fn bound_pending_tiles(&self, tiles: usize) {
+        self.0.pending_tiles.fetch_min(tiles as u64, Ordering::Relaxed);
+    }
+    pub fn tile_bound(&self, domain_tiles: usize) -> usize {
+        match self.try_data() {
+            Some(Ok(data)) => data.tiles.len(),
+            Some(Err(_)) => 0,
+            None => usize::try_from(self.0.pending_tiles.load(Ordering::Relaxed)).unwrap_or(usize::MAX).min(domain_tiles),
+        }
     }
     pub(crate) fn pending_bytes(&self) -> usize {
         usize::try_from(self.0.pending_bytes.load(Ordering::Relaxed)).unwrap_or(usize::MAX)

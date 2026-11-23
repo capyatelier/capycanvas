@@ -5254,6 +5254,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let preview = self.sync_previews(now_ns, presentation_ns);
         let clone_source = self.engine.clone_source();
         let budget_completions=self.engine.metrics().input_budget_completions;
+        let tile_refusals=self.engine.metrics().saved_tile_refusals;
         let memory_refusals=self.engine.backend().stroke_memory_refusals();
         if let Err(cause)=self.engine.render_frame_for(now_ns,presentation_ns) {
             if self.recover_failed_edits(false)? {
@@ -5272,6 +5273,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if self.engine.backend().stroke_memory_refusals()!=memory_refusals {
             self.raise_message_notice(MessageId::COMMON_STROKE_MEMORY);
+        }
+        if self.engine.metrics().saved_tile_refusals!=tile_refusals {
+            self.raise_message_notice(MessageId::DOCUMENTS_REFUSAL_SAVE_CAPACITY);
         }
         if self.engine.clone_source() != clone_source {
             self.sync_retouch_points();

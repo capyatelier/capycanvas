@@ -195,6 +195,7 @@ documents-prints-at = Druckgröße { $width } × { $height } { $unit }
 documents-too-large-side = Zu groß für dieses Gerät: höchstens { $maximum } px pro Seite
 documents-too-large-memory = Zu groß für den verfügbaren Speicher dieses Geräts
 documents-refusal-disk-space = Nicht genügend freier Speicherplatz. Speicherplatz freigeben und erneut versuchen.
+documents-refusal-save-capacity = Diese Zeichnung enthält so viele Pixel, wie eine Zeichnungsdatei speichern kann. Ebenen löschen, zusammenführen oder zuschneiden, um Platz zu schaffen.
 documents-megapixels = { $megapixels } MP
 documents-layer-memory = { $size } pro Ebene
 documents-layer-memory-available = { $size } pro Ebene · { $available } verfügbar

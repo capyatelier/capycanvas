@@ -196,6 +196,7 @@ documents-prints-at = 印刷サイズ { $width } × { $height } { $unit }
 documents-too-large-side = このデバイスには大きすぎます。辺の長さは{ $maximum } pxまでです。
 documents-too-large-memory = このデバイスの空きメモリには大きすぎます。
 documents-refusal-disk-space = ディスクの空き容量が足りません。空き容量を増やしてから、もう一度お試しください。
+documents-refusal-save-capacity = この描画には、描画ファイルに保存できる最大のピクセルが含まれています。レイヤーを削除、結合、または切り抜いて空きを作ってください。
 documents-megapixels = { $megapixels } MP
 documents-layer-memory = 1レイヤーあたり{ $size }
 documents-layer-memory-available = 1レイヤーあたり{ $size } · 空き{ $available }

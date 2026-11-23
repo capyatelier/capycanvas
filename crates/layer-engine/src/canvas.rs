@@ -62,6 +62,7 @@ pub struct EngineMetrics {
     pub frames: u64,
     pub committed_strokes: u64,
     pub input_budget_completions: u64,
+    pub saved_tile_refusals: u64,
     pub platform_prediction_frames: u64,
     pub engine_prediction_frames: u64,
 }
@@ -114,6 +115,42 @@ struct ActiveStroke {
     barrel_twist: bool,
     momentum: Option<(Vec<Dab>, usize)>,
     taper: Option<HeldStroke>,
+    room: TileRoom,
+}
+
+#[derive(Clone, Debug)]
+struct TileRoom {
+    before: Option<Arc<layer_core::raster::RasterData>>,
+    plane: layer_core::raster::RasterPlane,
+    planes: usize,
+    layer_planes: usize,
+    pages: [u32; 2],
+    free: usize,
+    added: std::collections::BTreeSet<[u32; 2]>,
+    refused: bool,
+}
+impl TileRoom {
+    fn whole(&self) -> usize {
+        (self.pages[0] as usize).saturating_mul(self.pages[1] as usize).saturating_mul(self.layer_planes)
+    }
+    fn admits(&mut self, dab: Dab) -> bool {
+        if self.free >= self.whole() { return true; }
+        let damage = damage_for_dabs(&[dab]);
+        let page = |value: f32, pages: u32| ((value / layer_core::raster::TILE_SIZE as f32).max(0.) as u32).min(pages);
+        let columns = page(damage.min.x.floor(), self.pages[0])..page(damage.max.x.ceil() + layer_core::raster::TILE_SIZE as f32 - 1., self.pages[0]);
+        let rows = page(damage.min.y.floor(), self.pages[1])..page(damage.max.y.ceil() + layer_core::raster::TILE_SIZE as f32 - 1., self.pages[1]);
+        let fresh: Vec<_> = rows.flat_map(|y| columns.clone().map(move |x| [x, y])).filter(|coordinate| !self.added.contains(coordinate)
+            && self.before.as_ref().is_none_or(|data| !data.tiles.contains_key(&layer_core::raster::TileKey { plane: self.plane, coordinate: *coordinate }))).collect();
+        let needed = fresh.len().saturating_mul(self.planes);
+        if needed > self.free { self.refused = true; return false; }
+        self.free -= needed;
+        self.added.extend(fresh);
+        true
+    }
+    fn bound(&self, before: &layer_core::raster::RasterRevision) -> usize {
+        if self.free >= self.whole() { return self.whole(); }
+        before.tile_bound(self.whole()).saturating_add(self.added.len().saturating_mul(self.planes)).min(self.whole())
+    }
 }
 
 #[derive(Clone)]
@@ -1165,6 +1202,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         };
         let layer = stroke.target;
         let publication = layer_core::raster::RasterRevision::pending();
+        if let Some(previous) = &self.completed_publication { publication.bound_pending_tiles(previous.tile_bound(usize::MAX)); }
         self.editor.amend(Edit::SetRaster { target: layer, revision: publication.clone() })?;
         self.completed_publication = Some(publication);
         self.rebuild_completed = true;
@@ -2060,6 +2098,17 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 style.selection = self.document().working.selection.as_ref().map(|selection| {
                     std::sync::Arc::new(selection.translated(layer_core::offsets::point(self.document().target_offset(target).map(|v| -v))))
                 });
+                let before = self.document().target_raster(target).unwrap().clone();
+                let room = TileRoom {
+                    before: before.try_data().and_then(Result::ok),
+                    plane: if is_mask { layer_core::raster::RasterPlane::Mask } else { layer_core::raster::RasterPlane::Color },
+                    planes: 1 + usize::from(!is_mask && style.execution == BrushExecution::Watercolor),
+                    layer_planes: if is_mask { 1 } else { 2 },
+                    pages: self.document().target_extent(target).map(|side| side.div_ceil(layer_core::raster::TILE_SIZE)),
+                    free: layer_core::ProjectLimits::default().tile_capacity().saturating_sub(self.document().saved_tiles()),
+                    added: Default::default(),
+                    refused: false,
+                };
                 let active = ActiveStroke {
                     paint_color: (!is_mask
                         && tool == StrokeTool::Brush
@@ -2070,7 +2119,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                         && brush.color_rgba_linear[3] > 0.)
                         .then_some(self.settings.paint_color)
                         .flatten(),
-                    before: self.document().target_raster(target).unwrap().clone(),
+                    before,
                     id,
                     target,
                     tool,
@@ -2087,6 +2136,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     barrel_twist: event.flags.contains(SampleFlags::BARREL_TWIST),
                     momentum: None,
                     taper: None,
+                    room,
                 };
                 self.active_stroke = Some(active);
                 self.admitted_pen |= event.tool.is_pen() && !event.flags.contains(SampleFlags::UNCLASSIFIED);
@@ -2256,6 +2306,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 stroke.paper = active.style.paper.clone();
                 self.completed_stroke = Some(stroke);
                 let publication = layer_core::raster::RasterRevision::pending();
+                publication.bound_pending_tiles(active.room.bound(&active.before));
                 self.completed_at = None;
                 self.completed_before = Some(active.before);
                 self.completed_clone_start = active.clone_start;
@@ -2312,6 +2363,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if terminal {
             damage = damage.union(self.dab_generator.finish(&active.brush, &mut self.dabs));
         }
+        if self.admit_stroke_dabs(start) {
+            damage = damage_for_dabs(&self.dabs[start..]);
+        }
         let point_index = input.map_or(self.builder.real_points().len(), |(_, index)| index);
         let active = self.active_stroke.as_mut().expect("stroke remains active");
         if let Some(taper) = active.taper.as_mut() {
@@ -2343,6 +2397,25 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 },
             );
         }
+    }
+
+    fn admit_stroke_dabs(&mut self, start: usize) -> bool {
+        let Some(active) = self.active_stroke.as_mut() else { return false };
+        let refused = active.room.refused;
+        let generated = self.dabs.len();
+        let mut kept = start;
+        for index in start..generated {
+            let dab = self.dabs[index];
+            if active.room.admits(dab) {
+                self.dabs[kept] = dab;
+                kept += 1;
+            }
+        }
+        self.dabs.truncate(kept);
+        if active.room.refused && !refused {
+            self.metrics.saved_tile_refusals = self.metrics.saved_tile_refusals.saturating_add(1);
+        }
+        kept != generated
     }
 
     fn release_taper(&mut self, release: Release) {
@@ -2415,6 +2488,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             let start = self.dabs.len();
             self.dabs.extend_from_slice(&pending[..chunk_len]);
             consumed += chunk_len;
+            self.admit_stroke_dabs(start);
+            if self.dabs.len() == start {
+                continue;
+            }
             let damage = damage_for_dabs(&self.dabs[start..]);
             push_batches(
                 &mut self.batches,
@@ -2428,7 +2505,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     stroke_start,
                     stroke_end: false,
                     first_dab: start.min(u32::MAX as usize) as u32,
-                    dab_count: chunk_len.min(u32::MAX as usize) as u32,
+                    dab_count: (self.dabs.len() - start).min(u32::MAX as usize) as u32,
                     style: style.clone(),
                     damage,
                 },

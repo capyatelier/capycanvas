@@ -195,6 +195,7 @@ documents-prints-at = Khổ in { $width } × { $height } { $unit }
 documents-too-large-side = Quá lớn cho thiết bị này: mỗi cạnh tối đa { $maximum } px
 documents-too-large-memory = Quá lớn so với bộ nhớ còn trống của thiết bị này
 documents-refusal-disk-space = Không đủ dung lượng đĩa trống. Hãy giải phóng dung lượng đĩa rồi thử lại.
+documents-refusal-save-capacity = Bản vẽ này đã chứa nhiều điểm ảnh nhất mà một tệp bản vẽ có thể lưu. Hãy xóa, gộp hoặc cắt bớt lớp để có thêm chỗ.
 documents-megapixels = { $megapixels } MP
 documents-layer-memory = { $size } mỗi lớp
 documents-layer-memory-available = { $size } mỗi lớp · còn trống { $available }

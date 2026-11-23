@@ -195,6 +195,7 @@ documents-prints-at = Se imprime a { $width } × { $height } { $unit }
 documents-too-large-side = Demasiado grande para este dispositivo: los lados llegan como máximo a { $maximum } px
 documents-too-large-memory = Demasiado grande para la memoria disponible en este dispositivo
 documents-refusal-disk-space = No hay suficiente espacio libre en disco. Libera espacio y vuelve a intentarlo.
+documents-refusal-save-capacity = Este dibujo contiene tantos píxeles como puede guardar un archivo de dibujo. Elimina, combina o recorta capas para hacer sitio.
 documents-megapixels = { $megapixels } MP
 documents-layer-memory = { $size } por capa
 documents-layer-memory-available = { $size } por capa · { $available } disponibles

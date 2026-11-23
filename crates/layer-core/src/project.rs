@@ -79,13 +79,36 @@ impl Default for ProjectLimits {
     }
 }
 
+const OTHER_RECORDS_SHARE: usize = 16;
 impl ProjectLimits {
     pub fn for_import() -> Self {
         Self::default()
     }
+    pub fn tile_capacity(&self) -> usize {
+        let [bytes, values] = crate::package::codec::tile_record_cost();
+        let manifest = crate::package::manifest::ManifestLimits::default();
+        let metadata = usize::try_from(self.metadata_bytes).unwrap_or(usize::MAX).min(manifest.metadata_bytes);
+        let tiles = [metadata / bytes, manifest.traversal_nodes / values, manifest.resources].into_iter().min().unwrap_or(0);
+        tiles - tiles / OTHER_RECORDS_SHARE
+    }
 }
 
 impl Document {
+    pub fn saved_tiles(&self)->usize{
+        let mut roots=RootInventory::default();roots.document(self);
+        let mut owners=BTreeSet::new();
+        let sources=roots.sources.iter().filter(|source|owners.insert(Arc::as_ptr(source) as usize)).map(|source|source.tiles.len()).sum::<usize>();
+        self.scene().targets().filter(|target|!matches!(target,SourceTarget::Selection(_))).filter_map(|target|{
+            let domain=self.scene().target_extent(target).map(|side|side.div_ceil(raster::TILE_SIZE) as usize);
+            let planes=if matches!(target,SourceTarget::Coverage(_)) {1} else {2};
+            Some(self.scene().raster(target)?.tile_bound(domain[0].saturating_mul(domain[1]).saturating_mul(planes)))
+        }).fold(sources,usize::saturating_add)
+    }
+    pub fn admit_saved_tiles(&self,before:usize)->Result<(),DocumentError>{
+        let tiles=self.saved_tiles();
+        if tiles>before && tiles>ProjectLimits::default().tile_capacity() {return Err(DocumentError::InvalidLayerOperation(crate::SAVE_CAPACITY_EXCEEDED));}
+        Ok(())
+    }
     pub fn validate(&self,limits:ProjectLimits)->Result<(),String>{
         self.validate_payloads().map_err(|e|e.to_string())?;
         self.admit(limits)?;
@@ -173,5 +196,63 @@ mod tests {
         let bytes=code.values().sum();
         document.admit(ProjectLimits {asset_bytes:bytes,..Default::default()}).unwrap();
         assert!(document.admit(ProjectLimits {asset_bytes:bytes-1,..Default::default()}).is_err());
+    }
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::*;
+    use crate::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey, TILE_SIZE};
+    fn layer(document: &mut Document, tiles: &[RasterTile], grid: [u32; 2]) -> OccurrenceHandle {
+        let source = document.working.occurrence.unwrap();
+        let (edit, created) = document.duplicate_layers_edit(&[source]).unwrap();
+        document.apply(edit).unwrap();
+        let target = document.scene().source_target(created[0]).unwrap();
+        *document.target_raster_mut(target).unwrap() = RasterRevision::backed(RasterData { tiles: tiles.iter().enumerate().map(|(index, tile)|
+            (TileKey { plane: RasterPlane::Color, coordinate: [index as u32 % grid[0], index as u32 / grid[0]] }, tile.clone())).collect(), ..Default::default() });
+        created[0]
+    }
+    fn unique(document: &Document, count: usize) -> Vec<RasterTile> {
+        let descriptor = document.composition().color.paint_descriptor();
+        let compressed = TileBlob::encode(descriptor, &vec![0; descriptor.byte_len([TILE_SIZE; 2]).unwrap()]).unwrap().compressed_on_worker().unwrap().to_vec();
+        (0..count).map(|_| RasterTile::backed(TileBlob::from_verified_resource(PortableId::random(), descriptor, compressed.as_slice().into()).unwrap())).collect()
+    }
+
+    #[test]
+    fn the_tile_capacity_covers_every_unique_tile_record_a_save_or_recovery_writes() {
+        let grid = [16, 16];
+        let mut document = Document::new(PortableId::random(), grid[0] * TILE_SIZE, grid[1] * TILE_SIZE, DocumentNames { paint: "ink".into(), paper: "paper".into() });
+        let empty = crate::package::codec::PreparedPackage::prepare(&document.artwork.capture(crate::authored::CaptureCheckpoint {owner:1,document:document.artwork.id,session_generation:1,artwork_generation:1,working_generation:1,edit_checkpoint:1}).unwrap(), None, &std::sync::atomic::AtomicBool::new(false)).unwrap().manifest().len();
+        let tiles = unique(&document, (grid[0] * grid[1]) as usize);
+        layer(&mut document, &tiles, grid);
+        let full = crate::package::codec::PreparedPackage::prepare(&document.artwork.capture(crate::authored::CaptureCheckpoint {owner:1,document:document.artwork.id,session_generation:1,artwork_generation:1,working_generation:1,edit_checkpoint:2}).unwrap(), None, &std::sync::atomic::AtomicBool::new(false)).unwrap().manifest().len();
+        let [bytes, _] = crate::package::codec::tile_record_cost();
+        assert!((full - empty) / tiles.len() < bytes, "{} manifest bytes per tile against an estimate of {bytes}", (full - empty) / tiles.len());
+        let capacity = ProjectLimits::default().tile_capacity();
+        let full_layer = (crate::MAX_EXTENT / TILE_SIZE).pow(2) as usize;
+        assert!(capacity > 2 * full_layer && capacity * bytes < 63 * 1024 * 1024, "{capacity} tiles of {bytes} bytes must fit the package and recovery metadata");
+    }
+
+    #[test]
+    fn edits_that_would_pass_the_save_capacity_are_refused_and_others_still_apply() {
+        let grid = [256, 256];
+        let mut document = Document::new(PortableId::random(), grid[0] * TILE_SIZE, grid[1] * TILE_SIZE, DocumentNames { paint: "ink".into(), paper: "paper".into() });
+        let shared = unique(&document, 1).remove(0);
+        let capacity = ProjectLimits::default().tile_capacity();
+        let mut layers = Vec::new();
+        while document.saved_tiles() < capacity {
+            let count = (capacity - document.saved_tiles()).min((grid[0] * grid[1]) as usize);
+            layers.push(layer(&mut document, &vec![shared.clone(); count], grid));
+        }
+        assert_eq!(document.saved_tiles(), capacity);
+        let mut editor = Editor::new(document);
+        let (duplicate, _) = editor.document().duplicate_layers_edit(&[layers[0]]).unwrap();
+        assert_eq!(editor.perform(duplicate).unwrap_err().to_string(), crate::SAVE_CAPACITY_EXCEEDED);
+        assert_eq!(editor.document().saved_tiles(), capacity);
+        editor.perform(editor.document().delete_layers_edit(&[layers[0]]).unwrap()).unwrap();
+        assert!(editor.document().saved_tiles() < capacity);
+        let (duplicate, _) = editor.document().duplicate_layers_edit(&[*layers.last().unwrap()]).unwrap();
+        editor.perform(duplicate).unwrap();
+        assert!(editor.document().saved_tiles() <= capacity);
     }
 }

@@ -196,6 +196,7 @@ documents-prints-at = 인쇄 크기 { $width } × { $height } { $unit }
 documents-too-large-side = 이 기기에서 쓰기에는 너무 큽니다. 한 변은 최대 { $maximum } px입니다.
 documents-too-large-memory = 이 기기의 사용 가능한 메모리에 비해 너무 큽니다.
 documents-refusal-disk-space = 디스크 여유 공간이 부족합니다. 디스크 공간을 확보한 후 다시 시도하세요.
+documents-refusal-save-capacity = 이 그림에는 그림 파일이 저장할 수 있는 최대 픽셀이 들어 있습니다. 레이어를 삭제, 병합 또는 자르기하여 공간을 확보하세요.
 documents-megapixels = { $megapixels } MP
 documents-layer-memory = 레이어당 { $size }
 documents-layer-memory-available = 레이어당 { $size } · { $available } 사용 가능
