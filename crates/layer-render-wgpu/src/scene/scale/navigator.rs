@@ -23,8 +23,9 @@ impl Navigator {
             !matches || cache.submission_valid.as_ref().is_some_and(|valid|!valid.load(std::sync::atomic::Ordering::Acquire))))
     }
     fn held(&self,r:&WgpuRasterizer)->bool {self.view().is_some() && self.cache.as_ref().is_some_and(|cache|cache.held(r))}
+    fn behind_contact(&self,display:&Cache)->bool {self.view().is_some() && !self.follows(display) && display.holds_advanced_frame()}
     pub(crate) fn outstanding(&self,r:&WgpuRasterizer)->Option<crate::frame_demand::Outstanding> {
-        if self.held(r) || !self.pending() {return None;}
+        if self.held(r) || !self.pending() || r.scale_display.as_ref().is_some_and(|display|self.behind_contact(display)) {return None;}
         let cache=self.cache.as_ref()?;
         cache.cells_demand(r,false).or_else(||cache.residual_demand(r))
     }
@@ -73,6 +74,7 @@ impl Navigator {
         let Some(display) = r.scale_display.as_ref() else { return Ok(()); };
         let followed=self.cache.as_ref().zip(display.contact_id()).and_then(|(cache,contact)|display.contact_window(contact,cache).map(|source|(source,contact)));
         let follows=followed.is_some();
+        let behind=!follows && display.holds_advanced_frame();
         let deferred=self.held(r) || changed && self.view().is_some() && packet.time_seconds>=self.refreshed && packet.time_seconds-self.refreshed<0.05;
         let mut inherited=None;
         let source=if let Some((source,contact))=followed {
@@ -86,6 +88,8 @@ impl Navigator {
             }
             inherited=Some(Inherited {contact,taken});
             Some((source,Some(contact),region))
+        } else if behind && self.view().is_some() {
+            self.contact=None;self.inherited=None;self.stale=true;return Ok(());
         } else {
             let pages=display.pages.clone();
             self.prepare(r,packet,r.scene.as_ref().unwrap(),pages,false)?;
@@ -137,7 +141,7 @@ impl Navigator {
         self.contact=contact;self.inherited=inherited;
         write.track(encoder);
         scene_write.track(encoder);
-        self.refreshed = packet.time_seconds;self.stale=false;
+        self.refreshed = packet.time_seconds;self.stale=behind;
         self.revision = self.revision.wrapping_add(1);
         crate::performance_trace::counter(c"Capy Navigator refreshes", self.revision);
         crate::performance_trace::counter(c"Capy Navigator pixels", texels);
@@ -1239,5 +1243,83 @@ mod tests {
         submit_settled(&mut r,FramePacket {time_seconds:4.,..next});
         let shown=navigator_texel(&r,[896,128]);
         assert!(!r.navigator.pending() && shown[0]>shown[2],"once the cell's input arrives the Navigator shows its new color: {shown:?}");
+    }
+
+    fn zoomed_ink()->(Document,OccurrenceHandle,SourceTarget) {
+        let extent=[8192,768];
+        let mut artwork=layer_core::authored::Artwork::new(extent).unwrap();
+        let (owner,target)=crate::test_support::add_paint(&mut artwork,"Zoomed ink",extent);
+        let SourceTarget::Paint(paint)=target else {unreachable!()};
+        artwork.paint.get_mut(paint).unwrap().base=Some(layer_core::authored::PaintBase::new(layer_core::color::source::rgba8_source(extent,|_,_|[11,31,97,255]).into()));
+        let stack=artwork.compositions.get(artwork.root).unwrap().result;artwork.stacks.get_mut(stack).unwrap().entries=vec![owner];
+        (Document::from_artwork(artwork).unwrap(),owner,target)
+    }
+    fn zoomed_in(doc:&Document,owner:OccurrenceHandle)->(WgpuRasterizer,FramePacket<'_>) {
+        let extent=doc.composition().size;
+        let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        layer_render::CanvasRenderer::set_working_layer(&mut r,Some(owner));
+        let mut frame=FramePacket {blend_space:doc.composition().blend,composite_all:false,..packet(doc.scene(),extent)};
+        frame.view.width_px=1024;frame.view.height_px=768;frame.view.document_to_surface=[1.,0.,0.,1.,0.,0.];
+        submit_settled(&mut r,frame);crate::test_support::complete(&r);
+        assert!(r.scale_display.as_ref().unwrap().plan.bounds!=PixelRect::full(extent),"the view's window covers part of the drawing");
+        (r,frame)
+    }
+    fn marks()->(layer_render::DabStyle,[layer_render::Dab;2]) {
+        let style=crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::GPen);
+        let mut mark=super::super::tests::contact::material_dab(600.,400.,&style);mark.radii=[120.;2];
+        let dabs=[super::super::tests::contact::material_dab(300.,300.,&style),mark];
+        (style,dabs)
+    }
+
+    #[test]
+    fn a_navigator_beside_a_zoomed_in_contact_stays_pending_until_it_shows_the_strokes_new_mark() {
+        let (doc,owner,target)=zoomed_ink();let (mut r,frame)=zoomed_in(&doc,owner);let (style,dabs)=marks();
+        let send=|r:&mut WgpuRasterizer,index:usize,end:bool,time:f32| {
+            let batch=stroke_batch(target,&style,&dabs[index],index==0,end);
+            crate::test_support::submit_ready(r,FramePacket {dabs:&dabs[index..=index],dab_batches:std::slice::from_ref(&batch),time_seconds:time,..frame}).unwrap();
+            crate::test_support::complete(r);
+        };
+        let before=navigator_texel(&r,[600,400]);
+        send(&mut r,0,false,1.);
+        assert!(r.scale_display.as_ref().unwrap().contact_id().is_some(),"the stroke enters contact");
+        send(&mut r,1,false,1.2);
+        assert!(r.scale_display.as_ref().unwrap().contact_id().is_some(),"the contact holds through the mark");
+        let shown=navigator_texel(&r,[600,400]);
+        assert!(r.navigator.pending() && r.navigator.content_revision().is_none() || shown[0]>before[0]+0.2,
+            "the Navigator reports a current picture without the stroke's mark: {shown:?}, before the stroke {before:?}");
+        send(&mut r,1,true,1.4);
+        submit_settled(&mut r,FramePacket {time_seconds:2.,..frame});
+        let shown=navigator_texel(&r,[600,400]);
+        assert!(!r.navigator.pending() && shown[0]>before[0]+0.2,"after pen-up the Navigator shows the mark: {shown:?}, before the stroke {before:?}");
+    }
+
+    #[test]
+    fn a_navigator_beside_a_zoomed_in_contact_stays_pending_after_the_contact_retracts_its_first_prediction() {
+        let (doc,owner,target)=zoomed_ink();let (mut r,frame)=zoomed_in(&doc,owner);let (style,dabs)=marks();
+        let before=navigator_texel(&r,[600,400]);
+        let batches=[DabBatchKind::Persistent,DabBatchKind::Preview].map(|kind|{let index=usize::from(kind==DabBatchKind::Preview);
+            DabBatch {kind,first_dab:index as u32,..stroke_batch(target,&style,&dabs[index],index==0,false)}});
+        crate::test_support::submit_ready(&mut r,FramePacket {dabs:&dabs,dab_batches:&batches,time_seconds:1.,..frame}).unwrap();crate::test_support::complete(&r);
+        assert!(r.scale_display.as_ref().unwrap().contact_id().is_some(),"the stroke enters contact with its prediction");
+        crate::test_support::submit_ready(&mut r,FramePacket {dabs:&[],dab_batches:&[],time_seconds:1.2,..frame}).unwrap();crate::test_support::complete(&r);
+        assert!(r.scale_display.as_ref().unwrap().contact_id().is_some(),"the contact holds through the retraction");
+        let shown=navigator_texel(&r,[600,400]);
+        assert!(r.navigator.pending() && r.navigator.content_revision().is_none() || crate::test_support::max_error(&[shown],&[before])<1e-4,
+            "the Navigator reports a current picture that shows the retracted prediction: {shown:?}, before the stroke {before:?}");
+    }
+
+    #[test]
+    fn a_navigator_released_beside_a_zoomed_in_contact_shows_a_first_picture_before_pen_up() {
+        let (doc,owner,target)=zoomed_ink();let (mut r,frame)=zoomed_in(&doc,owner);let (style,dabs)=marks();
+        let send=|r:&mut WgpuRasterizer,index:usize,start:bool,time:f32| {
+            let batch=stroke_batch(target,&style,&dabs[index],start,false);
+            crate::test_support::submit_ready(r,FramePacket {dabs:&dabs[index..=index],dab_batches:std::slice::from_ref(&batch),time_seconds:time,..frame}).unwrap();
+            crate::test_support::complete(r);
+        };
+        send(&mut r,0,true,1.);send(&mut r,1,false,1.2);
+        r.navigator.release();
+        send(&mut r,1,false,1.4);
+        assert!(r.scale_display.as_ref().unwrap().contact_id().is_some(),"the contact holds");
+        assert!(r.navigator.view().is_some(),"a released Navigator shows a first picture before pen-up");
     }
 }

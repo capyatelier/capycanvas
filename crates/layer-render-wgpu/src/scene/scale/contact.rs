@@ -36,6 +36,7 @@ pub(super) struct Contact {
     reduced_from:BTreeMap<[u32;2],Vec<Description>>,
     tip:Option<PixelRect>,
     cell_reads:IdMap<[u32;2],Arc<[PixelRect]>>,
+    diverged:bool,
 }
 #[derive(Clone)]
 pub(super) struct Witness {contact:u64,reads:Arc<[PixelRect]>,versions:crate::raster::contents::Versions,predicted:bool,tip:Option<PixelRect>}
@@ -195,6 +196,7 @@ impl Cache {
         use_tiles(r,self.plan,packet,Some(scene)) && !(self.plan.level>0 && root.fused_transform(r))
     }
     pub(super) fn contact_id(&self)->Option<u64> {self.gesture.as_ref().map(|contact|contact.id)}
+    pub(super) fn holds_advanced_frame(&self)->bool {self.gesture.as_ref().is_some_and(|contact|contact.exit.get().is_none() && contact.diverged)}
     pub(super) fn stroke_scope(&self,packet:FramePacket<'_>,touched:&[PixelRect],from:Option<[f32;2]>)->Vec<PixelRect> {
         let (level,extent,bounds)=(self.plan.level,self.plan.extent,self.plan.bounds);let span=PAGE_SIZE<<level;
         let near=|reach:PixelRect|PixelRect::new(reach.min_x().saturating_sub(span),reach.min_y().saturating_sub(span),
@@ -343,7 +345,7 @@ impl Cache {
             ahead,
             footprints,tainted,guard,generation:std::sync::Mutex::new(generation),exit:std::sync::OnceLock::new(),preview_level,cells,inputs,pages,level,
             stale:BTreeMap::new(),written:IdMap::default(),submissions:Vec::new(),stamps:Arc::default(),reduced,baselines:BTreeMap::new(),drawn_directly,reduced_from:BTreeMap::new(),
-            tip,cell_reads};
+            tip,cell_reads,diverged:false};
         contact.stale=contact.phased(&contact.previewed).map(|tile|(tile,page_rect(tile))).collect();
         self.gesture=Some(contact);
         Ok(())
@@ -480,6 +482,7 @@ impl Cache {
         };
         let persistent=changed.clone();
         changed.extend(contact.predicted.iter().chain(&predicted).copied());
+        contact.diverged|=!changed.is_empty();
         let previewed=r.preview_input_tiles(target);
         let stale=contact.footprints.iter().filter(|(local,_)|changed.iter().any(|tile|!page_rect(*tile).intersect(*local).is_empty()))
             .flat_map(|(_,cells)|cells.iter().copied()).collect::<Vec<_>>();
