@@ -684,41 +684,32 @@ impl AcceptedInputs {
     pub(crate) fn brush_color(&mut self,r:&WgpuRasterizer,target:SourceTarget,coordinate:[u32;2],
         preview:Option<(PreviewStage,Option<(PreviewPass,u32)>)>,receipt:&crate::submission::Submission,
     )->Result<[Option<source_access::SourceRead>;2],GpuRasterError> {
-        let address=(target,RasterPlane::Color,coordinate);
+        self.brush_plane(r,(target,RasterPlane::Color,coordinate),preview,receipt)
+    }
+    pub(crate) fn brush_wetness(&mut self,r:&WgpuRasterizer,target:SourceTarget,coordinate:[u32;2],
+        preview:Option<(PreviewStage,Option<(PreviewPass,u32)>)>,receipt:&crate::submission::Submission,
+    )->Result<Option<source_access::SourceRead>,GpuRasterError> {
+        self.brush_plane(r,(target,RasterPlane::WatercolorWetness,coordinate),preview,receipt).map(|[base,_]|base)
+    }
+    fn brush_plane(&mut self,r:&WgpuRasterizer,address:Address,
+        preview:Option<(PreviewStage,Option<(PreviewPass,u32)>)>,receipt:&crate::submission::Submission,
+    )->Result<[Option<source_access::SourceRead>;2],GpuRasterError> {
+        let (target,plane,coordinate)=address;
         let inputs=self.brush.as_ref().and_then(|inputs|inputs.get(&address))
             .ok_or(GpuRasterError::Invariant("brush input is not prepared"))?;
         let predicted=preview.filter(|_|inputs.preview.is_some());
         let family=predicted.and(inputs.preview.as_ref()).unwrap_or(&inputs.persistent);
         let read=if family.is_empty() {None}else {
             let expected=match predicted {
-                Some((stage,Some((pass,step))))=>r.preview_version(target,RasterPlane::Color,coordinate,stage)
+                Some((stage,Some((pass,step))))=>r.preview_version(target,plane,coordinate,stage)
                     .map(|version|version.intermediate(pass,step).version().clone()),
-                Some((stage,None))=>r.preview_expected(target,RasterPlane::Color,coordinate,stage),
-                None=>r.current_raster_version(target,RasterPlane::Color,coordinate),
+                Some((stage,None))=>r.preview_expected(target,plane,coordinate,stage),
+                None=>r.current_raster_version(target,plane,coordinate),
             }.map_err(crate::prepared_brush_error)?;
             Some(family.iter().find_map(|resident|resident.read(&expected,Some(receipt)))
                 .ok_or(GpuRasterError::Invariant("prepared brush input version is not readable"))?)
         };
         resolve(&self.leases,self.decisions.choose_resident(address,read))
-    }
-    pub(crate) fn brush_wetness(&mut self,r:&WgpuRasterizer,target:SourceTarget,coordinate:[u32;2],
-        preview:Option<(PreviewStage,Option<(PreviewPass,u32)>)>,receipt:&crate::submission::Submission,
-    )->Result<Option<source_access::SourceRead>,GpuRasterError> {
-        let address=(target,RasterPlane::WatercolorWetness,coordinate);
-        let inputs=self.brush.as_ref().and_then(|inputs|inputs.get(&address))
-            .ok_or(GpuRasterError::Invariant("brush wetness input is not prepared"))?;
-        let family=if preview.is_some() {inputs.preview.as_deref().unwrap_or(&[])}else {&inputs.persistent};
-        let read=if family.is_empty() {None}else {
-            let expected=match preview {
-                Some((stage,Some((pass,step))))=>r.preview_version(target,RasterPlane::WatercolorWetness,coordinate,stage)
-                    .map(|version|version.intermediate(pass,step).version().clone()),
-                Some((stage,None))=>r.preview_expected(target,RasterPlane::WatercolorWetness,coordinate,stage),
-                None=>r.current_raster_version(target,RasterPlane::WatercolorWetness,coordinate),
-            }.map_err(crate::prepared_brush_error)?;
-            Some(family.iter().find_map(|resident|resident.read(&expected,Some(receipt)))
-                .ok_or(GpuRasterError::Invariant("prepared brush wetness version is not readable"))?)
-        };
-        resolve(&self.leases,self.decisions.choose_resident(address,read)).map(|[base,_]|base)
     }
     pub(crate) fn brush_state(&self,target:SourceTarget,coordinate:[u32;2],state:BrushState,preview:bool,
         expected:&layer_core::raster::ContentVersion,receipt:&crate::submission::Submission,

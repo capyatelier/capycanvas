@@ -823,6 +823,18 @@ fn wetness_at(r: &WgpuRasterizer, layer: &Document, at: [u32; 2]) -> f32 {
     wetness_page(r, layer, at.map(|value| value / PAGE_SIZE))[(at[1] % PAGE_SIZE * PAGE_SIZE + at[0] % PAGE_SIZE) as usize]
 }
 
+fn color_page(r: &WgpuRasterizer, layer: &Document, coordinate: [u32; 2], kind: DabBatchKind) -> Vec<[f32; 4]> {
+    let target = target(layer);
+    let read = if kind == DabBatchKind::Preview {
+        let expected = r.preview_expected(target, layer_core::raster::RasterPlane::Color, coordinate, scene::PreviewStage::Final).unwrap();
+        r.preview_page(coordinate).unwrap().active().read(expected, None).unwrap()
+    } else {
+        let page = r.paint_layers[0].pages.iter().find(|page| page.coordinate == coordinate).unwrap();
+        r.read_color_page(target, page, false, None).unwrap()
+    };
+    crate::test_support::float_pixels(r, &read.value().texture)
+}
+
 fn watercolor_contact(x: f32, y: f32, radius: f32, color: [f32; 4]) -> Dab {
     Dab { center: Point { x, y }, radii: [radius; 2], material: [0.8, 1., 1., 1.], ..dab(color) }
 }
@@ -888,6 +900,31 @@ fn watercolor_transport_draws_water_from_diagonal_pages() {
     let near_corner = |x: usize, y: usize| x.min(side - 1 - x) < 32 && y.min(side - 1 - y) < 32;
     let wet = (0..side * side).filter(|index| near_corner(index % side, index / side) && wetness[*index] > 0.).count();
     assert!(wet > 0, "water crosses page corners from diagonal donors");
+}
+
+#[test]
+fn a_watercolor_prediction_draws_water_from_an_authored_neighbor_it_does_not_predict() {
+    let extent = [512, 256];
+    let page = |kind: DabBatchKind| {
+        let layer = paint_document(extent, "authored wet neighbor");
+        let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let contacts = [watercolor_contact(300., 128., 36., [1., 0., 0., 1.]), watercolor_contact(140., 128., 47., [0.1, 0.3, 0.8, 1.])];
+        crate::test_support::submit_ready(&mut r, FramePacket { dabs: &contacts, reset_layers: true,
+            dab_batches: &watercolor_stroke(&layer, &still_watercolor(), 1, &contacts[..1], 0, true, DabBatchKind::Persistent), ..packet(layer.scene(), extent) }).unwrap();
+        let mut style = far_watercolor();
+        style.rendering.edge_width = 1.;
+        crate::test_support::submit_ready(&mut r, FramePacket { dabs: &contacts, composite_all: false,
+            dab_batches: &watercolor_stroke(&layer, &style, 2, &contacts[1..], 1, true, kind), ..packet(layer.scene(), extent) }).unwrap();
+        if kind == DabBatchKind::Preview {
+            assert!(r.preview_watercolor_wetness_pages.iter().all(|page| page.coordinate != [1, 0]), "the prediction has no wetness of its own beside the authored wash");
+        }
+        color_page(&r, &layer, [0, 0], kind)
+    };
+    let persistent = page(DabBatchKind::Persistent);
+    assert!((0..256 * 256).any(|index| index % 256 >= 228 && persistent[index][0] > 0.01), "the persistent twin draws red from its authored neighbor");
+    let predicted = page(DabBatchKind::Preview);
+    let error = predicted.iter().zip(&persistent).flat_map(|(a, b)| a.iter().zip(b).map(|(a, b)| (a - b).abs())).fold(0., f32::max);
+    assert!(error < 0.01, "the prediction draws the same water and pigment as its persistent twin: maximum error {error}");
 }
 
 #[test]
