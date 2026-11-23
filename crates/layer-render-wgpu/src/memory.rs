@@ -95,6 +95,7 @@ pub(super) struct Memory {
     watch: std::cell::RefCell<Option<layer_core::MemoryWatch>>,
     unified: bool,
     pub idle: std::sync::atomic::AtomicBool,
+    pass_evictable: std::cell::Cell<Option<Option<u64>>>,
 }
 pub(super) fn retained_limit(grant: u64, occupied: u64) -> u64 { grant.saturating_sub(occupied) }
 fn source_demand(viewport: [u32;2]) -> u64 {
@@ -146,7 +147,7 @@ impl Memory {
             raster: Owner::new(factory, Kind::RasterPool, MemoryReport { pinned_gpu_bytes: working, pinned_ram_bytes: working, demand_gpu_bytes: working, demand_ram_bytes: working, ..Default::default() }),
             staging: Owner::new(factory, Kind::Staging, MemoryReport { pinned_gpu_bytes: working, demand_gpu_bytes: working, ..Default::default() }),
             demand: std::cell::Cell::new(demand), demand_key: std::cell::Cell::new(None), applied_limits: std::cell::Cell::new(None), limits_dirty: std::cell::Cell::new(true), preparation: std::cell::Cell::new(0), target: std::cell::Cell::new(total(demand.wanted(0))), refused: Default::default(), lane: Default::default(), trimmed: Default::default(), retired: Default::default(), wake, resources, overdraft: Default::default(), fruitless: Default::default(), #[cfg(not(target_arch = "wasm32"))] watch: Default::default(),
-            unified: factory.unified_memory(), idle: std::sync::atomic::AtomicBool::new(true),
+            unified: factory.unified_memory(), idle: std::sync::atomic::AtomicBool::new(true), pass_evictable: Default::default(),
         };
         memory.applied_limits.set(Some(memory.grants()));
         memory
@@ -248,6 +249,15 @@ impl Memory {
     pub fn working_limit(&self) -> u64 { self.demand.get().floor }
     pub(crate) fn unit(&self) -> u64 { self.demand.get().unit() }
     pub fn invalidate_limits(&self) { self.limits_dirty.set(true); }
+    pub(crate) fn evictable_paint(&self,walk:impl FnOnce()->u64)->u64 {
+        let Some(known)=self.pass_evictable.get() else {return walk();};
+        let bytes=known.unwrap_or_else(walk);
+        self.pass_evictable.set(Some(Some(bytes)));
+        bytes
+    }
+    pub(crate) fn forget_evictable_paint(&self) {
+        if self.pass_evictable.get().is_some() {self.pass_evictable.set(Some(None));}
+    }
     fn limits_changed(&self) -> bool { self.limits_dirty.get() || self.applied_limits.get() != Some(self.grants()) }
     pub fn apply_limits(&self, limits: [u64; 4]) -> bool {
         let changed = self.applied_limits.replace(Some(limits)) != Some(limits);
@@ -276,7 +286,20 @@ impl WgpuRasterizer {
     pub(crate) fn admit_group(&mut self,raster:u64,display:u64)->Result<(crate::residency::Reservation,crate::residency::Reservation),crate::residency::Blocked> {
         self.admit_group_within(raster,raster,display)
     }
+    pub(crate) fn memory_pass<T>(&mut self,pass:impl FnOnce(&mut Self)->T)->T {
+        if self.memory.pass_evictable.get().is_some() {return pass(self);}
+        self.memory.pass_evictable.set(Some(None));
+        let result=pass(self);
+        self.memory.pass_evictable.set(None);
+        result
+    }
+    fn publish_and_apply_grants(&mut self) {
+        self.memory_pass(|r|{r.publish_memory();r.factory.memory_budget().flush_reports();r.refresh_memory_limits();});
+    }
     pub(crate) fn admit_group_within(&mut self,least:u64,raster:u64,display:u64)->Result<(crate::residency::Reservation,crate::residency::Reservation),crate::residency::Blocked> {
+        self.memory_pass(|r|r.admit_lane_group(least,raster,display))
+    }
+    fn admit_lane_group(&mut self,least:u64,raster:u64,display:u64)->Result<(crate::residency::Reservation,crate::residency::Reservation),crate::residency::Blocked> {
         self.memory.lane.borrow_mut().asked=true;self.memory.lend(self.raster_tiers.raster.used(),raster,0);
         let drain=crate::residency::Drain::new(self.draining());
         let admitted=self.try_group(raster,display).or_else(|_|{self.yield_to_lane(raster,display);self.try_group(raster,display)}).or_else(|blocked| {
@@ -361,8 +384,7 @@ impl WgpuRasterizer {
         }
     }
     pub(crate) fn commit_raster_working(&mut self,reservation:crate::residency::Reservation) {
-        drop(reservation);self.sync_raster_report();
-        self.memory.invalidate_limits();self.refresh_memory_limits();
+        self.memory_pass(|r|{drop(reservation);r.sync_raster_report();r.memory.invalidate_limits();r.refresh_memory_limits();});
     }
     pub(crate) fn retire_native_color(&self,mut pages:Vec<PageSurface>,leases:Vec<Arc<crate::residency::Lease>>,encoder:&mut submission::CommandEncoder) {
         let retiring=pages.iter().map(PageSurface::storage_bytes).sum::<u64>();
@@ -379,9 +401,11 @@ impl WgpuRasterizer {
     pub(crate) fn refresh_memory_limits(&mut self) {
         if !self.memory_pass_due() {return;}
         #[cfg(test)] crate::test_support::PassCounts {grant_encoders:1,..Default::default()}.record();
-        let mut encoder=submission::CommandEncoder::new(&self.device,&Default::default());
-        self.apply_frame_grants(&mut encoder);
-        if encoder.has_work() {self.last_submission=encoder.submit(&self.queue);}
+        self.memory_pass(|r| {
+            let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+            r.apply_frame_grants(&mut encoder);
+            if encoder.has_work() {r.last_submission=encoder.submit(&r.queue);}
+        });
     }
     pub(crate) fn apply_frame_grants(&mut self,encoder:&mut submission::CommandEncoder) {
         let mut scene=self.scene.take();let mut cache=self.scale_display.take();
@@ -441,13 +465,10 @@ impl WgpuRasterizer {
         self.scene_tiers.display.begin_frame();
     }
     pub(crate) fn frame_room(&mut self, packet: FramePacket<'_>) {
-        self.set_display_room(packet);
-        self.fit_grants();
+        self.memory_pass(|r|{r.set_display_room(packet);r.fit_grants();});
     }
     pub(crate) fn fit_grants(&mut self) {
-        self.trim_display_to_grant(self.scene.as_deref());
-        self.refresh_memory_limits();
-        self.trim_raster_to_grant();
+        self.memory_pass(|r|{r.trim_display_to_grant(r.scene.as_deref());r.refresh_memory_limits();r.trim_raster_to_grant();});
     }
     fn trim_raster_to_grant(&mut self) {
         if self.raster_tiers.raster.used().saturating_sub(self.raster_buffers.transfer.used())<=self.memory.raster_grant() {return;}
@@ -547,16 +568,14 @@ impl WgpuRasterizer {
         self.memory.demand_region(scene, extent, PixelRect::full(extent));
         let demand=self.memory.demand.get();
         self.memory.demand.set(Demand {sources:[demand.sources[0],scene::scale::SOURCE_WORKING_BYTES+WORKING_BYTES],..demand});
-        self.publish_memory();
-        self.factory.memory_budget().flush_reports();
-        self.refresh_memory_limits();
+        self.publish_and_apply_grants();
     }
     pub(super) fn prepare_capture_sources(&mut self,bytes:u64) {
         let demand=self.memory.demand.get();
         let required=bytes.saturating_add(WORKING_BYTES);
         if required<=demand.sources[1] && bytes<=demand.inputs[1] {return;}
         self.memory.demand.set(Demand {sources:[demand.sources[0],demand.sources[1].max(required)],inputs:[demand.inputs[0],demand.inputs[1].max(bytes)],..demand});
-        self.publish_memory();self.factory.memory_budget().flush_reports();self.refresh_memory_limits();
+        self.publish_and_apply_grants();
     }
     pub(crate) fn reserve_effect_analysis(&mut self, bytes: u64) -> Result<crate::effect_analysis::Lease, String> {
         let required = self.device.analysis_memory.used().saturating_add(bytes);
@@ -565,21 +584,15 @@ impl WgpuRasterizer {
         }
         let demand = self.memory.demand.get();
         self.memory.demand.set(Demand {resources:demand.resources.max(required),..demand});
-        self.publish_memory();
-        self.factory.memory_budget().flush_reports();
-        self.refresh_memory_limits();
+        self.publish_and_apply_grants();
         let result = crate::effect_analysis::Lease::reserve(&self.device, bytes);
         self.memory.demand.set(Demand {resources:demand.resources,..self.memory.demand.get()});
-        self.publish_memory();
-        self.factory.memory_budget().flush_reports();
-        self.refresh_memory_limits();
+        self.publish_and_apply_grants();
         result
     }
     pub(crate) fn refresh_preparation_memory(&mut self) {
         if self.memory.preparation.get() == 0 { return; }
-        self.publish_memory();
-        self.factory.memory_budget().flush_reports();
-        self.refresh_memory_limits();
+        self.publish_and_apply_grants();
     }
     pub(crate) fn preparation_memory(&self, bytes: u64) {
         let before = self.memory.preparation.replace(if bytes == 0 { 0 } else { bytes.saturating_add(self.memory.working_limit()) });
@@ -683,10 +696,12 @@ impl WgpuRasterizer {
         if !self.memory.idle.load(std::sync::atomic::Ordering::Acquire)
             || self.startup.as_ref().is_some_and(|startup| !startup.compiler.is_idle()) { return; }
         if self.restore_preparation().is_none() && !self.bake_preflight.as_ref().is_some_and(|state|state.pending()) { self.memory.preparation.set(0); }
-        self.publish_memory();
-        self.publish_samples();
-        self.memory.invalidate_limits();self.refresh_memory_limits();
-        self.publish_memory();
+        self.memory_pass(|r| {
+            r.publish_memory();
+            r.publish_samples();
+            r.memory.invalidate_limits();r.refresh_memory_limits();
+            r.publish_memory();
+        });
     }
 }
 
