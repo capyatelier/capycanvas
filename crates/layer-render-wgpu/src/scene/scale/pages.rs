@@ -654,7 +654,7 @@ impl Store {
         let accepted=if let Some(input)=self.inputs.get(&key).and_then(|inputs|inputs.iter().find(|input|input.at(region,input_level))) {
             input.accepted.clone()
         }else {self.capture(&key,region,input_level)?};
-        Ok(Write {key,region,accuracy,accepted:Some(accepted)})
+        Ok(Write {key,region,accuracy,accepted:Some(accepted),witness:None})
     }
     pub(super) fn restamped(&self,key:&Key,held:&Held)->Held {
         Held {written_at:self.pages.get(key).map_or(held.written_at,|page|page.written_at),..held.clone()}
@@ -925,7 +925,7 @@ impl Store {
         #[cfg(test)]
         crate::scene::sources::assert_reading("store commit");
 
-        let Write {key,region:area,accuracy,accepted}=write;
+        let Write {key,region:area,accuracy,accepted,..}=write;
         #[cfg(test)]
         if key.source.is_none() {crate::test_support::PassCounts {composite_commits:1,..Default::default()}.record();}
         let input_level=accepted.as_ref().map(|accepted|accepted.recorded.input_level);
@@ -1378,7 +1378,7 @@ pub(super) struct Projection {
     key: Key,
     versions:Vec<Recorded>,
 }
-struct Shown {recorded:Option<Recorded>,submission:submission::Submission,exact:bool,direct:bool,predicted:bool}
+struct Shown {recorded:Option<Recorded>,submission:submission::Submission,exact:bool,direct:bool,refused:bool,witness:Option<super::contact::Witness>}
 impl Shown {
     fn unnamed(&self)->bool {self.recorded.is_none() && !self.submission.discarded()}
     fn composition(&self,template:&Key)->bool {
@@ -1500,9 +1500,10 @@ pub(super) struct Write {
     pub region: PixelRect,
     pub accuracy: Accuracy,
     accepted:Option<Accepted>,
+    pub(super) witness:Option<super::contact::Witness>,
 }
 impl Write {
-    pub(super) fn keyless(key:Key,region:PixelRect)->Self {Self {key,region,accuracy:Accuracy::Display,accepted:None}}
+    pub(super) fn keyless(key:Key,region:PixelRect)->Self {Self {key,region,accuracy:Accuracy::Display,accepted:None,witness:None}}
 }
 impl RegionRecords {
     fn projection_ready(&self,r:&WgpuRasterizer,format:wgpu::TextureFormat)->bool {
@@ -1700,7 +1701,7 @@ impl Cache {
         for (index,copy,exact) in copies {
             copy.image.clone().track(encoder);changed=changed.union(copy.region);
             let recorded=copy.versions.into_iter().next().expect("a copied page records its key");
-            let previous=std::mem::replace(&mut cells.cells[index],Cell::showing(Shown {recorded:Some(recorded),submission:submission.clone(),exact,direct:false,predicted:false})).shown;
+            let previous=std::mem::replace(&mut cells.cells[index],Cell::showing(Shown {recorded:Some(recorded),submission:submission.clone(),exact,direct:false,refused:false,witness:None})).shown;
             cells.unconfirmed.push((submission.clone(),index,previous));
         }
         drop(cells);
@@ -1712,7 +1713,7 @@ impl Cache {
         if write.key.level!=self.plan.level || write.accepted.is_none() && self.gesture.is_none() {return;}
         let mut cells=self.cells.lock().unwrap();
         let index=Cells::index(self.plan,write.key.coordinate);
-        let previous=std::mem::replace(&mut cells.cells[index],Cell::showing(Shown {recorded:write.accepted.map(|accepted|accepted.recorded),submission:submission.clone(),exact:write.accuracy==Accuracy::Exact,direct:true,predicted:false})).shown;
+        let previous=std::mem::replace(&mut cells.cells[index],Cell::showing(Shown {recorded:write.accepted.map(|accepted|accepted.recorded),submission:submission.clone(),exact:write.accuracy==Accuracy::Exact,direct:true,refused:false,witness:write.witness})).shown;
         cells.unconfirmed.push((submission,index,previous));
     }
     pub(super) fn commit_window(&mut self,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder)->Result<(),GpuRasterError> {
@@ -1766,7 +1767,7 @@ impl Cache {
             image.track(encoder);
             #[cfg(test)]
             crate::test_support::PassCounts {written_back:1,..Default::default()}.record();
-            let write=Write {key:recorded.key.clone(),region:recorded.region,accuracy:if shown.exact {Accuracy::Exact}else {Accuracy::Display},accepted:Some(Accepted {frame:frame.clone(),recorded:recorded.clone()})};
+            let write=Write {key:recorded.key.clone(),region:recorded.region,accuracy:if shown.exact {Accuracy::Exact}else {Accuracy::Display},accepted:Some(Accepted {frame:frame.clone(),recorded:recorded.clone()}),witness:None};
             store.commit(write,0,encoder);
             shown.direct=false;
         }
@@ -1891,7 +1892,7 @@ impl Cache {
         self.cells().is_some_and(|(cells,_,_)|cells.cells.iter().any(|cell|cell.naming(r)))
     }
     pub(super) fn keyless(&self,region:PixelRect)->bool {self.keyless_where(region,|_|true)}
-    pub(super) fn keyless_without_prediction(&self,region:PixelRect)->bool {self.keyless_where(region,|shown|!shown.predicted)}
+    pub(super) fn keyless_unrefused(&self,region:PixelRect)->bool {self.keyless_where(region,|shown|!shown.refused)}
     fn keyless_where(&self,region:PixelRect,accept:impl Fn(&Shown)->bool)->bool {
         self.cells().is_some_and(|(cells,_,_)|coordinates(region,self.plan.level).all(|coordinate|
             cells.cells.get(Cells::index(self.plan,coordinate)).is_some_and(|cell|cell.shown.as_ref().is_some_and(|shown|shown.recorded.is_none() && accept(shown)))))
@@ -1920,23 +1921,24 @@ impl Cache {
             cell.shown=None;cell.invalidate();
         }
     }
-    pub(super) fn touch_cell_keys(&self,region:PixelRect) {
-        let Some((_cells,store,template))=self.cells() else {return;};
-        let Some(frame)=store.expected() else {return;};
-        for coordinate in coordinates(region.intersect(self.plan.bounds),self.plan.level) {
-            drop(frame.expected_key(&Key {coordinate,..template.clone()},bounds(coordinate,self.plan.level,self.plan.extent),self.required_input_level()));
-        }
+    pub(super) fn cell_reads(&self,target:SourceTarget,region:PixelRect)->crate::IdMap<[u32;2],Arc<[PixelRect]>> {
+        let Some((_cells,store,template))=self.cells() else {return Default::default();};
+        let Some(frame)=store.expected() else {return Default::default();};
+        let (plan,input_level)=(self.plan,self.required_input_level());
+        let cells=coordinates(region.intersect(plan.bounds),plan.level).map(|coordinate|(coordinate,bounds(coordinate,plan.level,plan.extent))).collect::<Vec<_>>();
+        for (coordinate,region) in &cells {drop(frame.expected_key(&Key {coordinate:*coordinate,..template.clone()},*region,input_level));}
+        frame.cell_reads(target,&template.expression,plan.level,input_level,&cells)
     }
-    pub(super) fn key_contact_cells(&self,frame:&SignatureFrame,tips:&[PixelRect],tip:Option<PixelRect>) {
+    pub(super) fn key_contact_cells(&self,frame:&SignatureFrame,proven:&dyn Fn(Option<&super::contact::Witness>)->Result<(),Option<PixelRect>>) {
         let Some((mut cells,_store,template))=self.cells() else {return;};
         let (plan,input_level)=(self.plan,self.required_input_level());
         for (cell,coordinate) in cells.cells.iter_mut().zip(coordinates(plan.bounds,plan.level)) {
             let Some(shown)=cell.shown.as_mut().filter(|shown|shown.unnamed()) else {continue;};
             let region=bounds(coordinate,plan.level,plan.extent);
-            let tipped=tips.iter().any(|tip|!tip.intersect(region).is_empty());
-            shown.predicted|=tipped;
-            shown.recorded=(!tipped).then(||materialize(frame,&Key {coordinate,..template.clone()},region,input_level).ok()).flatten();
-            if shown.recorded.is_none() {cell.invalidate();cell.lag=tip.filter(|_|tipped);}
+            match proven(shown.witness.as_ref()).and_then(|()|materialize(frame,&Key {coordinate,..template.clone()},region,input_level).map_err(|_|None)) {
+                Ok(recorded)=>{shown.recorded=Some(recorded);shown.witness=None;},
+                Err(lag)=>{shown.refused=true;cell.invalidate();cell.lag=lag;},
+            }
         }
     }
     pub(super) fn reached_cells(&self,region:DocRect)->Vec<usize> {Cells::reached(self.plan,region.in_frame(self.plan.extent))}

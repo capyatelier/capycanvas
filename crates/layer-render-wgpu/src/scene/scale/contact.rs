@@ -35,7 +35,10 @@ pub(super) struct Contact {
     drawn_directly:bool,
     reduced_from:BTreeMap<[u32;2],Vec<Description>>,
     tip:Option<PixelRect>,
+    cell_reads:IdMap<[u32;2],Arc<[PixelRect]>>,
 }
+#[derive(Clone)]
+pub(super) struct Witness {contact:u64,reads:Arc<[PixelRect]>,versions:crate::raster::contents::Versions,predicted:bool,tip:Option<PixelRect>}
 
 type Description=(crate::resident::Input,PixelRect);
 enum Stroked {Tile(Vec<Description>),Level(PixelRect)}
@@ -98,7 +101,7 @@ fn crop(jobs:&mut [crate::scene::Job],[x,y,width,height]:[u32;4]) {
 }
 
 #[derive(Default)]
-struct Declared {cells:Vec<(PixelRect,crate::scene::sources::Inputs)>,inputs:crate::scene::sources::AcceptedInputs,pages:IdMap<pages::Key,pages::Held>,level:Option<u32>}
+struct Declared {cells:Vec<(PixelRect,crate::scene::sources::Inputs)>,inputs:crate::scene::sources::AcceptedInputs,pages:IdMap<pages::Key,pages::Held>,level:Option<u32>,cell_reads:IdMap<[u32;2],Arc<[PixelRect]>>}
 
 #[derive(PartialEq)]
 struct Guard {inspect_mask:Option<OccurrenceHandle>,clipping:[bool;2],blend_space:layer_core::BlendSpace,watercolor:Option<WatercolorLayerStyle>}
@@ -178,6 +181,13 @@ impl Contact {
         let changed=self.next.iter().flat_map(|(_,changed,..)|self.phased(changed));
         members(self.frame.watercolor(self.target),reach.chain(changed).chain(self.stale.keys().copied()))
     }
+    fn proves(&self,witness:Option<&Witness>)->Result<(),Option<PixelRect>> {
+        use layer_core::raster::RasterPlane::{Color,WatercolorWetness};
+        let witness=witness.filter(|witness|witness.contact==self.id).ok_or(None)?;
+        let planes:&[layer_core::raster::RasterPlane]=if self.frame.watercolor(self.target) {&[Color,WatercolorWetness]}else {&[Color]};
+        let unchanged=witness.reads.iter().all(|read|planes.iter().all(|plane|witness.versions.region(*plane,*read).matches(&self.composed.region(*plane,*read))==Some(true)));
+        if unchanged && !witness.predicted {Ok(())}else {Err(witness.tip.filter(|_|unchanged))}
+    }
 }
 
 impl Cache {
@@ -245,7 +255,7 @@ impl Cache {
         let frame=kept.then(||Arc::new(contact.frame.composed(contact.target,contact.composed.clone())));
         if let Some(frame)=&frame {
             self.pages.lock().unwrap().set_expected(frame.clone());
-            self.key_contact_cells(frame,&contact.phased(&contact.predicted).map(|tile|contact.source.document(page_rect(tile)).in_frame(contact.plan.extent)).collect::<Vec<_>>(),contact.tip);
+            self.key_contact_cells(frame,&|witness|contact.proves(witness));
         }
         drop(contact.exit.set(frame));
     }
@@ -318,7 +328,7 @@ impl Cache {
         if required.iter().any(|cell|!ready.contains(cell)) {return Ok(());}
         let source=source_frame(Some(&scene.scale_sources),packet.scene,target);
         let reduced=local_reach(packet,target,source.phase).into_iter().flat_map(page_coordinates).collect();
-        let Some(Declared {cells,inputs,pages,level})=self.declare_contact(scene,r,packet,encoder,retained,budget,&frame,&root,target,tiled,None,ready,&|cell|required.contains(&cell).then_some(Class::Authored),&reduced)? else {return Ok(());};
+        let Some(Declared {cells,inputs,pages,level,cell_reads})=self.declare_contact(scene,r,packet,encoder,retained,budget,&frame,&root,target,tiled,None,ready,&|cell|required.contains(&cell).then_some(Class::Authored),&reduced)? else {return Ok(());};
         if required.iter().any(|region|!cells.iter().any(|(cell,_)|cell==region)) {return Ok(());}
         request_ahead(r,packet.scene,&frame,encoder,target,source.phase,ahead.iter().copied());
         let footprints=frame.reader_regions(target,self.plan.level).into_iter().map(|(local,regions)|(local,regions.into_iter().flat_map(|region|self.reached_cells(region)).collect())).collect();
@@ -333,7 +343,7 @@ impl Cache {
             ahead,
             footprints,tainted,guard,generation:std::sync::Mutex::new(generation),exit:std::sync::OnceLock::new(),preview_level,cells,inputs,pages,level,
             stale:BTreeMap::new(),written:IdMap::default(),submissions:Vec::new(),stamps:Arc::default(),reduced,baselines:BTreeMap::new(),drawn_directly,reduced_from:BTreeMap::new(),
-            tip};
+            tip,cell_reads};
         contact.stale=contact.phased(&contact.previewed).map(|tile|(tile,page_rect(tile))).collect();
         self.gesture=Some(contact);
         Ok(())
@@ -363,9 +373,9 @@ impl Cache {
         cells.retain(|cell|!self.pivot_missing(*cell));
         let declared=if cells.is_empty() && tiles.is_empty() {Some(Declared::default())}
             else {self.declare_contact(scene,r,packet,encoder,retained,budget,&frame,&root,target,tiled,level,cells,&|cell|Some(if reached.contains(&cell) {Class::Authored}else {Class::Visible}),&tiles)?};
-        let Some(Declared {cells,inputs,pages,level})=declared else {return Ok(false);};
+        let Some(Declared {cells,inputs,pages,level,cell_reads})=declared else {return Ok(false);};
         let contact=self.gesture.as_mut().expect("live contact");
-        contact.cells.extend(cells);
+        contact.cells.extend(cells);contact.cell_reads.extend(cell_reads);
         if level.is_some() {contact.level=level;contact.reduced.extend(tiles);}
         contact.inputs.adopt(inputs)?;
         for (key,page) in pages {contact.pages.entry(key).or_insert(page);}
@@ -437,8 +447,8 @@ impl Cache {
         let level=level.or_else(||requests.iter().find(|(id,_)|*id==target).map(|(_,request)|request.plan.level));
         let reductions=match level.filter(|_|!tiles.is_empty()) {Some(level)=>Self::declare_reductions(scene,r,packet,frame,target,level,tiles,encoder),None=>Ok(Default::default())};
         let Some(inputs)=reductions.ok().and_then(|inputs|inputs.accept_query(r,Some(scene)).ok()) else {return Ok(None);};
-        self.touch_cell_keys(bounds);
-        Ok(Some(Declared {cells,inputs,pages,level}))
+        let cell_reads=self.cell_reads(target,bounds);
+        Ok(Some(Declared {cells,inputs,pages,level,cell_reads}))
     }
     fn declare_reductions(scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,frame:&Arc<SignatureFrame>,target:SourceTarget,level:u32,tiles:&BTreeSet<[u32;2]>,
         encoder:&mut submission::CommandEncoder,
@@ -519,6 +529,13 @@ impl Cache {
         let cells=std::mem::take(&mut contact.cells);
         let stale=std::mem::take(&mut contact.stale);
         let mut baselines=std::mem::take(&mut contact.baselines);
+        let cell_reads=std::mem::take(&mut contact.cell_reads);
+        let tip=pointwise_reach(packet,plan,&contact.frame,target,contact.drawn_directly,&[DabBatchKind::Preview]);
+        let (versions,predicted)=contact.next.as_ref().map_or_else(||(contact.composed.clone(),contact.predicted.iter().chain(&contact.previewed).copied().collect::<Vec<_>>()),
+            |(versions,_,predicted,previewed)|(versions.clone(),predicted.iter().chain(previewed).copied().collect()));
+        let id=contact.id;
+        let witness=|cell:[u32;2]|cell_reads.get(&cell).map(|reads|Witness {contact:id,reads:reads.clone(),versions:versions.clone(),
+            predicted:reads.iter().any(|read|predicted.iter().any(|tile|!page_rect(*tile).intersect(*read).is_empty())),tip});
         let reductions=contact.level.into_iter().flat_map(|level|reductions(&scene.scale_sources.entries[&target],r,target,level,&reduced))
             .filter_map(|(key,region,tile)|contact.pages.get(&key).map(|page|(key,region,tile,page.clone()))).collect::<Vec<_>>();
         let recorded=contact.guard.watercolor.is_none() && frame.phase==[0;2] && !(r.preview_contribution && r.preview_layer_id==Some(target));
@@ -573,6 +590,7 @@ impl Cache {
                             .map(|changed|paint_transform::texel_rect(changed.window_local(region),side)).filter(|[_,_,width,height]|width*height!=0);
                         if let Some(texels)=texels {crop(&mut scene.jobs[start..],texels);}
                         if let Some((stroked,reads))=now {fresh.push((cell,stroked,reads));}
+                        for write in &mut unit.window {write.witness=witness(cell);}
                         unit.work=scene.planned_work(start);units.push(unit);
                         let written=texels.map_or(region,|[x,y,width,height]|PixelRect::new(x*side,y*side,(x+width)*side,(y+height)*side).translated([region.min_x(),region.min_y()]).intersect(region));
                         composed.push((written,lag.map_or(written,|lag|written.intersect(lag))));
@@ -585,13 +603,13 @@ impl Cache {
             Ok((composed,blocked,fresh))
         })();
         let contact=self.gesture.as_mut().expect("live contact");
-        contact.inputs=inputs;contact.cells=cells;contact.stale=stale;contact.baselines=baselines;
+        contact.inputs=inputs;contact.cells=cells;contact.stale=stale;contact.baselines=baselines;contact.cell_reads=cell_reads;
         let (composed,blocked,fresh)=match result {Ok(done)=>done,Err(error)=>{scene.discard_jobs_from(start);return Err(error);}};
         let submission=encoder.submission();
         contact.baselines.extend(fresh.into_iter().map(|(cell,stroked,reads)|(cell,Baseline {submission:submission.clone(),stroked,reads})));
         for (tile,now) in witnessed {match now {Some(now)=>{contact.reduced_from.insert(tile,now);},None=>{contact.reduced_from.remove(&tile);}}}
         if let Some((versions,_,predicted,previewed))=contact.next.take() {contact.composed=versions;contact.predicted=predicted;contact.previewed=previewed;}
-        contact.tip=pointwise_reach(packet,plan,&contact.frame,target,contact.drawn_directly,&[DabBatchKind::Preview]);
+        contact.tip=tip;
         {
             let tipped:BTreeSet<_>=contact.phased(&contact.previewed).collect();
             let mut store=self.pages.lock().unwrap();

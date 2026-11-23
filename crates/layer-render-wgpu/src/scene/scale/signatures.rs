@@ -402,6 +402,22 @@ impl Prepared {
             (*local,regions)
         }).collect()
     }
+    pub(super) fn cell_reads(&self,target:SourceTarget,node:&graph::Node,level:u32,input_level:u32,cells:&[([u32;2],PixelRect)])->IdMap<[u32;2],Arc<[PixelRect]>> {
+        let memo=self.memo.lock().unwrap();
+        let roots:IdMap<Request,[u32;2]>=cells.iter().map(|(coordinate,region)|(Request::new(node,(*region).into(),level,input_level,false,false),*coordinate))
+            .filter(|(request,_)|memo.entries.contains_key(request)).collect();
+        let mut reads:IdMap<[u32;2],Vec<PixelRect>>=roots.values().map(|cell|(*cell,Vec::new())).collect();
+        for (request,local) in memo.readers.get(&target).into_iter().flatten() {
+            let mut seen=IdSet::default();let mut stack=vec![request];
+            while let Some(request)=stack.pop() {
+                if !seen.insert(request) {continue;}
+                let Some(entry)=memo.entries.get(request) else {continue;};
+                if let Some(cell)=roots.get(request) {reads.get_mut(cell).unwrap().push(*local);}
+                stack.extend(&entry.dependents);
+            }
+        }
+        reads.into_iter().map(|(cell,reads)|(cell,reads.into())).collect()
+    }
     pub(super) fn composed(&self,target:SourceTarget,versions:raster::contents::Versions)->Self {self.advanced(target,versions,None)}
     pub(super) fn advanced(&self,target:SourceTarget,versions:raster::contents::Versions,preview:Option<Arc<PreviewDeclaration>>)->Self {
         let mut snapshot=(*self.snapshot).clone();snapshot.rasters.insert(target,versions);snapshot.preview=preview;

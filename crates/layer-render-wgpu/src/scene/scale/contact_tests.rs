@@ -324,6 +324,85 @@ fn a_contact_ended_under_a_predicted_tip_draws_the_tip_away_like_a_twin_that_com
 }
 
 #[test]
+fn a_prediction_a_blur_spreads_into_the_next_cell_is_drawn_away_at_pen_up_like_a_twin_that_never_predicted_it() {
+    let extent=[1024,512];let mut doc=document_at(extent);let ink=doc.working.occurrence.unwrap();let target=primary_target(&doc);
+    let blur=effect_occurrence(&mut doc,layer_core::EffectInstance::new(crate::tests::fixture("gaussian_blur").program()),"Blur");
+    set_effect_value(&mut doc,blur,"sigma",layer_core::EffectValue::Number(12.));
+    set_root_entries(&mut doc,vec![blur,ink]);
+    let style=crate::layer_tests::preset_style(DefaultBrushPreset::GPen);
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
+    let next=PixelRect::new(256,0,512,256);let at=(128*extent[0]+256) as usize;
+    let kept=[sized_dab([100.,128.],6.,&style),sized_dab([108.,128.],6.,&style)];
+    let (tip,last)=(sized_dab([246.,128.],6.,&style),sized_dab([900.,400.],6.,&style));
+    let drawn=|predicted:bool| {
+        let mut r=renderer(&doc);crate::test_support::submit_settled(&mut r,frame);
+        batched_frame(&mut r,frame,target,&style,&kept[..1],1,0);
+        let dabs=if predicted {vec![kept[1].clone(),tip.clone()]}else {vec![kept[1].clone()]};
+        batched_frame(&mut r,frame,target,&style,&dabs,1,1);
+        let cache=r.scale_display.as_ref().unwrap();
+        let live=(cache.contact_id().is_some() && cache.keyless(next),display_pixels(&r)[at]);
+        let lift=layer_render::DabBatch {stroke_id:layer_core::StrokeId(1),stroke_start:false,stroke_end:true,..dab_batch(target,style.clone(),last.bounds())};
+        crate::test_support::submit_ready(&mut r,FramePacket {dabs:std::slice::from_ref(&last),dab_batches:std::slice::from_ref(&lift),time_seconds:1.,..frame}).unwrap();
+        let lifted=(r.scale_display.as_ref().unwrap().keyless(next),display_pixels(&r)[at]);
+        crate::test_support::submit_settled(&mut r,frame);
+        (live,lifted,display_pixels(&r))
+    };
+    let [((unnamed,tipped),(refused,lifted),settled),((_,twin_tipped),(_,twin_lifted),twin)]=[true,false].map(drawn);
+    assert!(unnamed,"the predicted frame writes the next cell in contact without a key");
+    assert!(max_error(&[tipped],&[twin_tipped])>1e-3,"the blur spreads the prediction into the next cell: {tipped:?} against {twin_tipped:?}");
+    assert!(refused || max_error(&[lifted],&[twin_lifted])<1e-4,"pen-up names the next cell while it shows the prediction: {lifted:?} against {twin_lifted:?}");
+    let error=max_error(&settled,&twin);
+    assert!(error<1e-4,"the picture after pen up differs from a twin that never predicted the tip by {error}");
+}
+
+#[test]
+fn a_cell_a_discarded_contact_left_unnamed_is_not_named_by_a_later_contact_after_the_layer_above_changes_it() {
+    let extent=[2048,512];let mut doc=document_at(extent);let ink=doc.working.occurrence.unwrap();let target=primary_target(&doc);
+    let other=paint_occurrence(&mut doc,"Other",None);set_root_entries(&mut doc,vec![other,ink]);
+    let other_target=doc.scene().source_target(other).unwrap();
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
+    let cell=PixelRect::new(256,0,512,256);let at=(128*extent[0]+400) as usize;
+    let blue=(0..PAGE_SIZE*PAGE_SIZE).flat_map(|_|[0.1f32,0.2,0.9,1.]).flat_map(f32::to_le_bytes).collect::<Vec<_>>();
+    let dabs=[stroke_dab(100.,128.),stroke_dab(300.,128.),stroke_dab(1800.,400.),stroke_dab(1810.,400.)];
+    let send=|r:&mut WgpuRasterizer,dab:Option<&layer_render::Dab>,[start,end]:[bool;2],time:f32| {
+        let batch=dab.map(|dab|stroke_batch(target,dab,start,end));
+        crate::test_support::submit_ready(r,FramePacket {dabs:dab.map_or(&[][..],std::slice::from_ref),dab_batches:batch.as_ref().map_or(&[][..],std::slice::from_ref),time_seconds:time,..frame}).unwrap();
+        r.scale_display.as_ref().unwrap().contact_id()
+    };
+    let paged=|r:&mut WgpuRasterizer| {
+        crate::test_support::submit_settled(r,frame);
+        let dab=stroke_dab(400.,60.);
+        crate::test_support::submit_ready(r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&stroke_batch(other_target,&dab,true,true)),..frame}).unwrap();
+        crate::test_support::submit_settled(r,frame);
+    };
+    let mut r=renderer(&doc);paged(&mut r);
+    send(&mut r,Some(&dabs[0]),[true,false],0.01);
+    let first=send(&mut r,Some(&dabs[1]),[false,false],0.02);
+    assert!(first.is_some() && r.scale_display.as_ref().unwrap().keyless(cell),"the first contact writes the cell without a key");
+    r.test.discard_frame=true;
+    send(&mut r,None,[false,false],0.03);
+    assert!(!r.test.discard_frame,"the pause frame's encoder is dropped");
+    crate::test_support::upload_layer_page(&mut r,doc.scene(),other_target,[1,0],&blue);
+    evict_composite_pages(r.scale_display.as_ref().unwrap(),&[cell]);
+    let repeats=1+(0..4).position(|step|send(&mut r,Some(&dabs[2]),[false,false],0.04+0.001*step as f32).is_some_and(|second|Some(second)!=first)).expect("a second contact begins");
+    assert!(r.scale_display.as_ref().unwrap().keyless(cell),"the second contact begins away from the cell, which keeps the first contact's write");
+    send(&mut r,Some(&dabs[3]),[false,true],0.05);
+    let (named,lifted)=(!r.scale_display.as_ref().unwrap().keyless(cell),display_pixels(&r)[at]);
+    crate::test_support::submit_settled(&mut r,frame);
+    let stroke=dabs[..2].iter().chain(std::iter::repeat_n(&dabs[2],repeats)).chain(&dabs[3..]).cloned().collect::<Vec<_>>();
+    let mut fresh=renderer(&doc);paged(&mut fresh);
+    crate::test_support::upload_layer_page(&mut fresh,doc.scene(),other_target,[1,0],&blue);
+    let whole=layer_render::DabBatch {stroke_start:true,stroke_end:true,dab_count:stroke.len() as u32,damage:stroke.iter().map(|dab|dab.bounds()).reduce(|a,b|a.union(b)).unwrap(),
+        ..stroke_batch(target,&stroke[0],true,true)};
+    crate::test_support::submit_ready(&mut fresh,FramePacket {dabs:&stroke,dab_batches:std::slice::from_ref(&whole),time_seconds:0.05,..frame}).unwrap();
+    crate::test_support::submit_settled(&mut fresh,frame);
+    let reference=display_pixels(&fresh);
+    assert!(!named || max_error(&[lifted],&reference[at..=at])<1e-4,"the second contact's exit names the first contact's write over the changed layer: {lifted:?} against {:?}",reference[at]);
+    let error=max_error(&display_pixels(&r),&reference);
+    assert!(error<1e-4,"the settled picture differs from a fresh renderer by {error}");
+}
+
+#[test]
 fn a_zoom_during_a_held_contact_names_its_own_frame_and_settles_like_a_fresh_renderer() {
     let extent=[2048,1024];let doc=document_at(extent);let target=primary_target(&doc);
     let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
@@ -458,8 +537,10 @@ fn pen_up_keeps_the_cells_shown_earlier_in_the_contact_without_composing_or_copy
     assert!(composed.is_subset(&last),"pen-up composes only the cells its own dab reaches: {composed:?}");
     let cache=r.scale_display.as_ref().unwrap();let plan=cache.plan;
     for coordinate in &earlier {
-        assert!(cache.displays(pages::bounds(*coordinate,plan.level,plan.extent).intersect(plan.bounds)),"pen-up keeps the cell {coordinate:?} shown earlier in the contact");
+        let cell=pages::bounds(*coordinate,plan.level,plan.extent).intersect(plan.bounds);
+        assert!(cache.displays(cell) && !cache.keyless(cell),"pen-up keeps and names the cell {coordinate:?} shown earlier in the contact");
     }
+    assert_eq!(cache.presented_matches_expected(),Some(true),"every cell of the window carries a record that matches the frame after pen-up");
     let view_cells=pages::coordinates(plan.bounds,plan.level).count() as u64;
     assert_eq!(counts.written_back,0,"pen-up copies no cell into the Store: {counts:?}");
     assert!(counts.expected_keys<=6*view_cells,"pen-up keys stay bounded by the view, not the contact: {} keys for {view_cells} cells",counts.expected_keys);
