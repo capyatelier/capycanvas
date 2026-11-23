@@ -158,7 +158,7 @@ fn resolve(leases:&[Lease],choices:&[Option<Selected>;2])->Result<[Option<source
         None=>Ok(None),
         Some(Selected::Resident(tile,witness))=>{
             #[cfg(test)] if ACCEPTED_READ_RESULTS.with(|results|results.borrow().is_some()) {RESIDENT_READS.with(|reads|reads.borrow_mut().push(tile.view.clone()));}
-            Ok(Some(source_access::SourceRead {tile:tile.clone(),pending:Vec::new(),assembly:None,complete:witness.complete()}))
+            Ok(Some(source_access::SourceRead::resident(tile.clone(),witness.complete())))
         },
         Some(Selected::Decoded(key))=>accepted(leases,key.clone()).map(Some),
     };
@@ -486,7 +486,7 @@ impl Inputs {
             let cache=r.source_tiles.borrow();
             read.assembly.iter().flat_map(|assembly|assembly.sources()).chain([&read.tile.view]).for_each(|view|cache.stamp(view,class));
             let mut lease=cache.lease(&read.tile.view).unwrap();drop(cache);
-            lease.read=Some(Arc::new(Read {key:Key::base(base,*coordinate),tile:read.tile,pending:read.pending,assembly:read.assembly}));
+            lease.read=Some(Arc::new(read));
             accepted.push(lease);
         }
         Ok(AcceptedInputs {brush:None,brush_state:None,unit:self.unit,leases:accepted,placements:self.placements.clone(),decisions:self.decisions.clone(),declaring:None,objects_refusal:None,class:Some(class)})
@@ -745,7 +745,7 @@ impl AcceptedInputs {
     fn placeholder(r:&WgpuRasterizer,plane:RasterPlane)->source_access::SourceRead {
         let tile=if plane==RasterPlane::Color {RawTile {texture:r.empty_texture.clone().into(),view:r.empty_view.clone()}}
             else {RawTile {texture:r.empty_scalar_texture.clone().into(),view:r.empty_scalar_view.clone()}};
-        source_access::SourceRead {tile,pending:Vec::new(),assembly:None,complete:true}
+        source_access::SourceRead::resident(tile,true)
     }
     fn decide(&mut self,r:&WgpuRasterizer,address:Address,raw:Option<bool>,decide:impl FnOnce(&mut Inputs,&Declaration)->Result<(),GpuRasterError>)
         ->Result<[Option<source_access::SourceRead>;2],GpuRasterError> {
@@ -945,7 +945,7 @@ pub(crate) struct PaintBaseAssembly {
 
 impl PaintBaseAssembly {
     pub(super) fn recorded(&self)->bool {self.write.recorded()}
-    pub(super) fn sources(&self)->impl Iterator<Item=&wgpu::TextureView> {
+    pub(crate) fn sources(&self)->impl Iterator<Item=&wgpu::TextureView> {
         std::iter::once(&self.tile.view).chain(self.copies.iter().map(|copy|&copy.source.view))
     }
     pub(crate) fn encode(&self,r:&WgpuRasterizer,encoder: &mut crate::submission::CommandEncoder) {
@@ -965,7 +965,8 @@ impl PaintBaseAssembly {
 }
 
 
-fn plan_paint_base(r: &WgpuRasterizer, base: &layer_core::authored::PaintBase, coordinate: [u32; 2]) -> Result<Option<source_access::SourceRead>, GpuRasterError> {
+fn plan_paint_base(r: &WgpuRasterizer, base: &layer_core::authored::PaintBase, coordinate: [u32; 2]) -> Result<Option<Read>, GpuRasterError> {
+    let key=Key::base(base,coordinate);
     let bounds = source_access::paint_base_bounds(base).intersect(page_rect(coordinate));
     if bounds.is_empty() { return Ok(None); }
     let mut cache = r.source_tiles.borrow_mut();
@@ -973,13 +974,13 @@ fn plan_paint_base(r: &WgpuRasterizer, base: &layer_core::authored::PaintBase, c
         let source_coordinate = std::array::from_fn(|i| coordinate[i] - base.offset[i] / PAGE_SIZE);
         let (tile, pending) = cache.plan_exact(r, base.image.storage(), source_coordinate)?;
         let (tile, promotion) = cache.promote(r, tile)?;
-        return Ok(Some(source_access::SourceRead { tile, pending: pending.into_iter().chain(promotion).collect(), assembly: None, complete: true }));
+        return Ok(Some(Read { key, tile, pending: pending.into_iter().chain(promotion).collect(), assembly: None }));
     }
     let (tile, write) = cache.plan_base(r, base, coordinate)?;
     let Some(write)=write else {
         let assembly=cache.base_pending(&tile.view);
         let pending=assembly.as_ref().map_or_else(Vec::new,|assembly|assembly.dependencies.clone());
-        return Ok(Some(source_access::SourceRead {tile,pending,assembly,complete:true}));
+        return Ok(Some(Read {key,tile,pending,assembly}));
     };
     let _target=cache.lease(&tile.view).unwrap();
     let mut leases=Vec::new();
@@ -1000,13 +1001,13 @@ fn plan_paint_base(r: &WgpuRasterizer, base: &layer_core::authored::PaintBase, c
     }
     let assembly=Arc::new(PaintBaseAssembly {tile:RawTile {texture:tile.texture.clone(),view:tile.view.clone()},copies,write,dependencies:pending.clone(),_leases:leases});
     cache.remember_base(&tile.view,assembly.clone());
-    Ok(Some(source_access::SourceRead {tile,pending,assembly:Some(assembly),complete:true}))
+    Ok(Some(Read {key,tile,pending,assembly:Some(assembly)}))
 }
 
 struct Read {key:Key,tile:RawTile,pending:Vec<Arc<PendingTile>>,assembly:Option<Arc<PaintBaseAssembly>>}
 impl Read {
     fn source(&self)->source_access::SourceRead {
-        source_access::SourceRead {tile:RawTile {texture:self.tile.texture.clone(),view:self.tile.view.clone()},pending:self.pending.clone(),assembly:self.assembly.clone(),complete:true}
+        source_access::SourceRead::decoded(self.tile.clone(),self.pending.clone(),self.assembly.clone())
     }
 }
 impl std::ops::Deref for Lease {type Target=Arc<dyn Send+Sync>;fn deref(&self)->&Self::Target {&self.owner}}
@@ -1282,8 +1283,8 @@ impl DecodedTiles {
     fn stamp(&self,view:&wgpu::TextureView,class:crate::residency::Class) {
         if let Some(index)=self.views.get(view) {self.slots[*index].lease.stamp(class);}
     }
-    pub(crate) fn consumed(&self,read:&source_access::SourceRead) {
-        for view in read.assembly.iter().flat_map(|assembly|assembly.sources()).chain([&read.tile.view]) {
+    pub(crate) fn consumed<'a>(&self,views:impl Iterator<Item=&'a wgpu::TextureView>) {
+        for view in views {
             if let Some(index)=self.views.get(view) {self.slots[*index].lease.release_demand();}
         }
     }

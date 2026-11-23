@@ -157,7 +157,7 @@ impl Scene {
                 let mut held=self.own(output);
                 if let Some(low) = low {
                     let [read,_]=accepted.raw_color(r,low,coordinate)?;
-                    let low=read.map(|read|self.read_input(read)).unwrap_or_else(||r.empty_view.clone());
+                    let low=read.map(|read|self.read_input(read).take(&mut self.complete)).unwrap_or_else(||r.empty_view.clone());
                     let detail = self.alloc(r, wgpu::Color::TRANSPARENT)?;
                     self.draw(r, detail, self.pool[output].view.clone(), Some(low),
                         [0., 0., PAGE_SIZE as f32, PAGE_SIZE as f32], [17., 1., 0., 0.], false, Convert::None);

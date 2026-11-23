@@ -71,19 +71,25 @@ impl<T> Sampled<T> {
     pub fn new(value:T,complete:bool)->Self {Self {value,complete}}
     pub fn take(self,complete:&mut bool)->T {*complete&=self.complete;self.value}
     pub fn map<U>(self,map:impl FnOnce(T)->U)->Sampled<U> {Sampled {value:map(self.value),complete:self.complete}}
+    pub fn uncertified(self)->T {self.value}
 }
 impl Sampled<wgpu::TextureView> {
     pub fn read<U:resident::TextureStorage>(read:&resident::Read<'_,U>)->Self {Self {value:read.value().view().clone(),complete:read.complete()}}
 }
 
 pub(super) struct SourceRead {
-    pub tile: RawTile,
+    tile: RawTile,
     pub pending: Vec<Arc<scene::sources::PendingTile>>,
     pub assembly: Option<Arc<scene::sources::PaintBaseAssembly>>,
-    pub complete: bool,
+    complete: bool,
 }
 impl SourceRead {
+    pub fn resident(tile:RawTile,complete:bool)->Self {Self {tile,pending:Vec::new(),assembly:None,complete}}
+    pub fn decoded(tile:RawTile,pending:Vec<Arc<scene::sources::PendingTile>>,assembly:Option<Arc<scene::sources::PaintBaseAssembly>>)->Self {
+        Self {tile,pending,assembly,complete:true}
+    }
     pub fn sampled(self)->Sampled<RawTile> {Sampled::new(self.tile,self.complete)}
+    pub fn consumed(&self,sources:&scene::sources::DecodedTiles) {sources.consumed(self.assembly.iter().flat_map(|assembly|assembly.sources()).chain([&self.tile.view]));}
     pub fn ready(&self)->bool {self.pending.iter().all(|pending|pending.ready())}
     pub fn encode(&self,r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder,class:crate::residency::Class)->Result<bool,GpuRasterError> {
         if !self.ready() && (!r.snapshot_worker || cfg!(target_arch="wasm32")) {return Ok(false);}
@@ -167,7 +173,7 @@ impl WgpuRasterizer {
         let read=std::cell::RefCell::new(Vec::new());
         let views=self.layer_neighborhood(inputs,layer,coordinate,offsets,captured,encoder,|inputs,r,layer,at,receipt| {
             if let Some(tile)=r.material_reads.as_ref().and_then(|reads|reads.get(&(layer,at,preview))) {
-                return Ok([tile.clone().map(|(tile,complete)|SourceRead {tile,pending:Vec::new(),assembly:None,complete}),None]);
+                return Ok([tile.clone().map(|(tile,complete)|SourceRead::resident(tile,complete)),None]);
             }
             #[cfg(test)] crate::test_support::record_material_read((at,preview.map(|(stage,_)|stage)));
             let choices=inputs.brush_color(r,layer,at,preview,receipt)?;
@@ -224,7 +230,7 @@ impl WgpuRasterizer {
         layer: SourceTarget,
         coordinate: [u32; 2],
         encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<Option<RawTile>, GpuRasterError> {
+    ) -> Result<Option<Sampled<RawTile>>, GpuRasterError> {
         let read=|r:&WgpuRasterizer,accepted:&mut scene::sources::AcceptedInputs|if layer.is_coverage() {accepted.raw_scalar(r,layer,RasterPlane::Mask,coordinate)}
             else {accepted.raw_color(r,layer,coordinate).map(|[base,_]|base)};
         let declaration=scene::sources::Declaration::raw(None,None,Some(encoder.submission()));
@@ -233,7 +239,7 @@ impl WgpuRasterizer {
         let read=read(self,&mut accepted)?;
         accepted.clone().track(encoder);
         if let Some(read)=&read && !read.encode(self,encoder,crate::residency::Class::Authored)? {return Err(GpuRasterError::NotReady);}
-        accepted.track(encoder);Ok(read.map(|read|read.tile))
+        accepted.track(encoder);Ok(read.map(SourceRead::sampled))
     }
 
     pub(super) fn paint_base_tile(&mut self, base: &PaintBase, coordinate: [u32; 2], encoder: &mut crate::submission::CommandEncoder) -> Result<Option<RawTile>, GpuRasterError> {

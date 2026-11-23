@@ -262,7 +262,7 @@ impl RegionRequests {
     fn sample_fill_seed(&mut self,r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder)->Result<(),GpuRasterError> {
         let Some((target,position,buffer))=&mut self.fill_seed else {return Ok(());};
         let rect=scene::fill_edges::seed_rect(*position,r.target_extent(*target));
-        let tile=if rect.is_empty() {None}else{r.raw_layer_tile(*target,[rect.min_x()/PAGE_SIZE,rect.min_y()/PAGE_SIZE],encoder)?};
+        let tile=if rect.is_empty() {None}else{r.raw_layer_tile(*target,[rect.min_x()/PAGE_SIZE,rect.min_y()/PAGE_SIZE],encoder)?.map(source_access::Sampled::uncertified)};
         let buffer=buffer.get_or_insert_with(||r.device.create_buffer(&wgpu::BufferDescriptor {label:Some("fill seed texel"),size:16,
             usage:wgpu::BufferUsages::COPY_SRC|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false}));
         if let Some(tile)=tile {

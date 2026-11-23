@@ -46,6 +46,7 @@ pub(super) struct ImageStages {
     preview_layer: Option<SourceTarget>,
     object_moving: Option<OccurrenceHandle>,
     blend_space: layer_core::BlendSpace,
+    incomplete: bool,
     pub input_updates: u64,
     pub pass_updates: u64,
     pub pass_pixels: u64,
@@ -366,6 +367,9 @@ impl Scene {
         }
         result
     }
+    pub(crate) fn retire_incomplete_images(&mut self) {
+        if self.images.incomplete { self.retire_images(|scene| scene.images = ImageStages::charged(&scene.tiers.gpu, &scene.tiers.ram)); }
+    }
     pub(super) fn update_images(
         &mut self,
         r: &mut WgpuRasterizer,
@@ -389,7 +393,10 @@ impl Scene {
         let previous = std::mem::replace(&mut self.image_evaluation_origin, doc_bounds.min);
         let damage = self.image_damage.take();
         self.image_damage = damage.as_ref().map(|damage| damage.map(|region| doc_bounds.local(region)));
+        let outer = std::mem::replace(&mut self.complete, true);
         let result = self.retire_images(|scene| scene.update_image_stages(r, rebased, local_dirty, encoder));
+        self.images.incomplete |= !self.complete;
+        self.complete = outer && !self.images.incomplete;
         self.image_evaluation_origin = previous;
         self.image_output = previous_output;
         self.image_damage = damage;

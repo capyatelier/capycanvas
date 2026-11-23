@@ -297,7 +297,7 @@ impl SourceThumbnails {
         let mut pending=None;
         for _ in 0..tile_limit {
             let Some(coordinate)=prepared.remaining.front().copied() else {break;};
-            let tile=match r.raw_layer_tile(layer,coordinate,encoder) {
+            let tile=match r.raw_layer_tile(layer,coordinate,encoder).map(|tile|tile.map(source_access::Sampled::uncertified)) {
                 Ok(Some(tile))=>tile,Ok(None)=>return Err(GpuRasterError::InvalidExtent),
                 Err(error) if error.is_preparation_pending()=>{pending=Some(error);break;},Err(error)=>return Err(error),
             };

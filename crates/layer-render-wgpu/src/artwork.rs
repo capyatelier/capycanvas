@@ -193,7 +193,7 @@ impl Capture {
             ));
         }
         let (texture, view) = self.target.clone().unwrap();
-        self.region_into(r, packet, region, &texture, encoder)?;
+        self.region_into(r, packet, region, &texture, encoder)?.uncertified();
         Ok(source_access::RawTile { texture: texture.into(), view })
     }
     /// Capture `region` into the top-left prefix of `destination`, a working
@@ -205,15 +205,15 @@ impl Capture {
         region: PixelRect,
         destination: &wgpu::Texture,
         encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<(), GpuRasterError> {
+    ) -> Result<source_access::Sampled<()>, GpuRasterError> {
         self.region_reading(r, packet, region, destination, false, encoder)
     }
     pub fn authored_region_into(&mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, region: PixelRect, destination: &wgpu::Texture,
-        encoder: &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError> {
+        encoder: &mut crate::submission::CommandEncoder) -> Result<source_access::Sampled<()>, GpuRasterError> {
         self.region_reading(r, packet, region, destination, true, encoder)
     }
     fn region_reading(&mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, region: PixelRect, destination: &wgpu::Texture,
-        authored: bool, encoder: &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError> {
+        authored: bool, encoder: &mut crate::submission::CommandEncoder) -> Result<source_access::Sampled<()>, GpuRasterError> {
         if region.width() > destination.width() || region.height() > destination.height() {
             return Err(GpuRasterError::InvalidExtent);
         }
@@ -230,12 +230,13 @@ impl Capture {
         }
         if self.scene.is_none() { self.scene = Some(scene::Scene::new(r)?); }
         let scene = self.scene.as_mut().unwrap();
+        scene.retire_incomplete_images();
         let output = packet.scene.scope().and_then(scene::raw_output).unwrap_or(scene::Output::Artwork(None));
-        if authored { scene.capture_authored_region(r, packet, destination, region, output, encoder)?; }
-        else { scene.capture_region_prepared(r, packet, destination, region, output, encoder)?; }
+        let ((), complete) = scene.certified(|scene| if authored { scene.capture_authored_region(r, packet, destination, region, output, encoder) }
+            else { scene.capture_region_prepared(r, packet, destination, region, output, encoder) })?;
         self.window = Some(window);
         self.peak_image_bytes = self.peak_image_bytes.max(bytes);
-        Ok(())
+        Ok(source_access::Sampled::new((), complete))
     }
     /// The window capturing `region` reads and the filter images it needs,
     /// refused above the image limit before anything is allocated.

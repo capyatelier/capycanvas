@@ -315,7 +315,7 @@ fn exact_preview_after_mask_upload(execution: BrushExecution) {
             assert_eq!((r.preview_level,r.preview_contribution,r.preview_requires_base),quality,
                 "a refused exact preview must preserve its published quality");
         }
-        result.unwrap();
+        result.unwrap().uncertified();
     });
     r.wait_idle().unwrap();
     assert_eq!(r.preview_level, 0);

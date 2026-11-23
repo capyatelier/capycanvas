@@ -252,6 +252,7 @@ impl<T> RasterWrite<'_, T> {
 impl Encoding {
     pub fn intent(&self)->Option<&Intent> {self.intent.as_ref()}
     pub(crate) fn certified(mut self,delta:Delta)->Self {self.delta=delta;self}
+    pub(crate) fn completed(mut self,complete:bool)->Self {self.version.complete&=complete;self}
     pub fn publish(mut self,actual:&Submission)->Written {
         self.version.submission=actual.clone();
         self.names.lock().unwrap().publish(self.version.clone(),self.delta);

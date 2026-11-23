@@ -520,8 +520,8 @@ impl Scene {
         let level=accepted.level(id,RasterPlane::Color,c);
         let over=overlay.is_some();
         let empty=base.is_none() && overlay.is_none();
-        let base=base.map(|read|self.read_input(read));
-        let source=overlay.map(|read|self.read_input(read)).or_else(||base.clone()).unwrap_or_else(||r.empty_view.clone());
+        let base=base.map(|read|self.read_input(read).uncertified());
+        let source=overlay.map(|read|self.read_input(read).uncertified()).or_else(||base.clone()).unwrap_or_else(||r.empty_view.clone());
         Ok(PageInputs { source, base: base.unwrap_or_else(|| r.empty_view.clone()), level, over, empty })
     }
     /// Reduce level page `tile` of a layer whose levels lie `phase` pixels

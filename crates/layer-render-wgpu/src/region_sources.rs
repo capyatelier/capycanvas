@@ -659,7 +659,7 @@ impl RawRegions {
                             .ok_or(GpuRasterError::InvalidExtent)?;
                         r.paint_base_tile(&source, *coordinate, encoder)?
                     } else {
-                        if placed { Some(self.capture.layer_tile(r,layer,*coordinate,encoder)?) } else { r.raw_layer_tile(layer,*coordinate,encoder)? }
+                        if placed { Some(self.capture.layer_tile(r,layer,*coordinate,encoder)?) } else { r.raw_layer_tile(layer,*coordinate,encoder)?.map(source_access::Sampled::uncertified) }
                     }
                 } else {
                     let region = page_rect(*coordinate).intersect(PixelRect::full([w, h]));
@@ -667,8 +667,8 @@ impl RawRegions {
                     let (texture, view) = self.captured[slot].clone();
                     if slot >= self.progress.as_ref().unwrap().captured {
                         let packet = frame.as_ref().unwrap().packet([w, h]);
-                        if sampling == Sampling::Target { self.capture.authored_region_into(r, packet, region, &texture, encoder)?; }
-                        else { self.capture.region_into(r, packet, region, &texture, encoder)?; }
+                        if sampling == Sampling::Target { self.capture.authored_region_into(r, packet, region, &texture, encoder)?.uncertified(); }
+                        else { self.capture.region_into(r, packet, region, &texture, encoder)?.uncertified(); }
                         self.progress.as_mut().unwrap().captured = slot + 1;
                     }
                     Some(source_access::RawTile { texture: texture.into(), view })

@@ -299,7 +299,7 @@ fn target_bytes(renderer: &mut WgpuRasterizer, scene: layer_core::SceneView<'_>,
     desired: Option<&layer_render::TransformPreview>) -> Vec<u8> {
     if desired.is_none() {
         if target.is_coverage() {return crate::test_support::mask_page_bytes(renderer,target,[0;2]);}
-        let tile=crate::test_support::submit_encoded(renderer,|r,encoder|crate::test_support::query_ready(r,encoder,|r,encoder|r.raw_layer_tile(target,[0;2],encoder))).unwrap();
+        let tile=crate::test_support::submit_encoded(renderer,|r,encoder|crate::test_support::query_ready(r,encoder,|r,encoder|r.raw_layer_tile(target,[0;2],encoder).map(|tile|tile.map(crate::source_access::Sampled::uncertified)))).unwrap();
         return crate::layer_tests::page_bytes(renderer,&tile.texture);
     }
     let desired=desired.unwrap();

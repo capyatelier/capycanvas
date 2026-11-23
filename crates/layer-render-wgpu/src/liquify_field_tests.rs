@@ -854,7 +854,7 @@ fn pinch_minification_keeps_transparency_at_physical_canvas_edge() {
 
 fn source_color_pages(r: &mut WgpuRasterizer, target: layer_core::SourceTarget, extent: [u32; 2]) -> BTreeMap<[u32; 2], Vec<u8>> {
     let tiles: Vec<_> = crate::test_support::submit_encoded(r, |r, encoder| page_coordinates(PixelRect::full(extent)).map(|coordinate| {
-        let tile = crate::test_support::query_ready(r, encoder, |r, encoder| r.raw_layer_tile(target, coordinate, encoder)).unwrap();
+        let tile = crate::test_support::query_ready(r, encoder, |r, encoder| r.raw_layer_tile(target, coordinate, encoder).map(|tile|tile.map(crate::source_access::Sampled::uncertified))).unwrap();
         (coordinate, tile.texture)
     }).collect());
     tiles.into_iter().map(|(coordinate, texture)| (coordinate, crate::layer_tests::page_bytes(r, &texture))).collect()

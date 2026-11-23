@@ -70,7 +70,7 @@ fn stored_fill_prepares_cold_reference_tiles_beside_its_seed() {
         let scope=layer_core::SceneScope::Raw(*reference);
         let mut capture=crate::artwork::Capture::default();
         crate::test_support::submit_encoded(r,|r,encoder|crate::test_support::query_ready(r,encoder,|r,encoder|capture.region_into(r,
-            packet(snapshot.view().with_scope(&scope),extent),PixelRect::new(240,32,241,33),&seed,encoder)));
+            packet(snapshot.view().with_scope(&scope),extent),PixelRect::new(240,32,241,33),&seed,encoder))).uncertified();
         assert!(r.source_tiles.borrow().prepared_view(image,[0,0]).is_some());
         assert!(r.source_tiles.borrow().prepared_view(image,[1,0]).is_none(),"the fill halo must reach a cold tile");
     }

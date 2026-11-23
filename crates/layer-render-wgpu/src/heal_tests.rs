@@ -93,6 +93,24 @@ fn source_at(engine: &mut CanvasEngine<WgpuRasterizer>, x: f32, y: f32) {
 }
 
 #[test]
+fn a_heal_whose_tone_reads_pixels_a_cold_donor_left_behind_is_not_complete() {
+    let (mut fixture, style) = cold_clone([384., 0.]);
+    committed_miss(&mut fixture, &style);
+    let (r, packet) = fixture.frame();
+    r.retouch.as_mut().unwrap().take_miss();
+    let retouch = Retouch { source: RetouchSource::References, references: Arc::new([TARGET_USE].into()), offset: [384., 0.], ..Default::default() };
+    r.prepare_retouch(Some(&RetouchPreparation { execution: layer_core::BrushExecution::Heal, target: PHOTO, retouch: retouch.clone(), points: Vec::new() }));
+    crate::test_support::submit_settled(r, packet);
+    let mut heal = crate::layer_tests::preset_style(DefaultBrushPreset::HealingBrush);
+    heal.retouch = Some(retouch);
+    let dab = clone_dab(96., 96.);
+    let stroke = DabBatch { stroke_id: layer_core::StrokeId(2), ..crate::test_support::dab_batch(PHOTO, heal, dab.bounds()) };
+    crate::test_support::submit_settled(r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&stroke), composite_all: false, ..packet });
+    assert_eq!(r.retouch.as_ref().unwrap().counts.heals, 1);
+    assert!(!committed_complete(r, PHOTO, [0, 0]), "a heal whose tone reads the committed dab's missing pixels under a clean destination is not complete");
+}
+
+#[test]
 fn spot_healing_batches_resident_candidates_across_pages() {
     let (mut input, mut engine) = healer(document([2048, 1024]), DefaultBrushPreset::SpotHealingBrush, 512., false);
     for step in 0..20 {

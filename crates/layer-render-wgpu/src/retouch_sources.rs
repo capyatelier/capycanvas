@@ -527,10 +527,15 @@ impl RetouchSources {
             .map(|candidate| std::mem::replace(&mut r.effect_analyses, candidate.entries.clone()));
         let result = self.capture.region_into(r, packet, region, &texture, encoder);
         if let Some(previous) = previous { r.effect_analyses = previous; }
-        if let Err(error) = result {
-            self.cache.release(slot);
-            return if error.is_preparation_pending() {self.pending=true;Ok(None)}else {Err(error)};
+        let mut complete = true;
+        match result {
+            Ok(captured) => captured.take(&mut complete),
+            Err(error) => {
+                self.cache.release(slot);
+                return if error.is_preparation_pending() {self.pending=true;Ok(None)}else {Err(error)};
+            }
         }
+        if !complete {self.cache.release(slot);return Ok(None);}
         encoding.publish(&encoder.submission());
         self.counts.captures += 1;
         self.counts.blocking += u64::from(blocking);
@@ -553,7 +558,12 @@ impl RetouchSources {
             if !wait && self.capture.would_block(r,packet,region) {return Ok(None);}
             let slot=self.cache.claim(r,coordinate)?;
             let (texture,_,encoding)=self.cache.slots[slot].page.destination(self.cache.pages[&coordinate].1.clone(),true,&encoder.submission())?;
-            if let Err(error)=self.capture.region_into(r,packet,region,&texture,encoder) {self.cache.release(slot);return Err(error);}
+            let mut complete=true;
+            match self.capture.region_into(r,packet,region,&texture,encoder) {
+                Ok(captured)=>captured.take(&mut complete),
+                Err(error)=>{self.cache.release(slot);return Err(error);},
+            }
+            if !complete {self.cache.release(slot);return Ok(None);}
             encoding.publish(&encoder.submission());self.counts.captures+=1;return Ok(Some(slot));
         }
         let versions=&self.cache.key.as_ref().unwrap().versions[&layer];

@@ -458,7 +458,7 @@ impl ObjectCache {
                             Err(error)=>return Err(error),
                         }
                         steps=steps.saturating_add((encoder.pass_count()-before).saturating_mul(PASS_TAPS));
-                        read.tile
+                        read.sampled().uncertified()
                     };
                     let origin = coordinate.map(|v| v * PAGE_SIZE);
                     let extent = std::array::from_fn(|axis| (task.job.source.extent[axis] - origin[axis]).min(PAGE_SIZE));

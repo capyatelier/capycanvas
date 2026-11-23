@@ -431,7 +431,7 @@ impl Scene {
         self.jobs.push(Job::Sampling(Box::new(SamplingStep::Begin {inverse:job.inverse,size:job.size,nearest:job.nearest,extent:job.source.extent})));
         for coordinate in page_coordinates(bounds) {
             let read=accepted.image(r,&job.source,coordinate)?;
-            let view=self.read_input(read);
+            let view=self.read_input(read).take(&mut self.complete);
             let origin=coordinate.map(|v|v*PAGE_SIZE);
             let extent=std::array::from_fn(|axis|(job.source.extent[axis]-origin[axis]).min(PAGE_SIZE));
             self.jobs.push(Job::Sampling(Box::new(SamplingStep::Contribute {source:view,origin:origin.map(|v|v as i32),extent})));
@@ -493,7 +493,7 @@ fn encode_prepared(r:&mut WgpuRasterizer,encoder:&mut crate::submission::Command
     if read.pending.iter().any(|pending|!pending.recorded()) && r.source_tiles.borrow().uploads_full(class) {Scene::submit_source_uploads(r,encoder,class)?;}
     inputs.track(encoder);
     if !read.encode(r,encoder,class)? {return Err(GpuRasterError::NotReady);}
-    Ok(read.tile)
+    Ok(read.sampled().uncertified())
 }
 
 

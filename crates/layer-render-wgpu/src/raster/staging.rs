@@ -319,14 +319,15 @@ impl TargetRestore {
                 if !read.encode(r,encoder,crate::residency::Class::Authored)? {break;}
                 let version=super::contents::fallback(&self.defaults[0],*coordinate);
                 if let Some(originals)=&self.originals {
-                    liquify::Liquify::restore_original(r,originals,room,*coordinate,self.extent,&version,&read.tile,encoder)?;
-                    r.source_tiles.borrow().consumed(&read);
+                    read.consumed(&r.source_tiles.borrow());
+                    liquify::Liquify::restore_original(r,originals,room,*coordinate,self.extent,&version,read.sampled(),encoder)?;
                     self.next+=1;continue;
                 }
                 let page=self.pages.colors.iter_mut().find(|page|page.coordinate==*coordinate).unwrap();page.primary_needs_clear=false;
                 let receipt=encoder.submission();let write=page.primary.initialize(&receipt).ok_or(GpuRasterError::Invariant("prepared output was already initialized"))?;
-                encoder.copy_texture_to_texture(read.tile.texture.as_image_copy(),write.value().texture.as_image_copy(),write.value().texture.size());
-                write.publish(version);
+                let mut complete=true;let tile=read.sampled().take(&mut complete);
+                encoder.copy_texture_to_texture(tile.texture.as_image_copy(),write.value().texture.as_image_copy(),write.value().texture.size());
+                write.completed(complete).publish(version);
                 self.next+=1;continue;
             }
             let SourcePage::Raster(key,tile)=source else {unreachable!()};
@@ -336,14 +337,15 @@ impl TargetRestore {
                 let read=scene::sources::accepted_raster(&self.inputs,&blob,space,space)?;
                 if !read.encode(r,encoder,crate::residency::Class::Authored)? {break;}
                 if let Some(originals)=&self.originals {
-                    liquify::Liquify::restore_original(r,originals,room,key.coordinate,self.extent,&tile.content_version(),&read.tile,encoder)?;
-                    r.source_tiles.borrow().consumed(&read);
+                    read.consumed(&r.source_tiles.borrow());
+                    liquify::Liquify::restore_original(r,originals,room,key.coordinate,self.extent,&tile.content_version(),read.sampled(),encoder)?;
                     self.next+=1;continue;
                 }
                 let page=self.pages.colors.iter_mut().find(|page|page.coordinate==key.coordinate).unwrap();page.primary_needs_clear=false;
                 let receipt=encoder.submission();let write=page.primary.initialize(&receipt).ok_or(GpuRasterError::Invariant("prepared output was already initialized"))?;
-                encoder.copy_texture_to_texture(read.tile.texture.as_image_copy(),write.value().texture.as_image_copy(),write.value().texture.size());
-                write.publish(tile.content_version());
+                let mut complete=true;let source=read.sampled().take(&mut complete);
+                encoder.copy_texture_to_texture(source.texture.as_image_copy(),write.value().texture.as_image_copy(),write.value().texture.size());
+                write.completed(complete).publish(tile.content_version());
                 self.next+=1;continue;
             }
             let Some(prepared)=self.held(&blob) else {r.request_scalar_decode(blob,space)?;break;};

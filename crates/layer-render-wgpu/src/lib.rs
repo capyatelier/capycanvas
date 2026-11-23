@@ -3957,7 +3957,7 @@ impl WgpuRasterizer {
                 let accepted=requested.accept_query(self,None)?;
                 let read=scene::sources::accepted_image(&accepted,&source,coordinate)?;
                 if !read.encode(self,encoder,class)? {return Err(GpuRasterError::NotReady);}
-                let result=images.write_tile(self,encoder,&source,coordinate,&read.tile.texture,None);
+                let result=images.write_tile(self,encoder,&source,coordinate,&read.sampled().uncertified().texture,None);
                 accepted.track(encoder);result?;
                 work.spend(scene::PASS_TAPS);built[class as usize]=true;
             }

@@ -475,7 +475,7 @@ impl PreviewPipeline {
             let mut views = Vec::with_capacity(coordinates.len());
             for c in coordinates {
                 let view = match current.get(c) {
-                    Some(_) => match r.raw_layer_tile(id, *c, encoder) {
+                    Some(_) => match r.raw_layer_tile(id, *c, encoder).map(|tile| tile.map(source_access::Sampled::uncertified)) {
                         Ok(Some(tile)) => tile.view,
                         Ok(None) => return Err(GpuRasterError::MissingPaintLayer(id)),
                         Err(error) if error.is_preparation_pending() => break,
@@ -713,7 +713,7 @@ impl PreviewPipeline {
                         Some(_) if prepared.objects.is_some() || prepared.reduced.is_some() => prepared.generated[0].1.clone(),
                         Some(c) if prepared.placed => capture.thumbnail_tile(r,target,*c,encoder)?.view,
                         Some(c) => {
-                            r.raw_layer_tile(id, *c, encoder)?
+                            r.raw_layer_tile(id, *c, encoder)?.map(source_access::Sampled::uncertified)
                                 .ok_or(GpuRasterError::MissingPaintLayer(id))?
                                 .view
                         }

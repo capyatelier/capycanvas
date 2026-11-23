@@ -2663,7 +2663,7 @@ pub(super) mod query_tests {
                 if read.encode(r,encoder,crate::residency::Class::Visible)? {Ok(())}else {Err(GpuRasterError::NotReady)});
             assert!(!exact_read.ready(),"Display must publish before the level-0 decode arrives");
             let write=store.prepare_write(key.clone(),region,Accuracy::Display,4).unwrap();
-            encoder.copy_texture_to_texture(read.tile.texture.as_image_copy(),image.texture.as_image_copy(),
+            encoder.copy_texture_to_texture(read.sampled().uncertified().texture.as_image_copy(),image.texture.as_image_copy(),
                 wgpu::Extent3d {width:32,height:32,depth_or_array_layers:1});
             store.commit(write,0,&mut encoder);
             renderer.uploads.finish(&encoder);encoder.submit(&renderer.queue);crate::test_support::complete(&renderer);

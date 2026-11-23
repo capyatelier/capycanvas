@@ -1177,7 +1177,7 @@ fn same_encoder_preview_pages_are_accepted_without_waiting_for_submission() {
     assert_eq!(accepted.witnesses(target,RasterPlane::Color,[0;2]).len(),1);
     let previews=std::mem::take(&mut r.preview_pages);
     let [Some(kept),None]=accepted.color(&r,packet.scene,target,[0;2]).unwrap() else {panic!("accepted preview was reselected")};
-    assert_eq!(kept.tile.view,selected.tile.view);
+    assert_eq!(kept.sampled().uncertified().view,selected.sampled().uncertified().view);
     r.preview_pages=previews;
     assert!(matches!(declare(&r,None),Err(GpuRasterError::NotReady)));
     let page=&r.preview_pages[0];
@@ -1498,15 +1498,15 @@ fn a_capture_yields_its_next_window_until_the_previous_window_retires() {
     let mut capture = crate::artwork::Capture::default();
     let (whole, _) = crate::create_color_target(&r.device, extent, "whole window");
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    crate::test_support::query_ready(&mut r, &mut encoder, |r, encoder| capture.region_into(r, packet, PixelRect::full(extent), &whole, encoder));
+    crate::test_support::query_ready(&mut r, &mut encoder, |r, encoder| capture.region_into(r, packet, PixelRect::full(extent), &whole, encoder)).uncertified();
     let page = PixelRect::new(0, 0, PAGE_SIZE, PAGE_SIZE);
     assert!(capture.peak_image_bytes > 0);
     queued_gpu_work(&r).submit(&r.queue);
     while wake.try_recv().is_ok() {}
     let (tile, _) = crate::create_color_target(&r.device, [PAGE_SIZE; 2], "page window");
-    let result = capture.region_into(&mut r, packet, page, &tile, &mut encoder);
+    let result = capture.region_into(&mut r, packet, page, &tile, &mut encoder).map(crate::source_access::Sampled::uncertified);
     assert!(matches!(result, Err(GpuRasterError::NotReady)), "the next window started while the previous one was in flight: {result:?}");
-    after_wake(&mut r, &wake, |r| capture.region_into(r, packet, page, &tile, &mut encoder));
+    after_wake(&mut r, &wake, |r| capture.region_into(r, packet, page, &tile, &mut encoder).map(crate::source_access::Sampled::uncertified));
 }
 
 #[test]

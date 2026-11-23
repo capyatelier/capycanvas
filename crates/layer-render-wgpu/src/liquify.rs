@@ -553,14 +553,14 @@ impl Liquify {
     }
 
     pub(crate) fn restore_original(r:&WgpuRasterizer,originals:&Mutex<Originals>,room:&mut Option<crate::residency::Reservation>,coordinate:[u32;2],extent:[u32;2],
-        version:&layer_core::raster::ContentVersion,source:&source_access::RawTile,encoder:&mut submission::CommandEncoder)->Result<(),GpuRasterError> {
+        version:&layer_core::raster::ContentVersion,source:source_access::Sampled<source_access::RawTile>,encoder:&mut submission::CommandEncoder)->Result<(),GpuRasterError> {
         let mut originals=originals.lock().expect("liquify sources");
         let capture=originals.versions.tile(layer_core::raster::RasterPlane::Color,coordinate);
         if version.matches(&capture)!=Some(true) {return Err(GpuRasterError::Invariant("Liquify backing does not match its captured input"));}
         if originals.readable(coordinate) {return Ok(());}
         let prior=originals.tiles.get(&coordinate).cloned();
         let (mut pending,mut writes)=(Vec::new(),Vec::new());
-        Self::store(r,room,&mut originals,coordinate,extent,capture,prior,Some(source_access::Sampled::new(source.clone(),true)),encoder,&mut pending,&mut writes)?;
+        Self::store(r,room,&mut originals,coordinate,extent,capture,prior,Some(source),encoder,&mut pending,&mut writes)?;
         display_mips::CompleteUpdates::flush_all(&mut pending,encoder);
         let actual=encoder.submission();
         for (_,encoding) in writes {encoding.publish(&actual);}

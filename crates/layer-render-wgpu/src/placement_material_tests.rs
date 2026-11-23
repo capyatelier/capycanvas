@@ -90,7 +90,7 @@ fn raw_planes(r: &mut WgpuRasterizer, document: &Document) -> Planes {
                 if let Some(source) = &source && !source.encode(r, encoder, crate::residency::Class::Authored)? {
                     return Err(GpuRasterError::NotReady);
                 }
-                Ok(source.map(|source| source.tile))
+                Ok(source.map(|source| source.sampled().uncertified()))
             }));
             if let Some(tile) = tile {
                 let bytes = page_bytes(r, &tile.texture);

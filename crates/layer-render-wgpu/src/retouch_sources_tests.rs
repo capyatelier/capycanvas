@@ -233,7 +233,7 @@ fn sample(r: &mut WgpuRasterizer, page: [u32; 2], offset: [f32; 2]) -> (Vec<[f32
 }
 
 fn layer_page(r: &mut WgpuRasterizer, layer: SourceTarget, page: [u32; 2]) -> Vec<[f32; 4]> {
-    let tile = submit_encoded(r, |r, encoder| crate::test_support::query_ready(r, encoder, |r, encoder| r.raw_layer_tile(layer, page, encoder)));
+    let tile = submit_encoded(r, |r, encoder| crate::test_support::query_ready(r, encoder, |r, encoder| r.raw_layer_tile(layer, page, encoder).map(|tile|tile.map(crate::source_access::Sampled::uncertified))));
     tile.map_or_else(|| vec![[0.; 4]; (PAGE_SIZE * PAGE_SIZE) as usize], |tile| floats(&crate::layer_tests::page_bytes(r, &tile.texture)))
 }
 
@@ -808,6 +808,49 @@ fn a_liquify_preview_over_pixels_a_cold_donor_left_behind_is_not_final() {
     let preview=DabBatch {kind:DabBatchKind::Preview,stroke_id:layer_core::StrokeId(2),stroke_end:false,..crate::test_support::dab_batch(TARGET,liquify,deform.bounds())};
     crate::test_support::submit_ready(r,FramePacket {dabs:std::slice::from_ref(&deform),dab_batches:std::slice::from_ref(&preview),composite_all:false,..packet}).unwrap();
     assert!(!final_preview(r,[0,0]),"a Liquify prediction over the committed dab's missing pixels is not readable as its final page");
+}
+
+fn committed_complete(r:&WgpuRasterizer,layer:SourceTarget,coordinate:[u32;2])->bool {
+    let page=r.paint_layers.iter().find(|l|l.id==layer).and_then(|l|l.pages.iter().find(|p|p.coordinate==coordinate)).expect("the page is resident");
+    r.read_color_page(layer,page,false,None).expect("the committed page is readable").complete()
+}
+
+#[test]
+fn a_reference_composed_from_pixels_a_cold_donor_left_behind_is_not_final() {
+    let (mut fixture,style)=cold_clone([384.,0.]);
+    committed_miss(&mut fixture,&style);
+    let edit=occurrence_edit(&fixture.document,TARGET_USE,|occurrence|occurrence.opacity=0.5);
+    fixture.document.apply(edit).unwrap();
+    let (r,packet)=fixture.frame();
+    assert!(!committed_complete(r,TARGET,[0,0]),"the committed dab left its page incomplete");
+    let retouch=Retouch {source:RetouchSource::References,references:Arc::new([TARGET_USE].into()),..Default::default()};
+    r.prepare_retouch(Some(&RetouchPreparation {execution:layer_core::BrushExecution::Clone,target:PHOTO,retouch:retouch.clone(),points:Vec::new()}));
+    let style=layer_render::DabStyle {retouch:Some(retouch),..style};
+    let dab=clone_dab(96.,96.);
+    let preview=DabBatch {kind:DabBatchKind::Preview,stroke_id:layer_core::StrokeId(2),stroke_end:false,..crate::test_support::dab_batch(PHOTO,style,dab.bounds())};
+    crate::test_support::submit_ready(r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&preview),composite_all:false,..packet}).unwrap();
+    assert!(r.read_color_page(PHOTO,r.preview_page([0,0]).unwrap(),true,None).is_err(),
+        "a clone of a half-opaque reference composed from the committed dab's missing pixels is not readable as the prediction's final page");
+}
+
+#[test]
+fn a_fill_whose_edge_band_reads_pixels_a_cold_donor_left_behind_is_not_complete() {
+    let (mut fixture,style)=cold_clone([384.,0.]);
+    committed_miss(&mut fixture,&style);
+    fixture.r.retouch.as_mut().unwrap().take_miss();
+    assert!(!committed_complete(&fixture.r,TARGET,[0,0]),"the committed dab left its page incomplete");
+    let band=layer_core::Selection::polygon(vec![Point {x:200.,y:64.},Point {x:320.,y:64.},Point {x:320.,y:128.},Point {x:200.,y:128.}]).unwrap();
+    let edges=layer_core::FillEdges {translucent_seed:false,snapshot:fixture.document.snapshot(),position:Point {x:300.,y:96.},tolerance:0.,colour_on_solid:false,lines:Vec::new()};
+    let fill=RasterOperation {placement:layer_core::Affine::IDENTITY,coverage:reveal_all(SIZE),
+        kind:RasterOperationKind::Fill {edges:Some(Box::new(edges)),underfill:Some(band),texture:Default::default(),color:FILL,alpha_locked:false}};
+    let SourceTarget::Paint(handle)=TARGET else {unreachable!()};
+    let paint=fixture.document.artwork.paint.get_mut(handle).unwrap();
+    paint.operations=Arc::new(vec![fill]);paint.raster=layer_core::raster::RasterRevision::pending();
+    let (r,packet)=fixture.frame();
+    let command=DabBatch {kind:DabBatchKind::RasterOperation(0),dab_count:0,damage:layer_core::Rect::from_extent(SIZE),
+        ..crate::test_support::dab_batch(TARGET,crate::tests::test_style(layer_core::BrushExecution::Dry),layer_core::Rect::from_extent(SIZE))};
+    crate::test_support::submit_settled(r,FramePacket {dab_batches:std::slice::from_ref(&command),..packet});
+    assert!(!committed_complete(r,TARGET,[1,0]),"a filled page whose edge band reads the committed dab's missing pixels is not complete");
 }
 
 #[test]

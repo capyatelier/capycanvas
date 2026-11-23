@@ -22,10 +22,10 @@ fn ready_units_hold_one_lease_per_source_storage() {
     let mut inputs=crate::scene::sources::Inputs::default();
     for _ in 0..64 {inputs.image_for(&source,[0;2],attempt.r.document_color().space,crate::scene::sources::SourceUse::Exact);}
     let mut unit=Unit {sources:inputs.accept_query(&mut attempt.r,Some(&attempt.scene)).unwrap(),..Default::default()};
-    let read=crate::scene::sources::accepted_image(&unit.sources,&source,[0;2]).unwrap();
+    let read=crate::scene::sources::accepted_image(&unit.sources,&source,[0;2]).unwrap().sampled().uncertified();
     let output=attempt.scene.alloc(&attempt.r,wgpu::Color::TRANSPARENT).unwrap();let start=attempt.scene.jobs.len();
     for _ in 0..64 {
-        attempt.scene.draw(&attempt.r,output,read.tile.view.clone(),None,[0.,0.,256.,256.],[0.;4],false,Convert::layers(frame(&attempt.doc,0)));
+        attempt.scene.draw(&attempt.r,output,read.view.clone(),None,[0.,0.,256.,256.],[0.;4],false,Convert::layers(frame(&attempt.doc,0)));
     }
     let mut encoder=submission::CommandEncoder::new(&attempt.r.device,&Default::default());
     assert!(unit.ready(&mut attempt.scene,&mut attempt.r,&mut encoder,start,Class::Visible).unwrap());

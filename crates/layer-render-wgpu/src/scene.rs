@@ -428,6 +428,7 @@ pub(super) struct Scene {
     used: Vec<scratch::Usage>,
     operation_scratch: Vec<scratch::Lease>,
     declaring: bool,
+    complete: bool,
     jobs: Vec<Job>,
     source_jobs: Vec<std::ops::Range<usize>>,
     ordered:bool,
@@ -807,6 +808,7 @@ impl Scene {
             used: Vec::new(),
             operation_scratch: Vec::new(),
             declaring: false,
+            complete: true,
             jobs: Vec::new(),
             source_jobs: Vec::new(),ordered:false,
             source_bindings: Default::default(),region_bindings: Default::default(),watercolor_bindings: Default::default(),
@@ -935,10 +937,16 @@ impl Scene {
             _=>n,
         }
     }
-    fn read_input(&mut self,read:source_access::SourceRead)->wgpu::TextureView {
-        for pending in read.pending {self.enqueue_source_decode(pending);}
-        if let Some(assembly)=read.assembly {let index=self.source_position();self.jobs.insert(index,Job::PaintBase(assembly));}
-        read.tile.view
+    fn read_input(&mut self,mut read:source_access::SourceRead)->source_access::Sampled<wgpu::TextureView> {
+        for pending in std::mem::take(&mut read.pending) {self.enqueue_source_decode(pending);}
+        if let Some(assembly)=read.assembly.take() {let index=self.source_position();self.jobs.insert(index,Job::PaintBase(assembly));}
+        read.sampled().map(|tile|tile.view)
+    }
+    pub(super) fn certified<T>(&mut self,bind:impl FnOnce(&mut Self)->Result<T,GpuRasterError>)->Result<(T,bool),GpuRasterError> {
+        let outer=std::mem::replace(&mut self.complete,true);
+        let result=bind(self);
+        let complete=self.complete;self.complete=outer && complete;
+        result.map(|value|(value,complete))
     }
     pub(super) fn declare(&mut self,r:&mut WgpuRasterizer,inputs:sources::Inputs,declaration:sources::Declaration,
         traverse:impl FnOnce(&mut Self,&mut WgpuRasterizer,&mut sources::AcceptedInputs)->Result<(),GpuRasterError>,
@@ -950,8 +958,9 @@ impl Scene {
         let (used,position,metrics)=(self.used.clone(),self.position_key.clone(),r.metrics.clone());
         let material=std::mem::take(&mut self.material_pages);
         let declaring=std::mem::replace(&mut self.declaring,true);
+        let complete=self.complete;
         let result=sources::declare(inputs,declaration,|accepted|traverse(self,r,accepted));
-        self.declaring=declaring;
+        self.declaring=declaring;self.complete=complete;
         self.jobs=jobs;self.source_jobs=source_jobs;
         self.pool.truncate(used.len());
         self.used=used;
@@ -1014,7 +1023,7 @@ impl Scene {
         r.source_tiles.get_mut().flush_retired(encoder);
         inputs.clone().track(encoder);
         if !read.encode(r,encoder,Class::Authored)? {return Err(GpuRasterError::NotReady);}
-        inputs.track(encoder);Ok(Some(read.tile))
+        inputs.track(encoder);Ok(Some(read.sampled().uncertified()))
     }
     pub fn prepare_native_transfer(&mut self, r: &WgpuRasterizer, space: layer_core::color::RgbSpace) -> Result<crate::native_tiles::NativeTransfer, GpuRasterError> {
         r.source_tiles.borrow_mut().prepare_transfer(&r.device, space)
@@ -1026,7 +1035,8 @@ impl Scene {
         for request in requests {
             let read=sources::accepted_raster(inputs,request.blob,request.space,request.destination)?;
             if !read.encode(r,encoder,Class::Authored)? {return Err(GpuRasterError::NotReady);}
-            encoder.copy_texture_to_texture(read.tile.texture.as_image_copy(),request.working.as_image_copy(),request.working.size());
+            let tile=read.sampled().uncertified();
+            encoder.copy_texture_to_texture(tile.texture.as_image_copy(),request.working.as_image_copy(),request.working.size());
         }
         Ok(())
     }
@@ -1058,7 +1068,7 @@ impl Scene {
         r.source_tiles.get_mut().flush_retired(encoder);
         inputs.clone().track(encoder);
         if !read.encode(r,encoder,Class::Authored)? {return Err(GpuRasterError::NotReady);}
-        inputs.track(encoder);Ok(read.tile)
+        inputs.track(encoder);Ok(read.sampled().uncertified())
     }
 
     fn watercolor_nearby(r: &WgpuRasterizer, packet: FramePacket<'_>, target: SourceTarget,
@@ -1136,22 +1146,22 @@ impl Scene {
         Ok(())
     }
     fn color_inputs(&mut self,r:&WgpuRasterizer,scene:SceneView<'_>,target:SourceTarget,c:[u32;2],accepted:&mut sources::AcceptedInputs)->Result<[Option<ColorInput>;2],GpuRasterError> {
-        Ok(accepted.color(r,scene,target,c)?.map(|read|read.map(|read|ColorInput {view:self.read_input(read),lease:None})))
+        Ok(accepted.color(r,scene,target,c)?.map(|read|read.map(|read|ColorInput {view:self.read_input(read).take(&mut self.complete),lease:None})))
     }
     fn scalar_input(&mut self,r:&WgpuRasterizer,scene:SceneView<'_>,target:SourceTarget,plane:RasterPlane,c:[u32;2], accepted:&mut sources::AcceptedInputs)->Result<Option<wgpu::TextureView>,GpuRasterError> {
         let read=accepted.scalar(r,scene,target,plane,c)?;
-        Ok(read.map(|read|self.read_input(read)))
+        Ok(read.map(|read|self.read_input(read).take(&mut self.complete)))
     }
     fn mask_input(&mut self,r:&WgpuRasterizer,target:SourceTarget,source:&CoverageSource,c:[u32;2],accepted:&mut sources::AcceptedInputs)->Result<Option<wgpu::TextureView>,GpuRasterError> {
         let read=accepted.mask(r,target,source,c)?;
-        Ok(read.map(|read|self.read_input(read)))
+        Ok(read.map(|read|self.read_input(read).take(&mut self.complete)))
     }
     fn watercolor_views(&mut self,r:&WgpuRasterizer,scene:SceneView<'_>,target:SourceTarget,coordinate:[u32;2],accepted:&mut sources::AcceptedInputs)->Result<Vec<wgpu::TextureView>,GpuRasterError> {
         let mut views=Vec::with_capacity(10);
         for plane in [RasterPlane::Color,RasterPlane::WatercolorWetness] {
             for coordinate in watercolor_stencil(coordinate) {
                 let read=coordinate.map(|c|if plane==RasterPlane::Color {accepted.color(r,scene,target,c).map(|[base,overlay]|overlay.or(base))}else {accepted.scalar(r,scene,target,plane,c)}).transpose()?.flatten();
-                views.push(read.map_or_else(||if plane==RasterPlane::Color {r.empty_view.clone()}else {r.empty_scalar_view.clone()},|read|self.read_input(read)));
+                views.push(read.map_or_else(||if plane==RasterPlane::Color {r.empty_view.clone()}else {r.empty_scalar_view.clone()},|read|self.read_input(read).take(&mut self.complete)));
             }
         }
         Ok(views)
@@ -1673,7 +1683,7 @@ impl Scene {
         let target = packet.scene.source_target(index).unwrap_or_default();
         if !normal_paint(packet.scene, index) || r.watercolor_style(target, packet.dab_batches).is_some() { return Ok(false); }
         let mask = packet.scene.mask(index).filter(|(mask, _)| mask.enabled);
-        let [base,overlay]=accepted.native_color(r,packet.scene,target,tile)?.map(|read|read.map(|read|self.read_input(read)));
+        let [base,overlay]=accepted.native_color(r,packet.scene,target,tile)?.map(|read|read.map(|read|self.read_input(read).take(&mut self.complete)));
         if overlay.is_some() && mask.is_some() || accepted.level(target,RasterPlane::Color,tile)!=0 {return Ok(false);}
         if base.is_none() && overlay.is_none() {return Ok(true);}
         let coverage = mask.map_or(1., |(m, source)| if m.inverted { 1. - source.default_coverage } else { source.default_coverage });
@@ -1759,7 +1769,8 @@ impl Scene {
                     this.command_mask_at(r,&op.coverage,*coordinate,command,accepted).map(drop))?;
                 let intent=r.raster_intent(target,layer_core::raster::RasterPlane::Mask,*coordinate)?;
                 let write=page.write(&intent,&receipt)?;
-                let mask = self.command_mask_at(r, &op.coverage, *coordinate, command, &mut accepted)?;
+                let (mask,bound)=self.certified(|this|this.command_mask_at(r,&op.coverage,*coordinate,command,&mut accepted))?;
+                let write=write.completed(bound);
                 let out = self.reserve_format(r, true)?;
                 self.draw(r, out, write.value().view.clone(), Some(mask.view.clone()),
                     [0., 0., 256., 256.], [22., 1., 0., 0.], false, Convert::None);
@@ -1821,8 +1832,9 @@ impl Scene {
             let source=write.value().view.clone();let destination=write.value().texture.clone();
             let name=ticket.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|ticket|ticket.version().clone());
             let publication=write.encoded(name);
-            if let Some(ticket)=ticket {page.derived=Some(ticket);}
-            let edge_input=edge_settings.map(|_|self.fill_edge_page(r,packet,target,op,c,encoder)).transpose()?.flatten();
+            if let Some(ticket)=&ticket {page.derived=Some(ticket.clone());}
+            let mut complete=true;
+            let edge_input=edge_settings.map(|_|self.fill_edge_page(r,packet,target,op,c,encoder)).transpose()?.flatten().map(|edge|edge.take(&mut complete));
             let inputs=|this:&mut Self,r:&WgpuRasterizer,accepted:&mut sources::AcceptedInputs|->Result<_,GpuRasterError> {
                 let mask=this.command_mask_at(r,&op.coverage,c,(target,operation_index as u32,false),accepted)?;
                 let underfill=underfill_coverage.as_ref().map(|coverage|this.command_mask_at(r,coverage,c,(target,operation_index as u32,true),accepted)).transpose()?;
@@ -1830,7 +1842,12 @@ impl Scene {
                 Ok((mask,underfill,views))
             };
             let mut accepted=self.accept_capture(r,packet,None,&declaration,|this,r,accepted|inputs(this,r,accepted).map(drop))?;
-            let (mask,underfill,views)=inputs(self,r,&mut accepted)?;
+            let ((mask,underfill,views),bound)=self.certified(|this|inputs(this,r,&mut accepted))?;
+            complete&=bound;
+            let publication=publication.completed(complete);
+            if !complete && let Some(ticket)=ticket {
+                r.preview_pages.iter_mut().find(|page|page.coordinate==c).ok_or(GpuRasterError::Invariant("prepared apply operation state is inconsistent"))?.derived=Some(ticket.written(false));
+            }
             let resolved=views.zip(resolve.as_ref()).map(|(views,(page,record))| {
                 let view=self.pool[page.index].view.clone();
                 self.jobs.push(Job::Clear(view.clone(),wgpu::Color::TRANSPARENT));
