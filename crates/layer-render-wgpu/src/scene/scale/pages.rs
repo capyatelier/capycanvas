@@ -192,6 +192,24 @@ impl Cache {
             .map(|(cell,coordinate)|(bounds(coordinate,self.plan.level,self.plan.extent),!cell.queued && cell.shown.as_ref().is_some_and(|shown|shown.exact))).collect()
     }
     #[cfg(test)]
+    pub(crate) fn shown_cells(&self)->Vec<([u32;2],Option<bool>)> {
+        let Some((cells,_store,_))=self.cells() else {return Vec::new();};
+        cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level)).map(|(cell,coordinate)| {
+            let owed=!cell.derived && (cell.queued || !cell.current) || !cell.written();
+            (coordinate,(!owed).then(||cell.derived || cell.shown.as_ref().is_some_and(|shown|shown.exact)))
+        }).collect()
+    }
+    #[cfg(test)]
+    pub(crate) fn mislabelled_cells(&self)->Vec<[u32;2]> {
+        let Some((cells,store,_))=self.cells() else {return Vec::new();};
+        let Some(frame)=store.expected().cloned() else {return Vec::new();};
+        let level=self.required_input_level();
+        cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level))
+            .filter(|(cell,_)|!cell.derived && cell.current && !cell.queued
+                && cell.shown.as_ref().and_then(|shown|shown.recorded.as_ref()).is_some_and(|recorded|recorded.matches(&frame,level)==Some(false)))
+            .map(|(_,coordinate)|coordinate).collect()
+    }
+    #[cfg(test)]
     pub(crate) fn shows_reduced(&self,region:PixelRect)->bool {
         let Some((cells,_store,_))=self.cells() else {return false;};
         let reached=Cells::reached(self.plan,region);
