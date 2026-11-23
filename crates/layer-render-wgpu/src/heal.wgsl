@@ -323,16 +323,18 @@ fn relax(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_id) 
     let across = (window.z + BLOCK - 1u) / BLOCK - window.x / BLOCK;
     let block = vec2<u32>(window.x / BLOCK + found.y % across, window.y / BLOCK + found.y / across);
     let origin = tile_origin(l, found.x);
-    if ((origin.x + origin.y) / BLOCK + block.x + block.y) % 2u != p.parity {
+    let colour = origin / l.tile * ((l.tile + BLOCK - 1u) / BLOCK) + block;
+    if (colour.x + colour.y) % 2u != p.parity {
         return;
     }
     let block_origin = vec2<i32>(origin + block * BLOCK);
+    let halo = min(vec2<u32>(BLOCK), vec2<u32>(l.tile) - block * BLOCK) + 1u;
     for (var i = lid.y * (BLOCK / 2u) + lid.x; i < BLOCK_PITCH * BLOCK_PITCH; i += BLOCK * BLOCK / 2u) {
         let offset = vec2<u32>(i % BLOCK_PITCH, i / BLOCK_PITCH);
-        let corner = (offset.x == 0u || offset.x == BLOCK_PITCH - 1u) && (offset.y == 0u || offset.y == BLOCK_PITCH - 1u);
+        let corner = (offset.x == 0u || offset.x == halo.x) && (offset.y == 0u || offset.y == halo.y);
         var valid = false;
         var value = vec4<f32>(0.0);
-        if !corner {
+        if !corner && all(offset <= halo) {
             let source = cell(l, block_origin + vec2<i32>(offset) - 1);
             valid = inside(source);
             if valid { value = membrane[source]; }
