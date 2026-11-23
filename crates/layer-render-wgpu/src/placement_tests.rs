@@ -812,6 +812,51 @@ fn watercolor_microbatches_never_lower_the_wetness_of_their_update() {
     }
 }
 
+fn wetness_page(r: &WgpuRasterizer, layer: &Document, coordinate: [u32; 2]) -> Vec<f32> {
+    let versions = r.raster_versions(layer.scene(), target(layer)).unwrap();
+    let page = r.paint_layers[0].watercolor_wetness_pages.iter().find(|page| page.coordinate == coordinate).unwrap();
+    let read = page.active().read(versions.tile(layer_core::raster::RasterPlane::WatercolorWetness, coordinate), None).unwrap();
+    crate::layer_tests::page_bytes(r, &read.value().texture).as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect()
+}
+
+fn wetness_at(r: &WgpuRasterizer, layer: &Document, at: [u32; 2]) -> f32 {
+    wetness_page(r, layer, at.map(|value| value / PAGE_SIZE))[(at[1] % PAGE_SIZE * PAGE_SIZE + at[0] % PAGE_SIZE) as usize]
+}
+
+fn watercolor_contact(x: f32, y: f32, radius: f32, color: [f32; 4]) -> Dab {
+    Dab { center: Point { x, y }, radii: [radius; 2], material: [0.8, 1., 1., 1.], ..dab(color) }
+}
+
+fn still_watercolor() -> DabStyle {
+    DabStyle { transport: None, ..preset_style(layer_core::DefaultBrushPreset::WetWatercolor) }
+}
+
+fn watercolor_stroke(layer: &Document, style: &DabStyle, stroke: u64, contacts: &[Dab], first: usize, start: bool, kind: DabBatchKind) -> Vec<DabBatch> {
+    contacts.iter().enumerate().map(|(index, contact)| DabBatch { style: style.clone(), stroke_id: StrokeId(stroke), stroke_start: start && index == 0,
+        stroke_end: false, first_dab: (first + index) as u32, damage: contact.bounds(), kind, ..batch(target(layer)) }).collect()
+}
+
+#[test]
+fn a_watercolor_update_keeps_the_water_of_pixels_its_contacts_miss() {
+    let extent = [512; 2];
+    let layer = paint_document(extent, "watercolor rewetting");
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let contacts = [[200., 200., 60.], [250., 250., 60.], [330., 330., 30.], [370., 370., 50.]]
+        .map(|[x, y, radius]| Dab { flow: 0.5, ..watercolor_contact(x, y, radius, [0.1, 0.3, 0.8, 1.]) });
+    let send = |r: &mut WgpuRasterizer, batches: &[DabBatch], reset_layers| crate::test_support::submit_ready(r, FramePacket { dabs: &contacts,
+        dab_batches: batches, reset_layers, ..packet(layer.scene(), extent) }).unwrap();
+    send(&mut r, &[], true);
+    send(&mut r, &watercolor_stroke(&layer, &still_watercolor(), 2, &contacts[..1], 0, true, DabBatchKind::Persistent), false);
+    let soaked = wetness_at(&r, &layer, [200, 200]);
+    assert!(soaked > 0. && soaked < 1., "the first contact leaves partial water: {soaked}");
+    send(&mut r, &watercolor_stroke(&layer, &still_watercolor(), 2, &contacts[1..2], 1, false, DabBatchKind::Persistent), false);
+    assert_eq!(wetness_at(&r, &layer, [200, 200]), soaked, "a contact that misses a pixel inside its rectangle keeps that pixel's water");
+    assert!(wetness_at(&r, &layer, [270, 270]) > 0., "the new contact wets its own core");
+    send(&mut r, &watercolor_stroke(&layer, &still_watercolor(), 2, &contacts[2..], 2, false, DabBatchKind::Persistent), false);
+    assert!(wetness_at(&r, &layer, [330, 330]) > 0., "a later microbatch that misses a pixel keeps the water an earlier one laid");
+    assert!(wetness_at(&r, &layer, [385, 385]) > 0., "the later microbatch wets its own core");
+}
+
 #[test]
 fn page_zero_copies_reclear_both_formats_and_reduced_extents() {
     let layer = paint_document([512; 2], "zero page stamps");

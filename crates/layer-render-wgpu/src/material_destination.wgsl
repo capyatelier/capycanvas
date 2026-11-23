@@ -54,9 +54,8 @@ fn transport_coverage(@builtin(global_invocation_id) id: vec3<u32>) {
 
 @compute @workgroup_size(TRANSPORT_WORKGROUP_X, TRANSPORT_WORKGROUP_Y)
 fn transport_watercolor(@builtin(global_invocation_id) id: vec3<u32>) {
-    let dirty = transport_dirty(id.xy);
-    let wetness = store_transport_coverage(id.xy, dirty).wetness;
-    if dirty {
+    let wetness = store_transport_coverage(id.xy, transport_dirty(id.xy)).wetness;
+    if wetness.a > 0.5 {
         textureStore(material_wetness_output, vec2<i32>(id.xy), wetness);
     } else if material_sources.header.w != 0u {
         textureStore(material_wetness_output, vec2<i32>(id.xy), textureLoad(reservoir_texture, vec2<i32>(id.xy), 0));

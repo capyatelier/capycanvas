@@ -217,8 +217,8 @@ WebGPU read/write rules; each page kernel writes its whole inactive page.
 Watercolor wetness ping-pongs because transport must read the pre-update value
 while writing all deposition from that submitted update. The first microbatch
 to reach a page writes its whole inactive surface, the pre-update wetness
-outside its dirty rectangle; every microbatch stores `prior + (1-prior)·charge`
-inside its dirty rectangle only, and the update swaps only pages it wrote. Charge grows with
+where none of its contacts deposit; every microbatch stores `prior + (1-prior)·charge`
+only where its contacts deposit, and the update swaps only pages it wrote. Charge grows with
 the stroke's coverage, which never decreases across one update's microbatches,
 and a locked transparent pixel keeps its prior water, so a later store never
 lowers an earlier one and a plain store equals the maximum over the update.

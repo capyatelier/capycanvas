@@ -401,10 +401,10 @@ shared by a frame's consecutive batches and their watercolor transport,
 dispatches every job of a batch and, after a committed wet
 batch's jobs, its reservoir exchange. At stroke start the exchange begins from
 the selected pigment instead of the stored reservoir. Watercolor stores wetness
-only inside the dirty rectangle, except that the first job of an update on a
-page also stores the pre-update wetness outside it; a later microbatch never
-stores less, so no blend is needed. Tile records for all of a frame's batches
-follow one another and upload before the frame's other commands.
+only where a contact of the job deposits, except that the first job of an
+update on a page also stores the pre-update wetness everywhere else; a later
+microbatch never stores less, so no blend is needed. Tile records for all of a
+frame's batches follow one another and upload before the frame's other commands.
 Each dispatch is its own WebGPU usage scope, so a
 later dispatch reads earlier writes in recorded order. Only a job that binds
 decoded source tiles ends the pass first, because preparing it may reuse a cache

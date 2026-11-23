@@ -2,7 +2,7 @@
 //! each page they write, so one compute pass dispatches every page job of a
 //! batch. A job writes its whole inactive page: the material result inside its
 //! dirty rectangle and the unchanged texel elsewhere, so no page copy precedes
-//! it. Watercolor wetness is stored only inside the rectangle.
+//! it. Watercolor wetness is stored only where a contact deposits.
 use super::*;
 use dry_material::{Entries, MATERIAL_BLENDS, MATERIAL_SLOTS};
 use material_sources::{elapsed, record, rect_words};

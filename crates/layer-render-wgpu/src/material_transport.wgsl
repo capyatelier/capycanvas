@@ -238,8 +238,9 @@ fn watercolor_fragment(
         0.0,
         1.0,
     );
-    let deposited_wetness = select(prior_wetness + (1.0 - prior_wetness) * water_charge, prior_wetness,
-        style.color.a > 0.5 && !(stored.a > 0.0));
+    let deposited = strongest_request > 0.0;
+    let deposited_wetness = select(prior_wetness, prior_wetness + (1.0 - prior_wetness) * water_charge,
+        deposited && (style.color.a <= 0.5 || stored.a > 0.0));
     let coverage_increment = stroke_increment(prior_coverage, stroke_coverage);
     var result = original;
     if working_has_color(coverage_increment) && style.operation.w == 0u {
@@ -271,7 +272,7 @@ fn watercolor_fragment(
     return MaterialOutput(
         result,
         vec4<f32>(stroke_coverage, 0.0, 0.0, 1.0),
-        vec4<f32>(deposited_wetness, 0.0, 0.0, 1.0),
+        vec4<f32>(deposited_wetness, 0.0, 0.0, select(0.0, 1.0, deposited)),
     );
 }
 
