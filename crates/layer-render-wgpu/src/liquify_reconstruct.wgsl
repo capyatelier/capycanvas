@@ -75,15 +75,24 @@ fn prior_value(pixel: vec2<i32>, block: u32, size: vec2<u32>) -> vec4<u32> {
     return pack_map(MapSample(displacement, footprint + IDENTITY));
 }
 
-fn current_average(pixel: vec2<i32>, block: u32, size: vec2<u32>) -> vec4<f32> {
-    if block == 1u { return textureLoad(current_color, pixel, 0); }
+fn block_average(image: texture_2d<f32>, pixel: vec2<i32>, block: u32, size: vec2<u32>) -> vec4<f32> {
     var color = vec4(0.);
     for (var y = 0u; y < size.y; y++) {
         for (var x = 0u; x < size.x; x++) {
-            color += textureLoad(current_color, pixel * i32(block) + vec2<i32>(i32(x), i32(y)), 0);
+            color += textureLoad(image, pixel * i32(block) + vec2<i32>(i32(x), i32(y)), 0);
         }
     }
     return color / f32(size.x * size.y);
+}
+
+fn current_average(pixel: vec2<i32>, block: u32, size: vec2<u32>) -> vec4<f32> {
+    if block == 1u { return textureLoad(current_color, pixel, 0); }
+    return block_average(current_color, pixel, block, size);
+}
+
+fn original_average(pixel: vec2<i32>, block: u32, size: vec2<u32>) -> vec4<f32> {
+    if all(size == vec2(block)) { return textureLoad(original_color, pixel, i32(log2(f32(block)))); }
+    return block_average(original_color, pixel, block, size);
 }
 
 @compute @workgroup_size(16, 8)
@@ -104,12 +113,14 @@ fn reconstruct(@builtin(global_invocation_id) invocation: vec3<u32>) {
     var dy = unpack_footprint(packed.w);
     let at = render_target.origin_extent.xy + vec2<f32>(pixel * i32(block)) + .5 * vec2<f32>(size) + displacement;
     let bounds = bitcast<vec4<f32>>(sources.pages[2]);
-    let radius = .5 * abs(dx) + .5 * abs(dy);
+    let longest = f32(max(size.x, size.y));
+    let shape = vec2<f32>(size) / longest;
+    let radius = .5 * abs(dx) * shape.x + .5 * abs(dy) * shape.y;
     let available = max(min(at - bounds.xy, bounds.zw - at), vec2(0.));
-    let fit = min(vec2(f32(block)), available / max(radius, vec2(1.e-20)));
+    let fit = min(vec2(longest), available / max(radius, vec2(1.e-20)));
     let factor = min(fit.x, fit.y);
-    dx *= factor;
-    dy *= factor;
+    dx *= factor * shape.x;
+    dy *= factor * shape.y;
     let lengths = vec2(footprint_length(dx), footprint_length(dy));
     let cap = f32(max(sources.header.w, 1u));
     let scale = max(max(lengths.x, lengths.y) / cap, sqrt(lengths.x) * sqrt(lengths.y) / sqrt(cap));
@@ -131,7 +142,7 @@ fn reconstruct(@builtin(global_invocation_id) invocation: vec3<u32>) {
     if sources.header.y != 0u { color += textureLoad(previous_color, pixel, 0); }
     if sources.header.z != 0u {
         if style.color.a > .5 {
-            let original = textureLoad(original_color, pixel, i32(log2(f32(block))));
+            let original = original_average(pixel, block, size);
             if color.a > 0. { color = vec4(color.rgb / color.a * original.a, original.a); }
             else { color = original; }
         }

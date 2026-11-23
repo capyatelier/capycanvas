@@ -1357,22 +1357,22 @@ fn smooth_liquify_gpu_map_and_footprint_match_numerical_reference() {
     println!("smooth liquify GPU oracle: max displacement error {max_displacement_error:.6} px, max footprint component error {max_footprint_error:.6}");
 }
 
-#[test]
-fn reduced_push_preview_keeps_the_real_pixels_of_a_partial_edge_block() {
+fn reduced_push_edge_column(source:impl Fn(u32,u32)->[u8;4],center:[f32;2],radius:f32,motion:[f32;2],alpha_locked:bool)->Vec<[f32;4]> {
     let extent=[513,512];
     let view=layer_render::ViewState{width_px:64,height_px:64,
         document_to_surface:[0.125,0.,0.,0.125,0.,0.]};
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut doc=placement::paint_document(extent,"reduced Push edge block");
-    placement::set_source(&mut doc,layer_core::color::source::rgba8_source(extent,|_,_|[83,149,211,255]));
+    placement::set_source(&mut doc,layer_core::color::source::rgba8_source(extent,source));
     crate::test_support::submit_settled(&mut r,FramePacket{view,reset_layers:true,..crate::test_support::packet(doc.scene(),extent)});
     let mut contact=dab([0.;4]);
-    contact.center=Point{x:500.,y:128.};
-    contact.radii=[40.;2];
-    contact.motion=[20.,0.];
+    contact.center=Point{x:center[0],y:center[1]};
+    contact.radii=[radius;2];
+    contact.motion=motion;
     contact.material[3]=1.;
     let mut style=preset_style(DefaultBrushPreset::LiquifyPush);
-    style.liquify=Some(Arc::new(layer_core::liquify::Context::for_source(placement::paint(&doc),false)));
+    style.alpha_locked=alpha_locked;
+    style.liquify=Some(Arc::new(layer_core::liquify::Context::for_source(placement::paint(&doc),alpha_locked)));
     let mut preview=crate::test_support::dab_batch(placement::target(&doc),style,contact.bounds());
     preview.kind=DabBatchKind::Preview;
     preview.stroke_id=StrokeId(320);
@@ -1382,15 +1382,36 @@ fn reduced_push_preview_keeps_the_real_pixels_of_a_partial_edge_block() {
     assert_eq!(r.preview_level,2,"Fit preview must use a four-pixel block");
     let page=r.preview_pages.iter().find(|page|page.coordinate==[2,0]).unwrap();
     let pixels=crate::test_support::float_pixels(&r,&r.read_color_page(placement::target(&doc),page,true,None).unwrap().value().texture);
-    let original=[83,149,211,255].map(|code|
-        layer_core::color::RgbSpace::Srgb.decode(f64::from(code)/255.) as f32);
-    for row in 0..64 {
-        let edge=pixels[row*64];
+    (0..64).map(|row|pixels[row*64]).collect()
+}
+
+fn assert_edge_rows(column:&[[f32;4]],rows:std::ops::Range<usize>,expected:[f32;4],tolerance:f32,context:&str) {
+    for row in rows {
+        let edge=column[row];
         for component in 0..4 {
-            assert!((edge[component]-original[component]).abs()<=1e-5,
-                "the block holding the last real column must average its real pixels in row {row}: {edge:?} vs {original:?}");
+            assert!((edge[component]-expected[component]).abs()<=tolerance,"{context} in row {row}: {edge:?} vs {expected:?}");
         }
     }
+}
+
+#[test]
+fn reduced_push_preview_keeps_the_real_pixels_of_a_partial_edge_block() {
+    let original=[83,149,211,255].map(|code|layer_core::color::RgbSpace::Srgb.decode(f64::from(code)/255.) as f32);
+    let column=reduced_push_edge_column(|_,_|[83,149,211,255],[500.,128.],40.,[20.,0.],false);
+    assert_edge_rows(&column,0..64,original,1e-5,"the block holding the last real column must average its real pixels");
+}
+
+#[test]
+fn a_deformed_reduced_edge_block_samples_the_full_height_of_its_real_pixels() {
+    let column=reduced_push_edge_column(|_,y|if y%4==0 {[255;4]} else {[0,0,0,255]},[480.,130.],60.,[0.5,0.],false);
+    assert_edge_rows(&column,32..33,[0.25,0.25,0.25,1.],1e-4,"a one-column edge block must trace all four of its rows");
+}
+
+#[test]
+fn an_alpha_locked_reduced_push_keeps_the_real_alpha_of_an_edge_block() {
+    let original=[83,149,211,255].map(|code|layer_core::color::RgbSpace::Srgb.decode(f64::from(code)/255.) as f32);
+    let column=reduced_push_edge_column(|_,_|[83,149,211,255],[480.,130.],60.,[0.5,0.],true);
+    assert_edge_rows(&column,0..64,original,1e-5,"an alpha-locked edge block must keep the alpha of its real pixels");
 }
 
 #[test]
