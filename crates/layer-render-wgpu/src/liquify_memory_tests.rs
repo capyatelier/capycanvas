@@ -335,7 +335,7 @@ fn a_contact_reconstructs_the_same_pixels_whatever_order_its_session_kept_its_or
     }
 }
 
-fn fit_pen_up() -> (WgpuRasterizer, BTreeSet<[u32; 2]>, BTreeSet<[u32; 2]>) {
+fn fit_pen_up(each: &mut dyn FnMut(&WgpuRasterizer)) -> (WgpuRasterizer, BTreeSet<[u32; 2]>, BTreeSet<[u32; 2]>) {
     use crate::layer_tests::{dab, placement, preset_style};
     let extent = [2048, 1536];
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
@@ -367,6 +367,7 @@ fn fit_pen_up() -> (WgpuRasterizer, BTreeSet<[u32; 2]>, BTreeSet<[u32; 2]>) {
         declared.clear();
         Liquify::required_sources(&r, packet, &plans, &mut declared);
         crate::test_support::submit_ready(&mut r, packet).unwrap();
+        each(&r);
     }
     let restore = r.restore_preflight.as_ref().unwrap();
     let mut read = declared.remove(&target).unwrap_or_default();
@@ -377,18 +378,63 @@ fn fit_pen_up() -> (WgpuRasterizer, BTreeSet<[u32; 2]>, BTreeSet<[u32; 2]>) {
 
 #[test]
 fn a_liquify_pen_up_holds_only_the_pages_it_reads_or_writes() {
-    let (_, read, held) = fit_pen_up();
+    let (_, read, held) = fit_pen_up(&mut |_| {});
     let unread = held.difference(&read).copied().collect::<Vec<_>>();
     assert!(!read.is_empty() && unread.is_empty(), "pen-up holds pages the contact neither reads nor writes: {unread:?}");
 }
 
 #[test]
 fn a_finished_contact_leaves_every_original_for_other_edits_to_take() {
-    let (r, ..) = fit_pen_up();
+    let (r, ..) = fit_pen_up(&mut |_| {});
     let atlases = r.liquify.as_ref().unwrap().sessions.iter().filter_map(Weak::upgrade)
         .map(|session| session.lock().unwrap().atlases.iter().flatten().count() as u64).sum::<u64>();
     assert!(atlases > 0 && r.idle_original_bytes() == atlases * ORIGINAL_ATLAS_BYTES,
         "after pen-up no frame reads the contact's {atlases} atlases, but only {} B of them can be taken", r.idle_original_bytes());
+}
+
+#[test]
+fn a_sessions_idle_originals_stay_counted_from_open_to_close() {
+    let counted = |r: &WgpuRasterizer| r.liquify.as_ref().map_or([0; 2], |liquify| [liquify.idle_original_bytes(), liquify.walked_idle_original_bytes()]);
+    let mut steps = Vec::new();
+    let (r, ..) = fit_pen_up(&mut |r: &WgpuRasterizer| steps.push(counted(r)));
+    steps.push(counted(&r));
+    assert!(steps.iter().all(|[kept, walked]| kept == walked) && steps.last().unwrap()[0] > 0,
+        "from the session's first frame to pen-up its idle originals match a walk of every session: {steps:?}");
+    let liquify = r.liquify.as_ref().unwrap();
+    let (idle, sessions) = (liquify.idle.clone(), liquify.sessions.clone());
+    drop(r);
+    assert!(sessions.iter().all(|session| session.strong_count() == 0) && idle.load(Ordering::SeqCst) == 0,
+        "a closed session leaves no idle originals: {} B", idle.load(Ordering::SeqCst));
+}
+
+#[test]
+fn the_pinned_paint_figure_matches_a_full_walk_through_strokes_evictions_undo_and_restore() {
+    let mut canvas = Canvas::photo(1024);
+    let mut evicted = 0;
+    let mut exact = |canvas: &mut Canvas, step: &str| {
+        let r = canvas.engine.backend_mut();
+        let paint = r.paint_memory_bytes();
+        let [kept, after] = r.memory_pass(|r| {
+            let kept = [r.pinned_paint_bytes(), r.walked_pinned_paint_bytes()];
+            let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+            r.evict_raster(u64::MAX, &[], &[], &mut encoder);
+            if encoder.has_work() { r.last_submission = encoder.submit(&r.queue); }
+            [kept, [r.pinned_paint_bytes(), r.walked_pinned_paint_bytes()]]
+        });
+        evicted += paint.saturating_sub(r.paint_memory_bytes());
+        assert!(kept[0] == kept[1] && after[0] == after[1], "{step}: the pinned paint figure before {kept:?} and after {after:?} an eviction in one pass matches a full walk");
+    };
+    canvas.brush(layer_core::DefaultBrushPreset::LoadedOil, 200.);
+    assert!(canvas.ovals([0.3, 0.5], 1. / 16., 1), "the painted stroke must end");
+    exact(&mut canvas, "after a stroke");
+    canvas.brush(layer_core::DefaultBrushPreset::LiquifyPush, 200.);
+    assert!(canvas.ovals([0.6, 0.5], 1. / 16., 1), "the Liquify contact must end");
+    exact(&mut canvas, "after a Liquify contact");
+    assert!(canvas.engine.undo().unwrap() && canvas.settle());
+    exact(&mut canvas, "after Undo");
+    assert!(canvas.engine.redo().unwrap() && canvas.settle());
+    exact(&mut canvas, "after Redo restores the contact");
+    assert!(evicted > 0, "the passes evicted pages and originals");
 }
 
 fn fill_lane(r: &mut WgpuRasterizer) -> Vec<crate::residency::Reservation> {

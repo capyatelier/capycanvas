@@ -1083,6 +1083,19 @@ fn durable_color_accounting_compares_only_changed_pages() {
 }
 
 #[test]
+fn a_memory_pass_walks_the_paint_pages_once() {
+    let (_doc,mut r,_data)=durable_color_renderer();
+    let walks=|r:&mut WgpuRasterizer,pass:&dyn Fn(&mut WgpuRasterizer)| {
+        let before=crate::test_support::PassCounts::snapshot();pass(r);crate::test_support::PassCounts::snapshot().delta(before).pinned_walks
+    };
+    let held=std::cell::RefCell::new(None);
+    let admission=walks(&mut r,&|r|*held.borrow_mut()=Some(r.admit_raster_working(MIB).unwrap()));
+    let commit=walks(&mut r,&|r|r.commit_raster_working(held.borrow_mut().take().unwrap()));
+    let refresh=walks(&mut r,&|r|{r.memory.invalidate_limits();r.refresh_memory_limits();});
+    assert_eq!([admission,commit,refresh],[1;3],"an admission, a commit and a grant pass each walk the paint pages once");
+}
+
+#[test]
 fn stroke_frames_compare_only_the_pages_they_write() {
     let extent=[PAGE_SIZE*16,PAGE_SIZE];
     let doc=crate::scene::scale::tests::document_at(extent);
