@@ -191,6 +191,30 @@ fn cold_backed_scalar_planes_survive_destructive_affine_mapping_without_live_pag
 }
 
 #[test]
+fn wet_edges_follow_a_near_band_edge_that_the_deep_band_misses() {
+    let island = |x: u32, y: u32| (103..106).contains(&x) && (99..102).contains(&y);
+    let wash = |x: u32, y: u32| (80..128).contains(&x) && (180..220).contains(&y) && x != 104;
+    let texels = || (0..PAGE_SIZE * PAGE_SIZE).map(|index| (index % PAGE_SIZE, index / PAGE_SIZE));
+    let color: Vec<u8> = texels().flat_map(|(x, y)| if island(x, y) { [255, 0, 0, 255] } else if wash(x, y) { [0, 0, 255, 128] } else { [0; 4] }).collect();
+    let wetness: Vec<u8> = texels().map(|(x, y)| if island(x, y) || wash(x, y) { 255 } else { 0 }).collect();
+    let mut data = RasterData { watercolor: Some(RasterWatercolor { wet_edge: 1., burnt_edge: 0.6, edge_width: 4. }), ..Default::default() };
+    for (plane, bytes) in [(RasterPlane::Color, color), (RasterPlane::WatercolorWetness, wetness)] {
+        data.tiles.insert(TileKey { plane, coordinate: [0, 0] }, RasterTile::backed(TileBlob::encode(plane.descriptor(Default::default()), &bytes).unwrap()));
+    }
+    let document = layer(data);
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    render(&mut r, &document, &[], true);
+    let pixels = crate::test_support::blend_space_pixels(&mut r);
+    let at = |x: usize, y: usize| pixels[y * EXTENT[0] as usize + x];
+    let close = |actual: [f32; 4], expected: [f32; 4]| actual.iter().zip(expected).all(|(a, e)| (a - e).abs() < 0.005);
+    let halo = at(100, 100);
+    assert!(close(halo, [0.13, 0., 0., 0.13]), "a dry pixel whose near band reaches a wet island takes the outer halo: {halo:?}");
+    let density = 128. / 255. * 1.65;
+    let rim = at(100, 200);
+    assert!(close(rim, [0., 0., (1. - (0.16 + 0.6 * 0.62)) * density, density]), "a wet pixel beside a narrow dry gap takes the rim: {rim:?}");
+}
+
+#[test]
 fn semitransparent_material_over_nontransparent_backdrop_matches_premultiplied_over() {
     let mut renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut front = layer(fixture(maps()[1], 16.));

@@ -159,14 +159,11 @@ fn watercolor(position: vec2<f32>) -> vec4<f32> {
     let center_occupied = occupied(center_wetness);
     let width = clamp(style.edges.z, 1.0, 16.0);
     let deep = sample_band(world, center_occupied, center, width * 2.0);
-
-    // A stable watercolor interior, including every overlap-density change,
-    // and a region with no watercolor wetness need no near-band samples.
-    if (center_occupied > 0.5 && deep.minimum > 0.5)
-        || (center_occupied < 0.5 && deep.maximum < 0.5) {
+    let near = sample_band(world, center_occupied, center, width);
+    if (center_occupied > 0.5 && min(deep.minimum, near.minimum) > 0.5)
+        || (center_occupied < 0.5 && max(deep.maximum, near.maximum) < 0.5) {
         return center * style.canvas_opacity.z;
     }
-    let near = sample_band(world, center_occupied, center, width);
 
     // Morphology uses only the unioned watercolor wetness mask. Pigment alpha can
     // vary through pressure, glazing, or overlapping strokes without becoming
