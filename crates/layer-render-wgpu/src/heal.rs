@@ -358,7 +358,7 @@ impl RetouchSources {
         let Some(_) = batch.style.retouch.as_ref() else {
             return Ok(());
         };
-        let pages: Vec<[u32; 2]> = r
+        let owned: BTreeSet<[u32; 2]> = r
             .paint_layers
             .iter()
             .find(|l| l.id == batch.target)
@@ -367,19 +367,13 @@ impl RetouchSources {
             .iter()
             .filter(|page| page.owner == Some(batch.stroke_id))
             .map(|page| page.coordinate)
-            .collect::<BTreeSet<_>>()
-            .into_iter()
             .collect();
-        if pages.is_empty() {
+        if owned.is_empty() {
             return Ok(());
         }
         let _trace = crate::performance_trace::Span::new(c"capy.heal_prepare");
-        crate::performance_trace::counter(c"capy.heal_pages", pages.len() as u64);
         let spot = batch.style.execution == BrushExecution::SpotHeal;
         let device = r.device.clone();
-        let pyramid = Pyramid::new(&pages, device.limits().max_storage_buffer_binding_size);
-        let finest = pyramid.levels[0].cells();
-        let mut layout = pyramid.words();
         let extent = r.target_extent(batch.target);
         let damage: Vec<PixelRect> = self
             .stroke
@@ -387,9 +381,18 @@ impl RetouchSources {
             .filter(|s| s.id == batch.stroke_id)
             .map(|s| s.damage.values().copied().collect())
             .filter(|d: &Vec<PixelRect>| !d.is_empty())
-            .unwrap_or_else(|| pages.iter().map(|p| page_rect(*p)).collect());
+            .unwrap_or_else(|| owned.iter().map(|p| page_rect(*p)).collect());
         let bounds = damage.iter().fold(PixelRect::EMPTY, |b, d| b.union(*d));
-        let margin = (bounds.width().max(bounds.height()) / 4).clamp(8, 64).max(2 * pyramid.scale);
+        let mut margin = (bounds.width().max(bounds.height()) / 4).clamp(8, 64);
+        let (pages, pyramid) = loop {
+            let pages: Vec<[u32; 2]> = damage.iter().flat_map(|d| page_coordinates(d.expand(margin, extent))).collect::<BTreeSet<_>>().into_iter().collect();
+            let pyramid = Pyramid::new(&pages, device.limits().max_storage_buffer_binding_size);
+            if margin >= 2 * pyramid.scale { break (pages, pyramid); }
+            margin = 2 * pyramid.scale;
+        };
+        crate::performance_trace::counter(c"capy.heal_pages", pages.len() as u64);
+        let finest = pyramid.levels[0].cells();
+        let mut layout = pyramid.words();
         let windows: Vec<PixelRect> = pages
             .iter()
             .map(|page| damage.iter().fold(PixelRect::EMPTY, |w, d| w.union(d.expand(margin, extent).intersect(page_rect(*page)))))
@@ -550,6 +553,7 @@ impl RetouchSources {
         let parameters = bindings::group(&device, "spot healing parameters", &k.parameters, [uniform()]);
         self.heal.job = Some(Box::new(Job {
             intents:pages.iter().map(|coordinate|r.raster_intent(batch.target,layer_core::raster::RasterPlane::Color,*coordinate)).collect::<Result<_,_>>()?,
+            owned: pages.iter().map(|page| owned.contains(page)).collect(),
             batch: batch.clone(), pages, windows, offsets, boxes, seeds, plane_group, apply_group, parameters,
             choice, choice_at, scores_at, found, copied, work, scale: pyramid.scale, spot,
             storage_bytes: layout_buffer.size() + params.size(),
@@ -586,6 +590,7 @@ struct Job {
     intents:Vec<crate::raster::contents::Intent>,
     batch: DabBatch,
     pages: Vec<[u32; 2]>,
+    owned: Vec<bool>,
     windows: Vec<PixelRect>,
     offsets: Vec<([i32; 2], f32)>,
     boxes: Vec<[u32; 2]>,
@@ -713,7 +718,7 @@ impl Job {
                 let layer = r.paint_layers.iter().position(|l| l.id == self.batch.target).ok_or(GpuRasterError::MissingPaintLayer(self.batch.target))?;
                 let mut publications=Vec::new();
                 let mut groups=Vec::new();
-                for i in pages.filter(|i| !self.windows[*i].is_empty()) {
+                for i in pages.filter(|i| self.owned[*i] && !self.windows[*i].is_empty()) {
                     let page = self.pages[i];
                     let start = match sources.stroke.as_ref().filter(|s| s.id == self.batch.stroke_id).and_then(|s| s.pages.get(&page)) {
                         Some(Some((slot,expected))) => sources.pool[*slot].read(expected,Some(&receipt))?.value().view.clone(), _ => r.empty_view.clone(),

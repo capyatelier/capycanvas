@@ -404,6 +404,26 @@ fn retouching_after_reordering_the_references_copies_their_new_order() {
 }
 
 #[test]
+fn healing_beside_a_page_edge_takes_the_surroundings_across_it() {
+    let healed_beside = |edge: u32| {
+        let mut doc = photo_document([1536, 512], move |x, _| grey(if (edge..edge + 64).contains(&x) { 1. } else { 0.1 }));
+        doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().color.depth = layer_core::color::SampleDepth::F32;
+        let (mut input, mut engine) = healer(doc, DefaultBrushPreset::HealingBrush, 240., false);
+        let x = edge as f32 - 176.;
+        source_at(&mut engine, x - 340., 256.);
+        stroke(&mut engine, &mut input, 1, [x, 256.], [x, 256.]);
+        let healed = pixels(engine.backend_mut(), TARGET);
+        (edge - 286..edge - 66).step_by(4).flat_map(|x| [156, 206, 256, 306, 356].map(|y| (x, y))).map(|(x, y)| healed(x, y)).collect::<Vec<_>>()
+    };
+    let (across, within) = (healed_beside(768), healed_beside(896));
+    assert_eq!(across.iter().map(|p| p[3]).collect::<Vec<_>>(), within.iter().map(|p| p[3]).collect::<Vec<_>>(), "both dabs cover the same pixels");
+    assert!(within.iter().any(|p| p[3] > 0.999 && p[1] > linear(encode(0.1)) + 0.01), "the bright surroundings lift the heal: {within:?}");
+    for (index, (a, b)) in across.iter().zip(&within).enumerate() {
+        assert!(close(*a, *b), "pixel {index}: across the page edge {a:?}, within a page {b:?}");
+    }
+}
+
+#[test]
 fn healing_matches_tone_on_the_documents_values() {
     let code = |encoded: f32| (encoded * 255.).round() as u8;
     let texture = |x: u32, y: u32| {
