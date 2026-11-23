@@ -125,7 +125,7 @@ fn reduce_phased(@builtin(global_invocation_id) id: vec3<u32>) {
             }
         }
     } else {
-        let snapped = (start + i32(cell / 2u)) & vec2(-i32(cell));
+        let snapped = (start + vec2<i32>(min(size, vec2(cell)) / 2u)) & vec2(-i32(cell));
         let units = (size + cell - 1u) / cell;
         for (var y = 0u; y < units.y; y++) {
             for (var x = 0u; x < units.x; x++) {
