@@ -1,7 +1,14 @@
 use super::*;
 use std::sync::{Arc, Weak};
 
-pub(crate) struct Resource { pub buffer: wgpu::Buffer, pub _analysis: Option<Arc<crate::effect_analysis::Lease>> }
+pub(crate) struct Resource { pub buffer: wgpu::Buffer, pub _analysis: Option<Arc<crate::effect_analysis::Lease>>, identity: u64 }
+impl Resource {
+    pub(crate) fn new(buffer: wgpu::Buffer, analysis: Option<Arc<crate::effect_analysis::Lease>>) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self { buffer, _analysis: analysis, identity: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) }
+    }
+    pub(crate) fn identity(&self) -> u64 { self.identity }
+}
 type LutKey = ([u8;32], [[u32;3];2]);
 #[derive(Default)]
 pub(crate) struct Cache {
@@ -29,15 +36,15 @@ impl Cache {
             let buffer=crate::initialized_buffer(device,&wgpu::util::BufferInitDescriptor {
                 label:Some("immutable color lookup"),contents:&contents,usage:wgpu::BufferUsages::STORAGE,
             })?;
-            let value = Arc::new(Resource {buffer, _analysis: Some(lease)});
+            let value = Arc::new(Resource::new(buffer, Some(lease)));
             self.entries.insert(key, Arc::downgrade(&value)); self.uploads += 1;
             Ok(value)
         } else {
             if self.empty.is_none() {
                 let lease = Arc::new(crate::effect_analysis::Lease::reserve(device, 16).map_err(GpuRasterError::Effect)?);
-                self.empty = Some(Arc::new(Resource {_analysis: Some(lease), buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                self.empty = Some(Arc::new(Resource::new(device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("empty effect resource"), size: 16, usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
-                })}));
+                }), Some(lease))));
             }
             Ok(self.empty.as_ref().unwrap().clone())
         }

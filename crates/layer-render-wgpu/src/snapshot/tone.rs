@@ -6,7 +6,7 @@ impl SnapshotRenderer {
         -> Result<crate::effects::resources::Resource, String> {
         match kind {
             layer_core::EffectAnalysisKind::LocalIllumination => self.build_tone_guide_async(output).await
-                .map(|guide| crate::effects::resources::Resource {buffer: guide.buffer.clone(), _analysis: guide.analysis_lease.clone()}),
+                .map(|guide| crate::effects::resources::Resource::new(guide.buffer.clone(), guide.analysis_lease.clone())),
             layer_core::EffectAnalysisKind::Dehaze => self.build_dehaze_guide_async(output).await,
         }
     }
@@ -160,6 +160,6 @@ impl SnapshotRenderer {
         self.reduce_analysis(output, reserved, |encoder, texture, origin| builder.reduce(encoder, texture, origin)).await?;
         let buffer = builder.finish(&self.renderer.queue, || self.check_cancelled().map_err(|e| e.to_string())).await?;
         let retained = lease.as_mut().map(|lease| lease.split(buffer.size()));
-        Ok(crate::effects::resources::Resource {buffer, _analysis: retained})
+        Ok(crate::effects::resources::Resource::new(buffer, retained))
     }
 }

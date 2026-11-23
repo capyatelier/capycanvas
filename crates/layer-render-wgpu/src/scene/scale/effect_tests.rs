@@ -1709,3 +1709,32 @@ fn admissions_count_every_live_scene_of_the_renderer() {
     assert_eq!(r.current_display_memory_report().gpu_bytes, report, "a Scene taken out of the renderer still counts");
     r.scene = taken;
 }
+
+#[test]
+fn an_analysis_guide_that_lands_without_an_edit_repaints_the_display_like_a_renderer_that_had_it_first() {
+    use layer_core::{ArtworkQuery,ArtworkSource};
+    for (id,key) in [("shadows_highlights","shadows"),("clarity","amount"),("dehaze","amount")] {
+        let mut doc=crate::artwork_sample_tests::document_in([256,256],layer_core::color::RgbSpace::Srgb,
+            |x,y|if (x/32+y/32)%2==0 {[0.9,0.85,0.8,1.]}else {[0.05,0.08,0.1,1.]});
+        let mut adjustment=EffectInstance::new(crate::tests::fixture(id).program());adjustment.set(key,EffectValue::Number(80.)).unwrap();
+        let target=crate::artwork_sample_tests::insert_effect(&mut doc,adjustment,0);
+        let frame=FramePacket {composite_all:false,..packet(doc.scene(),doc.composition().size)};
+        let guided=|r:&mut WgpuRasterizer| {
+            let query=ArtworkQuery::new(&doc,ArtworkSource::EffectInput(target));
+            let candidate=pollster::block_on(r.snapshot_gpu().effect_analysis(query,crate::snapshot::CaptureControl::default())).unwrap();
+            r.apply_effect_analysis(candidate);
+        };
+        let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        crate::test_support::submit_settled(&mut r,frame);
+        let fallback=display_pixels(&r);
+        guided(&mut r);
+        crate::test_support::submit_settled(&mut r,frame);
+        let mut cold=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        guided(&mut cold);
+        crate::test_support::submit_settled(&mut cold,frame);
+        let expected=display_pixels(&cold);
+        assert!(crate::test_support::max_error(&fallback,&expected)>1e-3,"{id}: the guide changes the picture");
+        let error=crate::test_support::max_error(&display_pixels(&r),&expected);
+        assert!(error<1e-4,"{id}: the display after its guide lands differs from a renderer that had the guide first by {error}");
+    }
+}

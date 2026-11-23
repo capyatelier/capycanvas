@@ -277,6 +277,12 @@ impl Prepared {
             .map(|effect|(effect,crate::effects::Gpu::effect_time(r,packet.scene,*handle,packet.time_seconds)))).collect());
         let mut prepared=Self::read(FramePacket {scene:scene.view(),..packet},declared,&reads)?;
         let snapshot=Arc::get_mut(&mut prepared.snapshot).unwrap();snapshot.moving=r.moving_layer;
+        for (handle,definition) in &mut snapshot.effects {
+            if packet.scene.effect(*handle).is_some_and(|effect|effect.program.analysis().is_some()) {
+                let guide=crate::effects::Gpu::analysis_resource(r,*handle).map_or(0,|resource|resource.identity());
+                definition.version=ContentVersion::derive(recipe(&guide),std::slice::from_ref(&definition.version));
+            }
+        }
         for target in needed {snapshot.rasters.remove(&target);snapshot.captures.remove(&target);}
         for target in reads.targets {
             if r.transforms.as_ref().is_some_and(|transforms|transforms.display_source(target)) && !snapshot.captures.contains_key(&target) {snapshot.rasters.remove(&target);}
