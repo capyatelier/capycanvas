@@ -43,13 +43,14 @@ pub(super) struct RawRegions {
     bindings: std::collections::VecDeque<Binding>,
     progress: Option<Classification>,
     request_source: Option<(layer_render::RegionSource,Sampling)>,
-    batches_left:Option<usize>,
+    tiles_left:Option<usize>,
     pages:Option<Vec<[u32;2]>>,
 }
 struct Classification {
     frame: Option<Arc<artwork::Frame>>,
     extent: [u32; 2],
     batch: usize,
+    tile: usize,
     captured: usize,
     source: usize,
 }
@@ -188,7 +189,7 @@ impl RawRegions {
             parameters: Vec::new(),
             bindings: Default::default(),
             progress: None,
-            request_source:None,batches_left:None,pages:None,
+            request_source:None,tiles_left:None,pages:None,
         }
     }
     pub fn pipelines(&self) -> impl Iterator<Item = &Deferred<wgpu::ComputePipeline>> {
@@ -238,7 +239,7 @@ impl RawRegions {
             self.capture = Default::default();
         }
     }
-    pub fn batch_limit(&mut self,limit:Option<usize>) {self.batches_left=limit;}
+    pub fn tile_limit(&mut self,limit:Option<usize>) {self.tiles_left=limit;}
     pub fn classification(&mut self,mask:Option<wgpu::Buffer>,pages:Option<Vec<[u32;2]>>) {
         self.cancel();self.request_source=None;
         self.bindings.clear();self.mask=mask;self.pages=pages;
@@ -264,7 +265,7 @@ impl RawRegions {
             layer_render::RegionSource::Source(_) | layer_render::RegionSource::Coverage(_) => None,
             _ => return Err(GpuRasterError::InvalidExtent),
         };
-        self.progress = Some(Classification {frame, extent:r.document_extent, batch:0, captured:0, source:0});
+        self.progress = Some(Classification {frame, extent:r.document_extent, batch:0, tile:0, captured:0, source:0});
         Ok(())
     }
     fn encode_cached(
@@ -549,47 +550,52 @@ impl RawRegions {
         let fallback = layer.and_then(|target| r.layer_masks.definitions.get(&target)).map_or([0.;4], |mask| [mask.default_coverage;4]);
         let seed_tile = request.position.map(|v| v / PAGE_SIZE);
         let tiles: Vec<_> = self.pages.clone().unwrap_or_else(||page_coordinates(PixelRect::full([w, h])).collect());
-        let batches: Vec<_> = (tone.is_none())
-            .then_some(std::slice::from_ref(&seed_tile))
-            .into_iter()
-            .chain((!matches!(sampling,Sampling::Seeds|Sampling::TargetSeed)).then_some(tiles.chunks(if placed { 1 } else { BATCH_TILES })).into_iter().flatten())
-            .collect();
+        let classified: &[[u32;2]] = if matches!(sampling,Sampling::Seeds|Sampling::TargetSeed) { &[] } else { &tiles };
         let stride =
             (PARAMETER_BYTES as u32).next_multiple_of(limit.min_uniform_buffer_offset_alignment);
-        let mut uniforms = vec![0; stride as usize * batches.len()];
+        let progress = self.progress.as_ref().unwrap();
+        let mut planned = Vec::new();
+        if progress.batch == 0 && tone.is_none() { planned.push(None); }
+        let (mut start, mut left) = (progress.tile, self.tiles_left);
+        while start < classified.len() && left != Some(0) {
+            let count = if placed { 1 } else { left.unwrap_or(BATCH_TILES).min(BATCH_TILES) }.min(classified.len() - start);
+            planned.push(Some(start..start + count));
+            start += count;
+            left = left.map(|left| left - count);
+        }
+        let mut uniforms = vec![0; stride as usize * planned.len().max(1)];
         // Occupancy only, without decoding/copying originals or retaining pages.
         let has_tile = |coordinate: [u32;2]| placed || layer.is_none_or(|id|
             r.paint_layers.iter().find(|l| l.id == id).is_some_and(|l| l.pages.iter().any(|p| p.coordinate == coordinate))
                 || r.native_backing(id).is_some_and(|data| data.tiles.contains_key(&layer_core::raster::TileKey {
                     plane:layer_core::raster::RasterPlane::Color,coordinate }))
                 || r.tiled_sources.get(&id).is_some_and(|base| source_access::paint_base_contains(base, coordinate)));
-        for (batch, tiles) in batches.iter().enumerate() {
-            for (i, coordinate) in tiles.iter().enumerate() {
-                let [x, y] = coordinate.map(|v| v * PAGE_SIZE);
-                let data = [
-                    w,
-                    h,
-                    x,
-                    y,
-                    request.position[0] % PAGE_SIZE,
-                    request.position[1] % PAGE_SIZE,
-                    PAGE_SIZE.min(w - x),
-                    PAGE_SIZE.min(h - y),
-                    fallback[0].to_bits(),
-                    fallback[1].to_bits(),
-                    fallback[2].to_bits(),
-                    fallback[3].to_bits(),
-                    request.tolerance.to_bits(),
-                    f32::from(has_tile(*coordinate)).to_bits(),
-                    (match sampling {Sampling::Areas(layer_core::FillAreas::Transparent)=>4.0f32,Sampling::Areas(layer_core::FillAreas::TransparentOrWhite)=>5.,Sampling::Areas(layer_core::FillAreas::AnyColour)=>6.,_=>if request.enclosure.is_some() || sampling==Sampling::Enclosed {3.}else{f32::from(coverage)}}).to_bits(),
-                    f32::from(combine).to_bits(),
-                ];
-                for (word, value) in uniforms[batch * stride as usize + i * 64..][..64]
-                    .as_chunks_mut::<4>().0.iter_mut()
-                    .zip(data)
-                {
-                    word.copy_from_slice(&value.to_ne_bytes());
-                }
+        for (at, coordinate) in planned.iter().enumerate().flat_map(|(block, batch)| batch.clone().map_or(std::slice::from_ref(&seed_tile), |range| &classified[range])
+            .iter().enumerate().map(move |(slot, coordinate)| (block * stride as usize + slot * 64, coordinate))) {
+            let [x, y] = coordinate.map(|v| v * PAGE_SIZE);
+            let data = [
+                w,
+                h,
+                x,
+                y,
+                request.position[0] % PAGE_SIZE,
+                request.position[1] % PAGE_SIZE,
+                PAGE_SIZE.min(w - x),
+                PAGE_SIZE.min(h - y),
+                fallback[0].to_bits(),
+                fallback[1].to_bits(),
+                fallback[2].to_bits(),
+                fallback[3].to_bits(),
+                request.tolerance.to_bits(),
+                f32::from(has_tile(*coordinate)).to_bits(),
+                (match sampling {Sampling::Areas(layer_core::FillAreas::Transparent)=>4.0f32,Sampling::Areas(layer_core::FillAreas::TransparentOrWhite)=>5.,Sampling::Areas(layer_core::FillAreas::AnyColour)=>6.,_=>if request.enclosure.is_some() || sampling==Sampling::Enclosed {3.}else{f32::from(coverage)}}).to_bits(),
+                f32::from(combine).to_bits(),
+            ];
+            for (word, value) in uniforms[at..][..64]
+                .as_chunks_mut::<4>().0.iter_mut()
+                .zip(data)
+            {
+                word.copy_from_slice(&value.to_ne_bytes());
             }
         }
         if self
@@ -630,13 +636,14 @@ impl RawRegions {
                 })
                 .collect()
         };
-        for (i, tiles) in batches.into_iter().enumerate().skip(self.progress.as_ref().unwrap().batch) {
-            if i==0 && tone.is_none() && (matches!(sampling,Sampling::Transparent|Sampling::Enclosed|Sampling::Retained|Sampling::Areas(_)) || request.enclosure.is_some()) {
+        for (block, batch) in planned.into_iter().enumerate() {
+            let seeding = batch.is_none();
+            let tiles = batch.map_or(std::slice::from_ref(&seed_tile), |range| &classified[range]);
+            if seeding && (matches!(sampling,Sampling::Transparent|Sampling::Enclosed|Sampling::Retained|Sampling::Areas(_)) || request.enclosure.is_some()) {
                 if sampling==Sampling::Retained {encoder.copy_buffer_to_buffer(self.seeds.as_ref().unwrap(),self.progress.as_ref().unwrap().source as u64*16,&self.seed,0,16);} else {encoder.clear_buffer(&self.seed,0,None);}
                 self.progress.as_mut().unwrap().batch=1;
                 continue;
             }
-            if i>0 && self.batches_left==Some(0) {return Err(GpuRasterError::NotReady);}
             Self::prepare_batch(r,frame.as_deref(),layer,tiles)?;
             let checkpoint=r.source_tiles.borrow().batch_checkpoint();
             let mut views: [wgpu::TextureView; BATCH_TILES] =
@@ -727,8 +734,8 @@ impl RawRegions {
                 }
             };
             let pass = encoder.compute_pass();
-            pass.set_bind_group(0, &binding.group, &[(i as u32) * stride]);
-            if i == 0 && tone.is_none() {
+            pass.set_bind_group(0, &binding.group, &[block as u32 * stride]);
+            if seeding {
                 pass.set_pipeline(&self.seed_pipeline);
                 pass.dispatch_workgroups(1, 1, 1);
             } else {
@@ -748,11 +755,15 @@ impl RawRegions {
             }
             self.bindings.push_back(binding);
             let progress = self.progress.as_mut().unwrap();
-            progress.batch = i + 1;
+            progress.batch += 1;
             progress.captured = 0;
+            if !seeding {
+                progress.tile += tiles.len();
+                if let Some(left)=&mut self.tiles_left {*left=left.saturating_sub(tiles.len());}
+            }
             if !coverage {r.source_tiles.borrow_mut().release_batch(checkpoint);}
-            if i>0 && let Some(left)=&mut self.batches_left {*left=left.saturating_sub(1);}
         }
+        if self.progress.as_ref().unwrap().tile < classified.len() {return Err(GpuRasterError::NotReady);}
         if let Some(cache) = &mut self.tonal_cache {
             cache.ready = true;
             // The scalar cache supersedes the query's decoded color scratch.

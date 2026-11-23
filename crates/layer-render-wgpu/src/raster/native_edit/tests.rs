@@ -168,7 +168,6 @@ fn native_stroke_publication_keeps_prepared_reference_pages_and_matches_fresh_ma
             r.wait_idle().unwrap();
             let flood=&r.regions.as_ref().unwrap().flood;
             if flood.compaction_pending()!=Some(!compacted) {return Err(flood.compaction_pending());}
-            assert!(flood.lines_submitted());
             Ok(())
         });
         r.shader_idle(false,false);

@@ -5476,7 +5476,6 @@ impl WgpuRasterizer {
         #[cfg(test)]
         { self.test.frame_work = work.counts(); }
         if let Some(liquify)=&mut self.liquify {liquify.publish(packet.scene,packet.dab_batches,&publication);}
-        self.region_chunks_submitted();
         self.telemetry.submitted(&self.queue);
         self.last_submission = Some(submission.clone());
         if refined {

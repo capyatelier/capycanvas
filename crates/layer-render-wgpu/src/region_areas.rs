@@ -33,7 +33,6 @@ impl AreasJob {
         let done=crate::InFlightCompletion(self.in_flight.clone());
         encoder.hold(done);
         encoder.submit(&r.queue);
-        if let Some(refiner)=&mut regions.refiner {refiner.timed(&r.queue,regions.chunk_timing.take());}
         match result {Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>Ok(None),other=>other}
     }
     fn encode(&mut self,r:&mut WgpuRasterizer,regions:&mut RegionRequests,encoder:&mut crate::submission::CommandEncoder)->Result<Option<RegionOutput>,GpuRasterError> {
@@ -57,15 +56,12 @@ impl AreasJob {
                 if !regions.flood.prepare_areas(&r.compilation,startup::BRUSH) || !ready {return Err(GpuRasterError::NotReady);}
             }
             r.drain_image_decodes(encoder)?;
-            regions.refiner(r).poll_timing();
-            regions.raw.batch_limit(Some(16));
             regions.build_cache(r,&self.request,false,encoder,None,true)?;
             let mask=regions.raw.mask().ok_or(GpuRasterError::InvalidExtent)?;
             let (paper,grain,radius)=RegionRequests::paper(r,&self.request)?;
             let reach=self.request.fill.as_ref().and_then(|fill|fill.reach).unwrap_or(16);
             let reach=(self.request.refinement.close_gaps && reach>0).then_some(reach);
-            let budget=regions.refiner(r).chunk()*super::DEMAND_CHUNKS;
-            if !regions.flood.build_scope(&flood::Input {device:&r.device,mask:&mask,paper:&paper},encoder,(grain,radius),budget,None)? {return Err(GpuRasterError::NotReady);}
+            if !regions.scoped_lines(&flood::Input {device:&r.device,mask:&mask,paper:&paper},encoder,(grain,radius),None)? {return Err(GpuRasterError::NotReady);}
             let areas=regions.flood.begin_areas(&flood::Input {device:&r.device,mask:&mask,paper:&paper},encoder,r.document_extent,reach)?;
             let side=areas.windows[0].1[2].max(areas.windows[0].1[3]);
             if side<PAGE_SIZE && areas.extent.iter().any(|&n|n>side) {return Err(GpuRasterError::SizeOverflow);}

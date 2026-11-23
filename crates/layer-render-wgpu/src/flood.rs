@@ -6,10 +6,11 @@ use wgpu::util::DeviceExt;
 
 #[path = "flood_lines.rs"]
 mod lines;
+pub(crate) use lines::CHUNK_NANOSECONDS;
 pub(super) use lines::{Input,ScopeProbe,UNDERFILL_HALF_PIXELS};
 const WINDOW: u32 = 2048;
 const UNLABELED: u32 = 4;
-const SCOPED_WINDOW: u32 = 512;
+const FLOOD_WINDOW: u32 = 512;
 const PARAMETER_BYTES: u64 = 96;
 
 pub(super) struct Flood {
@@ -36,6 +37,31 @@ pub(super) struct Region {
     pub bounds_offset: u64,
     pub underfill: Option<(wgpu::Buffer, u64)>,
     pub gaps: Option<GapRegions>,
+}
+const WORD_PASS_NANOSECONDS: f64 = 2.;
+pub(super) struct Chunks {
+    device: PipelineDevice,
+    queued: std::collections::VecDeque<(crate::submission::CommandEncoder, f64)>,
+}
+impl Chunks {
+    pub fn new(device: &PipelineDevice) -> Self {
+        Self {device:device.clone(),queued:Default::default()}
+    }
+    fn op(&mut self, encode: impl FnOnce(&mut crate::submission::CommandEncoder) -> f64) {
+        let mut op=crate::submission::CommandEncoder::new(&self.device,&wgpu::CommandEncoderDescriptor {label:Some("connected region")});
+        let cost=encode(&mut op);
+        if self.queued.back().is_none_or(|(_,spent)|*spent>0. && spent+cost>lines::CHUNK_NANOSECONDS) {
+            self.queued.push_back((crate::submission::CommandEncoder::new(&self.device,&wgpu::CommandEncoderDescriptor {label:Some("connected region")}),0.));
+        }
+        let (encoder,spent)=self.queued.back_mut().unwrap();
+        encoder.append_encoder(op);*spent+=cost;
+    }
+    pub fn next(&mut self, encoder: &mut crate::submission::CommandEncoder, pieces: u32) {
+        for (chunk,_) in self.queued.drain(..(pieces as usize).min(self.queued.len())) {encoder.append_encoder(chunk);}
+    }
+    pub fn is_empty(&self) -> bool {self.queued.is_empty()}
+    #[cfg(test)]
+    pub fn planned(&self) -> Vec<f64> {self.queued.iter().map(|(_,spent)|*spent).collect()}
 }
 pub(super) struct GapRegions {
     pub seal_metadata: Option<wgpu::Buffer>,
@@ -163,7 +189,7 @@ impl Flood {
         if !self.lines.building() {self.lines.allocate(device,extent,labels.side,&windows)?;}
         self.lines.build(input,encoder,paper,budget,demand,dirty,lines)
     }
-    pub fn build_scope(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,paper:([f32;4],u32),budget:f64,blocks:Option<std::collections::BTreeSet<[u32;2]>>)->Result<bool,GpuRasterError> {
+    pub fn build_scope(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,paper:([f32;4],u32),budget:f64,blocks:Option<std::collections::BTreeSet<[u32;2]>>)->Result<(bool,f64),GpuRasterError> {
         self.lines.build_scope(input,encoder,paper,budget,blocks)
     }
     pub fn lines_full(&self)->bool {self.lines.full()}
@@ -178,10 +204,12 @@ impl Flood {
         self.lines.check_snap(input,encoder,tap,probe,stop);
     }
     #[allow(clippy::too_many_arguments)]
-    pub fn probe_scope(&mut self,device:&PipelineDevice,encoder:&mut crate::submission::CommandEncoder,extent:[u32;2],seed:[u32;2],tolerance:f32,classified:&wgpu::Buffer,paper:&wgpu::TextureView,stop:Option<(&wgpu::Buffer,bool)>)->Result<mpsc::Receiver<Result<ScopeProbe,GpuRasterError>>,GpuRasterError> {
+    pub fn probe_scope(&mut self,device:&PipelineDevice,chunks:&mut Chunks,extent:[u32;2],seed:[u32;2],tolerance:f32,classified:&wgpu::Buffer,paper:&wgpu::TextureView,stop:Option<(&wgpu::Buffer,bool)>)->Result<mpsc::Receiver<Result<ScopeProbe,GpuRasterError>>,GpuRasterError> {
         let open=RegionRefinement {close_gaps:false,edges:layer_render::RegionEdges::Exact,smooth_edges:false};
-        self.encode_input(device,encoder,extent,seed,tolerance,None,open,classified,true,false,paper,stop,None,None)?;
-        Ok(self.lines.probe_scope(&Input {device,mask:classified,paper},encoder,seed))
+        self.encode_input(device,chunks,extent,seed,tolerance,None,open,classified,true,false,paper,stop,None,None)?;
+        let mut probe=None;
+        chunks.op(|encoder|{probe=Some(self.lines.probe_scope(&Input {device,mask:classified,paper},encoder,seed));0.});
+        Ok(probe.unwrap())
     }
     pub fn prepare_areas(&self,compiler:&compile::Scope,priority:startup::Class)->bool {
         self.lines.prepare_areas(compiler,priority) & compiler.require(["initialize","merge","mark_exterior","export_border","seam_merge","propagate_flags","area_tokens"].map(|entry|&self.pipelines[entry]),priority)
@@ -250,7 +278,6 @@ impl Flood {
         }
     }
     pub fn lines_ready(&mut self,demand:bool)->Result<bool,GpuRasterError> {self.lines.ready(demand)}
-    pub fn lines_submitted(&self)->bool {self.lines.submitted()}
     pub fn lines_discarded(&self)->bool {self.lines.discarded()}
     pub fn cancel_lines(&mut self) {self.lines.cancel();}
     #[allow(clippy::too_many_arguments)]
@@ -265,7 +292,7 @@ impl Flood {
     pub fn encode_input(
         &mut self,
         device: &PipelineDevice,
-        encoder: &mut crate::submission::CommandEncoder,
+        chunks: &mut Chunks,
         extent: [u32; 2],
         seed: [u32; 2],
         tolerance: f32,
@@ -298,13 +325,13 @@ impl Flood {
         let limit = device.limits();
         let area=reach.map(|blocks|blocks.iter().map(|&[x,y]|PixelRect::new(x.saturating_sub(1)*lines::SCOPE_BLOCK,y.saturating_sub(1)*lines::SCOPE_BLOCK,(x+2)*lines::SCOPE_BLOCK,(y+2)*lines::SCOPE_BLOCK))
             .fold(PixelRect::EMPTY,PixelRect::union).intersect(PixelRect::full(extent)));
-        let labels = area.and_then(|_|Labels::sized(extent, &limit, SCOPED_WINDOW)).or_else(||Labels::new(extent, &limit)).ok_or(GpuRasterError::SizeOverflow)?;
+        let labels = Labels::sized(extent, &limit, FLOOD_WINDOW).or_else(||Labels::new(extent, &limit)).ok_or(GpuRasterError::SizeOverflow)?;
         let mask_bytes = u64::from(w.div_ceil(32)) * u64::from(h) * 4;
         if let Some(trail)=trail {
             if self.trail.as_ref().is_none_or(|(id,size,_)|*id!=trail.transaction || *size!=extent) {
                 let buffer=device.create_buffer(&wgpu::BufferDescriptor {label:Some("fill crossed regions"),size:32+mask_bytes,
                     usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::COPY_SRC,mapped_at_creation:false});
-                encoder.clear_buffer(&buffer,0,None);self.trail=Some((trail.transaction,extent,buffer));
+                chunks.op(|encoder|{encoder.clear_buffer(&buffer,0,None);0.});self.trail=Some((trail.transaction,extent,buffer));
             }
         }else{self.trail=None;}
         if classified.size() < mask_bytes {
@@ -335,10 +362,13 @@ impl Flood {
         let summary = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("flood summary"),contents:&summary,usage:wgpu::BufferUsages::COPY_SRC,
         });
-        encoder.copy_buffer_to_buffer(&summary,0,&region.coverage,0,32);
-        encoder.copy_buffer_to_buffer(&summary,32,&region.coverage,region.bounds_offset,20);
-        encoder.copy_buffer_to_buffer(&summary,56,&region.coverage,region.bounds_offset+24,4);
-        if band {encoder.copy_buffer_to_buffer(&summary,32,&region.coverage,region.bounds_offset+32,20);}
+        chunks.op(|encoder| {
+            encoder.copy_buffer_to_buffer(&summary,0,&region.coverage,0,32);
+            encoder.copy_buffer_to_buffer(&summary,32,&region.coverage,region.bounds_offset,20);
+            encoder.copy_buffer_to_buffer(&summary,56,&region.coverage,region.bounds_offset+24,4);
+            if band {encoder.copy_buffer_to_buffer(&summary,32,&region.coverage,region.bounds_offset+32,20);}
+            0.
+        });
         let stride = PARAMETER_BYTES.next_multiple_of(u64::from(limit.min_uniform_buffer_offset_alignment));
         let windows: Vec<_> = labels.windows(extent).collect();
         let included=area.map(|area|windows.iter().map(|(_,[x,y,w,h])|!area.intersect(PixelRect::new(*x,*y,x+w,y+h)).is_empty()).collect::<Vec<_>>());
@@ -384,8 +414,9 @@ impl Flood {
         let dimension = limit.max_compute_workgroups_per_dimension;
         let pipelines = &self.pipelines;
         let clear=modes as usize;
-        let run = |encoder: &mut crate::submission::CommandEncoder, mode:usize, attempt:usize, at: usize, entries: &[&'static str]| {
+        let run = |encoder: &mut crate::submission::CommandEncoder, mode:usize, attempt:usize, at: usize, entries: &[&'static str]| -> f64 {
             let [_, _, ww, wh] = windows[at].1;
+            let mut dispatched = 0.;
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("connected region"),
                 timestamp_writes: None,
@@ -400,23 +431,29 @@ impl Flood {
                     "export_border" => perimeter([ww, wh]),
                     "seam_merge" => u64::from(labels.grid[0] - 1) * u64::from(h) + u64::from(labels.grid[1] - 1) * u64::from(w),
                     "propagate_flags" => labels.flags - labels.slots,
-                    "pack" => words,
+                    "pack" => u64::from(ww.div_ceil(8)) * u64::from(wh),
                     _ => mask_bytes / 4,
                 };
                 if invocations > 0 { dispatch_linear(&mut pass, invocations, dimension); }
+                dispatched += invocations as f64 * WORD_PASS_NANOSECONDS * match *entry {"merge" => 448., "pack" => 24., _ => 1.};
             }
+            dispatched
         };
         let input=Input {device,mask:classified,paper};
-        self.lines.exclude(&input,encoder,fill.map_or(&[],|fill|fill.excluded_seals.as_ref()));
-        let seal_metadata=if multiple {self.lines.seal_metadata(device)}else{None};
-        encoder.clear_buffer(store,labels.seed*4,Some(41*4));
-        if multiple {encoder.copy_buffer_to_buffer(&summary,52,store,(labels.seed+40)*4,4);}
-        encoder.clear_buffer(store,labels.flags*4,Some((labels.marks-labels.flags)*4));
+        let lines=&self.lines;
+        chunks.op(|encoder| {
+            let excluded=lines.exclude(&input,encoder,fill.map_or(&[],|fill|fill.excluded_seals.as_ref()));
+            encoder.clear_buffer(store,labels.seed*4,Some(41*4));
+            if multiple {encoder.copy_buffer_to_buffer(&summary,52,store,(labels.seed+40)*4,4);}
+            encoder.clear_buffer(store,labels.flags*4,Some((labels.marks-labels.flags)*4));
+            excluded
+        });
+        let seal_metadata=if multiple {lines.seal_metadata(device)}else{None};
         for attempt in labeled.clone() {
-            self.lines.barriers(&input,encoder,refinement.close_gaps && (!multiple || attempt>0),16*(attempt+u32::from(!multiple)),[0,0,(labels.seed+8*u64::from(attempt)) as u32,u32::from(enclosed)],store);
-            if let Some((stop,_))=stop {self.lines.intersect(&input,encoder,stop);}
-            self.lines.snap_seed(&input,encoder,store,(labels.seed+8*u64::from(attempt)) as u32,seed);
-            if attempts>1 {self.lines.barrier_plane(&input,encoder,&region.coverage,store,attempt,0);}
+            chunks.op(|encoder|lines.barriers(&input,encoder,refinement.close_gaps && (!multiple || attempt>0),16*(attempt+u32::from(!multiple)),[0,0,(labels.seed+8*u64::from(attempt)) as u32,u32::from(enclosed)],store));
+            if let Some((stop,_))=stop {chunks.op(|encoder|lines.intersect(&input,encoder,stop));}
+            chunks.op(|encoder|lines.snap_seed(&input,encoder,store,(labels.seed+8*u64::from(attempt)) as u32,seed)
+                +if attempts>1 {lines.barrier_plane(&input,encoder,&region.coverage,store,attempt,0)}else{0.});
         }
         let last=windows.len()-1;
         let mode=if attempts>1 {1}else{0};
@@ -426,59 +463,77 @@ impl Flood {
                 if !inside(at) {
                     let side=u64::from(labels.side);
                     let slot=labels.slots+(u64::from(attempt)*u64::from(labels.grid[0]*labels.grid[1])+at as u64)*4*side;
-                    encoder.copy_buffer_to_buffer(&self.unlabeled,0,store,slot*4,16*side);
+                    chunks.op(|encoder|{encoder.copy_buffer_to_buffer(&self.unlabeled,0,store,slot*4,16*side);0.});
                     continue;
                 }
-                encoder.clear_buffer(store,labels.marks*4,Some((labels.seed-labels.marks)*4));
-                run(encoder,mode,attempt as usize,at,&["initialize","merge","mark_exterior","export_border"]);
+                chunks.op(|encoder| {
+                    encoder.clear_buffer(store,labels.marks*4,Some((labels.seed-labels.marks)*4));
+                    run(encoder,mode,attempt as usize,at,&["initialize","merge","mark_exterior","export_border"])
+                });
             }
         }
-        for attempt in labeled.clone() {run(encoder,mode,attempt as usize,0,&["seam_merge"]);}
-        run(encoder,0,0,0,&["propagate_flags"]);
-        for attempt in labeled.rev() {
-            run(encoder,mode,attempt as usize,0,&["resolve_seed"]);
-            if choose {
-                run(encoder,mode,attempt as usize,0,&["finish_attempt"]);
+        chunks.op(|encoder| {
+            let mut dispatched=0.;
+            for attempt in labeled.clone() {dispatched+=run(encoder,mode,attempt as usize,0,&["seam_merge"]);}
+            dispatched+=run(encoder,0,0,0,&["propagate_flags"]);
+            for attempt in labeled.rev() {
+                dispatched+=run(encoder,mode,attempt as usize,0,&["resolve_seed"]);
+                if choose {
+                    dispatched+=run(encoder,mode,attempt as usize,0,&["finish_attempt"]);
+                }
             }
-        }
-        if attempts>1 && !enclosed && !multiple {self.lines.barrier_plane(&input,encoder,&region.coverage,store,(labels.seed+8*u64::from(attempts)) as u32,1);}
-        if multiple {
-            encoder.clear_buffer(&region.coverage,32+u64::from(attempts)*mask_bytes,Some(mask_bytes));
-            self.lines.barrier_plane(&input,encoder,&region.coverage,store,(labels.seed+40) as u32,1);
-        }
+            if attempts>1 && !enclosed && !multiple {dispatched+=lines.barrier_plane(&input,encoder,&region.coverage,store,(labels.seed+8*u64::from(attempts)) as u32,1);}
+            if multiple {
+                encoder.clear_buffer(&region.coverage,32+u64::from(attempts)*mask_bytes,Some(mask_bytes));
+                dispatched+=lines.barrier_plane(&input,encoder,&region.coverage,store,(labels.seed+40) as u32,1);
+            }
+            dispatched
+        });
         let reuse=attempts==1 && included.is_none();
         for attempt in 0..if enclosed {attempts as usize}else{1} {
-            if attempts>1 && enclosed && attempt+1==attempts as usize {encoder.clear_buffer(&region.coverage,32,Some(mask_bytes));}
-            if reuse {run(encoder,0,attempt,last,&["component_mask"]);}
+            if attempts>1 && enclosed && attempt+1==attempts as usize {chunks.op(|encoder|{encoder.clear_buffer(&region.coverage,32,Some(mask_bytes));0.});}
+            if reuse {chunks.op(|encoder|run(encoder,0,attempt,last,&["component_mask"]));}
             for at in (0..if reuse {last}else{windows.len()}).rev() {
-                if !inside(at) {run(encoder,clear,0,at,&["component_mask"]);continue;}
-                encoder.clear_buffer(store,labels.marks*4,Some((labels.seed-labels.marks)*4));
-                run(encoder,if attempts>1 {2}else{0},attempt,at,&["initialize","merge","mark_exterior","component_mask"]);
+                if !inside(at) {chunks.op(|encoder|run(encoder,clear,0,at,&["component_mask"]));continue;}
+                chunks.op(|encoder| {
+                    encoder.clear_buffer(store,labels.marks*4,Some((labels.seed-labels.marks)*4));
+                    run(encoder,if attempts>1 {2}else{0},attempt,at,&["initialize","merge","mark_exterior","component_mask"])
+                });
             }
         }
-        self.lines.thin(&input,encoder,&region.coverage,if attempts>1 && !enclosed {attempts}else{0});
-        if let Some((_,_,trail))=&self.trail {self.lines.union_trail(&input,encoder,trail);}
-        if fill.is_some() && contiguous {self.lines.boundary(&input,encoder,&region.coverage);}
-        if let Some(metadata)=&seal_metadata {self.lines.capture_seals(&input,encoder,metadata,store,(labels.seed+40) as u32);}
-        if enclosed {run(encoder,if attempts>1 {2}else{0},0,0,&["restore_components"]);}
+        chunks.op(|encoder|lines.thin(&input,encoder,&region.coverage,if attempts>1 && !enclosed {attempts}else{0}));
+        if let Some((_,_,trail))=&self.trail {chunks.op(|encoder|lines.union_trail(&input,encoder,trail));}
+        if fill.is_some() && contiguous {chunks.op(|encoder|lines.boundary(&input,encoder,&region.coverage));}
+        if let Some(metadata)=&seal_metadata {chunks.op(|encoder|lines.capture_seals(&input,encoder,metadata,store,(labels.seed+40) as u32));}
+        if enclosed {chunks.op(|encoder|run(encoder,if attempts>1 {2}else{0},0,0,&["restore_components"]));}
         if band {
-            self.lines.barrier_plane(&input,encoder,&region.coverage,store,0,2);
-            self.lines.assign(&input,encoder,fill.is_some(),area);
+            chunks.op(|encoder|lines.barrier_plane(&input,encoder,&region.coverage,store,0,2));
+            for window in lines.band_strips(area) {
+                for step in lines.assign_steps(fill.is_some(),window) {chunks.op(|encoder|lines.run(&input,encoder,vec![step]));}
+            }
         }
-        if let layer_render::RegionEdges::GrowShrink(value)=refinement.edges && value!=0 {self.lines.grow(&input,encoder,value);}
-        if let Some((stop,clip))=stop && (clip || !band) {self.lines.intersect(&input,encoder,stop);}
-        run(encoder,if multiple {3}else{0},0,0,&["pack"]);
-        if band && fill.is_some() {self.lines.copy_colour(encoder,&region.coverage,region.bounds_offset+28);}
-        if fill.is_some() {
-            if multiple {encoder.copy_buffer_to_buffer(store,(labels.seed+40)*4,&region.coverage,24,4);}
-            else{encoder.copy_buffer_to_buffer(&summary,52,&region.coverage,24,4);}
-            region.gaps=Some(GapRegions {seal_metadata});
+        if let layer_render::RegionEdges::GrowShrink(value)=refinement.edges && value!=0 {
+            for step in lines.grow_steps(value) {chunks.op(|encoder|lines.run(&input,encoder,vec![step]));}
         }
-        if let Some(points)=fill.and_then(|fill|fill.trail.as_ref()).map(|trail|trail.points.as_ref())
-            && let Some((_,_,trail))=&self.trail {
-            self.lines.next_trail(&input,encoder,trail,points,selection);
-            encoder.copy_buffer_to_buffer(trail,0,&region.coverage,region.bounds_offset+24,4);
-        }
+        if let Some((stop,clip))=stop && (clip || !band) {chunks.op(|encoder|lines.intersect(&input,encoder,stop));}
+        let packed:Vec<_>=(0..windows.len()).filter(|&at|inside(at)).collect();
+        if packed.len()<windows.len() {chunks.op(|encoder|{encoder.clear_buffer(&region.coverage,32,Some(words*4));0.});}
+        for at in packed {chunks.op(|encoder|run(encoder,if multiple {3}else{0},0,at,&["pack"]));}
+        chunks.op(|encoder| {
+            let mut dispatched=0.;
+            if band && fill.is_some() {lines.copy_colour(encoder,&region.coverage,region.bounds_offset+28);}
+            if fill.is_some() {
+                if multiple {encoder.copy_buffer_to_buffer(store,(labels.seed+40)*4,&region.coverage,24,4);}
+                else{encoder.copy_buffer_to_buffer(&summary,52,&region.coverage,24,4);}
+            }
+            if let Some(points)=fill.and_then(|fill|fill.trail.as_ref()).map(|trail|trail.points.as_ref())
+                && let Some((_,_,trail))=&self.trail {
+                dispatched+=lines.next_trail(&input,encoder,trail,points,selection);
+                encoder.copy_buffer_to_buffer(trail,0,&region.coverage,region.bounds_offset+24,4);
+            }
+            dispatched
+        });
+        if fill.is_some() {region.gaps=Some(GapRegions {seal_metadata});}
         Ok(region)
     }
 }

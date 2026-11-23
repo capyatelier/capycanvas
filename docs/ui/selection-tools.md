@@ -134,18 +134,24 @@ queue owns source snapshots, cancellation, stale-result rejection and publicatio
 Region polling drains completed raster decodes before retrying classification,
 so a cold backed paint source progresses without another frame or a prior readback.
 No canvas pixels are read back to classify regions. A scene source, such as the
-paths of Fill outside the paths, is captured 16 pages at a time into separate
-tiles that one dispatch classifies, and a single page of vector paths draws
+paths of Fill outside the paths, is captured up to 4 pages per chunk into
+separate tiles that one dispatch classifies, and a single page of vector paths draws
 straight into its tile, so classification records about one pass per page
 (`filling_outside_paths_classifies_captured_pages_in_batches`). Component labeling ([`flood.rs`](../../crates/layer-render-wgpu/src/flood.rs))
-uses analysis windows of at most 2048 × 2048 pixels, including a 96 px halo.
+uses windows of 512 × 512 pixels.
 Labels and exterior flags join across window borders before coverage is packed.
 
 Reference classification, paper-grain healing, line bits, distances and bounded
 end/seal lists are cached. Reuse validates source revisions and sampled colours,
 Tolerance and paper. Choosing a region tool or changing its references prepares
 this work page by page in the background; a tap completes needed work when that
-preparation is unfinished. Stop at colours on this layer, seed snapping, seals,
+preparation is unfinished. A tap's work is submitted in chunks of about 20 ms of
+GPU time on the slowest supported tablet: classification takes 4 pages, line
+building and floods take steps priced at their measured cost per invocation on
+that tablet, and each seal search runs in rounds of at most 4,096 steps per line
+end that resume where they stopped. A submission carries one chunk, or more while
+this GPU finishes submissions within 8 ms; at most two submissions are in flight,
+and the next is submitted when one completes. Stop at colours on this layer, seed snapping, seals,
 labeling and Edges run for the current request. Decoded tiles are released between
 reference batches. Full-canvas packed planes and coverage, window scratch and
 bounded seal storage must fit the device's buffer and texture limits; a request

@@ -366,7 +366,6 @@ fn warmed_context_needs_no_compile_at_first_use(use_: FirstUse) {
                 let mut encoder = crate::submission::CommandEncoder::new(&renderer.device, &Default::default());
                 renderer.prefetch_regions(&frame, &mut encoder, &mut crate::test_support::work(false)).unwrap();
                 renderer.uploads.finish(&encoder); encoder.submit(&renderer.queue);
-                renderer.region_chunks_submitted();
                 crate::test_support::complete(renderer);
                 assert!(std::time::Instant::now() < deadline, "{use_:?} source prewarm did not finish");
             }

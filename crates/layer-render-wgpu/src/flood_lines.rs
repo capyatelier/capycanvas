@@ -11,7 +11,7 @@ const SLOT_BYTES:u64=FRONTIER_NODES*8+VISIT_ENTRIES*2+SEAL_STATE_WORDS*4;
 const SEAL_SLOTS:u64=(16<<20)/SLOT_BYTES/64*64;
 const HEADER_WORDS:u32=6;
 const UNFINISHED_SEALS:u32=5;
-const SEAL_SUBMISSION_STEPS:f64=600e3;
+const SEAL_STEP_NANOSECONDS:f64=33.;
 const SEAL_ROUND_WORK:[f64;2]=[64.,4096.];
 const SEAL_PARALLEL_ENDS:f64=64.;
 const MAX_SEAL_ROUNDS:u64=64;
@@ -20,6 +20,7 @@ pub(super) const WINDOW_HALO:u32=GAP_REACH+2*MAX_LINE_WIDTH;
 const MAX_LINE_WIDTH:u32=16;
 const THIN_CUTOFF:u32=MAX_LINE_WIDTH*3/2;
 const RIM_HALF_PIXELS:u32=3;
+const BAND_ROWS:u32=256;
 pub(crate) const UNDERFILL_HALF_PIXELS:u32=48;
 const DISTANCE_LIMIT_HALF_PIXELS:u32=UNDERFILL_HALF_PIXELS+1;
 const DISTANCE_HALO:u32=64;
@@ -29,7 +30,7 @@ const FIT_DISPLACEMENT:u32=24;
 const NEIGHBOUR_REACH:u32=64;
 const PARAMS: u64 = 112;
 const PARAMETER_BATCH_BYTES:u64=64*1024;
-const MAX_CHUNK_TAPS:f64=5e8;
+pub(crate) const CHUNK_NANOSECONDS:f64=20e6;
 pub(super) const SCOPE_BLOCK:u32=128;
 const SCOPE_BLOCKS:i64=3;
 type Step = (&'static str,u64,Vec<u32>);
@@ -65,7 +66,7 @@ impl Build {
         let count=self.in_flight.load(std::sync::atomic::Ordering::Acquire);
         self.submission.as_ref().is_none_or(|owner|owner.submitted())
             && (self.ends.is_none() && self.open.is_none() || count==0)
-            && (count<u32::from(demand)+1 || demand && self.finished())
+            && (count<if demand {crate::selection_refine::CHUNKS_IN_FLIGHT} else {1} || demand && self.finished())
     }
     fn finished(&self)->bool {self.ranked && self.steps.is_empty() && self.sealing.is_none()}
 }
@@ -208,7 +209,8 @@ impl Lines {
         let [w,h]=self.extent;
         [vec![w,h,w.div_ceil(32),w.div_ceil(4)],window.to_vec(),core.to_vec(),self.offsets.to_vec(),options.to_vec(),paper.map(f32::to_bits).to_vec(),vec![0;4]].concat()
     }
-    fn encode(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,first:Option<&wgpu::Buffer>,second:Option<&wgpu::Buffer>,steps:Vec<Step>) {
+    fn encode(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,first:Option<&wgpu::Buffer>,second:Option<&wgpu::Buffer>,steps:Vec<Step>)->f64 {
+        let dispatched=steps.iter().map(|(entry,count,params)|*count as f64*nanoseconds(entry,params,1)).sum();
         let data=self.data.as_ref().unwrap();
         let Input {device,mask,paper}=input;
         let alignment=u64::from(device.limits().min_uniform_buffer_offset_alignment);
@@ -237,6 +239,7 @@ impl Lines {
                 pass.dispatch_workgroups(groups.div_ceil(rows),rows,1);
             }
         }
+        dispatched
     }
     fn jump_steps(&self,steps:&mut Vec<Step>,core:[u32;4],window:[u32;4],seeds:&'static str,kind:u32,reach:u32)->u32 {
         let count=u64::from(window[2])*u64::from(window[3]);
@@ -340,7 +343,6 @@ impl Lines {
         if work.sealing.as_ref().is_some_and(|sealing|sealing.active==0) {work.sealing=None;}
         self.building=Some(work);Ok(true)
     }
-    pub fn submitted(&self)->bool {self.building.as_ref().is_none_or(|work|work.submission.as_ref().is_none_or(|owner|owner.submitted()))}
     pub fn discarded(&self)->bool {self.building.as_ref().is_some_and(|work|work.submission.as_ref().is_some_and(|owner|owner.discarded()))}
     pub fn cancel(&mut self) {self.building=None;}
     #[allow(clippy::too_many_arguments)]
@@ -363,12 +365,13 @@ impl Lines {
         }
         self.advance(input,encoder,radius,budget,demand)
     }
-    pub fn build_scope(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,paper:([f32;4],u32),budget:f64,blocks:Option<std::collections::BTreeSet<[u32;2]>>)->Result<bool,GpuRasterError> {
+    pub fn build_scope(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,paper:([f32;4],u32),budget:f64,blocks:Option<std::collections::BTreeSet<[u32;2]>>)->Result<(bool,f64),GpuRasterError> {
         let target=blocks.map_or(Built::Full,Built::Blocks);
-        if self.covers(&target) {return Ok(true);}
+        if self.covers(&target) {return Ok((true,0.));}
         if self.building.as_ref().is_some_and(|work|work.target!=target) {self.building=None;}
         if self.building.is_none() {self.building=Some(Build {scoped:true,..Build::new(self.scope_steps(paper.0,&target),target.clone(),paper.0)});}
-        Ok(self.advance(input,encoder,paper.1,budget,true)?.0 && self.covers(&target))
+        let (ready,spent)=self.advance(input,encoder,paper.1,budget,true)?;
+        Ok((ready && self.covers(&target),spent))
     }
     fn covers(&self,target:&Built)->bool {
         match (&self.built,target) {(Built::Full,_)=>true,(Built::Blocks(built),Built::Blocks(blocks))=>blocks.is_subset(built),_=>false}
@@ -430,7 +433,7 @@ impl Lines {
         let (steps,mut spent)=if work.sealing.is_some() {(Vec::new(),0.)} else {plan_chunk(&mut work.steps,budget,radius)};
         let mut encoded=!steps.is_empty();
         self.encode(input,encoder,None,None,steps);
-        let room=(budget-spent).clamp(0.,SEAL_SUBMISSION_STEPS);
+        let room=(budget-spent).max(0.)/SEAL_STEP_NANOSECONDS;
         if work.sealing.is_none() && (spent==0. || room>=SEAL_PARALLEL_ENDS*SEAL_ROUND_WORK[0]) && let Some((_,remaining,params))=work.steps.pop_front_if(|(entry,_,_)|*entry=="seal_candidates") {
             let count=remaining.min(self.frontier.as_ref().unwrap().size()/SLOT_BYTES).min(((room/SEAL_ROUND_WORK[0]) as u64).max(SEAL_PARALLEL_ENDS as u64));
             let mut sealed=params.clone();sealed[18]=params[24]+count as u32;
@@ -440,7 +443,7 @@ impl Lines {
         if let Some(sealing)=&mut work.sealing {
             let counted=sealing.unfinished.is_none();
             let (rounds,steps)=sealing.rounds(room);
-            spent+=steps;
+            spent+=steps*SEAL_STEP_NANOSECONDS;
             if counted {encoder.clear_buffer(self.data.as_ref().unwrap(),u64::from(self.offsets[1]+UNFINISHED_SEALS)*4,Some(4));}
             self.encode(input,encoder,None,self.frontier.as_ref(),rounds);
             if counted {sealing.unfinished=Some(self.read_header(device,encoder,UNFINISHED_SEALS,"region unfinished seal searches"));}
@@ -459,82 +462,91 @@ impl Lines {
         self.building=Some(work);Ok((false,spent))
     }
     pub fn has_seals(&self)->bool {!self.overflow && self.ends!=0}
-    pub fn exclude(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,excluded:&[u32]) {
-        if !self.has_seals(){return;}
+    pub fn exclude(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,excluded:&[u32])->f64 {
+        if !self.has_seals(){return 0.;}
         let mut ids=excluded.to_vec();ids.sort_unstable();ids.dedup();
         let bytes=ids.iter().flat_map(|id|id.to_ne_bytes()).collect::<Vec<_>>();
         let buffer=(!ids.is_empty()).then(||input.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label:Some("removed fill seals"),contents:&bytes,usage:wgpu::BufferUsages::STORAGE}));
         self.encode(input,encoder,None,buffer.as_ref(),vec![("reset_ends",u64::from(self.ends),
-            self.params([0;4],[0;4],[8,self.ends,0,ids.len() as u32],[1.,1.,0.,0.]))]);
+            self.params([0;4],[0;4],[8,self.ends,0,ids.len() as u32],[1.,1.,0.,0.]))])
     }
     pub fn seal_metadata(&self,device:&PipelineDevice)->Option<wgpu::Buffer> {
         self.has_seals().then(||device.create_buffer(&wgpu::BufferDescriptor {label:Some("fill seal metadata"),
             size:u64::from(self.ends)*20,usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_SRC,mapped_at_creation:false}))
     }
-    pub fn capture_seals(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,output:&wgpu::Buffer,parents:&wgpu::Buffer,slot:u32) {
+    pub fn capture_seals(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,output:&wgpu::Buffer,parents:&wgpu::Buffer,slot:u32)->f64 {
         self.encode(input,encoder,Some(output),Some(parents),vec![("apply_seals",u64::from(self.ends),
-            self.params([0;4],[0;4],[0,slot,0,1],[1.,1.,0.,0.]))]);
+            self.params([0;4],[0;4],[0,slot,0,1],[1.,1.,0.,0.]))])
     }
 
-    pub fn barriers(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,close:bool,reach:u32,job:[u32;4],parents:&wgpu::Buffer) {
+    pub fn barriers(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,close:bool,reach:u32,job:[u32;4],parents:&wgpu::Buffer)->f64 {
         let params=|mut steps:Vec<Step>| {
             for (_,_,params) in &mut steps {params[24..28].copy_from_slice(&job);}
             steps
         };
-        self.encode(input,encoder,Some(parents),None,params(vec![("open_bits",u64::from(self.offsets[0]),self.params([0;4],[0;4],[0;4],[1.,1.,0.,0.]))]));
-        if close && self.has_seals() {
-            self.encode(input,encoder,Some(parents),None,params(vec![("apply_seals",u64::from(self.ends),self.params([0;4],[0;4],[0,0,reach/16-1,0],[1.,1.,0.,0.]))]));
-        }
-        self.encode(input,encoder,Some(parents),None,params(vec![("hold_barriers",u64::from(self.offsets[0]),self.params([0;4],[0;4],[0;4],[1.,1.,0.,0.]))]));
+        self.encode(input,encoder,Some(parents),None,params(vec![("open_bits",u64::from(self.offsets[0]),self.params([0;4],[0;4],[0;4],[1.,1.,0.,0.]))]))
+            +if close && self.has_seals() {
+                self.encode(input,encoder,Some(parents),None,params(vec![("apply_seals",u64::from(self.ends),self.params([0;4],[0;4],[0,0,reach/16-1,0],[1.,1.,0.,0.]))]))
+            }else{0.}
+            +self.encode(input,encoder,Some(parents),None,params(vec![("hold_barriers",u64::from(self.offsets[0]),self.params([0;4],[0;4],[0;4],[1.,1.,0.,0.]))]))
     }
 
-    pub fn assign(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,fill:bool,area:Option<PixelRect>) {
-        let mut steps=Vec::new();
-        for (core,window) in area.map_or_else(||self.windows.clone(),|area|self.windows_in(&[area],WINDOW_HALO)) {
-            steps.push(("reset_ends",1,self.params(core,window,[2,0,0,0],[1.,1.,0.,0.])));
-            let words=(window[0]+window[2]).div_ceil(32)-window[0]/32;
-            steps.push(("region_seeds",u64::from(words)*u64::from(window[3]),self.params(core,window,[0,5,0,0],[1.,1.,0.,0.])));
-            let nearest=self.jump_steps(&mut steps,core,window,"region_seeds",4,UNDERFILL_HALF_PIXELS.div_ceil(2));
-            let mut params=self.params(core,window,[UNDERFILL_HALF_PIXELS,RIM_HALF_PIXELS,THIN_CUTOFF,nearest],[1.,1.,0.,0.]);params[25]=u32::from(fill);
-            steps.push(("assign_region",word_count(core),params));
-        }
-        self.encode(input,encoder,None,None,steps);
+    pub fn band_strips(&self,area:Option<PixelRect>)->Vec<([u32;4],[u32;4])> {
+        area.map_or_else(||self.windows.clone(),|area|self.windows_in(&[area],WINDOW_HALO)).into_iter().flat_map(|([x,y,w,h],window)| {
+            (y..y+h).step_by(BAND_ROWS as usize).map(move |top| {
+                let core=[x,top,w,BAND_ROWS.min(y+h-top)];
+                (core,bounds(rect(core).expand(WINDOW_HALO,self.extent).intersect(rect(window))))
+            })
+        }).collect()
     }
-    pub fn grow(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,value:i32) {
+    pub fn assign_steps(&self,fill:bool,(core,window):([u32;4],[u32;4]))->Vec<Step> {
+        let mut steps=vec![("reset_ends",1,self.params(core,window,[2,0,0,0],[1.,1.,0.,0.]))];
+        let words=(window[0]+window[2]).div_ceil(32)-window[0]/32;
+        steps.push(("region_seeds",u64::from(words)*u64::from(window[3]),self.params(core,window,[0,5,0,0],[1.,1.,0.,0.])));
+        let nearest=self.jump_steps(&mut steps,core,window,"region_seeds",4,UNDERFILL_HALF_PIXELS.div_ceil(2));
+        let mut params=self.params(core,window,[UNDERFILL_HALF_PIXELS,RIM_HALF_PIXELS,THIN_CUTOFF,nearest],[1.,1.,0.,0.]);params[25]=u32::from(fill);
+        steps.push(("assign_region",word_count(core),params));
+        steps
+    }
+    pub fn run(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,steps:Vec<Step>)->f64 {
+        self.encode(input,encoder,None,None,steps)
+    }
+    pub fn grow_steps(&self,value:i32)->Vec<Step> {
         let kind=if value<0 {3} else {2};
         let mut steps=vec![("hold_barriers",u64::from(self.offsets[0]),self.params([0;4],[0;4],[1,0,0,0],[1.,1.,0.,0.]))];
         for &(core,window) in &self.windows {
             let input=self.jump_steps(&mut steps,core,window,"region_seeds",kind,value.unsigned_abs());
             steps.push(("grow_region",u64::from(core[2])*u64::from(core[3]),self.params(core,window,[value.unsigned_abs(),kind,0,input],[1.,1.,0.,0.])));
         }
-        self.encode(input,encoder,None,None,steps);
+        steps
     }
 
-    pub fn intersect(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,stop:&wgpu::Buffer) {
-        self.encode(input,encoder,Some(stop),None,vec![("intersect_bits",u64::from(self.offsets[0]),self.params([0;4],[0;4],[0;4],[1.,1.,0.,0.]))]);
+    pub fn intersect(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,stop:&wgpu::Buffer)->f64 {
+        self.encode(input,encoder,Some(stop),None,vec![("intersect_bits",u64::from(self.offsets[0]),self.params([0;4],[0;4],[0;4],[1.,1.,0.,0.]))])
     }
 
-    pub fn thin(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,coverage:&wgpu::Buffer,plane:u32) {
-        self.encode(input,encoder,Some(coverage),None,vec![("remember_thin",u64::from(self.offsets[0]),self.params([0;4],[0;4],[plane,0,0,0],[1.,1.,0.,0.]))]);
+    pub fn thin(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,coverage:&wgpu::Buffer,plane:u32)->f64 {
+        self.encode(input,encoder,Some(coverage),None,vec![("remember_thin",u64::from(self.offsets[0]),self.params([0;4],[0;4],[plane,0,0,0],[1.,1.,0.,0.]))])
     }
 
-    pub fn barrier_plane(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,coverage:&wgpu::Buffer,parents:&wgpu::Buffer,bucket:u32,mode:u32) {
+    pub fn barrier_plane(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,coverage:&wgpu::Buffer,parents:&wgpu::Buffer,bucket:u32,mode:u32)->f64 {
         let params=self.params([0;4],[0;4],[mode,bucket,0,0],[1.,1.,0.,0.]);
-        self.encode(input,encoder,Some(coverage),Some(parents),vec![("barrier_plane",u64::from(self.offsets[0]),params)]);
+        self.encode(input,encoder,Some(coverage),Some(parents),vec![("barrier_plane",u64::from(self.offsets[0]),params)])
     }
 
-    pub fn boundary(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,coverage:&wgpu::Buffer) {
-        self.encode(input,encoder,Some(coverage),None,vec![
+    pub fn boundary(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,coverage:&wgpu::Buffer)->f64 {
+        let dispatched=self.encode(input,encoder,Some(coverage),None,vec![
             ("reset_ends",1,self.params([0;4],[0;4],[2,0,0,0],[1.,1.,0.,0.])),
             ("barrier_plane",u64::from(self.offsets[0]),self.params([0;4],[0;4],[3,0,THIN_CUTOFF,0],[1.,1.,0.,0.])),
         ]);
         encoder.copy_buffer_to_buffer(self.data.as_ref().unwrap(),u64::from(self.offsets[1]+3)*4,coverage,28,4);
+        dispatched
     }
-    pub fn union_trail(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,trail:&wgpu::Buffer) {
-        self.encode(input,encoder,Some(trail),None,vec![("barrier_plane",u64::from(self.offsets[0]),self.params([0;4],[0;4],[5,0,0,0],[1.,1.,0.,0.]))]);
+    pub fn union_trail(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,trail:&wgpu::Buffer)->f64 {
+        self.encode(input,encoder,Some(trail),None,vec![("barrier_plane",u64::from(self.offsets[0]),self.params([0;4],[0;4],[5,0,0,0],[1.,1.,0.,0.]))])
     }
-    pub fn next_trail(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,trail:&wgpu::Buffer,points:&[[f32;2]],limit:Option<&wgpu::Buffer>) {
+    pub fn next_trail(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,trail:&wgpu::Buffer,points:&[[f32;2]],limit:Option<&wgpu::Buffer>)->f64 {
         let mut count=0u32;let mut data=Vec::new();
         for segment in points.windows(2) {
             let steps=((segment[1][0]-segment[0][0]).abs().max((segment[1][1]-segment[0][1]).abs())*2.).ceil().max(1.) as u32;
@@ -552,7 +564,7 @@ impl Lines {
             ("reset_ends",1,self.params([0;4],[0;4],[2,0,1,0],[1.,1.,0.,0.])),
             ("barrier_plane",u64::from(count.max(1)),self.params([bytes.len() as u32/4,u32::from(limit.is_some()),0,0],[0;4],[6,count,points.len().saturating_sub(1) as u32,THIN_CUTOFF],[1.,1.,0.,0.])),
             ("barrier_plane",1,self.params([0;4],[0;4],[7,count,points.len().saturating_sub(1) as u32,0],[1.,1.,0.,0.])),
-        ]);
+        ])
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -565,8 +577,8 @@ impl Lines {
         self.encode(input,encoder,seed,None,vec![("check_seeds",1,self.params([0;4],[0;4],
             [u32::from(matches!(mode,layer_render::RegionColourMode::ColourOnSolid)),u32::from(seed.is_some()),0,1],[1.,1.,0.,0.]))]);
     }
-    pub fn snap_seed(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,parents:&wgpu::Buffer,seed:u32,position:[u32;2]) {
-        self.encode(input,encoder,Some(parents),None,vec![("snap_seed",1,self.params([0;4],[0;4],[position[0],position[1],seed,0],[1.,1.,0.,0.]))]);
+    pub fn snap_seed(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,parents:&wgpu::Buffer,seed:u32,position:[u32;2])->f64 {
+        self.encode(input,encoder,Some(parents),None,vec![("snap_seed",1,self.params([0;4],[0;4],[position[0],position[1],seed,0],[1.,1.,0.,0.]))])
     }
     pub fn copy_colour(&self,encoder:&mut crate::submission::CommandEncoder,output:&wgpu::Buffer,offset:u64) {
         encoder.copy_buffer_to_buffer(self.data.as_ref().unwrap(),u64::from(self.offsets[1]+4)*4,output,offset,4);
@@ -589,17 +601,25 @@ fn changed_regions(pages:&std::collections::BTreeSet<[u32;2]>,halo:u32,extent:[u
 }
 
 pub(super) fn fits(extent:[u32;2],limits:&wgpu::Limits)->bool {storage_layout(extent,limits).is_some()}
+fn nanoseconds(entry:&str,params:&[u32],radius:u32)->f64 {
+    match entry {
+        "grain_bits"=>f64::from(radius*16+32)*0.1,"distance_seeds"|"store_distance"|"skeleton_seeds"=>10.,
+        "jump_distance"=>if matches!(params[17],0|4) {640.}else{20.},"skeleton_ridges"=>120.,"skeleton_prune"=>150.,"line_ends"=>1000.,
+        "refine_ends"=>10e3,"seal_candidates"=>f64::from(params[19]>>2)*SEAL_STEP_NANOSECONDS,"apply_seals"=>128.,"assign_region"=>64.,_=>2.,
+    }
+}
 fn plan_chunk(queue:&mut std::collections::VecDeque<Step>,budget:f64,radius:u32)->(Vec<Step>,f64) {
-    let budget=budget.min(MAX_CHUNK_TAPS);
     let mut steps=Vec::new();let mut spent=0.;
     while let Some((entry,remaining,mut params))=queue.pop_front_if(|(entry,_,_)|*entry!="seal_candidates") {
-        let weight=match entry {"grain_bits"=>f64::from(radius*16+32),"jump_distance"=>9.,"store_distance"=>16.,"skeleton_ridges"=>32.,"skeleton_prune"=>if params[16]==0 {1.}else{8.},"line_ends"=>32.,"refine_ends"=>1024.,_=>1.};
-        let sparse=entry=="skeleton_ridges" || entry=="jump_distance" && matches!(params[17],0|4);
-        let weight=weight*if sparse {32.}else{1.};
-        let fits=((budget-spent).max(0.)/weight) as u64/64*64;
+        let ends=entry=="refine_ends";
+        let cost=nanoseconds(entry,&params,radius);
+        let group=if ends {1} else {64};
+        let fits=((budget-spent).max(0.)/cost) as u64/group*group;
         if fits==0 && !steps.is_empty() {queue.push_front((entry,remaining,params));break;}
-        let count=fits.max(64).min(remaining);
-        steps.push((entry,count,params.clone()));spent+=count as f64*weight;
+        let count=fits.max(group).min(remaining);
+        let mut planned=params.clone();
+        if ends {planned[18]=params[24]+count as u32;}
+        steps.push((entry,count,planned));spent+=count as f64*cost;
         if count<remaining {params[24]+=count as u32;queue.push_front((entry,remaining-count,params));}
         if spent>=budget {break;}
     }
@@ -654,7 +674,7 @@ mod tests {
 
     #[cfg(not(target_arch="wasm32"))]
     #[test]
-    fn line_build_chunks_stay_bounded_however_fast_the_gpu_measures() {
+    fn every_line_chunk_fits_the_chunk_time() {
         let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         let limits=r.device.limits();
         for extent in [[4248,2832],[9504,6336]] {
@@ -666,26 +686,27 @@ mod tests {
             let mut queue:std::collections::VecDeque<Step>=[lines.grain_steps([1.,1.,0.,0.],1,false,&Default::default()),lines.scope_steps([1.,1.,0.,0.],&Built::Full),vec![ranking]].concat().into();
             let mut planned=0.;
             while !queue.is_empty() {
-                let (steps,spent)=plan_chunk(&mut queue,f64::INFINITY,1);
+                let (steps,spent)=plan_chunk(&mut queue,CHUNK_NANOSECONDS,1);
                 assert!(!steps.is_empty());
-                assert!(spent<=MAX_CHUNK_TAPS,"{extent:?}: one line chunk plans {spent:e} taps");
+                assert!(spent<=CHUNK_NANOSECONDS || steps.len()==1 && steps[0].1<=64,"{extent:?}: one line chunk plans {:.1} ms",spent*1e-6);
                 planned+=spent;
             }
-            assert!(planned>10.*MAX_CHUNK_TAPS,"{extent:?}: {planned:e}");
+            assert!(planned>10.*CHUNK_NANOSECONDS,"{extent:?}: {planned:e}");
         }
     }
 
     #[cfg(not(target_arch="wasm32"))]
     #[test]
-    fn seal_rounds_bound_each_search_and_fit_the_submission() {
+    fn seal_rounds_bound_each_search_and_fit_the_chunk_time() {
+        let budget=CHUNK_NANOSECONDS/SEAL_STEP_NANOSECONDS;
         for active in [5440,1024,64,1] {
             let mut params=vec![0;28];params[18]=5440;
-            let (steps,taps)=Sealing {params,active,started:false,unfinished:None}.rounds(SEAL_SUBMISSION_STEPS);
+            let (steps,taps)=Sealing {params,active,started:false,unfinished:None}.rounds(budget);
             let flags:Vec<_>=steps.iter().map(|(_,_,params)|params[19]&3).collect();
             assert!(flags[0]&1!=0 && flags[1..].iter().all(|flag|flag&1==0) && flags[..flags.len()-1].iter().all(|flag|flag&2==0) && flags[flags.len()-1]&2!=0,"{flags:?}");
             assert!(steps.iter().all(|(_,count,params)|*count==5440 && f64::from(params[19]>>2)<=SEAL_ROUND_WORK[1]),"a round searches past its bound");
-            assert!(taps<=SEAL_SUBMISSION_STEPS*1.0001,"{} rounds for {active} searching ends take {taps} steps",steps.len());
-            assert!(taps>=SEAL_SUBMISSION_STEPS*0.5 || f64::from(steps[0].2[19]>>2)==SEAL_ROUND_WORK[1] && steps.len() as u64==MAX_SEAL_ROUNDS,"{} rounds leave a submission half idle",steps.len());
+            assert!(taps<=budget*1.0001,"{} rounds for {active} searching ends take {:.1} ms",steps.len(),taps*SEAL_STEP_NANOSECONDS*1e-6);
+            assert!(taps>=budget*0.5 || f64::from(steps[0].2[19]>>2)==SEAL_ROUND_WORK[1] && steps.len() as u64==MAX_SEAL_ROUNDS,"{} rounds leave a chunk half idle",steps.len());
         }
     }
 

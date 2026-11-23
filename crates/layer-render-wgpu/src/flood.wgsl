@@ -206,9 +206,11 @@ fn pack(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocation_
         @builtin(num_workgroups) groups: vec3<u32>) {
     let extent = params.extent_seed.xy;
     let stride = (extent.x+7u)/8u;
-    let word = id.x + id.y * groups.x * 64u;
-    let y = word/stride;
-    let x = (word%stride)*8u;
+    let columns = (size().x+7u)/8u;
+    let local = id.x + id.y * groups.x * 64u;
+    let y = origin().y + local/columns;
+    let x = origin().x + (local%columns)*8u;
+    let word = y*stride + x/8u;
     var packed = 0u;
     var band = 0u;
     let band_offset=bitcast<u32>(params.options.y);
@@ -216,7 +218,7 @@ fn pack(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocation_
     var high = vec2<u32>(0);
     var band_low=extent;var band_high=vec2<u32>(0);
     var count = 0u;
-    if y < extent.y {
+    if local < columns*size().y {
         let column=i32(x/32u);var rows=0u;var left=0u;var right=0u;
         for(var dy=-2;dy<=2;dy++) {
             let row=i32(y)+dy;rows|=open_word(vec2(column,row));

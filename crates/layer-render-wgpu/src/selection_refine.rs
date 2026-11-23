@@ -4,12 +4,12 @@
 //! selection never holds the queue for a whole frame.
 use super::*;
 use layer_render::{SelectionMode, SelectionModify, SelectionRefinement};
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use wgpu::util::DeviceExt;
 
 /// GPU time one submission may take, and a preview's whole job, small enough
 /// to share each frame with the canvas and the interface.
 const CHUNK_SECONDS: f64 = 0.002;
+pub(super) const CHUNKS_IN_FLIGHT: u32 = 2;
 const PREVIEW_SECONDS: f64 = 0.001;
 /// Pixel taps per second before the GPU has timed a refinement: a slow
 /// mobile GPU's pace.
@@ -229,8 +229,6 @@ pub(super) struct Job {
     block: u32,
     scratch: Option<(wgpu::Buffer, u32)>,
     weights: Option<wgpu::Buffer>,
-    /// The GPU has finished every chunk submitted so far.
-    idle: Arc<AtomicBool>,
     /// Pixel taps of the latest chunk.
     taps: f64,
 }
@@ -251,20 +249,11 @@ impl Job {
             + self.external.as_ref().map_or(0, wgpu::Buffer::size)
             + self.scratch.as_ref().map_or(0, |(b, _)| b.size())
     }
-    pub fn idle(&self) -> bool {
-        self.idle.load(Ordering::Acquire)
-    }
     pub fn extent(&self) -> [u32; 2] {
         self.extent
     }
     pub fn taps(&self) -> f64 {
         self.taps
-    }
-    /// Wait for the GPU to finish everything encoded so far before the next chunk.
-    pub fn track(&self, encoder: &crate::submission::CommandEncoder) {
-        self.idle.store(false, Ordering::Release);
-        let idle = crate::CompletionFlag(self.idle.clone());
-        encoder.hold(idle);
     }
 
 }
@@ -541,7 +530,6 @@ impl SelectionRefiner {
             block: 0,
             scratch: None,
             weights: None,
-            idle: Arc::new(AtomicBool::new(true)),
             taps: 0.,
         })
     }

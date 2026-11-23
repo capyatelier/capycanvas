@@ -236,6 +236,16 @@ impl CommandEncoder {
         self.current().on_submitted_work_done(callback);
     }
     pub fn hold(&self,value:impl Send+'static) {self.held.borrow_mut().push(Box::new(value));}
+    pub fn append_encoder(&mut self,mut other:Self) {
+        assert!(other.submission.is_none());
+        self.compute=None;other.compute=None;
+        self.earlier.extend(self.current.take());
+        self.earlier.extend(other.prologue.take());
+        self.earlier.append(&mut other.earlier);
+        self.earlier.extend(other.current.take());
+        self.held.get_mut().append(other.held.get_mut());
+        self.passes=0;self.total_passes+=other.total_passes;self.resource_work|=other.resource_work;
+    }
     pub fn retire(&self,value:impl Send+'static) {
         #[cfg(not(target_arch="wasm32"))]
         {let value=self.poll.handle(&self.device).retirement(value);self.on_submitted_work_done(move||value.complete());}
