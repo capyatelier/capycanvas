@@ -1086,7 +1086,7 @@ pub(crate) fn storm_surface_area(rect:PixelRect,view:ViewState)->f64 {
     polygon.iter().zip(polygon.iter().cycle().skip(1)).take(polygon.len()).map(|(a,b)|a[0]*b[1]-a[1]*b[0]).sum::<f64>().abs()*0.5
 }
 
-fn bounded_work_timestamp_bytes(r:&WgpuRasterizer,result:&wgpu::Buffer)->Vec<u8> {
+pub(crate) fn buffer_bytes(r:&WgpuRasterizer,result:&wgpu::Buffer)->Vec<u8> {
     let output=r.device.create_buffer(&wgpu::BufferDescriptor {label:None,size:result.size(),
         usage:wgpu::BufferUsages::MAP_READ|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false});
     let mut commands=r.device.create_command_encoder(&Default::default());
@@ -1139,7 +1139,7 @@ pub(crate) fn bounded_outstanding_gpu_work(r:&WgpuRasterizer)->(crate::submissio
         e
     };
     let duration=|r: &WgpuRasterizer| {
-        let raw=bounded_work_timestamp_bytes(r,&result);
+        let raw=buffer_bytes(r,&result);
         let start=u64::from_le_bytes(raw[..8].try_into().unwrap());
         let end=u64::from_le_bytes(raw[8..16].try_into().unwrap());
         (end-start) as f64*r.queue.get_timestamp_period() as f64/1e6
@@ -1164,7 +1164,7 @@ pub(crate) fn bounded_outstanding_gpu_work(r:&WgpuRasterizer)->(crate::submissio
         e.finish()
     };
     (work,move|| {
-        let raw=bounded_work_timestamp_bytes(r,&result);
+        let raw=buffer_bytes(r,&result);
         let start=u64::from_le_bytes(raw[..8].try_into().unwrap());
         let end=u64::from_le_bytes(raw[8..16].try_into().unwrap());
         (end-start) as f64*r.queue.get_timestamp_period() as f64/1e6

@@ -171,7 +171,7 @@ impl Flood {
     pub fn built_blocks(&self)->Option<usize> {self.lines.built_blocks()}
     pub fn lines_open(&self)->bool {self.lines.open()}
     pub fn tap_distance(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,tap:[u32;2],grain:[f32;4]) {self.lines.tap_distance(input,encoder,tap,grain);}
-    pub fn read_stale(&self,device:&PipelineDevice,encoder:&mut crate::submission::CommandEncoder)->mpsc::Receiver<Result<u32,GpuRasterError>> {self.lines.read_stale(device,encoder)}
+    pub fn read_stale(&self,device:&PipelineDevice,encoder:&mut crate::submission::CommandEncoder)->mpsc::Receiver<Result<[u32;1],GpuRasterError>> {self.lines.read_stale(device,encoder)}
     pub fn scope_blocks(&self,seed:[u32;2],flagged:impl Iterator<Item=[u32;2]>)->std::collections::BTreeSet<[u32;2]> {self.lines.scope_blocks(seed,flagged)}
     pub fn check_snap(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,tap:[u32;2],probe:&ScopeProbe,stop:Option<&wgpu::Buffer>,fill:Option<&layer_render::RegionFillQuery>) {
         self.lines.exclude(input,encoder,fill.map_or(&[],|fill|fill.excluded_seals.as_ref()));

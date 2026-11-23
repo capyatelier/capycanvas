@@ -12,7 +12,7 @@ mod cache;
 mod areas;
 
 const DEMAND_CHUNKS:f64=3.;
-enum Scope {Check(mpsc::Receiver<Result<u32,GpuRasterError>>),Probe(mpsc::Receiver<Result<flood::ScopeProbe,GpuRasterError>>),Known(flood::ScopeProbe),Full}
+enum Scope {Check(mpsc::Receiver<Result<[u32;1],GpuRasterError>>),Probe(mpsc::Receiver<Result<flood::ScopeProbe,GpuRasterError>>),Known(flood::ScopeProbe),Full}
 pub(super) struct RegionRequests {
     pub(super) flood: Flood,
     pub(super) raw: region_sources::RawRegions,
@@ -325,7 +325,7 @@ impl RegionRequests {
         if let Some(Scope::Check(rx))=&scope {
             match rx.try_recv() {
                 Ok(stale)=>{
-                    if stale?&1!=0 {self.reclassify();return Err(GpuRasterError::NotReady);}
+                    if stale?[0]&1!=0 {self.reclassify();return Err(GpuRasterError::NotReady);}
                     scope=None;
                 },
                 Err(mpsc::TryRecvError::Empty)=>{self.scope=Some((id,scope.unwrap()));return Err(GpuRasterError::NotReady);},

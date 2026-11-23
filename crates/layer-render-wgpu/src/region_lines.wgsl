@@ -1,5 +1,5 @@
 const END_WORDS:u32=20u;
-const HEADER_WORDS:u32=5u;
+const HEADER_WORDS:u32=6u;
 struct LineParams {
     extent: vec4<u32>,
     window: vec4<u32>,
@@ -375,52 +375,85 @@ fn required_reach(squared:u32,allowance:u32)->u32 {
 }
 const FRONTIER_NODES=256u;
 const VISIT_ENTRIES=512u;
-const SLOT_WORDS=2u*FRONTIER_NODES+VISIT_ENTRIES/2u;
+const SEAL_STATE_WORDS=40u;
+const SLOT_WORDS=2u*FRONTIER_NODES+VISIT_ENTRIES/2u+SEAL_STATE_WORDS;
+const SEAL_FIRST_ROUND=1u;
+const SEAL_COUNTED_ROUND=2u;
+const SEAL_RAYS=16u;
+const SEAL_DONE=SEAL_RAYS+41u;
 fn frontier(k:u32)->vec2<u32>{return vec2(second[2u*k],second[2u*k+1u]&65535u);}
 fn visit_entry(table:u32,at:u32)->u32{return (second[table+at/2u]>>(at%2u*16u))&65535u;}
 fn set_visit_entry(table:u32,at:u32,value:u32){let word=table+at/2u;let shift=at%2u*16u;second[word]=(second[word]&~(65535u<<shift))|(value<<shift);}
 fn visit_slot(key:u32)->u32{return (key*2654435761u)>>23u;}
 fn place_frontier(k:u32,key:u32,walked:u32,entry:u32,table:u32,base:u32){second[2u*k]=key;second[2u*k+1u]=walked|(entry<<16u);set_visit_entry(table,entry,k-base+1u);}
-fn search_own_stroke(slot:u32,start:vec2<i32>,hit:vec2<i32>,reach:u32)->bool {
-    let base=slot*SLOT_WORDS/2u;let table=slot*SLOT_WORDS+2u*FRONTIER_NODES;
-    let origin=point(vec2<u32>(start));place_frontier(base,origin,0u,visit_slot(origin),table,base);var head=base;var tail=base+1u;
-    let limit=3u*reach;var nearby=false;var searching=true;
+fn move_frontier(into:u32,out:u32,table:u32,base:u32){let word=second[2u*out+1u];place_frontier(into,second[2u*out],word&65535u,word>>16u,table,base);}
+fn swap_frontier(a:u32,b:u32,table:u32,base:u32){let key=second[2u*a];let word=second[2u*a+1u];move_frontier(a,b,table,base);place_frontier(b,key,word&65535u,word>>16u,table,base);}
+fn frontier_rank(k:u32,hit:vec2<i32>)->vec2<u32>{let node=frontier(k);let delta=abs(vec2<i32>(coord(node.x))-hit);return vec2(node.y+u32(max(0,max(delta.x,delta.y)-2)),node.x);}
+fn ranks_before(a:vec2<u32>,b:vec2<u32>)->bool{return a.x<b.x || (a.x==b.x && a.y<b.y);}
+fn rise_frontier(out:u32,hit:vec2<i32>,table:u32,base:u32,work:ptr<function,u32>){
+    var k=out;
     loop {
-        if head==tail || !searching {break;}
-        var best=head;var rank=0xffffffffu;
-        for(var k=head;k<tail;k++){
-            let candidate=frontier(k);let delta=abs(vec2<i32>(coord(candidate.x))-hit);let cost=candidate.y+u32(max(0,max(delta.x,delta.y)-2));
-            if cost<rank || (cost==rank && candidate.x<frontier(best).x) {best=k;rank=cost;}
-        }
-        let node=frontier(best);let entry=second[2u*best+1u]>>16u;let moved=frontier(head);
-        place_frontier(best,moved.x,moved.y,second[2u*head+1u]>>16u,table,base);place_frontier(head,node.x,node.y,entry,table,base);head++;
-        let at=vec2<i32>(coord(node.x));
-        if square(vec2<u32>(at),vec2<u32>(hit))<=4u{nearby=true;break;}if node.y>=limit{continue;}
-        for(var n=0u;n<8u;n++){
-            let q=at+AROUND[n];let left=i32(limit-node.y-1u);if !active_barrier(q) || max(abs(q.x-hit.x),abs(q.y-hit.y))>left+2 {continue;}let key=point(vec2<u32>(q));
-            var probe=visit_slot(key);var visited=INVALID;
-            loop {let index=visit_entry(table,probe);if index==0u {break;}if second[2u*(base+index-1u)]==key {visited=base+index-1u;break;}probe=(probe+1u)%VISIT_ENTRIES;}
-            if visited!=INVALID {if visited>=head{let word=2u*visited+1u;second[word]=(second[word]&~65535u)|min(second[word]&65535u,node.y+1u);}continue;}
-            if tail==base+FRONTIER_NODES{searching=false;break;}place_frontier(tail,key,node.y+1u,probe,table,base);tail++;
-        }
+        if k==base {break;}let parent=base+(k-base-1u)/2u;*work+=1u;
+        if !ranks_before(frontier_rank(k,hit),frontier_rank(parent,hit)) {break;}
+        swap_frontier(k,parent,table,base);k=parent;
     }
-    for(var k=base;k<tail;k++){set_visit_entry(table,second[2u*k+1u]>>16u,0u);}
-    return nearby;
 }
-fn nearby_own_stroke(searched:ptr<function,array<vec3<u32>,8>>,slot:u32,start:vec2<i32>,hit:vec2<i32>,reach:u32)->bool {
-    let query=vec2(point(vec2<u32>(hit)),reach);
-    for(var i=0u;i<8u;i++){if (*searched)[i].z!=0u && all((*searched)[i].xy==query){return (*searched)[i].z==2u;}}
-    let nearby=search_own_stroke(slot,start,hit,reach);
+fn sink_frontier(open:u32,hit:vec2<i32>,table:u32,base:u32,work:ptr<function,u32>){
+    var k=base;
+    loop {
+        let left=base+2u*(k-base)+1u;if left>=base+open {break;}*work+=1u;
+        var child=left;if left+1u<base+open && ranks_before(frontier_rank(left+1u,hit),frontier_rank(left,hit)) {child=left+1u;}
+        if !ranks_before(frontier_rank(child,hit),frontier_rank(k,hit)) {break;}
+        swap_frontier(k,child,table,base);k=child;
+    }
+}
+fn begin_search(slot:u32,start:vec2<i32>) {
+    let base=slot*SLOT_WORDS/2u;let table=slot*SLOT_WORDS+2u*FRONTIER_NODES;
+    let origin=point(vec2<u32>(start));place_frontier(base,origin,0u,visit_slot(origin),table,base);
+}
+fn search_step(slot:u32,hit:vec2<i32>,limit:u32,open:ptr<function,u32>,added:ptr<function,u32>,growing:ptr<function,u32>,work:ptr<function,u32>)->u32 {
+    let base=slot*SLOT_WORDS/2u;let table=slot*SLOT_WORDS+2u*FRONTIER_NODES;
+    if *open==0u || *growing==0u {return 1u;}
+    let node=frontier(base);let entry=second[2u*base+1u]>>16u;
+    *open-=1u;*work+=8u;
+    if *open>0u {move_frontier(base,base+*open,table,base);sink_frontier(*open,hit,table,base,work);}
+    place_frontier(base+FRONTIER_NODES-(*added-*open),node.x,node.y,entry,table,base);
+    let at=vec2<i32>(coord(node.x));
+    if square(vec2<u32>(at),vec2<u32>(hit))<=4u{return 2u;}if node.y>=limit{return 0u;}
+    for(var n=0u;n<8u;n++){
+        let q=at+AROUND[n];let left=i32(limit-node.y-1u);if !active_barrier(q) || max(abs(q.x-hit.x),abs(q.y-hit.y))>left+2 {continue;}let key=point(vec2<u32>(q));
+        var probe=visit_slot(key);var visited=INVALID;
+        loop {*work+=1u;let index=visit_entry(table,probe);if index==0u {break;}if second[2u*(base+index-1u)]==key {visited=base+index-1u;break;}probe=(probe+1u)%VISIT_ENTRIES;}
+        if visited!=INVALID {
+            let word=2u*visited+1u;
+            if visited<base+*open && node.y+1u<(second[word]&65535u) {second[word]=(second[word]&~65535u)|(node.y+1u);rise_frontier(visited,hit,table,base,work);}
+            continue;
+        }
+        if *added==FRONTIER_NODES{*growing=0u;break;}
+        place_frontier(base+*open,key,node.y+1u,probe,table,base);rise_frontier(base+*open,hit,table,base,work);*open+=1u;*added+=1u;
+    }
+    return 0u;
+}
+fn end_search(slot:u32,open:u32,added:u32,work:ptr<function,u32>) {
+    let base=slot*SLOT_WORDS/2u;let table=slot*SLOT_WORDS+2u*FRONTIER_NODES;
+    for(var k=base;k<base+open;k++){set_visit_entry(table,second[2u*k+1u]>>16u,0u);}
+    for(var k=base+FRONTIER_NODES-(added-open);k<base+FRONTIER_NODES;k++){set_visit_entry(table,second[2u*k+1u]>>16u,0u);}
+    *work+=added;
+}
+fn remembered(searched:ptr<function,array<vec3<u32>,8>>,query:vec2<u32>)->u32 {
+    for(var i=0u;i<8u;i++){if (*searched)[i].z!=0u && all((*searched)[i].xy==query){return (*searched)[i].z;}}
+    return 0u;
+}
+fn remember(searched:ptr<function,array<vec3<u32>,8>>,query:vec2<u32>,nearby:bool) {
     for(var i=7u;i>0u;i--){(*searched)[i]=(*searched)[i-1u];}
     (*searched)[0]=vec3(query,select(1u,2u,nearby));
-    return nearby;
 }
 const RAYS=array<vec2<i32>,41>(vec2<i32>(12551,-10531),vec2<i32>(12911,-10087),vec2<i32>(13255,-9630),vec2<i32>(13583,-9162),vec2<i32>(13894,-8682),vec2<i32>(14189,-8192),vec2<i32>(14466,-7692),vec2<i32>(14726,-7182),vec2<i32>(14968,-6664),vec2<i32>(15191,-6138),vec2<i32>(15396,-5604),vec2<i32>(15582,-5063),vec2<i32>(15749,-4516),vec2<i32>(15897,-3964),vec2<i32>(16026,-3406),vec2<i32>(16135,-2845),vec2<i32>(16225,-2280),vec2<i32>(16294,-1713),vec2<i32>(16344,-1143),vec2<i32>(16374,-572),vec2<i32>(16384,0),vec2<i32>(16374,572),vec2<i32>(16344,1143),vec2<i32>(16294,1713),vec2<i32>(16225,2280),vec2<i32>(16135,2845),vec2<i32>(16026,3406),vec2<i32>(15897,3964),vec2<i32>(15749,4516),vec2<i32>(15582,5063),vec2<i32>(15396,5604),vec2<i32>(15191,6138),vec2<i32>(14968,6664),vec2<i32>(14726,7182),vec2<i32>(14466,7692),vec2<i32>(14189,8192),vec2<i32>(13894,8682),vec2<i32>(13583,9162),vec2<i32>(13255,9630),vec2<i32>(12911,10087),vec2<i32>(12551,10531));
 fn determinant(a:vec2<i32>,b:vec2<i32>)->i32{return a.x*b.y-a.y*b.x;}
 fn in_cone(a:vec2<i32>,b:vec2<i32>)->bool {let forward=dot(a,b);return forward>0 && abs(determinant(a,b))*1000<=forward*839;}
-fn gap_on_segment(a:vec2<i32>,b:vec2<i32>)->bool {
+fn gap_on_segment(a:vec2<i32>,b:vec2<i32>,work:ptr<function,u32>)->bool {
     let d=b-a;let steps=max(abs(d.x),abs(d.y));
-    for(var i=1;i<steps;i++){if !ink(a+rounded_div(d*i,max(1,steps))){return true;}}
+    for(var i=1;i<steps;i++){*work+=1u;if !ink(a+rounded_div(d*i,max(1,steps))){return true;}}
     return false;
 }
 fn rounded_div(value:vec2<i32>,divisor:i32)->vec2<i32>{return (value+sign(value)*(divisor/2))/divisor;}
@@ -453,7 +486,7 @@ fn end_width(base:u32)->u32{return atomicLoad(&cached[base+2u])&65535u;}
 fn refine_ends(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>){
     if line.job.y!=0u && atomicLoad(&cached[line.offsets.y+3u])==0u{return;}
     let index=id.x+id.y*groups.x*64u+line.job.x;
-    let count=min(atomicLoad(&cached[line.offsets.y]),line.offsets.w);if index>=count{return;}
+    let count=min(atomicLoad(&cached[line.offsets.y]),line.offsets.w);if index>=count || (line.options.z!=0u && index>=line.options.z){return;}
     let base=line.offsets.z+index*END_WORDS;let start=vec2<i32>(coord(atomicLoad(&cached[base])));let original=tangent(atomicLoad(&cached[base+1u]));
     if line.options.y==1u && atomicLoad(&cached[base+11u])==0u {return;}
     var direction=original;var best=0xffffffffu;var key=INVALID;
@@ -480,21 +513,50 @@ fn supported_hit(p:vec2<i32>)->bool {
     for(var n=0u;n<8u;n++){if active_barrier(p+AROUND[n]){return true;}}
     return false;
 }
+fn improve(best:ptr<function,array<u32,4>>,scores:ptr<function,array<u32,4>>,bends:ptr<function,array<u32,4>>,pending:vec4<u32>) {
+    for(var bucket=0u;bucket<4u;bucket++){if (pending.x&(1u<<bucket))!=0u {(*scores)[bucket]=pending.y;(*best)[bucket]=pending.z;(*bends)[bucket]=pending.w;}}
+}
 @compute @workgroup_size(64)
 fn seal_candidates(@builtin(global_invocation_id) id:vec3<u32>, @builtin(num_workgroups) groups:vec3<u32>){
     if line.job.y!=0u && atomicLoad(&cached[line.offsets.y+3u])==0u{return;}
     let index=id.x+id.y*groups.x*64u+line.job.x;
-    let count=min(atomicLoad(&cached[line.offsets.y]),line.offsets.w);if index>=count{return;}
+    let count=min(atomicLoad(&cached[line.offsets.y]),line.offsets.w);if index>=count || (line.options.z!=0u && index>=line.options.z){return;}
     let slot=index-line.job.x;let base=line.offsets.z+index*END_WORDS;let start=vec2<i32>(coord(atomicLoad(&cached[base])));let dir=tangent(atomicLoad(&cached[base+7u]));
     if line.options.y==1u && atomicLoad(&cached[base+11u])==0u {return;}
+    let state=slot*SLOT_WORDS+2u*FRONTIER_NODES+VISIT_ENTRIES/2u;
+    if (line.options.w&SEAL_FIRST_ROUND)!=0u {
+        second[state]=0u;second[state+1u]=INVALID;second[state+2u]=0u;second[state+37u]=0u;
+        for(var i=0u;i<8u;i++){second[state+15u+3u*i]=0u;}
+        for(var bucket=0u;bucket<4u;bucket++){atomicStore(&cached[base+4u+bucket*4u],INVALID);atomicStore(&cached[base+5u+bucket*4u],0xffffffffu);atomicStore(&cached[base+6u+bucket*4u],INVALID);}
+    }
+    var progress=second[state];var link=second[state+1u];var searching=second[state+2u];var march=second[state+37u];
+    if progress==SEAL_DONE && searching==0u {return;}
+    var open=second[state+3u];var added=second[state+4u];var growing=second[state+5u];var limit=second[state+6u];var hit=vec2<i32>(coord(second[state+7u]));var queried=second[state+8u];
+    var pending=vec4(second[state+9u],second[state+10u],second[state+11u],second[state+12u]);
     var best:array<u32,4>;var scores:array<u32,4>;var bends:array<u32,4>;var searched:array<vec3<u32>,8>;
-    for(var bucket=0u;bucket<4u;bucket++){best[bucket]=INVALID;scores[bucket]=0xffffffffu;bends[bucket]=INVALID;}
+    for(var bucket=0u;bucket<4u;bucket++){best[bucket]=atomicLoad(&cached[base+4u+bucket*4u]);scores[bucket]=atomicLoad(&cached[base+5u+bucket*4u]);bends[bucket]=atomicLoad(&cached[base+6u+bucket*4u]);}
+    for(var i=0u;i<8u;i++){searched[i]=vec3(second[state+13u+3u*i],second[state+14u+3u*i],second[state+15u+3u*i]);}
     let lower=vec2<u32>(max(start-vec2<i32>(80),vec2<i32>(0)))/128u;
     let upper=vec2<u32>(min(start+vec2<i32>(80),vec2<i32>(line.extent.xy)-vec2<i32>(1)))/128u;
-    for(var y=lower.y;y<=upper.y;y++){for(var x=lower.x;x<=upper.x;x++){
-        var link=atomicLoad(&cached[line.offsets.y+HEADER_WORDS+y*((line.extent.x+127u)/128u)+x]);
-        loop {
-            if link==0u {break;}
+    let columns=upper.x-lower.x+1u;let cells=columns*(upper.y-lower.y+1u);
+    var work=0u;
+    loop {
+        if work>=line.options.w>>2u {break;}
+        if searching!=0u {
+            let found=search_step(slot,hit,limit,&open,&added,&growing,&work);
+            if found==0u {continue;}
+            end_search(slot,open,added,&work);searching=0u;
+            remember(&searched,vec2(point(vec2<u32>(hit)),queried),found==2u);
+            if found==1u {improve(&best,&scores,&bends,pending);}
+            continue;
+        }
+        if progress==SEAL_DONE {break;}
+        var query=vec2(0u);
+        if progress<SEAL_RAYS {
+            if progress>=cells {progress=SEAL_RAYS;continue;}
+            if link==INVALID {let cell=lower+vec2(progress%columns,progress/columns);link=atomicLoad(&cached[line.offsets.y+HEADER_WORDS+cell.y*((line.extent.x+127u)/128u)+cell.x]);}
+            if link==0u {progress++;link=INVALID;continue;}
+            work+=1u;
             let other=line.offsets.z+(link-1u)*END_WORDS;let same=link-1u==index;link=atomicLoad(&cached[other+3u]);if same{continue;}
             let key=atomicLoad(&cached[other]);let end=vec2<i32>(coord(key));let d=end-start;
             if square(vec2<u32>(start),vec2<u32>(end))>64u*64u {continue;}
@@ -507,11 +569,11 @@ fn seal_candidates(@builtin(global_invocation_id) id:vec3<u32>, @builtin(num_wor
                 let q=start+rounded_div(dir*a,denominator);
                 if valid(q) {
                     length=root(square(vec2<u32>(start),vec2<u32>(q)))+root(square(vec2<u32>(end),vec2<u32>(q)));
-                    if length<=64u && (gap_on_segment(start,q)||gap_on_segment(q,end)){bend=point(vec2<u32>(q));}
+                    if length<=64u && (gap_on_segment(start,q,&work)||gap_on_segment(q,end,&work)){bend=point(vec2<u32>(q));}
                 }
             }
             if bend==INVALID {
-                if !straight || !gap_on_segment(start,end){continue;}
+                if !straight || !gap_on_segment(start,end,&work){continue;}
                 length=root(square(vec2<u32>(start),vec2<u32>(end)));
             }
             var alignment=0u;
@@ -522,34 +584,42 @@ fn seal_candidates(@builtin(global_invocation_id) id:vec3<u32>, @builtin(num_wor
                 let reach=16u*(bucket+1u)+(end_width(base)+end_width(other))/2u;
                 if square(vec2<u32>(start),vec2<u32>(end))<=reach*reach && (score<scores[bucket] || (score==scores[bucket] && (key<best[bucket] || (key==best[bucket] && bend<bends[bucket])))) {improved|=1u<<bucket;}
             }
-            if improved==0u || nearby_own_stroke(&searched,slot,start,end,required_reach(square(vec2<u32>(start),vec2<u32>(end)),(end_width(base)+end_width(other))/2u)){continue;}
-            for(var bucket=0u;bucket<4u;bucket++){if (improved&(1u<<bucket))!=0u {scores[bucket]=score;best[bucket]=key;bends[bucket]=bend;}}
-        }
-    }}
-    for(var ray=0u;ray<41u;ray++){
-        let rotation=RAYS[ray];let v=vec2(dir.x*rotation.x-dir.y*rotation.y,dir.x*rotation.y+dir.y*rotation.x);
-        let divisor=max(abs(v.x),abs(v.y));if divisor==0{continue;}
-        var free=false;
-        for(var step=1;step<=80;step++){
-            let q=start+rounded_div(v*step,divisor);let d=q-start;let length=u32(d.x*d.x+d.y*d.y);if length>(64u+end_width(base))*(64u+end_width(base)){break;}
-            if !ink(q){free=true;continue;}
-            if !free{continue;}
-            if !in_cone(dir,d){break;}
-            let hit=middle(q);if !supported_hit(hit){continue;}let key=point(vec2<u32>(hit));let score=0x80000000u+root(length*65536u)*(100u+3u*u32(abs(i32(ray)-20)));
+            if improved==0u {continue;}
+            pending=vec4(improved,score,key,bend);hit=end;query=vec2(key,required_reach(square(vec2<u32>(start),vec2<u32>(end)),(end_width(base)+end_width(other))/2u));
+        }else{
+            let ray=progress-SEAL_RAYS;let rotation=RAYS[ray];let v=vec2(dir.x*rotation.x-dir.y*rotation.y,dir.x*rotation.y+dir.y*rotation.x);
+            let divisor=max(abs(v.x),abs(v.y));let step=i32(march>>1u)+1;
+            work+=1u;
+            if divisor==0 || step>80 {progress++;march=0u;continue;}
+            let q=start+rounded_div(v*step,divisor);let d=q-start;let length=u32(d.x*d.x+d.y*d.y);
+            if length>(64u+end_width(base))*(64u+end_width(base)) {progress++;march=0u;continue;}
+            if !ink(q){march=(u32(step)<<1u)|1u;continue;}
+            if (march&1u)==0u {march=u32(step)<<1u;continue;}
+            if !in_cone(dir,d) {progress++;march=0u;continue;}
+            let found=middle(q);work+=128u;
+            if !supported_hit(found){march=(u32(step)<<1u)|1u;continue;}
+            progress++;march=0u;
+            let key=point(vec2<u32>(found));let score=0x80000000u+root(length*65536u)*(100u+3u*u32(abs(i32(ray)-20)));
             var improved=0u;
             for(var bucket=0u;bucket<4u;bucket++){
                 let reach=16u*(bucket+1u);
                 if length<=(reach+end_width(base))*(reach+end_width(base)) && (score<scores[bucket] || (score==scores[bucket] && key<best[bucket])){improved|=1u<<bucket;}
             }
-            if improved!=0u && !nearby_own_stroke(&searched,slot,start,hit,required_reach(length,end_width(base))) {
-                for(var bucket=0u;bucket<4u;bucket++){if (improved&(1u<<bucket))!=0u {scores[bucket]=score;best[bucket]=key;bends[bucket]=INVALID;}}
-            }
-            break;
+            if improved==0u {continue;}
+            pending=vec4(improved,score,key,INVALID);hit=found;query=vec2(key,required_reach(length,end_width(base)));
         }
+        let known=remembered(&searched,query);
+        if known!=0u {if known==1u {improve(&best,&scores,&bends,pending);}continue;}
+        searching=1u;begin_search(slot,start);open=1u;added=1u;growing=1u;limit=3u*query.y;queried=query.y;
     }
     for(var bucket=0u;bucket<4u;bucket++){
         atomicStore(&cached[base+4u+bucket*4u],best[bucket]);atomicStore(&cached[base+5u+bucket*4u],scores[bucket]);atomicStore(&cached[base+6u+bucket*4u],bends[bucket]);
     }
+    second[state]=progress;second[state+1u]=link;second[state+2u]=searching;second[state+37u]=march;
+    second[state+3u]=open;second[state+4u]=added;second[state+5u]=growing;second[state+6u]=limit;second[state+7u]=point(vec2<u32>(hit));second[state+8u]=queried;
+    second[state+9u]=pending.x;second[state+10u]=pending.y;second[state+11u]=pending.z;second[state+12u]=pending.w;
+    for(var i=0u;i<8u;i++){second[state+13u+3u*i]=searched[i].x;second[state+14u+3u*i]=searched[i].y;second[state+15u+3u*i]=searched[i].z;}
+    if (line.options.w&SEAL_COUNTED_ROUND)!=0u && (progress!=SEAL_DONE || searching!=0u) {atomicAdd(&cached[line.offsets.y+5u],1u);}
 }
 fn active_line_attempt()->bool{return line.job.w!=0u || line.job.y==0u || first[line.job.z+5u]==0u;}
 fn clear_open(p:vec2<i32>){if valid(p){atomicAnd(&eligible[u32(p.y)*line.extent.z+u32(p.x)/32u],~(1u<<(u32(p.x)%32u)));}}
