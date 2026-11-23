@@ -892,7 +892,7 @@ impl RegionRequests {
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         selection_readback::capture_selection(
-            &r.device,
+            &r.device,r.factory.memory_budget().clone(),
             capture,extent,byte_coverage,request_id,gaps,tx,
             move |mut result, source_stale, extra| {
                 result.tonal_sample = probe.and_then(|p| tonal::sample(extra, p));

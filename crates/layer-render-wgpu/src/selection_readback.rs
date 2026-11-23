@@ -21,9 +21,12 @@ struct Captured {
     seals: Vec<layer_render::RegionSeal>,
     next:Option<[u32;2]>,
 }
-fn read_coverage(bytes:&[u8],extent:[u32;2],byte_coverage:bool,coverage_size:u64,underfill_offset:Option<u64>,seal_records:usize,seed_offset:Option<u64>)->Result<Captured,GpuRasterError> {
+fn read_coverage(bytes:&[u8],extent:[u32;2],byte_coverage:bool,coverage_size:u64,underfill_offset:Option<u64>,seal_records:usize,seed_offset:Option<u64>,budget:&layer_core::MemoryBudget)->Result<Captured,GpuRasterError> {
     let read=|offset:usize|u32::from_le_bytes(bytes[offset..offset+4].try_into().unwrap());
     let count=extent[0].div_ceil(if byte_coverage {4}else{8}) as usize*extent[1] as usize;
+    let band_count=extent[0].div_ceil(8) as usize*extent[1] as usize;
+    let words=count as u64+underfill_offset.map_or(0,|_|band_count as u64);
+    let _admission=budget.admit_import(words.saturating_mul(4)).ok_or(GpuRasterError::StrokeMemory)?;
     let copy_words=|offset:usize,count:usize| {
         let source=&bytes[offset..offset+count*4];
         let mut words=std::sync::Arc::<[u32]>::new_uninit_slice(count);
@@ -40,7 +43,6 @@ fn read_coverage(bytes:&[u8],extent:[u32;2],byte_coverage:bool,coverage_size:u64
     let words=copy_words(32,count);
     let pixels=if byte_coverage {layer_core::SelectionPixels::bytes(extent,bounds,words)}else{layer_core::SelectionPixels::new(extent,bounds,words)}
         .map_err(|error|GpuRasterError::MapFailed(error.to_string()))?;
-    let band_count=extent[0].div_ceil(8) as usize*extent[1] as usize;
     let underfill=underfill_offset.map(|offset|
         layer_core::SelectionPixels::new(extent,bounds_at(offset as usize-32),copy_words(offset as usize,band_count))
             .map(std::sync::Arc::new).map_err(|error|GpuRasterError::MapFailed(error.to_string()))).transpose()?;
@@ -58,6 +60,7 @@ fn read_coverage(bytes:&[u8],extent:[u32;2],byte_coverage:bool,coverage_size:u64
 
 pub(super) fn capture_selection<T:Send+'static>(
     device:&crate::PipelineDevice,
+    budget:layer_core::MemoryBudget,
     capture:Capture,
     extent:[u32;2],
     byte_coverage:bool,
@@ -67,7 +70,7 @@ pub(super) fn capture_selection<T:Send+'static>(
     convert:impl FnOnce(RegionResult,u32,&[u8])->T+Send+'static,
 ) {
     let Capture {buffer,size,coverage_size,underfill_offset,seal_records,seed_offset}=capture;
-    crate::raster::map_then(device,None,&buffer,size,move|bytes|read_coverage(bytes,extent,byte_coverage,coverage_size,underfill_offset,seal_records,seed_offset),move|part| {
+    crate::raster::map_then(device,None,&buffer,size,move|bytes|read_coverage(bytes,extent,byte_coverage,coverage_size,underfill_offset,seal_records,seed_offset,&budget),move|part| {
         let result=part.and_then(|primary| {
             if gaps && primary.active>=5 {return Err(GpuRasterError::MapFailed("Invalid fill reach".into()));}
             let masks=gaps.then(||layer_render::RegionGapMasks {next:primary.next,active:primary.active,line_bounded:primary.line_bounded,seals:primary.seals.into()});

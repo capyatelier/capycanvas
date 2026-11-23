@@ -729,11 +729,16 @@ impl<R: CanvasRenderer> UiSession<R> {
             let target = self.region_tools.target.take_if(|t| {
                 result.as_ref().map_or(!queued, |result| t.generation == result.request_id())
             });
-            let result = result.map_err(|cause| {
-                if target.as_ref().is_some_and(|t| matches!(t.purpose, Purpose::Transform)) { self.discard_mode_actions(); }
-                if target.is_some() {self.region_tools.cancel();}
-                error(cause)
-            })?;
+            let result = match result {
+                Ok(result) => result,
+                Err(cause) => {
+                    if target.as_ref().is_some_and(|t| matches!(t.purpose, Purpose::Transform)) { self.discard_mode_actions(); }
+                    if target.is_some() {self.region_tools.cancel();}
+                    if !R::is_memory_refusal(&cause) { return Err(error(cause)); }
+                    self.raise_message_notice(MessageId::DOCUMENTS_TOO_LARGE_MEMORY);
+                    return Ok(regions::COMMANDS);
+                }
+            };
             let doc = self.engine.document();
             if let Some(target) = target.filter(|t| t.current(doc)) {
                 let result=match result {

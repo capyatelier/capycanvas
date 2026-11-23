@@ -177,12 +177,14 @@ impl SelectionPainter {
         }
         let extent = r.document_extent;
         let size = 32 + u64::from(extent[0].div_ceil(4)) * u64::from(extent[1]) * 4;
-        if extent.contains(&0)
-            || size + 32 > r.device.limits().max_storage_buffer_binding_size
+        if extent.contains(&0) {
+            return Err(GpuRasterError::SizeOverflow);
+        }
+        if size + 32 > r.device.limits().max_storage_buffer_binding_size
             || extent[1] > r.device.limits().max_compute_workgroups_per_dimension
             || extent[0].div_ceil(256) > r.device.limits().max_compute_workgroups_per_dimension
         {
-            return Err(GpuRasterError::SizeOverflow);
+            return Err(GpuRasterError::StrokeMemory);
         }
         let mut encoder = crate::submission::CommandEncoder::new(
             &r.device,
@@ -397,7 +399,7 @@ impl SelectionPainter {
         r.last_submission = encoder.submit(&r.queue);
         if let Some(readback) = &self.pending {
             selection_readback::capture_selection(
-            &r.device,
+            &r.device,r.factory.memory_budget().clone(),
                 selection_readback::Capture {buffer:readback.clone(),size:size+32,coverage_size:size,underfill_offset:None,seal_records:0,seed_offset:None},
                 extent,true,update.id,false,
                 self.tx.clone(),

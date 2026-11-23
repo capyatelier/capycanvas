@@ -168,6 +168,21 @@ mod painted_selection_checks {
         });
     }
     #[test]
+    fn a_selection_capture_refused_for_memory_keeps_the_selection_and_explains() {
+        let mut s = session(Platform::Gtk);
+        invoke(&mut s, CommandId::SelectionBrush);
+        let before = s.engine.document().working.selection.clone();
+        send(&mut s, PenPhase::Down, 100.);
+        send(&mut s, PenPhase::Up, 100.);
+        s.frame(1, 1).unwrap();
+        s.engine.backend_mut().selection_refusal = true;
+        s.frame(2, 2).unwrap();
+        assert_eq!(s.engine.document().working.selection, before);
+        assert_eq!(s.state.notice.as_ref().unwrap().text, s.localization().text(MessageId::DOCUMENTS_TOO_LARGE_MEMORY).as_ref());
+        assert!(!s.painted_selections.busy());
+        s.frame(3, 3).unwrap();
+    }
+    #[test]
     fn color_transition_waits_for_selection_capture_and_discards_gpu_requests() {
         use layer_core::{ColorTransition, color::{DocumentColor, RgbSpace, SampleDepth}};
         let mut s = session(Platform::Gtk);

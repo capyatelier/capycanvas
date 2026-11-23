@@ -433,7 +433,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             let Some(result) = self.engine.backend_mut().take_region() else {
                 return Ok(0);
             };
-            let layer_render::RegionOutput::Mask(result)=result.map_err(error)? else{return Err("Unexpected mask region capture".into());};
+            let result = match result {
+                Err(cause) if R::is_memory_refusal(&cause) => return Ok(self.refuse_selection_memory()),
+                result => result.map_err(error)?,
+            };
+            let layer_render::RegionOutput::Mask(result)=result else{return Err("Unexpected mask region capture".into());};
             if result.request_id != job.request.request_id {
                 return Err("Unexpected mask region capture".into());
             }
@@ -461,7 +465,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             && let Some(result) = self.engine.backend_mut().take_selection_paint()
         {
             let gesture = self.painted_selections.gestures.pop_front().unwrap();
-            let result = result.map_err(error)?;
+            let result = match result {
+                Err(cause) if R::is_memory_refusal(&cause) => return Ok(changed | self.refuse_selection_memory()),
+                result => result.map_err(error)?,
+            };
             if result.request_id != gesture.id {
                 return Err("Unexpected selection capture".into());
             }
@@ -518,17 +525,24 @@ impl<R: CanvasRenderer> UiSession<R> {
                     });
                 }
             }
-            if let Some(update) = gesture.update.as_ref()
-                && self
-                    .engine
-                    .backend_mut()
-                    .paint_selection(update)
-                    .map_err(error)?
-            {
-                gesture.capturing = update.finish;
-                gesture.update = None;
+            if let Some(update) = gesture.update.as_ref() {
+                match self.engine.backend_mut().paint_selection(update) {
+                    Ok(true) => {
+                        gesture.capturing = update.finish;
+                        gesture.update = None;
+                    }
+                    Ok(false) => {}
+                    Err(cause) if R::is_memory_refusal(&cause) => return Ok(changed | self.refuse_selection_memory()),
+                    Err(cause) => return Err(error(cause)),
+                }
             }
         }
         Ok(changed)
+    }
+    fn refuse_selection_memory(&mut self) -> u32 {
+        self.painted_selections.renderer_replaced();
+        self.engine.backend_mut().cancel_selection_paint();
+        self.raise_message_notice(MessageId::DOCUMENTS_TOO_LARGE_MEMORY);
+        regions::COMMANDS
     }
 }

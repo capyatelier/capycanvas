@@ -40,6 +40,7 @@ pub(crate) struct Recorder {
     pub(crate) sample_reply: Option<layer_render::ColorSample>,
     pub(crate) selection_updates: Vec<layer_render::SelectionPaint>,
     pub(crate) selection_reply: Option<layer_render::SelectionPaintResult>,
+    pub(crate) selection_refusal: bool,
     pub(crate) selection_wait: bool,
     pub(crate) region_requests: Vec<layer_render::RegionRequest>,
     pub(crate) region_fill_seed:Option<(SourceTarget,Point)>,
@@ -96,8 +97,10 @@ pub(crate) struct Recorder {
     pub(crate) memory_refusal_next_frame: bool,
     pub(crate) capture_failure: Option<&'static str>,
 }
+const MEMORY_REFUSAL: &str = "Not enough memory to finish this edit";
 impl CanvasRenderer for Recorder {
     type Error = BackendError;
+    fn is_memory_refusal(error: &Self::Error) -> bool { error.0 == MEMORY_REFUSAL }
     fn stroke_memory_refusals(&self) -> u64 { self.memory_refusals }
     fn poll_pending(&mut self, _view: layer_render::ViewState) -> Result<(), Self::Error> {
         self.memory_refusals += u64::from(std::mem::take(&mut self.memory_refusal_next_frame));
@@ -169,6 +172,7 @@ impl CanvasRenderer for Recorder {
         self.selection_updates.push(update.clone()); Ok(!self.selection_wait)
     }
     fn take_selection_paint(&mut self)->Option<Result<layer_render::SelectionPaintResult,Self::Error>> {
+        if std::mem::take(&mut self.selection_refusal) {return Some(Err(BackendError(MEMORY_REFUSAL)));}
         self.selection_reply.take().map(Ok)
     }
     fn set_fill_preview(&mut self,preview:Option<layer_render::FillPreview>) {self.fill_preview=preview;}

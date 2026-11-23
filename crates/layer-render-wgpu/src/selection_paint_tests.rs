@@ -294,3 +294,28 @@ fn selection_gradient_shapes_preserve_scalar_coverage_and_contact_opacity() {
         }
     }
 }
+
+#[test]
+fn a_panorama_selection_beyond_one_storage_binding_is_refused_for_memory() {
+    let mut r = renderer();
+    r.document_extent = [65536, 16384];
+    let update = request(1, Selection::empty(), SelectionPaintMode::Add, 1.);
+    assert_eq!(self::paint(&mut r, &update), Err(GpuRasterError::StrokeMemory));
+}
+
+#[test]
+fn a_selection_capture_beyond_the_memory_budget_is_refused_before_its_words_are_copied() {
+    let capture = |headroom: u64| {
+        let budget = layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts { total_bytes: Some(8 << 30), available_bytes: Some(6 << 30), ..Default::default() });
+        let mut r = crate::memory::memory_tests::renderer_in_budget(Default::default(), layer_core::DeviceMemoryFacts { budget_bytes: Some(2 << 30), ..Default::default() }, budget.clone()).unwrap();
+        crate::test_support::submit_settled(&mut r, FramePacket { reset_layers: true, ..packet(paint_document([128; 2], "artwork").scene(), [128; 2]) });
+        r.document_extent = [65536, 1024];
+        let _elsewhere = budget.admit_import(budget.import_headroom_bytes().saturating_sub(headroom)).unwrap();
+        let mut update = request(1, Selection::empty(), SelectionPaintMode::Add, 1.);
+        update.finish = true;
+        assert!(self::paint(&mut r, &update).unwrap());
+        crate::test_support::wait_until("selection paint capture timed out", || r.take_selection_paint().ok_or(())).map(|result| result.pixels.extent())
+    };
+    assert_eq!(capture(16 << 20), Err(GpuRasterError::StrokeMemory));
+    assert_eq!(capture(1 << 30), Ok([65536, 1024]));
+}
