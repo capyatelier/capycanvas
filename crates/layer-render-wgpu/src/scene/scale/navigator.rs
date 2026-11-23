@@ -1311,15 +1311,22 @@ mod tests {
     #[test]
     fn a_navigator_released_beside_a_zoomed_in_contact_shows_a_first_picture_before_pen_up() {
         let (doc,owner,target)=zoomed_ink();let (mut r,frame)=zoomed_in(&doc,owner);let (style,dabs)=marks();
-        let send=|r:&mut WgpuRasterizer,index:usize,start:bool,time:f32| {
-            let batch=stroke_batch(target,&style,&dabs[index],start,false);
+        let send=|r:&mut WgpuRasterizer,index:usize,[start,end]:[bool;2],time:f32| {
+            let batch=stroke_batch(target,&style,&dabs[index],start,end);
             crate::test_support::submit_ready(r,FramePacket {dabs:&dabs[index..=index],dab_batches:std::slice::from_ref(&batch),time_seconds:time,..frame}).unwrap();
             crate::test_support::complete(r);
         };
-        send(&mut r,0,true,1.);send(&mut r,1,false,1.2);
+        let before=navigator_texel(&r,[600,400]);
+        send(&mut r,0,[true,false],1.);send(&mut r,1,[false,false],1.2);
         r.navigator.release();
-        send(&mut r,1,false,1.4);
+        send(&mut r,1,[false,false],1.4);
         assert!(r.scale_display.as_ref().unwrap().contact_id().is_some(),"the contact holds");
         assert!(r.navigator.view().is_some(),"a released Navigator shows a first picture before pen-up");
+        assert!(r.navigator.pending() && r.navigator.content_revision().is_none(),"the first picture behind the contact is pending and names no revision");
+        send(&mut r,1,[false,true],1.6);
+        submit_settled(&mut r,FramePacket {time_seconds:2.,..frame});
+        let shown=navigator_texel(&r,[600,400]);
+        assert!(!r.navigator.pending() && r.navigator.content_revision().is_some() && shown[0]>before[0]+0.2,
+            "after pen-up the Navigator names the revision that shows the mark: {shown:?}, before the stroke {before:?}");
     }
 }
