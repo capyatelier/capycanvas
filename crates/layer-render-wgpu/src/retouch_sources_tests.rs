@@ -610,6 +610,29 @@ fn stroke_start_pages_survive_estimated_samples_and_corrections() {
 }
 
 #[test]
+fn a_clone_reads_a_lone_watercolor_reference_as_it_is_composed_not_as_its_raw_pigment() {
+    use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, RasterWatercolor, TileBlob, TileKey};
+    let island=|x:u32,y:u32|(103..106).contains(&x) && (99..102).contains(&y);
+    let wash=|x:u32,y:u32|(80..128).contains(&x) && (180..220).contains(&y) && x!=104;
+    let texels=||(0..PAGE_SIZE*PAGE_SIZE).map(|index|(index%PAGE_SIZE,index/PAGE_SIZE));
+    let color:Vec<u8>=texels().flat_map(|(x,y)|if island(x,y) {[255,0,0,255]}else if wash(x,y) {[0,0,255,128]}else {[0;4]}).collect();
+    let wetness:Vec<u8>=texels().map(|(x,y)|if island(x,y) || wash(x,y) {255}else {0}).collect();
+    let mut data=RasterData {watercolor:Some(RasterWatercolor {wet_edge:1.,burnt_edge:0.6,edge_width:4.}),..Default::default()};
+    for (plane,bytes) in [(RasterPlane::Color,color),(RasterPlane::WatercolorWetness,wetness)] {
+        data.tiles.insert(TileKey {plane,coordinate:[0,0]},RasterTile::backed(TileBlob::encode(plane.descriptor(Default::default()),&bytes).unwrap()));
+    }
+    let mut doc=document(SIZE);
+    let SourceTarget::Paint(photo)=PHOTO else {unreachable!()};
+    let paint=doc.artwork.paint.get_mut(photo).unwrap();paint.base=None;paint.raster=RasterRevision::backed(data);
+    let mut fixture=Fixture::new(doc);let (r,frame)=fixture.frame();
+    r.prepare_retouch(Some(&RetouchPreparation {execution:layer_core::BrushExecution::Clone,target:TARGET,retouch:Retouch {source:RetouchSource::References,references:Arc::new([PHOTO_USE].into()),..Default::default()},points:vec![Point {x:100.,y:200.}]}));
+    crate::test_support::submit_settled(r,frame);
+    let (pixels,complete)=sample(r,[0,0],[0.;2]);assert!(complete);
+    let density=128./255.*1.65;let rim=pixels[(200*256+100) as usize];
+    assert!((rim[3]-density).abs()<0.01,"the clone reads the wet rim at its composed density {density}, not the raw pigment: {rim:?}");
+}
+
+#[test]
 fn retouch_reference_reads_arbitrary_base_offset_and_transparent_tile_override() {
     use layer_core::authored::{PaintBase, PaintBasePolicy};
     use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey};
