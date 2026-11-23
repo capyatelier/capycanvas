@@ -276,8 +276,18 @@ pub(super) fn selected(plan: BrushPassPlan, preview: bool) -> impl Iterator<Item
     entries(plan.material).iter().copied().filter(move |&entry| match entry {
         Entry::Color => preview || !plan.state.coverage,
         Entry::Coverage => plan.state.coverage,
-        Entry::Reservoir | Entry::Watercolor | Entry::Gather => true,
+        Entry::Reservoir | Entry::Watercolor => true,
+        Entry::Gather => false,
     })
+}
+
+fn gathered(style: &layer_render::DabStyle) -> bool {
+    matches!(BrushPassPlan::for_style(style).material, MaterialOperation::Wet | MaterialOperation::Watercolor)
+}
+
+pub(super) fn gathers_far_taps(batch: &DabBatch, dabs: &[Dab], extent: [u32; 2]) -> bool {
+    let written = crate::batch_pixel_rect(batch, extent);
+    gathered(&batch.style) && page_coordinates(written).any(|page| job_donors(&batch.style, dabs, written, page, extent).is_some())
 }
 
 /// Wet and watercolor deposit through the brush blend. Smudge only
@@ -328,6 +338,10 @@ impl Pipelines {
             else { dry_material::material_contact_slot(style) * MATERIAL_BLENDS.len() };
         let blender = if operation == MaterialOperation::Smudge { blender(style) } else { PLAIN };
         &self.kernels[&(operation as u32, slot, entry, blender.kind as u8, blender.paper, blender.lift, blender.cells)]
+    }
+
+    pub fn gather(&self, style: &layer_render::DabStyle) -> Option<&Deferred<wgpu::ComputePipeline>> {
+        gathered(style).then(|| self.kernel(style, Entry::Gather))
     }
 
     fn output(&self,device:&PipelineDevice,style:&wgpu::Buffer,color:&resident::RasterWrite<'_,PageSurface>,
@@ -898,8 +912,8 @@ mod tests {
         let reference = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         let document = layer_core::Document::new(layer_core::authored::PortableId::random(), 128, 128,
             layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        for (preset, expected) in [(Preset::Smudge, 1), (Preset::NaturalBlender, 1), (Preset::WetRound, 3),
-            (Preset::OpaqueGouache, 4), (Preset::LoadedOil, 4), (Preset::PaletteKnife, 4), (Preset::WatercolorWash, 2), (Preset::WetWatercolor, 2)] {
+        for (preset, expected) in [(Preset::Smudge, 1), (Preset::NaturalBlender, 1), (Preset::WetRound, 2),
+            (Preset::OpaqueGouache, 3), (Preset::LoadedOil, 3), (Preset::PaletteKnife, 3), (Preset::WatercolorWash, 1), (Preset::WetWatercolor, 1)] {
             let mut renderer = crate::test_support::staged_renderer(&reference, Default::default());
             renderer.shader_idle(false, false);
             let mut brush = layer_core::default_brush(preset);
@@ -909,8 +923,14 @@ mod tests {
             let pipelines = &renderer.pipelines;
             let transport = &pipelines.destination_material;
             let ready = transport.kernels.values().filter(|p| p.ready()).count();
-            assert_eq!(ready, expected, "{preset:?} compiles its commit, prediction, reservoir and gather kernels");
+            assert_eq!(ready, expected, "{preset:?} first ink waits only for its commit, prediction and reservoir kernels");
             let normal = layer_render::DabStyle::for_brush(&brush, layer_core::StrokeTool::Brush);
+            if let Some(gather) = transport.gather(&normal) {
+                let compiler = &renderer.startup.as_ref().unwrap().compiler;
+                let demanded = |class| compile::tests::demands(compiler, class).contains(&gather.identity());
+                assert!(!gather.ready() && !demanded(crate::startup::BRUSH) && demanded(crate::startup::ANTICIPATED),
+                    "{preset:?} anticipates its far gather kernel after selection instead of waiting for it");
+            }
             brush.rendering.blend_mode = BrushBlendMode::Multiply;
             let multiply = layer_render::DabStyle::for_brush(&brush, layer_core::StrokeTool::Brush);
             let operation = BrushPassPlan::for_style(&normal).material;
@@ -919,6 +939,30 @@ mod tests {
                     "{preset:?} {entry:?} has a module per blend only when it deposits through the blend");
             }
         }
+    }
+
+    #[test]
+    fn a_near_wet_contact_paints_after_selection_before_its_far_gather_compiles() {
+        let reference = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let extent = [1024, 256];
+        let document = paint_document(extent, "first wet ink");
+        let target = target(&document);
+        let mut r = crate::test_support::staged_renderer(&reference, Default::default());
+        r.shader_idle(false, false);
+        let brush = layer_core::default_brush(Preset::WetRound);
+        r.prepare_startup(&document, &brush, false).unwrap();
+        crate::test_support::wait_startup(&mut r, std::time::Instant::now() + std::time::Duration::from_secs(60), |progress| progress.brush_ready, format_args!("Wet Round preparation timed out"));
+        let style = layer_render::DabStyle::for_brush(&brush, layer_core::StrokeTool::Brush);
+        let gather = r.pipelines.destination_material.gather(&style).unwrap().clone();
+        assert!(!gather.ready(), "selection lets first ink go before the far gather kernel compiles");
+        submit_ready(&mut r, FramePacket { reset_layers: true, ..packet(document.scene(), extent) }).unwrap();
+        let near = wet_contact(200., 128., 40., [0.; 2]);
+        let pulled = Dab { material: [0., 1., 1., 0.], ..wet_contact(700., 128., 16., [600., 0.]) };
+        let dabs = [near, pulled];
+        submit_ready(&mut r, FramePacket { dabs: &dabs, dab_batches: &[DabBatch { style: style.clone(), ..wet_batch(target, &near, 0, true) }], ..packet(document.scene(), extent) }).unwrap();
+        assert!(!gather.ready(), "the first near contact paints without the far gather kernel");
+        submit_ready(&mut r, FramePacket { dabs: &dabs, dab_batches: &[DabBatch { style: style.clone(), ..wet_batch(target, &pulled, 1, false) }], ..packet(document.scene(), extent) }).unwrap();
+        assert!(gather.ready(), "a far contact waits for the gather kernel it needs");
     }
 
     #[test]

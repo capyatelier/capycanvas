@@ -2191,8 +2191,11 @@ impl WgpuRasterizer {
                 if batch.dab_count==0 {continue;}
             }
             ready &= self.brush_textures_ready(&batch.style);
+            let dabs = packet.dabs.get(batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize).unwrap_or_default();
+            if destination_material::gathers_far_taps(batch, dabs, packet.scene.target_extent(batch.target)) {
+                ready &= self.compilation.require(self.pipelines.destination_material.gather(&batch.style), startup::BRUSH);
+            }
             if !self.startup.as_ref().is_some_and(|startup|startup.strokes.covers(&batch.style)) {
-                let dabs = packet.dabs.get(batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize).unwrap_or_default();
                 let mask = layer_masks::MaskRenderer::is_mask(packet.scene, batch.target);
                 let mut required = compile::Needs::default();
                 required.style(self, &batch.style, dry_material::Reach::of_dabs(dabs), mask, batch.kind == DabBatchKind::Preview);

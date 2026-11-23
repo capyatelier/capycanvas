@@ -551,7 +551,7 @@ impl WgpuRasterizer {
         let _batch = startup.compiler.batch();
         startup.finished = false;
         startup.brush_ready = false;
-        startup.compiler.advance();
+        let generation = startup.compiler.advance();
         let styles = [StrokeTool::Brush, StrokeTool::Eraser].map(|tool| layer_render::DabStyle {
             selection: document.working.selection.clone().map(Arc::new),
             ..brush_style(document, brush, tool)
@@ -573,6 +573,7 @@ impl WgpuRasterizer {
         }
         for style in &styles {
             strokes.style_helpers(self, style, mask, true);
+            if let Some(gather) = self.pipelines.destination_material.gather(style).filter(|_| !mask) { startup.compiler.warm(gather, ANTICIPATED, generation); }
         }
         strokes.require(&startup.compiler, BRUSH);
         startup.papers.clear();
