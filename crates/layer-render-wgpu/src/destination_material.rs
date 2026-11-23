@@ -79,6 +79,7 @@ pub(super) fn read_pages(batches: &[DabBatch], index: usize, dabs: &[Dab], exten
     }
     if let Some(last) = dabs.last().filter(|_| exchanges(batches, index, extent)) {
         let around = reservoir_page(last, extent);
+        crate::source_access::neighborhood(around, TRANSPORT_OFFSETS.map(Some)).for_each(&mut read);
         let reads = exchange_reads(&batch.style, dabs, extent);
         if beyond(reads, around) { page_coordinates(reads).for_each(&mut read); }
     }
@@ -698,6 +699,20 @@ mod tests {
             predicted(&r, target(&document), [1350, 128])
         };
         assert_close(laid(true), laid(false), "a prediction that replaces a broader one lays what a fresh prediction lays");
+    }
+
+    #[test]
+    fn a_wet_exchange_reads_the_pages_around_its_last_contact_whatever_its_damage() {
+        let extent = [1536, 256];
+        let document = paint_document(extent, "wet exchange beyond its damage");
+        let target = target(&document);
+        let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        submit_ready(&mut r, FramePacket { reset_layers: true, ..packet(document.scene(), extent) }).unwrap();
+        let dabs = [wet_contact(384., 128., 8., [0.; 2]), wet_contact(640., 640., 8., [256., 512.])];
+        let batch = DabBatch { dab_count: 2, damage: dabs[0].bounds(), ..wet_batch(target, &dabs[0], 0, true) };
+        submit_ready(&mut r, FramePacket { dabs: &dabs, dab_batches: &[batch], ..packet(document.scene(), extent) })
+            .expect("a Wet batch whose last contact lies off the canvas exchanges around the page it clamps to");
+        assert!(r.reservoir.state.is_some(), "the exchange published the stroke's reservoir");
     }
 
     #[test]
