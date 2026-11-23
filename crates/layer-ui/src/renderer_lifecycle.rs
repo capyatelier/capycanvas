@@ -461,16 +461,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.cancel_auto_levels();self.cancel_histogram();self.cancel_effect_analyses();
         self.rendering_suspended = true;
         self.storage_activity.set_busy(false);self.storage_activity.touch();
-        let recovered = self.engine.recover_failed_rasters().map_err(error);
-        self.refresh_document();
-        self.poll_document_close();
-        self.refresh_commands();
-        if self.engine.document().memory().package_failure().is_some() {
-            self.raise_message_notice(MessageId::DOCUMENTS_PACKAGE_DAMAGED_BODY);
-            self.set_host_error(Some(self.localization().text(MessageId::DOCUMENTS_PACKAGE_DAMAGED_BODY).to_string()));
-        }else if recovered? > 0 || interrupted_selection {
-            self.set_host_error(Some("Painting stopped. Edits whose pixels could not be recovered were canceled; earlier edits are retained.".into()));
-        }
+        self.recover_failed_edits(interrupted_selection)?;
         Ok(self.changed(
             retired_regions
                 | regions::DOCUMENT
@@ -479,6 +470,21 @@ impl<R: CanvasRenderer> UiSession<R> {
                 | regions::HOST,
             false,
         ))
+    }
+
+    pub(super) fn recover_failed_edits(&mut self, interrupted: bool) -> Result<bool, String> {
+        let recovered = self.engine.recover_failed_rasters().map_err(error);
+        self.refresh_document();
+        self.poll_document_close();
+        self.refresh_commands();
+        let damaged = self.engine.document().memory().package_failure().is_some();
+        if damaged {
+            self.raise_message_notice(MessageId::DOCUMENTS_PACKAGE_DAMAGED_BODY);
+            self.set_host_error(Some(self.localization().text(MessageId::DOCUMENTS_PACKAGE_DAMAGED_BODY).to_string()));
+        }else if recovered? > 0 || interrupted {
+            self.set_host_error(Some(self.localization().text(MessageId::COMMON_CANVAS_STOPPED).to_string()));
+        }
+        Ok(damaged)
     }
 
     pub(super) fn require_painting(&self) -> Result<(), String> {
@@ -878,6 +884,22 @@ mod tests {
                 assert_ne!(notice_text(&drawing),Some(damage.as_str()));
             }
         }
+    }
+
+    #[cfg(not(target_arch="wasm32"))]
+    #[test]
+    fn a_failed_capture_in_a_package_drawing_leaves_history_and_checkpoints_resume() {
+        let mut drawing=package_drawing(false);
+        let (checkpoint,before)=(drawing.engine.checkpoint(),drawing.engine.document().clone());
+        fail_stroke_capture(&mut drawing);
+        let path=std::env::temp_dir().join(format!("capy-ui-failed-capture-{}",layer_core::PortableId::random()));
+        let mut store=pollster::block_on(layer_core::package::session_store::SessionStore::open(&path)).unwrap();
+        let checkpointed=pollster::block_on(drawing.capture_session().unwrap().checkpoint(&mut store,&std::sync::atomic::AtomicBool::new(false)));
+        drop(store);std::fs::remove_dir_all(&path).unwrap();
+        checkpointed.unwrap();
+        assert_eq!(drawing.engine.checkpoint(),checkpoint,"the stroke whose capture failed leaves history");
+        assert_live_artwork_eq(drawing.engine.document(),&before);
+        assert_eq!(drawing.state.host_error.as_deref(),Some(drawing.localization().text(MessageId::COMMON_CANVAS_STOPPED).as_ref()));
     }
 
     #[test]

@@ -5256,8 +5256,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let budget_completions=self.engine.metrics().input_budget_completions;
         let memory_refusals=self.engine.backend().stroke_memory_refusals();
         if let Err(cause)=self.engine.render_frame_for(now_ns,presentation_ns) {
-            if self.engine.document().memory().package_failure().is_some() {
-                self.raise_message_notice(MessageId::DOCUMENTS_PACKAGE_DAMAGED_BODY);
+            if self.recover_failed_edits(false)? {
                 return Err(self.localization().text(MessageId::DOCUMENTS_PACKAGE_DAMAGED_BODY).to_string());
             }
             return Err(error(cause));
