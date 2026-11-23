@@ -91,11 +91,7 @@ fn gather_tap(at: vec2<u32>) {
         if at.y >= rows + count || at.x >= AVERAGE_TAPS { return; }
         position = average_position(dabs[style.operation.x + at.y - rows], at.x);
     }
-    let outside = any(position < vec2<f32>(0.0)) || any(position >= render_target.document_extent.xy);
-    let owned = all(floor(position / 256.0) == floor(render_target.origin_extent.xy / 256.0));
-    if (!outside && owned) || (outside && material_sources.header.w != 0u) {
-        store_dry_color(at, canvas_load(position));
-    }
+    store_donated(at, position);
 }
 
 fn carried_toward(carried: vec4<f32>, goal: vec4<f32>, exchange: f32, keep_alpha: bool) -> vec4<f32> {

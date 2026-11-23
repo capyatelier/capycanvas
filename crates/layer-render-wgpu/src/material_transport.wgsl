@@ -55,6 +55,27 @@ fn canvas_sample(brush_position: vec2<f32>) -> vec4<f32> {
     return mix(top, bottom, fraction.y);
 }
 
+fn donor_slot(page: vec2<u32>) -> u32 {
+    let donors = material_sources.pages[1].z;
+    for (var slot = 0u; slot < donors; slot += 1u) {
+        let pair = material_sources.pages[2u + slot / 2u];
+        if all(page == select(pair.xy, pair.zw, slot % 2u == 1u)) { return slot; }
+    }
+    return donors;
+}
+
+fn store_donated(at: vec2<u32>, position: vec2<f32>) {
+    if any(position < vec2<f32>(0.0)) || any(position >= render_target.document_extent.xy) {
+        if material_sources.header.w != 0u { store_dry_color(at, vec4<f32>(0.0)); }
+        return;
+    }
+    let page = vec2<u32>(floor(position / 256.0));
+    let slot = donor_slot(page);
+    if slot < material_sources.pages[1].z {
+        store_dry_color(at, load_neighborhood(i32(slot), vec2<i32>(floor(position)) - vec2<i32>(page * 256u)));
+    }
+}
+
 fn gathered_pickups() -> bool {
     return material_sources.header.z != 0u;
 }

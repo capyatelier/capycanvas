@@ -599,8 +599,8 @@ enum MaterialOperation {
 enum MaterialInputs<'a> {
     /// The pages around the destination.
     Neighborhood,
-    /// The colour of one donor page, and nothing else.
-    Donor,
+    /// The colour of up to nine donor pages, in slot order, and nothing else.
+    Donors(&'a [[u32; 2]]),
     /// The colour of the pages around the destination and the brush reservoir.
     Exchange,
     /// A gathered sample field.
@@ -2438,8 +2438,10 @@ impl WgpuRasterizer {
         let result=(|| {
             let reads_preview = target.material_source().is_preview();
             let declares_preview = target.is_preview();
-            let donating = matches!(inputs, MaterialInputs::Donor | MaterialInputs::Exchange);
-            let offsets = if matches!(inputs, MaterialInputs::Donor) { std::array::from_fn(|i| (i == 4).then_some([0, 0])) } else { self.material_offsets(batch) };
+            let donating = matches!(inputs, MaterialInputs::Donors(_) | MaterialInputs::Exchange);
+            let offsets = if let MaterialInputs::Donors(pages) = inputs {
+                std::array::from_fn(|i| pages.get(i).map(|page| std::array::from_fn(|axis| page[axis] as i32 - coordinate[axis] as i32)))
+            } else { self.material_offsets(batch) };
             let mut neighborhood=self.brush_inputs.take().ok_or(GpuRasterError::Invariant("brush inputs are not prepared"))?;
             #[cfg(test)] let _record=scene::sources::record_reads(&neighborhood);
             let source_preview=reads_preview.then_some((scene::PreviewStage::BeforeBatch(batch_index),None));
@@ -2553,7 +2555,7 @@ impl WgpuRasterizer {
                 Some(read.tile.view)
             }else {None};
             let mut auxiliary_state=None;
-            let auxiliary = if matches!(inputs, MaterialInputs::Donor) {&self.empty_view
+            let auxiliary = if matches!(inputs, MaterialInputs::Donors(_)) {&self.empty_view
             } else if let Some(wetness)=&wetness {wetness
             } else if retained {
                 current
