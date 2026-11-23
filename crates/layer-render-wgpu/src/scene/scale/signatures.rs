@@ -1054,8 +1054,15 @@ impl PreviewDeclaration {
         Ok(PreviewVersion {declaration:self.clone(),version:self.version_for(target,plane,coordinate,stage,pass)?,input,plane,coordinate,stage,pass,step:None,complete:false})
     }
     pub fn region_version(&self,plane:RasterPlane,region:PixelRect,stage:PreviewStage)->Result<ContentVersion,GpuRasterError> {self.region_version_for(plane,region,stage,plane_pass(plane))}
+    fn written_stage(&self,region:PixelRect,stage:PreviewStage,pass:PreviewPass)->PreviewStage {
+        if stage==PreviewStage::Seed || self.fill.is_some() && matches!(stage,PreviewStage::BeforeFill|PreviewStage::Final) {return stage;}
+        let Some(last)=self.commands.iter().filter(|command|included_stage(stage,command.index) && command.intersects(region)).map(|command|command.index).max() else {return stage;};
+        if !matches!(pass,PreviewPass::Color|PreviewPass::Wetness) {return PreviewStage::AfterBatch(last);}
+        PreviewStage::AfterBatch(self.transport_outputs.iter().filter(|(index,outputs)|**index>=last && included_stage(stage,**index)
+            && outputs.iter().any(|coordinate|!page_rect(*coordinate).intersect(region).is_empty())).map(|(index,_)|*index).min().unwrap_or(last))
+    }
     fn region_version_for(&self,plane:RasterPlane,region:PixelRect,stage:PreviewStage,pass:PreviewPass)->Result<ContentVersion,GpuRasterError> {
-        let stage=if let PreviewStage::BeforeBatch(index)=stage {self.source_stage(plane,index)}else {stage};
+        let stage=self.written_stage(region,if let PreviewStage::BeforeBatch(index)=stage {self.source_stage(plane,index)}else {stage},pass);
         let key=PreviewRequest {plane:raster::contents::index(plane),bounds:region_bounds(region),stage,pass};
         if let Some(version)=self.memo.lock().unwrap().get(&key) {return Ok(version.clone());}
         #[cfg(test)] crate::test_support::record_preview_region((key.plane,key.bounds,key.stage,key.pass));
