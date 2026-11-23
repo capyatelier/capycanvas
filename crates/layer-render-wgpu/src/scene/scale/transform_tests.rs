@@ -810,3 +810,19 @@ fn a_preview_the_grant_refuses_lets_the_canvas_settle() {
     assert_eq!(canvas.engine.backend().transforms.as_ref().unwrap().storage_bytes(),inputs,"a refused preview allocates no input");
 }
 
+#[test]
+fn a_prepared_preview_input_is_admitted_once_so_later_poses_draw() {
+    let mut canvas=Refusing::filled();
+    canvas.show(canvas.pose(false,0.));
+    canvas.settle().expect("the first pose draws while memory is free");
+    let inputs=canvas.engine.backend().transforms.as_ref().unwrap().storage_bytes();
+    assert!(inputs>64<<20,"the preview holds its reduced input: {inputs} bytes");
+    canvas.leave(128<<20);
+    for step in 1..=6 {
+        let pose=canvas.pose(true,step as f32*200.);
+        canvas.show(pose.clone());
+        canvas.until(|engine|engine.backend().transforms.as_ref().unwrap().drawn(&pose)==Some(&pose))
+            .expect("a moved pose draws from the input the preview already holds");
+    }
+    assert_eq!(canvas.engine.backend().refused_transform,None,"no pose was refused");
+}

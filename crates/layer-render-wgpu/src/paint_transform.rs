@@ -389,8 +389,9 @@ impl PaintTransforms {
         next:&layer_render::TransformPreview,scene:SceneView<'_>,level:u32,fine:bool)->Result<(),GpuRasterError> {
         let local=|next:&layer_render::TransformPreview,extent| if fine {1} else {input_level(level,next,extent)};
         let previews=[Some(next.clone()),next.companion(scene)];
-        let projected=previews.iter().flatten().filter(|next|!next.target.is_coverage()).try_fold(0u64,|bytes,next| {
+        let projected=self.0.iter().zip(&previews).filter_map(|(state,next)|next.as_ref().filter(|next|!next.target.is_coverage()).map(|next|(state,next))).try_fold(0u64,|bytes,(state,next)| {
             let level=local(next,scene.target_extent(next.target));
+            if state.reduced_input(next,scene).is_some_and(|input|input.level<=level) {return Ok(bytes);}
             display_plans(scene,next.target,level,self.input_requirements(next,level,scene).1)
                 .try_fold(bytes,|bytes,plan|bytes.checked_add(plan.pixel_bytes_through(display_mips::MAX_LEVEL))).ok_or(GpuRasterError::SizeOverflow)
         })?;
@@ -402,9 +403,7 @@ impl PaintTransforms {
             let same=state.holds_source(&next,Some(scene));
             let extent=scene.target_extent(next.target);
             let source=if same {state.preparing=None;&mut *state}else {
-                let prepared=state.preparing.as_ref().is_some_and(|state|state.prepared_preview.as_ref().is_some_and(|(old,owner,revision)|*owner==scene.owner() && *revision==scene.revision()
-                    && old.transaction==next.transaction && old.target==next.target && old.selection==next.selection));
-                if !prepared {
+                if !state.preparing.as_ref().is_some_and(|candidate|candidate.prepared_for(&next,scene)) {
                     let mut candidate=state.fork();
                     candidate.capture_source(r,encoder,next.target,scene.paint_base(next.target),next.selection.as_ref(),(extent,Some(scene)),None)?;
                     candidate.prepared_preview=Some((next.clone(),scene.owner(),scene.revision()));
@@ -1903,8 +1902,7 @@ impl ImageTransformState {
         next: &layer_render::TransformPreview,
         layer: Option<(SceneView<'_>, SourceTarget)>, extent: [u32; 2], native: bool,
     ) -> Result<PreviewUpdate, GpuRasterError> {
-        if let Some(candidate)=self.preparing.take().filter(|candidate|candidate.prepared_preview.as_ref().is_some_and(|(prepared,owner,revision)|layer.is_some_and(|(scene,_)|scene.owner()==*owner && scene.revision()==*revision)
-            && prepared.transaction==next.transaction && prepared.target==next.target && prepared.selection==next.selection)) {
+        if let Some(candidate)=self.preparing.take().filter(|candidate|layer.is_some_and(|(scene,_)|candidate.prepared_for(next,scene))) {
             let mut damage=self.cancel_preview(r,encoder)?.into_iter().collect::<Vec<_>>();
             *self = *candidate;
             let mut update=self.plan_preview(r,encoder,next,layer,extent,native)?;
@@ -1913,8 +1911,7 @@ impl ImageTransformState {
             return Ok(update);
         }
         let same_source = ( self.holds_source(next, layer.map(|(scene, _)| scene))
-            || self.prepared_preview.as_ref().is_some_and(|(p,owner,revision)|layer.is_some_and(|(scene,_)|scene.owner()==*owner && scene.revision()==*revision)
-            && p.transaction==next.transaction && p.target==next.target && p.selection==next.selection)) && self.capture.as_ref().is_none_or(|capture|layer.is_some_and(|(scene,_)|
+            || layer.is_some_and(|(scene,_)|self.prepared_for(next,scene))) && self.capture.as_ref().is_none_or(|capture|layer.is_some_and(|(scene,_)|
                 capture.matches_context(scene) && r.raster_versions(scene,next.target).is_ok_and(|current|
                     [RasterPlane::Color,RasterPlane::Mask,RasterPlane::WatercolorWetness].into_iter().all(|plane|capture.matches_source(plane,&current)==Some(true)))));
         if same_source && self.preview.as_ref()==Some(next) && self.native_preview==native {
@@ -1994,6 +1991,14 @@ impl ImageTransformState {
         lease.retire();
         let completion=lease.clone();encoder.hold(completion);
         self.retired_native.push((pages,lease));
+    }
+    fn prepared_for(&self, next: &layer_render::TransformPreview, scene: SceneView<'_>) -> bool {
+        self.prepared_preview.as_ref().is_some_and(|(prepared, owner, revision)| *owner == scene.owner() && *revision == scene.revision()
+            && prepared.transaction == next.transaction && prepared.target == next.target && prepared.selection == next.selection)
+    }
+    fn reduced_input(&self, next: &layer_render::TransformPreview, scene: SceneView<'_>) -> Option<&snapshot::DisplayInputs> {
+        let source = if self.holds_source(next, Some(scene)) { self } else { self.preparing.as_deref().filter(|candidate| candidate.prepared_for(next, scene))? };
+        source.reduced.as_ref()
     }
     /// Whether this state already holds `next`'s originals: those of its
     /// active transaction, or the moving pixels prepared for its selection.
