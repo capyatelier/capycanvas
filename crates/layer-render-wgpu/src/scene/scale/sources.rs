@@ -947,6 +947,15 @@ mod replacement_tests {
         assert_one_row_down(&page([0,1]),&page([0,0]));
     }
     #[test]
+    fn a_texel_phased_on_both_axes_takes_the_level_of_its_own_page() {
+        let perceptual=layer_core::BlendSpace::Perceptual;
+        let phased=native_page([512,512],[1,1],[1,1],perceptual,Some([384.,96.]));
+        let beside=native_page([512,512],[0,1],[0,0],perceptual,Some([384.,96.]));
+        for y in 1..PAGE_SIZE as usize {
+            assert_eq!(phased[y*PAGE_SIZE as usize],beside[(y-1)*PAGE_SIZE as usize+255],"phased texel (0,{y}) must show the native pixel of the page beside it");
+        }
+    }
+    #[test]
     fn a_linear_phased_native_page_copies_each_pixel() {
         let linear=layer_core::BlendSpace::Linear;
         let page=|offset|native_page([512,256],[1,0],offset,linear,None);

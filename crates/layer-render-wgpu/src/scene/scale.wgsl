@@ -112,13 +112,11 @@ fn reduce_phased(@builtin(global_invocation_id) id: vec3<u32>) {
     let full = all(size == vec2(side));
     let page = start / 256;
     let last = (start + vec2<i32>(size) - 1) / 256;
-    var level = 0u;
-    if full {
-        for (var y = page.y; y <= last.y; y++) {
-            for (var x = page.x; x <= last.x; x++) { level = max(level, bitcast<u32>(region.paper[y * 2 + x]) & 15u); }
-        }
-    }
-    let cell = 1u << level;
+    let columns = vec2(page.x == 0, last.x == 1);
+    let rows = vec2(page.y == 0, last.y == 1);
+    let touched = vec4(columns.x && rows.x, columns.y && rows.x, columns.x && rows.y, columns.y && rows.y);
+    let levels = select(vec4(0u), bitcast<vec4<u32>>(region.paper) & vec4(15u), touched);
+    let cell = 1u << select(0u, max(max(levels.x, levels.y), max(levels.z, levels.w)), full);
     var sum = vec4(0.);
     var count: f32;
     if cell == 1u && (region.flags & 2u) == 0u && full && side > 1u && all(page == last) {
