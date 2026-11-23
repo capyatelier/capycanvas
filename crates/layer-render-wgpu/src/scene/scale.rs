@@ -1059,12 +1059,12 @@ impl Cache {
         let Encoding { encoder, commands, retained, budget } = encoding;
         scene.placement_display=true;
         let finer=match destination {Destination::Overview(finer,changed)=>Some((finer,changed)),_=>None};
-        self.ask(pages::Asked {view:packet.view,moving:budget.motion});
+        let view=matches!(destination,Destination::View);
+        self.ask(pages::Asked {view:packet.view,moving:view && budget.motion});
         self.derive_cells(finer.map(|(finer,_)|finer));
         if let Some(mut previous)=self.retired.take() {previous.write_back(r,scene,encoder)?;}
         if let Some(previous)=self.previous.as_deref_mut() {previous.write_back(r,scene,encoder)?;}
         let stroking=!packet.dab_batches.is_empty();
-        let view=matches!(destination,Destination::View);
         let from=self.pointer;
         if view && let Some(centre)=dab_centre(packet) {self.pointer=Some(centre);}
         let reached=if self.gesture.is_some() {self.contact_continues(scene,r,packet,encoder)}else {None};

@@ -499,6 +499,29 @@ mod tests {
     }
 
     #[test]
+    fn a_navigator_refused_while_the_view_moves_keeps_its_refusals_when_the_motion_ends() {
+        let doc=document();let extent=doc.composition().size;let owner=doc.working.occurrence.unwrap();
+        let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
+        submit_settled(&mut r,frame);
+        let mut changed=doc.clone();changed.artwork.occurrences.get_mut(owner).unwrap().opacity=0.5;
+        let edit=FramePacket {time_seconds:1.,scene:changed.scene(),..frame};
+        let scene=r.scene.take().unwrap();scene.prepare_signatures(&r,edit).unwrap();r.scene=Some(scene);
+        let mut navigator=std::mem::take(&mut r.navigator);
+        let cache=navigator.cache.as_ref().unwrap();
+        cache.evict_window(cache.plan.bounds);
+        cache.refuse(None,cache.plan.bounds,&r.scene_tiers.display.wanting(crate::residency::Class::Navigator,u64::MAX));
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        for moving in [true,false] {
+            let before=crate::test_support::PassCounts::snapshot();
+            navigator.refresh(&mut r,edit,false,&mut encoder,&mut crate::test_support::work(moving)).unwrap();
+            assert_eq!(crate::test_support::PassCounts::snapshot().delta(before).destination_units,0,
+                "the Navigator asks its cells at one class whether or not the view moves, so a pass refused while moving keeps its refusals: moving={moving}");
+        }
+        r.navigator=navigator;r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+    }
+
+    #[test]
     fn a_navigator_frame_after_a_stroke_replans_only_the_cells_the_stroke_changed() {
         use super::super::tests::cell_keys::{assert_cached_keys_are_exact,begin_frame,cached_cells,expected,replanned,touched};
         use crate::test_support::dab_batch;
