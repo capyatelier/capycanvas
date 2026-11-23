@@ -165,7 +165,7 @@ struct Stroke {
     original: Arc<layer_core::authored::PaintSource>,
     field: Field,
     colored_tiles: BTreeMap<[u32; 2], Arc<Tile>>,
-    preview_tiles: BTreeMap<[u32; 2], (u64, layer_core::raster::ContentVersion)>,
+    preview_tiles: BTreeMap<[u32; 2], ([u64; 2], layer_core::raster::ContentVersion)>,
     dirty: BTreeMap<[u32; 2], PixelRect>,
 }
 
@@ -195,6 +195,7 @@ impl Stroke {
     fn colored(&self,at:&[u32;2])->Option<&Arc<Tile>> {
         self.pending.as_ref().and_then(|pending|pending.colored.get(at)).map_or_else(||self.colored_tiles.get(at),Option::as_ref)
     }
+    fn preview_inputs(&self,at:&[u32;2])->[u64;2] {[self.tile(at),self.colored(at)].map(|tile|tile.map_or(0,|tile|tile.id))}
     fn dirty_at(&self,at:&[u32;2])->Option<PixelRect> {
         self.pending.as_ref().and_then(|pending|pending.dirty.get(at)).map_or_else(||self.dirty.get(at).copied(),|area|*area)
     }
@@ -620,6 +621,29 @@ impl Liquify {
         Ok(tile)
     }
 
+    fn carry_preview(r:&mut WgpuRasterizer,stroke:&Stroke,batch:&DabBatch,batch_index:usize,coordinate:[u32;2],receipt:&submission::Submission)
+        ->Result<Option<layer_core::raster::ContentVersion>,GpuRasterError> {
+        let Some((_,held))=stroke.preview_tiles.get(&coordinate).filter(|(inputs,_)|*inputs==stroke.preview_inputs(&coordinate)) else {return Ok(None);};
+        if !r.preview_pages.iter().any(|page|page.coordinate==coordinate && page.active().read(held,Some(receipt)).is_some()) {return Ok(None);}
+        r.accepted_raster_output(batch.target,RasterOutput::PreviewColor(coordinate))?;
+        let ticket=r.preview_version(batch.target,layer_core::raster::RasterPlane::Color,coordinate,scene::PreviewStage::AfterBatch(batch_index))?;
+        let page=prepared_raster_output(r.preview_pages.iter_mut().find(|page|page.coordinate==coordinate))?;
+        let write=page.active_mut().revise(held,receipt).ok_or(GpuRasterError::Invariant("a carried Liquify preview changed"))?;
+        let version=ticket.version().clone();
+        let encoding=write.encoded(version.clone()).certified(resident::Delta::InPlace(PixelRect::EMPTY));
+        r.publish_material(batch,vec![MaterialPublication {kind:MaterialOutputKind::Color,coordinate,input:ticket.input().clone(),preview:Some(ticket),encoding}.encoded(receipt)])?;
+        Ok(Some(version))
+    }
+
+    fn keep_previews(&mut self,target:SourceTarget,tail:PixelRect,tiles:&[BrushTile],versions:BTreeMap<[u32;2],layer_core::raster::ContentVersion>) {
+        let stroke=self.strokes.get_mut(&target).unwrap();
+        let kept=|coordinate:&[u32;2]|tail.intersect(page_rect(*coordinate)).is_empty() && tiles.iter().any(|tile|tile.coordinate==*coordinate);
+        stroke.preview_tiles.retain(|coordinate,_|kept(coordinate));
+        for (coordinate,version) in versions.into_iter().filter(|(coordinate,_)|kept(coordinate)) {
+            stroke.preview_tiles.insert(coordinate,(stroke.preview_inputs(&coordinate),version));
+        }
+    }
+
     fn dispatch(&self, r: &mut WgpuRasterizer, encoder: &mut submission::CommandEncoder, batch_index: usize,
         batch: &DabBatch, jobs: &[Dispatch], map: bool) {
         if jobs.is_empty() { return; }
@@ -696,17 +720,15 @@ impl Liquify {
         let mut map_publications=Vec::new();
         let mut reductions = Vec::new();
         let mut original_writes=Vec::new();
+        let mut preview_versions=BTreeMap::new();
         for tile in context.tiles {
-            let preview_expected=if preview {Some(r.preview_expected(batch.target,layer_core::raster::RasterPlane::Color,tile.coordinate,scene::PreviewStage::AfterBatch(batch_index))?)}else {None};
             if !preview && tile.dabs.is_empty() && batch.style.liquify.as_ref().is_none_or(|c| c.amount.is_none()) { continue; }
             if context.target == (BrushEncodingTarget::Preview { from_persistent: true })
                 && tail.intersect(page_rect(tile.coordinate)).is_empty()
-                && stroke.preview_tiles.get(&tile.coordinate).is_some_and(|(map, expected)|
-                    *map == stroke.tile(&tile.coordinate).map_or(0, |tile| tile.id)
-                        && preview_expected.as_ref().is_some_and(|wanted|wanted.matches(expected)==Some(true)
-                            && r.preview_pages.iter().any(|page|page.coordinate==tile.coordinate && page.primary.read(wanted,Some(&encoder.submission())).is_some())))
+                && let Some(version)=Self::carry_preview(r,stroke,batch,batch_index,tile.coordinate,&encoder.submission())?
             {
                 self.unchanged_previews.insert((batch.target, tile.coordinate));
+                preview_versions.insert(tile.coordinate,version);
                 continue;
             }
             if preview { self.unchanged_previews.remove(&(batch.target, tile.coordinate)); }
@@ -752,6 +774,7 @@ impl Liquify {
             }
             outputs.push((tile.coordinate, output));
         }
+        #[cfg(test)] if preview {for (coordinate,_) in &outputs {crate::test_support::record_liquify_tile(crate::test_support::LiquifyVisit::Preview,*coordinate);}}
         self.dispatch(r, encoder, batch_index, batch, &dispatches, true);
         let actual=encoder.submission();
         for publication in map_publications {publication.publish(&actual);}
@@ -789,9 +812,11 @@ impl Liquify {
         let actual=encoder.submission();
         for (_,encoding) in original_writes {encoding.publish(&actual);}
         if measured { r.telemetry.phase_end(17, encoder); }
-        if outputs.is_empty() { return Ok(()); }
+        if outputs.is_empty() {
+            if preview {self.keep_previews(batch.target,tail,context.tiles,preview_versions);}
+            return Ok(());
+        }
         let mut publications=Vec::new();
-        let mut preview_versions=BTreeMap::new();
         let receipt=encoder.submission();
         let mut current_tiles = BTreeMap::new();
         if preview {
@@ -876,14 +901,7 @@ impl Liquify {
         let actual=encoder.submission();
         r.publish_material(batch,publications.into_iter().map(|publication|publication.encoded(&actual)).collect())?;
         drop(originals);
-        if preview {
-            let stroke = self.strokes.get_mut(&batch.target).unwrap();
-            stroke.preview_tiles.retain(|coordinate, _| tail.intersect(page_rect(*coordinate)).is_empty()
-                && context.tiles.iter().any(|tile| tile.coordinate == *coordinate));
-            for (coordinate, _) in outputs.iter().filter(|(coordinate, _)| tail.intersect(page_rect(*coordinate)).is_empty()) {
-                stroke.preview_tiles.insert(*coordinate,(stroke.tile(coordinate).map_or(0,|tile|tile.id),preview_versions[coordinate].clone()));
-            }
-        }
+        if preview {self.keep_previews(batch.target,tail,context.tiles,preview_versions);}
         if !preview {
             let stroke = self.strokes.get_mut(&batch.target).unwrap();
             stroke.stage(&encoder.submission())?;
