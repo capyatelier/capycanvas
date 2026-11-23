@@ -835,6 +835,7 @@ struct BrushReservoir {
     primary: resident::Resident<PageSurface>,
     secondary: resident::Resident<PageSurface>,
     active_secondary: bool,
+    predicted: Option<[resident::Resident<PageSurface>; 2]>,
 }
 
 
@@ -1488,6 +1489,7 @@ impl WgpuRasterizer {
             )),
             active_secondary: false,
             state:None,
+            predicted:None,
         };
         let dab_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("layer dab instances"),
@@ -2282,6 +2284,12 @@ impl WgpuRasterizer {
         )
     }
 
+    fn prepare_predicted_reservoir(&mut self, batches: &[DabBatch]) {
+        if self.reservoir.predicted.is_some() || !batches.iter().any(|batch| batch.kind == DabBatchKind::Preview && batch.style.execution == BrushExecution::Wet) { return; }
+        self.reservoir.predicted = Some(std::array::from_fn(|_| resident::Resident::unwritten(create_page_surface(&self.device, &self.float_texture_layout, &self.sampler,
+            [RESERVOIR_SIZE; 2], self.device.working_format(), "layer predicted brush reservoir", &self.raster_tiers.paint))));
+    }
+
     fn create_scalar_page_surface(&self, tier: &Arc<residency::Tier>, label: &'static str) -> PageSurface {
         create_page_surface(
             &self.device,
@@ -2406,6 +2414,7 @@ impl WgpuRasterizer {
         intent: &raster::contents::Intent,
         inputs: MaterialInputs<'_>,
         display: Option<usize>,
+        donors: Option<&mut Vec<resident::Input>>,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<bindings::MaterialSources, GpuRasterError> {
         let result=(|| {
@@ -2419,7 +2428,8 @@ impl WgpuRasterizer {
             let retained = stable_blender(&batch.style);
             let mut history=Vec::new();
             let declaration=declares_preview.then(||self.preview_declaration.clone().ok_or(GpuRasterError::Invariant("prepared material bind group state is inconsistent"))).transpose()?;
-            let accepting=declaration.as_ref().filter(|declaration|declaration.accepts(coordinate));
+            let accepting=declaration.as_ref().filter(|_|donors.is_none()).filter(|declaration|declaration.accepts(coordinate));
+            let collecting=accepting.is_some() || donors.is_some();
             if Self::tracks_stroke_start(batch) {
                 let committed_start = declaration.as_ref().is_some_and(|declaration|declaration.committed_seed(coordinate));
                 let needed = if reads_preview { !committed_start && self.preview_pages.iter().find(|page|page.coordinate==coordinate)
@@ -2464,7 +2474,7 @@ impl WgpuRasterizer {
                     page.stroke_start=Some(StrokeStart {state:MaterialState {stroke:batch.stroke_id,input:intent.clone(),version},preview:start_context,surface:start});
                 }
             }
-            let selected=self.brush_layer_neighborhood(&mut neighborhood,batch.target,coordinate,offsets,source_preview,accepting.is_some().then_some(&mut history),encoder)?;
+            let selected=self.brush_layer_neighborhood(&mut neighborhood,batch.target,coordinate,offsets,source_preview,collecting.then_some(&mut history),encoder)?;
             let layer = self
                 .paint_layers
                 .iter()
@@ -2512,14 +2522,14 @@ impl WgpuRasterizer {
                 let expected=if predicted_coverage.is_some() {self.preview_pass_expected(batch.target,RasterPlane::Color,coordinate,scene::PreviewStage::BeforeBatch(batch_index),scene::PreviewPass::Coverage)?}
                     else {state.version.clone()};
                 let (tile,witness)=neighborhood.brush_state(batch.target,coordinate,scene::sources::BrushState::Coverage(stroke_coverage_slabs(&batch.style),retained),predicted_coverage.is_some(),&expected,&receipt)?;
-                if accepting.is_some() {history.push(witness);}Ok(tile.view)
+                if collecting {history.push(witness);}Ok(tile.view)
             }).transpose()?;
             let coverage = coverage_page.as_ref().map_or(if retained { &self.empty_view } else { &self.empty_scalar_view }, |view|view);
             let wetness=if BrushPassPlan::for_device(&batch.style,&self.device).state.watercolor_wetness {
                 let stage=reads_preview.then_some((scene::PreviewStage::BeforeBatch(batch_index),None));
                 let read=neighborhood.brush_wetness(self,batch.target,coordinate,stage,&receipt)?
                     .ok_or(GpuRasterError::Invariant("material wetness input is not prepared"))?;
-                if accepting.is_some() {history.extend(neighborhood.witnesses(batch.target,RasterPlane::WatercolorWetness,coordinate));}
+                if collecting {history.extend(neighborhood.witnesses(batch.target,RasterPlane::WatercolorWetness,coordinate));}
                 Some(read.tile.view)
             }else {None};
             let mut auxiliary_state=None;
@@ -2538,18 +2548,21 @@ impl WgpuRasterizer {
                     }else {views[4]}
                 }else {&self.empty_view}
             } else if batch.style.execution==BrushExecution::Wet {
-                if batch.stroke_start {
-                    if let Some(declaration)=accepting {declaration.accept_inputs(batch.target,RasterPlane::Color,coordinate,scene::PreviewStage::Seed,scene::PreviewPass::Reservoir,Vec::new())?;}
-                    &self.empty_view
-                }else {
-                    let state=self.reservoir.state.as_ref().filter(|state|state.matches(batch.stroke_id,&intent)).ok_or(GpuRasterError::Invariant("prepared material bind group state is inconsistent"))?;
-                    let (tile,witness)=neighborhood.brush_state(batch.target,coordinate,scene::sources::BrushState::Reservoir,false,&state.version,&receipt)?;
-                    if let Some(declaration)=accepting {
-                        declaration.accept_inputs(batch.target,RasterPlane::Color,coordinate,scene::PreviewStage::Seed,scene::PreviewPass::Reservoir,vec![witness.clone()])?;
-                        history.push(witness);
-                    }auxiliary_state.insert(tile.view)
+                let incoming=match &declaration {
+                    Some(declaration)=>declaration.reservoir_input(batch_index)?,
+                    None=>(!batch.stroke_start).then(||self.reservoir.state.as_ref().filter(|state|state.matches(batch.stroke_id,&intent))
+                        .map(|state|(state.version.clone(),false)).ok_or(GpuRasterError::Invariant("prepared material bind group state is inconsistent"))).transpose()?,
+                };
+                match incoming {
+                    Some((expected,predicted))=>{
+                        let (tile,witness)=neighborhood.brush_state(batch.target,coordinate,scene::sources::BrushState::Reservoir,predicted,&expected,&receipt)?;
+                        if collecting {history.push(witness);}
+                        auxiliary_state.insert(tile.view)
+                    },
+                    None=>&self.empty_view,
                 }
             }else {&self.empty_view};
+            if let Some(donors)=donors {donors.extend(history.iter().cloned());}
             if let Some(declaration)=accepting {
                 let stage=scene::PreviewStage::AfterBatch(batch_index);
                 declaration.accept_inputs(batch.target,RasterPlane::Color,coordinate,stage,scene::PreviewPass::Color,history.clone())?;
@@ -2812,8 +2825,6 @@ impl WgpuRasterizer {
                 Some(page)=>page.state.as_ref().filter(|state|state.matches(batch.stroke_id,&input)).map(|state|(vec![state.version.clone()],false)),
                 None=>Some((Vec::new(),false)),
             },
-            scene::PreviewPass::Reservoir if batch.stroke_start=>Some((Vec::new(),false)),
-            scene::PreviewPass::Reservoir=>self.reservoir.state.as_ref().filter(|state|state.matches(batch.stroke_id,&input)).map(|state|(vec![state.version.clone()],false)),
             scene::PreviewPass::StrokeStart=> {
                 if let Some(start)=layer.pages.iter().find(|page|page.coordinate==coordinate).and_then(|page|page.stroke_start.as_ref())
                     .filter(|start|start.state.matches(batch.stroke_id,&input)) {Some((vec![start.state.version.clone()],true))}
@@ -2822,6 +2833,12 @@ impl WgpuRasterizer {
             },
             _=>None,
         }
+    }
+
+    fn preview_reservoir_seed(&self,declaration:&scene::PreviewDeclaration)->Option<layer_core::raster::ContentVersion> {
+        let stroke=declaration.reservoir_seed_stroke()?;
+        let input=self.raster_intent(declaration.target(),RasterPlane::Color,[0;2]).ok()?;
+        self.reservoir.state.as_ref().filter(|state|state.matches(stroke,&input)).map(|state|state.version.clone())
     }
 
     fn preview_material_plans(&self,packet:FramePacket<'_>,plans:&[Vec<BrushTile>],from_persistent:bool)->Result<Vec<Vec<BrushTile>>,GpuRasterError> {
@@ -2846,13 +2863,15 @@ impl WgpuRasterizer {
         if stamps.is_none() && let (Some(held),Some(candidate))=(&self.preview_declaration,&declaration)
             && !held.in_contact() && held.matches_metadata(candidate)?
             && held.matches_history(|plane,coordinate,pass|self.preview_seed_versions(held,plane,coordinate,pass,from_persistent)
-                .map(|(versions,_)|scene::PreviewDeclaration::captured_version(pass,&versions))) {
+                .map(|(versions,_)|scene::PreviewDeclaration::captured_version(pass,&versions)))
+            && held.reservoir_seed_matches(self.preview_reservoir_seed(held)) {
             return Ok(true);
         }
         self.preview_declaration=declaration.map(|declaration| {
             let seeds=declaration.required_seed_inputs().into_iter().filter(|(_,coordinate,pass)|*pass==scene::PreviewPass::StrokeStart || !declaration.accepted(*coordinate)).filter_map(|(plane,coordinate,pass)|
                 self.preview_seed_versions(&declaration,plane,coordinate,pass,from_persistent).map(|(versions,committed)|scene::PreviewSeed {plane,coordinate,pass,versions,committed})).collect();
-            declaration.with_seed_inputs(seeds).map(Arc::new)
+            let reservoir=self.preview_reservoir_seed(&declaration);
+            declaration.with_seed_inputs(seeds).map(|declaration|Arc::new(declaration.with_reservoir_seed(reservoir)))
         }).transpose()?;
         Ok(false)
     }

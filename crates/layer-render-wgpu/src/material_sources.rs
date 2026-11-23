@@ -240,7 +240,7 @@ impl WgpuRasterizer {
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<crate::bindings::MaterialSources, GpuRasterError> {
         let started = self.telemetry.enabled.then(web_time::Instant::now);
-        let result = self.material_bind_group(batch,batch_index, coordinate, target, intent, MaterialInputs::Neighborhood, display, encoder);
+        let result = self.material_bind_group(batch,batch_index, coordinate, target, intent, MaterialInputs::Neighborhood, display, None, encoder);
         self.metrics.material_cpu_ms[4] += elapsed(started);
         result
     }
@@ -267,7 +267,7 @@ impl WgpuRasterizer {
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<crate::bindings::MaterialSources, GpuRasterError> {
         let pages = self.retouch_pages(mapping, encoder)?;
-        self.material_bind_group(batch,batch_index, coordinate, target, intent, MaterialInputs::Retouch(&pages), display, encoder)
+        self.material_bind_group(batch,batch_index, coordinate, target, intent, MaterialInputs::Retouch(&pages), display, None, encoder)
     }
 }
 

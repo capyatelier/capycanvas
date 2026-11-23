@@ -15,6 +15,10 @@ pub(super) fn workgroup(operation: MaterialOperation) -> [u32; 2] {
     if operation == MaterialOperation::Smudge { [16, 8] } else { [8, 8] }
 }
 
+pub(super) fn reservoir_page(last: &Dab, extent: [u32; 2]) -> [u32; 2] {
+    std::array::from_fn(|i| ([last.center.x, last.center.y][i].max(0.) as u32 / PAGE_SIZE).min(extent[i].saturating_sub(1) / PAGE_SIZE))
+}
+
 pub(super) fn transported(style: &layer_render::DabStyle) -> bool {
     OPERATIONS.contains(&BrushPassPlan::for_style(style).material)
 }
@@ -211,7 +215,9 @@ impl WgpuRasterizer {
         let started = self.telemetry.enabled.then(web_time::Instant::now);
         let extent = self.target_extent(batch.target);
         let operation = BrushPassPlan::for_style(&batch.style).material;
-        let exchange = dabs.first().zip(dabs.last()).filter(|_| !preview && operation == MaterialOperation::Wet);
+        let declaration = preview.then(|| self.preview_declaration.clone()).flatten();
+        let exchange = dabs.first().zip(dabs.last()).filter(|_| operation == MaterialOperation::Wet
+            && (!preview || declaration.as_ref().is_some_and(|declaration| declaration.reservoir_consumed(batch_index))));
         let seeds: Vec<_> = jobs.iter().map(|job| operation == MaterialOperation::Watercolor && !self.watercolor_written.contains(&job.coordinate)).collect();
         self.watercolor_written.extend(jobs.iter().zip(&seeds).filter(|(_, seed)| **seed).map(|(job, _)| job.coordinate));
         self.metrics.material_cpu_ms[0] += elapsed(started);
@@ -229,7 +235,7 @@ impl WgpuRasterizer {
             let wet_intent=(operation==MaterialOperation::Watercolor).then(||self.raster_intent(batch.target,RasterPlane::WatercolorWetness,job.coordinate)).transpose()?;
             Ok((intent,wet_intent))
         }).collect::<Result<Vec<_>,GpuRasterError>>()?;
-        let source_keys=jobs.iter().zip(&intents).map(|(job,(intent,_))|self.transport_sources(encoder,batch_index,batch,job.coordinate,target,intent))
+        let source_keys=jobs.iter().zip(&intents).map(|(job,(intent,_))|self.transport_sources(encoder,batch_index,batch,job.coordinate,target,intent,None))
             .collect::<Result<Vec<_>,_>>()?;
         for (((index,job),sources),(intent,wet_intent)) in jobs.iter().enumerate().zip(source_keys).zip(intents) {
             let color_ticket=preview.then(||self.preview_material_version(batch,batch_index,RasterPlane::Color,job.coordinate,scene::PreviewPass::Color,&intent)).transpose()?;
@@ -277,24 +283,32 @@ impl WgpuRasterizer {
             publications.extend(next_publications.into_iter().flatten());
             first_record += 1;
         }
+        let mut predicted_exchange = None;
         if let Some((_, last)) = exchange {
-            let coordinate = std::array::from_fn(|i| ([last.center.x, last.center.y][i].max(0.) as u32 / PAGE_SIZE).min(extent[i].saturating_sub(1) / PAGE_SIZE));
+            let coordinate = reservoir_page(last, extent);
             let intent=self.raster_intent(batch.target,RasterPlane::Color,coordinate)?;
-            let sources=self.transport_sources(encoder,batch_index,batch,coordinate,target,&intent)?;
+            let mut donors=Vec::new();
+            let sources=self.transport_sources(encoder,batch_index,batch,coordinate,target,&intent,declaration.is_some().then_some(&mut donors))?;
+            if let Some(declaration)=&declaration {declaration.accept_reservoir_inputs(batch_index,donors)?;}
             let receipt=encoder.submission();
-            let destination=if self.reservoir.active_secondary {&mut self.reservoir.primary}else {&mut self.reservoir.secondary};
-            let write=destination.overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
+            let write=if let Some(declaration)=&declaration {
+                let incoming=declaration.reservoir_input(batch_index)?.map(|(version,_)|version);
+                let [first,second]=self.reservoir.predicted.as_mut().ok_or(GpuRasterError::Invariant("predicted reservoir is not prepared"))?;
+                if incoming.as_ref().is_some_and(|incoming|first.has_name(incoming)) {second}else {first}
+            }else if self.reservoir.active_secondary {&mut self.reservoir.primary}else {&mut self.reservoir.secondary}
+                .overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
             let output=self.pipelines.destination_material.output(&self.device,&self.style_buffer,&write,None,None);
             let (sources,_)=write.value().material.inputs(sources,|key|create_material_inputs(&self.device,&self.material_layout,self.material_records.binding().size,key));
-            let publication=MaterialPublication {kind:MaterialOutputKind::Reservoir,coordinate,preview:None,input:intent,
-                encoding:write.encoded(layer_core::raster::ContentName::fresh())};
             dispatches.push(Dispatch {entry:Entry::Reservoir,output,sources,coordinate,record_offset:self.material_records.offset(first_record)});
-            publications.push(publication);
+            if let Some(declaration)=&declaration {predicted_exchange=Some(write.encoded(declaration.reservoir_output(batch_index)?));}
+            else {publications.push(MaterialPublication {kind:MaterialOutputKind::Reservoir,coordinate,preview:None,input:intent,
+                encoding:write.encoded(layer_core::raster::ContentName::fresh())});}
         }
         self.encode_transport(encoder, batch_index, batch, &dispatches);
         let actual=encoder.submission();written.extend(publications.drain(..).map(|publication:MaterialPublication|publication.encoded(&actual)));
+        if let Some(encoding)=predicted_exchange {encoding.publish(&actual);}
         self.publish_material(batch,written)?;
-        if exchange.is_some() { self.reservoir.active_secondary = !self.reservoir.active_secondary; }
+        if exchange.is_some() && !preview { self.reservoir.active_secondary = !self.reservoir.active_secondary; }
         Ok(())
     }
 
@@ -306,10 +320,11 @@ impl WgpuRasterizer {
         coordinate: [u32; 2],
         target: BrushEncodingTarget,
         intent: &crate::raster::contents::Intent,
+        donors: Option<&mut Vec<resident::Input>>,
     ) -> Result<crate::bindings::MaterialSources, GpuRasterError> {
         let timing = self.telemetry.enabled;
         let started = timing.then(web_time::Instant::now);
-        let sources = self.material_bind_group(batch,batch_index, coordinate, target, intent, MaterialInputs::Neighborhood, None, encoder)?;
+        let sources = self.material_bind_group(batch,batch_index, coordinate, target, intent, MaterialInputs::Neighborhood, None, donors, encoder)?;
         self.metrics.material_cpu_ms[4] += elapsed(started);
         Ok(sources)
     }
@@ -365,10 +380,10 @@ mod tests {
             ..dab_batch(target, exchanging_wet(), contact.bounds()) }
     }
 
-    fn paint_red(r: &mut WgpuRasterizer, document: &layer_core::Document, center: [f32; 2], radius: f32) {
-        let red = Dab { center: Point { x: center[0], y: center[1] }, radii: [radius; 2], ..dab([1., 0., 0., 1.]) };
+    fn paint_dry(r: &mut WgpuRasterizer, document: &layer_core::Document, center: [f32; 2], radius: f32, color: [f32; 4]) {
+        let contact = Dab { center: Point { x: center[0], y: center[1] }, radii: [radius; 2], ..dab(color) };
         let extent = document.composition().size;
-        submit_ready(r, FramePacket { dabs: &[red], dab_batches: &[dab_batch(target(document), crate::tests::test_style(BrushExecution::Dry), red.bounds())],
+        submit_ready(r, FramePacket { dabs: &[contact], dab_batches: &[dab_batch(target(document), crate::tests::test_style(BrushExecution::Dry), contact.bounds())],
             ..packet(document.scene(), extent) }).unwrap();
     }
 
@@ -386,6 +401,13 @@ mod tests {
         pixels[(at[1] % PAGE_SIZE * PAGE_SIZE + at[0] % PAGE_SIZE) as usize]
     }
 
+    fn predicted(r: &WgpuRasterizer, target: SourceTarget, at: [u32; 2]) -> [f32; 4] {
+        let coordinate = at.map(|value| value / PAGE_SIZE);
+        let expected = r.preview_expected(target, layer_core::raster::RasterPlane::Color, coordinate, crate::scene::PreviewStage::Final).unwrap();
+        let read = r.preview_page(coordinate).unwrap().active().read(expected, None).unwrap();
+        crate::test_support::float_pixels(r, &read.value().texture)[(at[1] % PAGE_SIZE * PAGE_SIZE + at[0] % PAGE_SIZE) as usize]
+    }
+
     fn assert_close(actual: [f32; 4], expected: [f32; 4], context: &str) {
         assert!(actual.iter().zip(expected).all(|(a, e)| (a - e).abs() < 0.01), "{context}: {actual:?} != {expected:?}");
     }
@@ -397,7 +419,7 @@ mod tests {
         let target = target(&document);
         let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         submit_ready(&mut r, FramePacket { reset_layers: true, ..packet(document.scene(), extent) }).unwrap();
-        paint_red(&mut r, &document, [48., 64.], 40.);
+        paint_dry(&mut r, &document, [48., 64.], 40., [1., 0., 0., 1.]);
         let dabs = [wet_contact(48., 64., 20., [0.; 2]), wet_contact(176., 64., 20., [128., 0.])];
         submit_ready(&mut r, FramePacket { dabs: &dabs, dab_batches: &[wet_batch(target, &dabs[0], 0, true)],
             ..packet(document.scene(), extent) }).unwrap();
@@ -405,6 +427,48 @@ mod tests {
         submit_ready(&mut r, FramePacket { dabs: &dabs, dab_batches: &[wet_batch(target, &dabs[1], 1, false)],
             ..packet(document.scene(), extent) }).unwrap();
         assert_close(painted(&r, target, [176, 64]), [0.5, 0., 0.25, 0.75], "the next contact lays the red it took up on clear paint");
+    }
+
+    #[test]
+    fn a_wet_prediction_carries_paint_from_one_microbatch_to_the_next() {
+        let extent = [512, 256];
+        let dabs = [wet_contact(420., 128., 20., [0.; 2]), wet_contact(120., 128., 20., [-300., 0.]), wet_contact(128., 128., 20., [8., 0.]),
+            wet_contact(136., 128., 20., [8., 0.]), wet_contact(400., 128., 20., [264., 0.])];
+        let receiver = |target: SourceTarget, kind: DabBatchKind| DabBatch { kind, ..wet_batch(target, &dabs[4], 4, false) };
+        let split = |target: SourceTarget, kind: DabBatchKind| [DabBatch { dab_count: 3, damage: dabs[1].bounds().union(dabs[3].bounds()), kind,
+            ..wet_batch(target, &dabs[1], 1, false) }, receiver(target, kind)];
+        let stroke = || {
+            let document = paint_document(extent, "wet prediction microbatches");
+            let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+            submit_ready(&mut r, FramePacket { reset_layers: true, ..packet(document.scene(), extent) }).unwrap();
+            paint_dry(&mut r, &document, [128., 128.], 60., [1., 0., 0., 1.]);
+            submit_ready(&mut r, FramePacket { dabs: &dabs, dab_batches: &[wet_batch(target(&document), &dabs[0], 0, true)], ..packet(document.scene(), extent) }).unwrap();
+            (document, r)
+        };
+        let predict = |r: &mut WgpuRasterizer, document: &layer_core::Document, batches: &[DabBatch]| {
+            submit_ready(r, FramePacket { dabs: &dabs, dab_batches: batches, composite_all: false, ..packet(document.scene(), extent) }).unwrap();
+            predicted(r, target(document), [400, 128])
+        };
+        let (document, mut twin) = stroke();
+        submit_ready(&mut twin, FramePacket { dabs: &dabs, dab_batches: &split(target(&document), DabBatchKind::Persistent), ..packet(document.scene(), extent) }).unwrap();
+        let persistent = painted(&twin, target(&document), [400, 128]);
+        assert!(persistent[0] > 0.1, "the persistent twin lays red it took up: {persistent:?}");
+        let (document, mut r) = stroke();
+        let target = target(&document);
+        let real = (r.reservoir.state.as_ref().unwrap().version.clone(), r.reservoir.active_secondary, carried(&r, [32, 32]));
+        let prediction = predict(&mut r, &document, &split(target, DabBatchKind::Preview));
+        assert_close(prediction, persistent, "the predicted fourth contact lays the paint the first three took up");
+        assert_eq!(r.reservoir.state.as_ref().unwrap().version.matches(&real.0), Some(true), "a prediction keeps the stroke's reservoir version");
+        assert_eq!((r.reservoir.active_secondary, carried(&r, [32, 32])), (real.1, real.2), "a prediction leaves the stroke's reservoir unchanged");
+        let pickup = r.preview_declaration.as_ref().unwrap().reservoir_output(0).unwrap();
+        assert!(r.reservoir.predicted.as_ref().unwrap().iter().any(|surface| surface.has_name(&pickup)), "the predicted pickup publishes its own reservoir");
+        let alone = predict(&mut r, &document, &[receiver(target, DabBatchKind::Preview)]);
+        assert!(alone[0] < 0.05, "a prediction without the pickup lays the stroke's reservoir: {alone:?}");
+        assert_close(predict(&mut r, &document, &split(target, DabBatchKind::Preview)), prediction, "the original prediction comes back unchanged");
+        paint_dry(&mut r, &document, [128., 128.], 60., [0., 1., 0., 1.]);
+        let recoloured = predict(&mut r, &document, &split(target, DabBatchKind::Preview));
+        assert_ne!(r.preview_declaration.as_ref().unwrap().reservoir_output(0).unwrap().matches(&pickup), Some(true), "a new donor renames the predicted pickup");
+        assert!(recoloured[1] > 0.1 && recoloured[0] < 0.05, "the fourth contact lays the new donor: {recoloured:?}");
     }
 
     #[test]

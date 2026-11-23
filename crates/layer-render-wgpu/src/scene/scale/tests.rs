@@ -165,7 +165,7 @@ fn authored_work_excludes_source_arrivals_camera_moves_and_refinement() {
             assert!(frame.dab_batches.iter().filter(|batch|batch.kind==DabBatchKind::Preview).all(|batch|batch.stroke_start));
             let seeds=declaration.required_seed_inputs().into_iter().map(|(plane,coordinate,pass)| {
                 let versions=match pass {
-                    crate::scene::PreviewPass::Coverage|crate::scene::PreviewPass::Reservoir=>Vec::new(),
+                    crate::scene::PreviewPass::Coverage=>Vec::new(),
                     crate::scene::PreviewPass::StrokeStart=>vec![declaration.version(declaration.target(),plane,coordinate,crate::scene::PreviewStage::Seed).unwrap()],
                     _=>panic!("fresh-stroke fixture has an unexpected seed pass"),
                 };

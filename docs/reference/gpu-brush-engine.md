@@ -398,9 +398,10 @@ compute kernels through write-only storage. A page job stores the material
 result inside its dirty rectangle and the unchanged source texel elsewhere,
 including stroke coverage, so no page copy or coverage clear precedes it. One compute pass,
 shared by a frame's consecutive batches and their watercolor transport,
-dispatches every job of a batch and, after a committed wet
-batch's jobs, its reservoir exchange. At stroke start the exchange begins from
-the selected pigment instead of the stored reservoir. Watercolor stores wetness
+dispatches every job of a batch and, after a wet batch's jobs, its reservoir
+exchange: always for a committed batch, and for a predicted batch only when a
+later predicted batch of its stroke reads the result. At stroke start the
+exchange begins from the selected pigment instead of the stored reservoir. Watercolor stores wetness
 only where a contact of the job deposits, except that the first job of an
 update on a page also stores the pre-update wetness everywhere else; a later
 microbatch never stores less, so no blend is needed. Tile records for all of a

@@ -784,9 +784,11 @@ pub(crate) struct PreviewDeclaration {
     wetness_before:IdMap<usize,usize>,
     transport_outputs:IdMap<usize,std::collections::BTreeSet<[u32;2]>>,
     seed_inputs:IdMap<AcceptedKey,(ContentVersion,bool)>,
+    reservoir_seed:Option<(layer_core::StrokeId,ContentVersion)>,
     selection:Option<raster::contents::Intent>,
     context:ContentStamp,
     accepted:Arc<Mutex<IdMap<AcceptedKey,CapturedInputs>>>,
+    reservoir_inputs:Arc<Mutex<IdMap<usize,CapturedInputs>>>,
     memo:Arc<Mutex<IdMap<PreviewRequest,ContentVersion>>>,
     stamps:Option<(Arc<PreviewStamps>,ContentStamp)>,
 }
@@ -827,6 +829,8 @@ impl PreviewDeclaration {
         let target=packet.dab_batches.iter().find(|batch|batch.kind==DabBatchKind::Preview).map(|batch|batch.target).or_else(||fill.as_ref().map(|fill|fill.target));
         let Some(target)=target else {return Ok(None);};
         if packet.dab_batches.iter().any(|batch|batch.kind==DabBatchKind::Preview && batch.target!=target) || fill.as_ref().is_some_and(|fill|fill.target!=target) {return Err(GpuRasterError::MultiplePreviewLayers);}
+        let mut wet=packet.dab_batches.iter().filter(|batch|batch.kind==DabBatchKind::Preview && batch.style.execution==BrushExecution::Wet).map(|batch|batch.stroke_id);
+        if wet.next().is_some_and(|stroke|wet.any(|other|other!=stroke)) {return Err(GpuRasterError::UnsupportedBrushFeature("a prediction of more than one Wet stroke"));}
         if plans.len()!=packet.dab_batches.len() {return Err(GpuRasterError::InvalidDabRange);}
         let versions=match versions.remove(&target) {Some(versions)=>versions,None=>raster::contents::declared_versions(packet.scene,target)?};
         let stamped=stamps.is_some() && fill.is_none();
@@ -854,7 +858,7 @@ impl PreviewDeclaration {
             (command.index,outputs)
         }).collect();
         let mut context=Recipe::new();context.add(&(packet.document_extent,packet.scene.composition().color,packet.scene.color_mode(target)));context.tag(&packet.blend_space);
-        Ok(Some(Self {source:packet.scene.snapshot(),target,versions,inputs,commands,fill,quality,wetness_before,transport_outputs,seed_inputs:IdMap::default(),selection:None,context:context.0,accepted:Arc::default(),memo:Arc::default(),
+        Ok(Some(Self {source:packet.scene.snapshot(),target,versions,inputs,commands,fill,quality,wetness_before,transport_outputs,seed_inputs:IdMap::default(),reservoir_seed:None,selection:None,context:context.0,accepted:Arc::default(),reservoir_inputs:Arc::default(),memo:Arc::default(),
             stamps:stamps.map(|stamps|(stamps,layer_core::raster::ContentName::fresh().stamp()))}))
     }
     pub fn captured_version(pass:PreviewPass,versions:&[ContentVersion])->ContentVersion {
@@ -906,8 +910,7 @@ impl PreviewDeclaration {
         let mut keys=std::collections::BTreeSet::new();
         if !self.target.is_coverage() {for command in &self.commands {
             let style=&command.batch.style;let plan=BrushPassPlan::for_style(style);
-            let roles=[(plan.state.coverage,PreviewPass::Coverage),(WgpuRasterizer::tracks_stroke_start(&command.batch),PreviewPass::StrokeStart),
-                (style.execution==BrushExecution::Wet && !command.batch.stroke_start,PreviewPass::Reservoir)];
+            let roles=[(plan.state.coverage,PreviewPass::Coverage),(WgpuRasterizer::tracks_stroke_start(&command.batch),PreviewPass::StrokeStart)];
             for (needed,pass) in roles {if needed {for coordinate in &command.outputs {keys.insert((raster::contents::index(RasterPlane::Color),*coordinate,pass));}}}
         }}
         keys.into_iter().map(|(plane,coordinate,pass)|([RasterPlane::Color,RasterPlane::Mask,RasterPlane::WatercolorWetness][plane],coordinate,pass)).collect()
@@ -917,7 +920,6 @@ impl PreviewDeclaration {
         self.commands.iter().find(|command|command.outputs.contains(&coordinate) && match pass {
             PreviewPass::Coverage=>BrushPassPlan::for_style(&command.batch.style).state.coverage,
             PreviewPass::StrokeStart=>WgpuRasterizer::tracks_stroke_start(&command.batch),
-            PreviewPass::Reservoir=>command.batch.style.execution==BrushExecution::Wet && !command.batch.stroke_start,
             _=>false,
         }).map(|command|PreviewStage::BeforeBatch(command.index))
     }
@@ -935,6 +937,53 @@ impl PreviewDeclaration {
             if let Some((previous,_))=self.seed_inputs.insert(key,(version.clone(),seed.committed)) && previous.matches(&version)!=Some(true) {return Err(GpuRasterError::Effect("Preview seed inputs changed after declaration".into()));}
         }
         Ok(self)
+    }
+    fn exchanging(&self,command:&PreviewCommand)->bool {
+        command.batch.style.execution==BrushExecution::Wet && crate::paints(&command.batch,self.source.view().target_extent(self.target))
+    }
+    fn reservoir_predecessor(&self,command:&PreviewCommand)->Option<&PreviewCommand> {
+        self.commands.iter().filter(|other|other.index<command.index && other.batch.stroke_id==command.batch.stroke_id && self.exchanging(other)).max_by_key(|other|other.index)
+    }
+    pub fn reservoir_consumed(&self,index:usize)->bool {
+        self.commands.iter().any(|command|self.exchanging(command) && self.reservoir_predecessor(command).is_some_and(|previous|previous.index==index))
+    }
+    pub fn reservoir_seed_stroke(&self)->Option<layer_core::StrokeId> {
+        self.commands.iter().find(|command|self.exchanging(command) && !command.batch.stroke_start && self.reservoir_predecessor(command).is_none()).map(|command|command.batch.stroke_id)
+    }
+    pub fn with_reservoir_seed(mut self,seed:Option<ContentVersion>)->Self {
+        self.reservoir_seed=self.reservoir_seed_stroke().zip(seed);self
+    }
+    pub fn reservoir_seed_matches(&self,current:Option<ContentVersion>)->bool {
+        match (self.reservoir_seed.as_ref(),current) {
+            (Some((_,held)),Some(current))=>held.matches(&current)==Some(true),
+            (None,None)=>true,
+            _=>false,
+        }
+    }
+    pub fn reservoir_input(&self,index:usize)->Result<Option<(ContentVersion,bool)>,GpuRasterError> {
+        let command=self.commands.iter().find(|command|command.index==index).ok_or(GpuRasterError::Invariant("predicted reservoir batch is not declared"))?;
+        if let Some(previous)=self.reservoir_predecessor(command) {return Ok(Some((self.reservoir_output(previous.index)?,true)));}
+        if command.batch.stroke_start {return Ok(None);}
+        self.reservoir_seed.as_ref().filter(|(stroke,_)|*stroke==command.batch.stroke_id).map(|(_,seed)|Some((seed.clone(),false)))
+            .ok_or(GpuRasterError::Invariant("predicted reservoir seed is missing"))
+    }
+    pub fn reservoir_output(&self,index:usize)->Result<ContentVersion,GpuRasterError> {
+        let command=self.commands.iter().find(|command|command.index==index).ok_or(GpuRasterError::Invariant("predicted reservoir batch is not declared"))?;
+        let mut inputs:Vec<_>=self.reservoir_input(index)?.map(|(version,_)|version).into_iter().collect();
+        if let Some((_,frame))=self.stamps.as_ref().filter(|_|self.fill.is_none()) {
+            return Ok(ContentVersion::derive(recipe(&(*frame,self.target,self.quality,PreviewPass::Reservoir,index)),&inputs));
+        }
+        inputs.push(self.reservoir_inputs.lock().unwrap().get(&index).ok_or(GpuRasterError::NotReady)?.version.clone());
+        inputs.push(command.definition.clone().ok_or(GpuRasterError::NotReady)?);
+        Ok(ContentVersion::derive(recipe(&(self.context,self.target,self.quality,PreviewPass::Reservoir,index)),&inputs))
+    }
+    pub fn accept_reservoir_inputs(&self,index:usize,proofs:Vec<resident::Input>)->Result<(),GpuRasterError> {
+        let version=Self::captured_version(PreviewPass::Reservoir,&proofs.iter().map(|input|input.version().clone()).collect::<Vec<_>>());
+        let mut accepted=self.reservoir_inputs.lock().unwrap();
+        if let Some(existing)=accepted.get(&index) {
+            if existing.version.matches(&version)!=Some(true) {return Err(GpuRasterError::Effect("Preview inputs changed after acceptance".into()));}
+        } else {accepted.insert(index,CapturedInputs {_proofs:proofs,version});}
+        Ok(())
     }
     fn transport_output(&self,coordinate:[u32;2],stage:PreviewStage)->bool {
         match stage {PreviewStage::AfterBatch(index)=>self.transport_outputs.get(&index).is_some_and(|outputs|outputs.contains(&coordinate)),_=>false}
@@ -1030,7 +1079,7 @@ impl PreviewDeclaration {
                 for coordinate in command.coordinates(footprint) {contact.insert(AcceptedKey {plane:raster::contents::index(plane),coordinate,stage:PreviewStage::AfterBatch(command.index),pass});}
             }
         }
-        if matches!(pass,PreviewPass::Coverage|PreviewPass::StrokeStart|PreviewPass::Reservoir) {for coordinate in page_coordinates(region) {
+        if matches!(pass,PreviewPass::Coverage|PreviewPass::StrokeStart) {for coordinate in page_coordinates(region) {
             contact.insert(AcceptedKey {plane:raster::contents::index(plane),coordinate,stage:self.page_stage(plane,coordinate,stage),pass});
         }}
         let mut contact=contact.into_iter().collect::<Vec<_>>();contact.sort_by_key(|key|(key.coordinate,match key.stage {PreviewStage::AfterBatch(index)=>Some(index),_=>None}));
@@ -1054,6 +1103,10 @@ impl PreviewDeclaration {
             let key=AcceptedKey {plane:raster::contents::index(plane),coordinate,stage:PreviewStage::Seed,pass};
             let (seed,_)=self.seed_inputs.get(&key).ok_or(GpuRasterError::NotReady)?;
             inputs.push(ContentVersion::derive(recipe(&(key.plane,key.coordinate,key.pass)),std::slice::from_ref(seed)));
+        }
+        if self.reservoir_seed_stroke().is_some() {
+            let (_,seed)=self.reservoir_seed.as_ref().ok_or(GpuRasterError::NotReady)?;
+            inputs.push(ContentVersion::derive(recipe(&PreviewPass::Reservoir),std::slice::from_ref(seed)));
         }
         Ok(ContentVersion::derive(0x73656564696e707574,&inputs))
     }
@@ -1538,6 +1591,26 @@ pub(super) mod tests {
             assert_eq!(ticket.intermediate(PreviewPass::Transport,0).version().matches(ticket.version()),Some(coordinate==[2,0]));
         }
         assert!(!program.transport_output([0,0],PreviewStage::AfterBatch(0)));
+    }
+
+    #[test]
+    fn a_continued_wet_prediction_waits_for_its_stroke_reservoir() {
+        let (document,target)=document();
+        let mut wet=dab_batch(target,crate::tests::test_style(BrushExecution::Wet),PixelRect::new(0,0,64,64).to_rect());
+        wet.kind=DabBatchKind::Preview;wet.stroke_start=false;
+        let held=declaration(&document,&[wet],&[preview_dab(32.)],None);
+        assert!(matches!(held.authored_version(),Err(GpuRasterError::NotReady)),"a continuation names no source before its stroke's reservoir is captured");
+        assert!(held.with_reservoir_seed(Some(ContentVersion::derive(7,&[]))).authored_version().is_ok());
+    }
+
+    #[test]
+    fn a_prediction_holds_one_wet_stroke() {
+        let (document,target)=document();
+        let mut first=dab_batch(target,crate::tests::test_style(BrushExecution::Wet),PixelRect::new(0,0,64,64).to_rect());first.kind=DabBatchKind::Preview;
+        let second=DabBatch {stroke_id:layer_core::StrokeId(2),first_dab:1,..first.clone()};
+        let declared=PreviewDeclaration::from_scene(FramePacket {dab_batches:&[first,second],dabs:&[preview_dab(32.),preview_dab(40.)],
+            ..packet(document.scene(),document.composition().size)},IdMap::default(),IdMap::default(),PreviewQuality::default(),None,None);
+        assert!(matches!(declared,Err(GpuRasterError::UnsupportedBrushFeature(_))),"one private reservoir pair carries one predicted Wet stroke");
     }
 
     #[test]

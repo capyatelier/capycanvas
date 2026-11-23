@@ -1048,10 +1048,15 @@ impl WgpuRasterizer {
         }
         visit(BrushSlot::State(scene::sources::BrushState::Reservoir,false),None);
         for surface in [&self.reservoir.primary,&self.reservoir.secondary] {visit(BrushSlot::State(scene::sources::BrushState::Reservoir,false),Some(surface));}
+        if let Some(surfaces)=self.reservoir.predicted.as_ref().filter(|_|predicted) {
+            visit(BrushSlot::State(scene::sources::BrushState::Reservoir,true),None);
+            for surface in surfaces {visit(BrushSlot::State(scene::sources::BrushState::Reservoir,true),Some(surface));}
+        }
         Ok(())
     }
     pub(crate) fn prepare_raster_outputs(&mut self,packet:FramePacket<'_>,plans:&[Vec<BrushTile>])->bool {
         if let Some(batch)=packet.dab_batches.last() {self.live_stroke=Some(batch.stroke_id);}
+        self.prepare_predicted_reservoir(packet.dab_batches);
         let retained=source_access::retained_targets(packet.scene);
         let reset=packet.reset_layers||packet.document_extent!=self.document_extent;
         let mut required:BTreeMap<SourceTarget,BTreeSet<[u32;2]>>=BTreeMap::new();

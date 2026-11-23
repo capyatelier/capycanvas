@@ -44,7 +44,10 @@ only lifecycle contract needed by the renderer:
   brushes that request it;
 - preview batches fork committed coverage into recyclable sparse scratch and
   read any wet reservoir state, but cannot mutate persistent color or material
-  state.
+  state. A predicted wet batch that a later predicted batch of its stroke
+  follows exchanges into a private 64×64 pair instead, named from its
+  predecessor, its contacts and the pages it read, so the next predicted
+  batch carries what it picked up.
 
 The engine never merges batches across stroke identity or past a stroke-end
 boundary. Undo and load restore committed raster tiles rather than replaying
