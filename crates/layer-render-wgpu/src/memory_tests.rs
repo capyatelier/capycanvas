@@ -611,8 +611,7 @@ fn a_restore_drops_backed_color_before_refusing_working_memory() {
     drop(pressure);
 }
 
-#[test]
-fn pressure_retires_every_blend_scratch_page_in_one_pass_over_the_pages() {
+fn wet_stroke_on_every_page() -> WgpuRasterizer {
     let side = [8, 8];
     let extent = side.map(|side| PAGE_SIZE * side);
     let doc = layer_core::Document::new(layer_core::PortableId::random(), extent[0], extent[1],
@@ -631,6 +630,12 @@ fn pressure_retires_every_blend_scratch_page_in_one_pass_over_the_pages() {
     submit_published(&mut r, FramePacket { dabs: &dabs, dab_batches: std::slice::from_ref(&end), ..packet(doc.scene(), extent) });
     complete(&r);
     r.restore_preflight = None;
+    r
+}
+
+#[test]
+fn pressure_retires_every_blend_scratch_page_in_one_pass_over_the_pages() {
+    let mut r = wet_stroke_on_every_page();
     let scratch = |r: &WgpuRasterizer| r.paint_layers[0].pages.iter().filter(|page| page.secondary.is_some()).count() as u64;
     let pages = r.paint_layers[0].pages.len() as u64;
     assert!(scratch(&r) > 2 * SOURCE_SLOTS as u64, "the fixture retires several batches: {} of {pages} pages hold scratch", scratch(&r));
@@ -640,6 +645,19 @@ fn pressure_retires_every_blend_scratch_page_in_one_pass_over_the_pages() {
     let (retired,_leases)=r.evict_color(u64::MAX,&[],&[]);
     assert_eq!(scratch(&r),0,"one trim must release every optional scratch page");
     assert_eq!(retired.len() as u64,k);
+}
+
+#[test]
+fn a_modified_pages_spare_is_evictable_and_not_pinned() {
+    let mut r = wet_stroke_on_every_page();
+    r.retire_stroke_sources();
+    let pinned = r.pinned_paint_bytes();
+    let unpinned = r.paint_memory_bytes() - pinned;
+    let (retired, _leases) = r.evict_color(u64::MAX, &[], &[]);
+    assert_eq!(retired.len(), WARM_SPARE_PAGES, "only the warm spares of the modified pages are evictable");
+    assert_eq!(retired.iter().map(PageSurface::storage_bytes).sum::<u64>(), unpinned, "pinned paint counts spares that eviction offers");
+    drop(retired);
+    assert_eq!(r.pinned_paint_bytes(), pinned, "evicting the spares changed pinned paint");
 }
 
 #[test]

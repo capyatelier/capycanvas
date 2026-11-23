@@ -19,12 +19,11 @@ impl WgpuRasterizer {
         self.paint_layers.iter().map(|layer| {
             let contents = self.raster.as_ref().and_then(|raster| raster.targets.get(&layer.id)).map(|target| &target.contents);
             let held = |coordinate: [u32; 2]| required.iter().any(|(target, coordinates)| *target == layer.id && coordinates.binary_search(&coordinate).is_ok());
-            layer.pages.iter().filter(|page| {
-                page.stroke_start.is_none()
-                    && !contents.is_some_and(|contents| contents.modified(page.coordinate))
-                    && !held(page.coordinate)
-                    && self.restorable_color(native.backing.get(&layer.id), layer.id, contents, page.coordinate)
-            }).map(|page| page.primary.storage_bytes() + page.secondary.as_ref().map_or(0, |surface|surface.storage_bytes())).sum::<u64>()
+            layer.pages.iter().filter(|page| page.stroke_start.is_none() && !held(page.coordinate)).map(|page| {
+                let color = !contents.is_some_and(|contents| contents.modified(page.coordinate))
+                    && self.restorable_color(native.backing.get(&layer.id), layer.id, contents, page.coordinate);
+                page.secondary.as_ref().map_or(0, |surface|surface.storage_bytes()) + if color { page.primary.storage_bytes() } else { 0 }
+            }).sum::<u64>()
             + layer.coverage_pages.iter().filter(|page| page.owner.is_none_or(|owner| Some(owner) != self.live_stroke) && !held(page.coordinate))
                 .map(|page| page.primary.storage_bytes() + page.secondary.storage_bytes()).sum::<u64>()
         }).sum::<u64>()
