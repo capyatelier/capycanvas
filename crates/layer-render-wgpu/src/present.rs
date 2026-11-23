@@ -169,14 +169,14 @@ pub struct ViewportPresenter {
     standalone_overview: bool,
 }
 
-const PAPER_SHADE_SIZE: u64 = 64;
+const PAPER_SHADE_SIZE: u64 = 96;
 
 struct PaperShade {
     uniform: wgpu::Buffer,
     sampler: wgpu::Sampler,
     flat: wgpu::TextureView,
     view: Option<wgpu::TextureView>,
-    drawn: Option<[f32; 16]>,
+    drawn: Option<[f32; 24]>,
 }
 impl PaperShade {
     fn new(device: &crate::PipelineDevice) -> Self {
@@ -1344,7 +1344,7 @@ impl ViewportPresenter {
         let shade_data = shade.map(|(_, data, _)| data);
         if shade_data != self.shade.drawn {
             self.history.valid = false;
-            let bytes: Vec<u8> = shade_data.unwrap_or([0.; 16]).iter().flat_map(|v| v.to_ne_bytes()).collect();
+            let bytes: Vec<u8> = shade_data.unwrap_or([0.; 24]).iter().flat_map(|v| v.to_ne_bytes()).collect();
             self.uploads.write(encoder, &self.shade.uniform, &bytes)?;
             self.shade.drawn = shade_data;
         }

@@ -27,7 +27,7 @@ fn contact_noise(p: vec2<f32>) -> f32 {
 
 fn contact_paper(world: vec2<f32>) -> f32 {
     if contact_feature(2u, style.contact_a.y > 0.0) {
-        return paper_sample(grain_texture, brush_sampler, world, style.grain);
+        return paper_sample(grain_texture, brush_sampler, world, style.grain, style.grain_axes);
     }
     return 1.0;
 }

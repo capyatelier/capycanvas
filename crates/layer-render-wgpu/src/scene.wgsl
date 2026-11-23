@@ -153,7 +153,7 @@ fn scene_operation_point(local:vec2<f32>)->vec2<f32> {
 }
 fn scene_operation_paper(src:vec4<f32>,local:vec2<f32>)->vec4<f32> {
     if settings.operation_offset.z>0. {
-        let paper=paper_sample(scene_paper,paper_sampling,local,settings.source_over);
+        let paper=paper_sample(scene_paper,paper_sampling,local,settings.source_over,settings.paper_axes);
         let h=clamp(.5+settings.operation_offset.z*(paper-.5),0.,1.);
         let contact=relief_transfer((.25-(.5-h))/.05);
         return src*((1.-exp(-6.*contact))/(1.-exp(-6.)));

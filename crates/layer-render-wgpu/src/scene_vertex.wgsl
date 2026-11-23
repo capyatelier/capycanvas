@@ -8,6 +8,7 @@ struct Settings {
     operation_linear: vec4<f32>,
     operation_offset: vec4<f32>,
     query_grid: vec4<u32>,
+    paper_axes: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> settings: Settings;
 @group(1) @binding(0) var front: texture_2d<f32>;

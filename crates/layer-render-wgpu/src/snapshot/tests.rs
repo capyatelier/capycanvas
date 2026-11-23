@@ -135,20 +135,37 @@ fn staged_off_canvas_captures_prepare_constant_paper_and_keep_its_frame_extent()
 
 #[test]
 fn a_window_capture_lights_its_paper_where_the_whole_capture_does() {
-    let mut document=crate::layer_tests::paper_shade::rough_gray_paper();
-    crate::layer_tests::paper_shade::set_paper(&mut document,&[(layer_core::paper::RELIEF,layer_core::EffectValue::Number(150.))]);
-    let size=document.composition().size;
-    let whole=capture(document.clone()).unwrap().read_region([0,0,size[0],size[1]]).unwrap();
-    let (origin,extent)=([37,21],[64,72]);
-    let mut window=capture(document).unwrap();
-    window.capture_window(origin,extent).unwrap();
-    let pixels=window.read_region([0,0,extent[0],extent[1]]).unwrap();
-    for y in 0..extent[1] {for x in 0..extent[0] {
-        let actual=pixels[(y*extent[0]+x) as usize];
-        let expected=whole[((y+origin[1] as u32)*size[0]+x+origin[0] as u32) as usize];
-        for channel in 0..4 {assert!((actual[channel]-expected[channel]).abs()<1e-5,
-            "window pixel ({x},{y}) lights the paper of another place: {actual:?} vs {expected:?}");}
-    }}
+    use crate::layer_tests::paper_shade::{rough_gray_paper,set_paper,turned_paper,TURNS};
+    let mut rough=rough_gray_paper();
+    set_paper(&mut rough,&[(layer_core::paper::RELIEF,layer_core::EffectValue::Number(150.))]);
+    for document in [rough,turned_paper(TURNS[1])] {
+        let size=document.composition().size;
+        let whole=capture(document.clone()).unwrap().read_region([0,0,size[0],size[1]]).unwrap();
+        let (origin,extent)=([37,21],[64,72]);
+        let mut window=capture(document).unwrap();
+        window.capture_window(origin,extent).unwrap();
+        let pixels=window.read_region([0,0,extent[0],extent[1]]).unwrap();
+        for y in 0..extent[1] {for x in 0..extent[0] {
+            let actual=pixels[(y*extent[0]+x) as usize];
+            let expected=whole[((y+origin[1] as u32)*size[0]+x+origin[0] as u32) as usize];
+            for channel in 0..4 {assert!((actual[channel]-expected[channel]).abs()<1e-5,
+                "window pixel ({x},{y}) lights the paper of another place: {actual:?} vs {expected:?}");}
+        }}
+    }
+}
+
+#[test]
+fn a_turned_paper_lights_the_same_tooth_one_true_period_away_in_either_direction() {
+    use crate::layer_tests::paper_shade::{TURNS,turned_paper,periods,worst_shift};
+    for turn in TURNS {
+        let pixels=capture(turned_paper(turn)).unwrap().read_region([0,0,256,256]).unwrap().iter().map(|pixel|pixel[1]).collect::<Vec<_>>();
+        let spread=pixels.iter().fold(0f32,|a,b|a.max(*b))-pixels.iter().fold(1f32,|a,b|a.min(*b));
+        assert!(spread>0.02,"paper turned by {turn:?} must show its relief: {spread}");
+        for shift in periods(turn,1.) {
+            let worst=worst_shift(&pixels,256,shift);
+            assert!(worst<1e-3,"paper turned by {turn:?} must light the same tooth one period {shift:?} away: {worst}");
+        }
+    }
 }
 
 fn hide_paper(document:&mut Document) {

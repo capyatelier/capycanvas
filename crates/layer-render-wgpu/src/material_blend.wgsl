@@ -195,7 +195,7 @@ fn chunk_rotation(contact: BlendContact) -> f32 {
 }
 
 fn paper_at(point: vec2<f32>) -> f32 {
-    return paper_sample(grain_texture, brush_sampler, point, style.grain);
+    return paper_sample(grain_texture, brush_sampler, point, style.grain, style.grain_axes);
 }
 
 fn grainy_field(world: vec2<f32>, contact: BlendContact) -> vec4<f32> {

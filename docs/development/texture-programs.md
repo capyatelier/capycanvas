@@ -201,7 +201,13 @@ program.
    pixels `i + k × texels` and is evaluated at the paper position of its
    document pixel, so the mapping's offset is baked in and a brush reads the
    texel at the document pixel modulo the tile. Above 4096 texels on an axis,
-   the bake uses 4096 and brushes magnify bilinearly.
+   the bake uses 4096 and brushes magnify bilinearly. A turned or sheared
+   sheet has no such tile: it bakes one period of the paper along the paper's
+   own axes, with one texel per drawing pixel along each period vector, and
+   readers find a document point `d` at `B⁻¹(d − t)` in the tile, where the
+   columns of `B` are the period vectors and `t` is the mapping's offset. The
+   offset is reduced to one period on the CPU first. Such a bake does not
+   depend on the angle, so turning a turned sheet again reuses it.
 2. **Probe.** The source is evaluated at 65,536 positions chosen by a fixed
    hash. The values are read back asynchronously and their 0.5th and 99.5th
    percentiles become `low` and `high`; `relief = high − low` micrometers.

@@ -27,6 +27,49 @@ pub(crate) fn rough_gray_paper() -> Document {
     document
 }
 
+pub(crate) const TURNS: [[f64; 4]; 4] = [[1., 0., 0., 1.], [0.8, 0.6, -0.6, 0.8], [0.8, 0.6, 0.6, -0.8], [0.8, 0.6, -0.75, 1.]];
+
+fn surface_of(texture: layer_core::TextureSource, turn: [f64; 4]) -> layer_core::paper::PaperSurface {
+    let per_mm = 100. / texture.period().unwrap()[0];
+    layer_core::paper::PaperSurface { texture, mapping: layer_core::Affine64([turn[0] * per_mm, turn[1] * per_mm, turn[2] * per_mm, turn[3] * per_mm, 13.5, 7.5]) }
+}
+
+pub(crate) fn turned_surface(turn: [f64; 4]) -> layer_core::paper::PaperSurface {
+    surface_of(paper::built_in_paper("rough").unwrap().texture.clone().unwrap(), turn)
+}
+
+pub(crate) fn turned_paper(turn: [f64; 4]) -> Document {
+    paper_document(turned_surface(turn), 225.)
+}
+
+fn paper_document(surface: layer_core::paper::PaperSurface, light: f32) -> Document {
+    let mut document = Document::new(layer_core::authored::PortableId::random(), 256, 256,
+        layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+    let gray = layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb, [0.6, 0.6, 0.6, 1.]).unwrap();
+    set_paper(&mut document, &[("color", EffectValue::Color(gray)), (paper::RELIEF, EffectValue::Number(150.)), (paper::LIGHT, EffectValue::Number(light))]);
+    let sheet = document.bottom_paper().unwrap();
+    let handle = document.scene().effect_handle(sheet).unwrap();
+    let application = document.artwork.effects.get_mut(handle).unwrap();
+    for value in &mut application.values { if let EffectValue::Texture(texture) = value { *texture = Some(surface.texture.clone()); } }
+    application.spatial.as_mut().unwrap().mapping = surface.mapping;
+    document
+}
+
+pub(crate) fn periods(turn: [f64; 4], zoom: f64) -> [[i32; 2]; 2] {
+    [[turn[0], turn[1]], [turn[2], turn[3]]].map(|vector| vector.map(|v| (v * 100. * zoom).round() as i32))
+}
+
+pub(crate) fn worst_shift(values: &[f32], size: i32, shift: [i32; 2]) -> f32 {
+    let mut worst = 0f32;
+    for y in (0..size).step_by(3) { for x in (0..size).step_by(3) {
+        let [u, v] = [x + shift[0], y + shift[1]];
+        if (0..size).contains(&u) && (0..size).contains(&v) {
+            worst = worst.max((values[(y * size + x) as usize] - values[(v * size + u) as usize]).abs());
+        }
+    }}
+    worst
+}
+
 fn linear(pixels: &[u8]) -> Vec<f32> {
     pixels.as_chunks::<4>().0.iter().map(|p| layer_core::color::srgb_decode(f32::from(p[1]) / 255.)).collect()
 }
@@ -218,5 +261,68 @@ fn separated_paper_and_the_paper_preview_light_the_artwork_in_its_own_encoding()
                 assert!((a - b).abs() < 0.03 * b.max(0.05), "{blend:?} {name} keeps the tone of channel {c} on the {} side: {a} against {b}", if left { "painted" } else { "bare" });
             }
         }
+    }
+}
+
+#[test]
+fn a_turned_paper_lights_the_view_as_it_exports_and_repeats_when_minified() {
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let format = wgpu::TextureFormat::Rgba16Float;
+    let texture = crate::create_target(&r.device, [256, 256], format, "turned paper").0;
+    let mut presenter = crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb).unwrap();
+    for turn in TURNS {
+        let document = turned_paper(turn);
+        let mut present = |r: &mut WgpuRasterizer, zoom: f32| {
+            let camera = ViewState { document_to_surface: [zoom, 0., 0., zoom, 0., 0.], ..crate::test_support::view([256, 256]) };
+            crate::test_support::submit_settled(r, FramePacket { view: camera, ..packet(document.scene(), [256, 256]) });
+            crate::test_support::prepare_lit_presenter(r, &mut presenter);
+            presenter.present(r, &texture.create_view(&Default::default()), camera, [0.2, 0.3, 0.4, 1.]).unwrap();
+            crate::test_support::float_pixels(r, &texture).iter().map(|pixel| pixel[1]).collect::<Vec<_>>()
+        };
+        let native = present(&mut r, 1.);
+        let exported = r.snapshot_gpu().capture_scene(document.snapshot(), layer_core::authored::SceneScope::All, Default::default()).unwrap()
+            .read_region([0, 0, 256, 256]).unwrap();
+        let difference = native.iter().zip(&exported).map(|(view, export)| (layer_core::color::srgb_decode(*view) - export[1]).abs()).fold(0f32, f32::max);
+        assert!(difference < 2e-3, "the view of paper turned by {turn:?} must light it as the export does: {difference}");
+        for shift in periods(turn, 1.) {
+            let worst = worst_shift(&native, 256, shift);
+            assert!(worst < 1e-3, "the view of paper turned by {turn:?} must repeat every period {shift:?}: {worst}");
+        }
+        let minified = present(&mut r, 0.5);
+        let minified: Vec<f32> = (0..128).flat_map(|y| minified[y * 256..y * 256 + 128].to_vec()).collect();
+        for shift in periods(turn, 0.5).into_iter().filter(|shift| periods(turn, 1.).contains(&shift.map(|v| v * 2))) {
+            let worst = worst_shift(&minified, 128, shift);
+            assert!(worst < 1e-3, "a minified view of paper turned by {turn:?} must repeat every period {shift:?}: {worst}");
+        }
+    }
+}
+
+#[test]
+fn turning_a_sheet_turns_its_slopes_with_it() {
+    let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let lit = |turn: [f64; 4], light: [f64; 2]| {
+        let document = paper_document(turned_surface(turn), light[1].atan2(light[0]).to_degrees() as f32);
+        r.snapshot_gpu().capture_scene(document.snapshot(), layer_core::authored::SceneScope::All, Default::default()).unwrap()
+            .read_region([0, 0, 256, 256]).unwrap().iter().map(|pixel| pixel[1]).collect::<Vec<_>>()
+    };
+    let at = |turn: [f64; 4], m: [i32; 2]| [13. + turn[0] * f64::from(m[0]) + turn[2] * f64::from(m[1]), 7. + turn[1] * f64::from(m[0]) + turn[3] * f64::from(m[1])]
+        .map(|v| v.round() as i32);
+    let base = TURNS[1];
+    let light = 30f64.to_radians();
+    let reference = lit(base, [light.cos(), light.sin()]);
+    let paper_light = [base[0] * light.cos() + base[1] * light.sin(), base[2] * light.cos() + base[3] * light.sin()];
+    for turn in [[-0.6, 0.8, -0.8, -0.6], [0.8, 0.6, 0.6, -0.8], [0.6, 0.8, -0.8, 0.6]] {
+        let turned = lit(turn, [turn[0] * paper_light[0] + turn[2] * paper_light[1], turn[1] * paper_light[0] + turn[3] * paper_light[1]]);
+        let mut worst = 0f32;
+        let mut compared = 0;
+        for j in -50..50 { for i in -50..50 {
+            let m = [5 * i, 5 * j];
+            let [a, b] = [at(base, m), at(turn, m)];
+            if a.iter().chain(&b).all(|v| (0..256).contains(v)) {
+                worst = worst.max((reference[(a[1] * 256 + a[0]) as usize] - turned[(b[1] * 256 + b[0]) as usize]).abs());
+                compared += 1;
+            }
+        }}
+        assert!(compared > 100 && worst < 1e-4, "a sheet turned by {turn:?} under its turned light must shade each tooth as the sheet turned by {base:?}: {worst} over {compared}");
     }
 }

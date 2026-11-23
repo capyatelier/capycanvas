@@ -207,6 +207,7 @@ enum Job {
         target: wgpu::TextureView,
         sources: [wgpu::TextureView; 4],
         data: [f32; 32],
+        paper: [f32; 4],
         over: bool,
         clip: Option<PixelRect>,
         source_target: Option<SourceTarget>,
@@ -297,10 +298,11 @@ impl Job {
             for (bytes,value) in record.as_chunks_mut::<4>().0.iter_mut().zip(values) {*bytes=value.to_ne_bytes();}
             record
         };
-        let settings=|data:&[f32;32],grid:[u32;4]| {
-            let mut values=[0;36];
+        let settings=|data:&[f32;32],grid:[u32;4],paper:[f32;4]| {
+            let mut values=[0;40];
             for (value,data) in values.iter_mut().zip(data) {*value=data.to_bits();}
-            values[32..].copy_from_slice(&grid);
+            values[32..36].copy_from_slice(&grid);
+            values[36..].copy_from_slice(&paper.map(f32::to_bits));
             words(&values)
         };
         match self {
@@ -309,14 +311,15 @@ impl Job {
             Self::Resample {values,..}=>*values,
             Self::Fold(fold)=>fold.record(),
             Self::Transform(region)=>region.values().copied().unwrap_or([0;RECORD_BYTES]),
-            Self::Draw {data,..}|Self::Effect {data,..}=>settings(data,grid.unwrap_or_default()),
+            Self::Draw {data,paper,..}=>settings(data,grid.unwrap_or_default(),*paper),
+            Self::Effect {data,..}=>settings(data,grid.unwrap_or_default(),[0.;4]),
             Self::Clear(target,color)=>{
                 let size=target.texture().size();
                 let [w,h]=[size.width as f32,size.height as f32];
                 let mut data=[0.;32];
                 data[..8].copy_from_slice(&[0.,0.,w,h,w,h,0.,0.]);
                 data[12..16].copy_from_slice(&[color.r,color.g,color.b,color.a].map(|v|v as f32));
-                settings(&data,[0;4])
+                settings(&data,[0;4],[0.;4])
             }
             Self::Publish {..}|Self::Collection(_)|Self::Sampling(_)|Self::Vector(_)|Self::PaintBase(_)|Self::Positions(..)|Self::Placement(_)
                 |Self::VectorResample {..}|Self::DecodedTile(_)|Self::Watercolor {..}|Self::Copy {..}=>[0;RECORD_BYTES],
@@ -706,7 +709,7 @@ impl Scene {
             if let Some(ticket)=ticket {page.derived=Some(ticket);}
             let mut data = [0.; 32];
             data[..10].copy_from_slice(&[0., 0., 256., 256., 256., 256., 0., 0., 1., 1.]);
-            self.jobs.push(Job::Draw { target: output, sources: [view, r.empty_view.clone(), r.empty_view.clone(), r.empty_paper_view.clone()], data, over: false, clip: None, source_target:None, edges:None,pipeline:None });
+            self.jobs.push(Job::Draw { target: output, sources: [view, r.empty_view.clone(), r.empty_view.clone(), r.empty_paper_view.clone()], data, paper: [0.; 4], over: false, clip: None, source_target:None, edges:None,pipeline:None });
             self.publish_surface(target,publication);
         }
         Ok(())
@@ -1323,7 +1326,7 @@ impl Scene {
             over = false;
             self.jobs.pop();
         }
-        self.jobs.push(Job::Draw {
+        self.jobs.push(Job::Draw { paper: [0.; 4],
             target: self.pool[target].view.clone(),
             sources,
             data,
@@ -1893,7 +1896,7 @@ impl Scene {
                         false,
                         Convert::None,
                     );
-                    if let Some(Job::Draw { data, sources, edges, pipeline, .. }) = self.jobs.last_mut() {
+                    if let Some(Job::Draw { data, paper: paper_axes, sources, edges, pipeline, .. }) = self.jobs.last_mut() {
                         *pipeline=operation_pipeline(&op.kind);
                         if let Some(gradient)=&gradient {sources[2]=gradient.clone();}
                         if let Some(underfill)=&underfill {sources[2]=underfill.view.clone();}
@@ -1904,7 +1907,8 @@ impl Scene {
                         data[24..30].copy_from_slice(&op.placement.inverse().ok_or(GpuRasterError::InvalidTransform("Invalid paint operation placement"))?.0);
                         if let Some((view, grain, strength)) = &paper {
                             sources[3] = view.clone();
-                            data[16..20].copy_from_slice(grain);
+                            data[16..20].copy_from_slice(&grain.tile);
+                            *paper_axes = grain.axes;
                             data[30] = *strength;
                         }
                         if let Some((binding,crop))=edge_input {
@@ -3142,7 +3146,7 @@ impl Pipelines {
             wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
             wgpu::BufferBindingType::Uniform,
             true,
-            NonZeroU64::new(144),
+            NonZeroU64::new(160),
         )]);
         let layout = crate::bindings::layout(device, "scene sources", &[
             texture_entry(0, device),
@@ -3234,7 +3238,7 @@ fn uniform_binding(
     buffer: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     crate::bindings::group(device, "scene uniform binding", layout, [
-        wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer, offset: 0, size: NonZeroU64::new(144), }),
+        wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer, offset: 0, size: NonZeroU64::new(160), }),
     ])
 }
 fn local_rect(c: [u32; 2], offset: [i64; 2], tile: [u32; 2]) -> [f32; 4] {

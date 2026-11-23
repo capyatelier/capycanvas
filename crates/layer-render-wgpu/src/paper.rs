@@ -63,10 +63,12 @@ impl ExportShade {
     }
     #[expect(clippy::too_many_arguments, reason = "Export shading keeps the source, coverage, slope and paper placement explicit")]
     pub fn encode(&self, device: &PipelineDevice, encoder: &mut wgpu::CommandEncoder, source: &wgpu::Texture, coverage: Option<&wgpu::Texture>,
-        slope: &wgpu::TextureView, tile: [f32; 4], light: layer_core::paper::PaperLight, origin: [f64; 2]) -> Result<wgpu::Texture, GpuRasterError> {
+        slope: &wgpu::TextureView, grain: Grain, slope_axes: [f32; 4], light: layer_core::paper::PaperLight, origin: [f64; 2]) -> Result<wgpu::Texture, GpuRasterError> {
         let [x, y] = light.direction();
+        let [tile, axes] = [grain.tile, grain.axes];
         let data = [tile[0], tile[1], tile[2], tile[3], x, y, light.relief, light.through_paint, origin[0] as f32, origin[1] as f32, 0., 0.,
-            1., f32::from(u8::from(coverage.is_some())), 0., 0.];
+            1., f32::from(u8::from(coverage.is_some())), 0., 0., axes[0], axes[1], axes[2], axes[3],
+            slope_axes[0], slope_axes[1], slope_axes[2], slope_axes[3]];
         let uniform = initialized_buffer(device, &wgpu::util::BufferInitDescriptor {
             label: Some("paper export"),
             contents: &data.iter().flat_map(|v| v.to_ne_bytes()).collect::<Vec<_>>(),
@@ -97,6 +99,17 @@ const MAPPING: u8 = 1;
 const MAPPED: u8 = 2;
 const FAILED: u8 = 3;
 
+const AXES: [f32; 4] = [1., 0., 0., 1.];
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Grain {
+    pub tile: [f32; 4],
+    pub axes: [f32; 4],
+}
+impl Grain {
+    pub const FLAT: Self = Self { tile: [1., 1., 0., 0.], axes: AXES };
+}
+
 pub(super) struct PaperTile {
     pixels: [f64; 2],
     origin: [i64; 2],
@@ -104,11 +117,13 @@ pub(super) struct PaperTile {
     inverse: [f64; 4],
     texels: [u32; 2],
     period: [f64; 2],
+    turned: Option<[f64; 6]>,
 }
 impl PaperTile {
     pub fn new(surface: &PaperSurface) -> Result<Self, GpuRasterError> {
         let period = surface.texture.period().ok_or(GpuRasterError::Effect("Paper texture without a physical size".into()))?;
         let [a, b, c, d, x, y] = surface.mapping.0;
+        if (b != 0. || c != 0.) && (a != 0. || d != 0.) { return Self::turned(period, surface.mapping.0); }
         let raw = [period[0] * a.abs() + period[1] * c.abs(), period[0] * b.abs() + period[1] * d.abs()];
         let pixels = raw.map(|v| v.round().max(1.));
         let stretch = [pixels[0] / raw[0], pixels[1] / raw[1]];
@@ -121,6 +136,25 @@ impl PaperTile {
             inverse: [inverse[0], inverse[1], inverse[2], inverse[3]],
             texels: pixels.map(|v| (v as u32).min(MAX_TEXELS)),
             period,
+            turned: None,
+        })
+    }
+    fn turned(period: [f64; 2], mapping: [f64; 6]) -> Result<Self, GpuRasterError> {
+        let [a, b, c, d, ..] = mapping;
+        let lengths = [a.hypot(b) * period[0], c.hypot(d) * period[1]];
+        if !(a * d - b * c).is_normal() || !lengths.iter().all(|v| v.is_finite()) {
+            return Err(GpuRasterError::InvalidTransform("Singular paper mapping"));
+        }
+        let texels = lengths.map(|v| (v.round().max(1.) as u32).min(MAX_TEXELS));
+        let pixels = texels.map(f64::from);
+        Ok(Self {
+            pixels,
+            origin: [0; 2],
+            fraction: [0.; 2],
+            inverse: [period[0] / pixels[0], 0., 0., period[1] / pixels[1]],
+            texels,
+            period,
+            turned: Some(mapping),
         })
     }
     pub fn id_for(binding: &PaperBinding) -> Option<AssetId> {
@@ -149,10 +183,20 @@ impl PaperTile {
         for value in self.inverse.iter().chain(&self.fraction).chain(&self.pixels) {
             value.to_bits().hash(&mut hasher);
         }
+        self.turned.is_some().hash(&mut hasher);
         AssetId::from(format!("paper:{name}:{:016x}", hasher.finish()).as_str())
     }
     fn texel_mm(&self) -> f64 {
         (self.period[0] * self.period[1] / f64::from(self.texels[0]) / f64::from(self.texels[1])).sqrt()
+    }
+    fn slope_texel_mm(&self) -> [f64; 2] {
+        match self.turned {
+            Some(_) => [0, 1].map(|axis| self.period[axis] / f64::from(self.texels[axis])),
+            None => [self.texel_mm(); 2],
+        }
+    }
+    fn basis(&self) -> Option<[f64; 4]> {
+        self.turned.map(|[a, b, c, d, ..]| [a * self.period[0], b * self.period[0], c * self.period[1], d * self.period[1]])
     }
     fn image_shrink(&self, surface: &PaperSurface) -> Option<f64> {
         let TextureSource::Image(image) = &surface.texture else { return None };
@@ -169,11 +213,28 @@ impl PaperTile {
             nearest as f32, 0., 0., 0.]
     }
     pub fn grain_radius(&self) -> u32 {
-        (3. * (self.pixels[0] / f64::from(self.texels[0])).max(self.pixels[1] / f64::from(self.texels[1]))).ceil().clamp(1.,16.) as u32
+        let texel = match self.basis() {
+            Some([a, b, c, d]) => (a.hypot(b) / self.pixels[0]).max(c.hypot(d) / self.pixels[1]),
+            None => (self.pixels[0] / f64::from(self.texels[0])).max(self.pixels[1] / f64::from(self.texels[1])),
+        };
+        (3. * texel).ceil().clamp(1.,16.) as u32
     }
-    pub fn grain(&self, binding: &PaperBinding) -> [f32; 4] {
-        let offset = [0, 1].map(|axis| ((binding.target_offset[axis] - self.origin[axis]) as f64).rem_euclid(self.pixels[axis]));
-        [self.pixels[0] as f32, self.pixels[1] as f32, offset[0] as f32, offset[1] as f32]
+    pub fn grain(&self, binding: &PaperBinding) -> Grain {
+        let (Some([a, b, c, d]), Some([.., x, y])) = (self.basis(), self.turned) else {
+            let offset = [0, 1].map(|axis| ((binding.target_offset[axis] - self.origin[axis]) as f64).rem_euclid(self.pixels[axis]));
+            return Grain { tile: [self.pixels[0] as f32, self.pixels[1] as f32, offset[0] as f32, offset[1] as f32], axes: AXES };
+        };
+        let determinant = a * d - c * b;
+        let inverse = [d / determinant, -b / determinant, -c / determinant, a / determinant];
+        let offset = [binding.target_offset[0] as f64 - x, binding.target_offset[1] as f64 - y];
+        let periods = [inverse[0] * offset[0] + inverse[2] * offset[1], inverse[1] * offset[0] + inverse[3] * offset[1]].map(f64::floor);
+        let rebased = [offset[0] - a * periods[0] - c * periods[1], offset[1] - b * periods[0] - d * periods[1]];
+        Grain { tile: [1., 1., rebased[0] as f32, rebased[1] as f32], axes: inverse.map(|v| v as f32) }
+    }
+    pub fn slope_axes(&self) -> [f32; 4] {
+        let Some([a, b, c, d, ..]) = self.turned else { return AXES };
+        let scale = (a * d - b * c).abs().sqrt() / (a * d - b * c);
+        [d * scale, -c * scale, -b * scale, a * scale].map(|v| v as f32)
     }
 }
 
@@ -209,7 +270,7 @@ impl SlopePrograms {
     fn ready(&self) -> bool {
         self.slope.ready() && self.mip.ready()
     }
-    fn encode(&self, device: &PipelineDevice, queue: &wgpu::Queue, heights: &wgpu::TextureView, scale: f32) -> Result<wgpu::TextureView, GpuRasterError> {
+    fn encode(&self, device: &PipelineDevice, queue: &wgpu::Queue, heights: &wgpu::TextureView, scale: [f32; 2]) -> Result<wgpu::TextureView, GpuRasterError> {
         let source = heights.texture();
         let [width, height] = [source.width(), source.height()];
         let levels = 32 - width.max(height).leading_zeros();
@@ -225,7 +286,7 @@ impl SlopePrograms {
         });
         let uniform = initialized_buffer(device, &wgpu::util::BufferInitDescriptor {
             label: Some("paper slope scale"),
-            contents: &[scale, 0., 0., 0.].iter().flat_map(|v| v.to_ne_bytes()).collect::<Vec<_>>(),
+            contents: &[scale[0], scale[1], 0., 0.].iter().flat_map(|v| v.to_ne_bytes()).collect::<Vec<_>>(),
             usage: wgpu::BufferUsages::UNIFORM,
         })?;
         let level = |level: u32| texture.create_view(&wgpu::TextureViewDescriptor { base_mip_level: level, mip_level_count: Some(1), ..Default::default() });
@@ -492,11 +553,12 @@ impl Papers {
     }
 
     pub fn nearest_slope(&self, surface: &PaperSurface, tile: &PaperTile) -> Option<(&wgpu::TextureView, f32)> {
-        let orientation = |surface: &PaperSurface| surface.mapping.0[..4].iter().map(|v| v.partial_cmp(&0.)).collect::<Vec<_>>();
+        let orientation = |surface: &PaperSurface, tile: &PaperTile| tile.turned.is_none().then(|| surface.mapping.0[..4].iter().map(|v| v.partial_cmp(&0.)).collect::<Vec<_>>());
         let area = tile.pixels[0] * tile.pixels[1];
         self.bakes.iter()
-            .filter(|b| b.surface.texture == surface.texture && orientation(&b.surface) == orientation(surface))
-            .filter_map(|b| Some(((b.tile.pixels[0] * b.tile.pixels[1] / area).ln().abs(), b.slope.as_ref()?, (b.tile.pixels[0] / tile.pixels[0]) as f32)))
+            .filter(|b| b.surface.texture == surface.texture && orientation(&b.surface, &b.tile) == orientation(surface, tile))
+            .filter_map(|b| Some(((b.tile.pixels[0] * b.tile.pixels[1] / area).ln().abs(), b.slope.as_ref()?,
+                if b.tile.turned.is_some() { 1. } else { (b.tile.pixels[0] / tile.pixels[0]) as f32 })))
             .min_by(|a, b| a.0.total_cmp(&b.0))
             .map(|(_, view, stretch)| (view, stretch))
     }
@@ -543,7 +605,7 @@ impl Papers {
         if let Stage::Ready { view, relief } = &self.bakes[index].stage {
             let bake = &self.bakes[index];
             let Some(programs) = self.slope_programs.as_ref().filter(|_| bake.wants_slope && bake.slope.is_none()) else { return Ok(false) };
-            let scale = relief * REFERENCE_RELIEF_UM / (bake.tile.texel_mm() as f32 * 1000.);
+            let scale = bake.tile.slope_texel_mm().map(|mm| relief * REFERENCE_RELIEF_UM / (mm as f32 * 1000.));
             let slope = programs.encode(device, queue, view, scale)?;
             self.bakes[index].slope = Some(slope);
             return Ok(true);
@@ -882,6 +944,9 @@ mod tests {
             renderer.require_paper_slope(&binding, startup::OTHER).unwrap();
             renderer.papers.slope(&PaperTile::id_for(&binding).unwrap()).unwrap().clone()
         });
+        let turned = crate::layer_tests::paper_shade::turned_surface(crate::layer_tests::paper_shade::TURNS[1]);
+        let ready = PaperBinding { surface: Arc::new(turned.clone()), target_offset: [0; 2] };
+        renderer.require_paper_slope(&ready, startup::OTHER).unwrap();
         let nearest = |binding: PaperBinding| renderer.papers.nearest_slope(&binding.surface, &PaperTile::new(&binding.surface).unwrap())
             .map(|(view, stretch)| (view.clone(), stretch));
         let (view, stretch) = nearest(scaled(&rough, 1.2, false)).unwrap();
@@ -890,6 +955,11 @@ mod tests {
         assert_eq!(nearest(scaled(&rough, 2.5, false)).map(|(view, _)| view).as_ref(), Some(&baked[1]));
         assert_eq!(nearest(scaled(&hot, 1., false)), None, "another paper is never borrowed");
         assert_eq!(nearest(scaled(&rough, 1., true)), None, "nor a flipped tile");
+        let [a, b, c, d, x, y] = turned.mapping.0;
+        let doubled = PaperBinding { surface: Arc::new(PaperSurface { mapping: layer_core::Affine64([2. * a, 2. * b, 2. * c, 2. * d, x, y]), ..turned }), target_offset: [0; 2] };
+        let (view, stretch) = nearest(doubled).unwrap();
+        assert_eq!(&view, renderer.papers.slope(&PaperTile::id_for(&ready).unwrap()).unwrap());
+        assert_eq!(stretch, 1., "a held turned tile keeps the relief of its ready tile");
     }
 
     fn preview(renderer: &mut WgpuRasterizer, texture: &TextureSource) -> Vec<u8> {
@@ -948,7 +1018,7 @@ mod tests {
             mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: SLOPE_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC, view_formats: &[] });
         let uniform = initialized_buffer(&renderer.device, &wgpu::util::BufferInitDescriptor { label: None,
-            contents: &[1f32, 0., 0., 0.].iter().flat_map(|v| v.to_ne_bytes()).collect::<Vec<_>>(), usage: wgpu::BufferUsages::UNIFORM }).unwrap();
+            contents: &[1f32, 1., 0., 0.].iter().flat_map(|v| v.to_ne_bytes()).collect::<Vec<_>>(), usage: wgpu::BufferUsages::UNIFORM }).unwrap();
         let group = bindings::group(&renderer.device, "paper slope", &programs.layout, [uniform.as_entire_binding(), wgpu::BindingResource::TextureView(input)]);
         let row = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
         let readback = renderer.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: u64::from(row * height),

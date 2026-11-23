@@ -33,7 +33,7 @@ struct DisplayCache { scale: u32, padding: u32, next_scale: u32, written_pages: 
 @group(0) @binding(5) var<storage, read> cache: DisplayCache;
 @group(0) @binding(6) var kept: texture_2d<f32>;
 @group(0) @binding(13) var navigator: texture_2d<f32>;
-struct PaperShade { tile: vec4<f32>, light: vec4<f32>, paper: vec4<f32>, state: vec4<f32> };
+struct PaperShade { tile: vec4<f32>, light: vec4<f32>, paper: vec4<f32>, state: vec4<f32>, axes: vec4<f32>, slope: vec4<f32> };
 @group(0) @binding(14) var<uniform> paper_shade: PaperShade;
 @group(0) @binding(15) var paper_slope: texture_2d<f32>;
 @group(0) @binding(16) var paper_sampler: sampler;
@@ -156,8 +156,9 @@ fn mapped_at(p:vec2<f32>,dx:vec2<f32>,dy:vec2<f32>,linear:bool)->vec4<f32> {
 }
 fn paper_slope_shade(p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> f32 {
     let size = paper_shade.tile.xy;
-    let slope = textureSampleGrad(paper_slope, paper_sampler, (p + paper_shade.tile.zw) / size, dx / size, dy / size).xy;
-    return paper_shade_factor(slope, paper_shade.light);
+    let axes = mat2x2<f32>(paper_shade.axes.xy, paper_shade.axes.zw);
+    let slope = textureSampleGrad(paper_slope, paper_sampler, axes * (p + paper_shade.tile.zw) / size, axes * dx / size, axes * dy / size).xy;
+    return paper_shade_factor(mat2x2<f32>(paper_shade.slope.xy, paper_shade.slope.zw) * slope, paper_shade.light);
 }
 fn paper_relief(color: vec4<f32>, weight: f32, p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
     if paper_shade.state.x == 0. || paper_shade.state.z != 0. { return color; }

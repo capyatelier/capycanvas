@@ -175,7 +175,7 @@ impl LineCapture<'_> {
         let [w,h]=[crop.width(),crop.height()].map(|v|v as f32);
         let mut data=[0.;32];data[..8].copy_from_slice(&[0.,0.,w,h,SIDE as f32,SIDE as f32,0.,0.]);
         data[8..12].copy_from_slice(&[23.,1.,1.,0.]);
-        scene.jobs.push(Job::Draw {target:target.clone(),sources:[next.1.clone(),r.empty_view.clone(),r.empty_view.clone(),r.empty_paper_view.clone()],
+        scene.jobs.push(Job::Draw { paper: [0.; 4],target:target.clone(),sources:[next.1.clone(),r.empty_view.clone(),r.empty_view.clone(),r.empty_paper_view.clone()],
             data,over:true,clip:None,source_target:None,edges:None,pipeline:None});
     }
 }

@@ -1095,7 +1095,7 @@ fn fused_prediction_one_pixel_compares_signed_zero_and_tiny_alpha_bits() {
     let doc=document_at([256;2]);let target=source_at(&doc,0);
     let dab=crate::tests::test_dab([0.,0.],[0.,0.,0.,1.],0.8);
     let batch=dab_batch(target,crate::layer_tests::preset_style(DefaultBrushPreset::GPen),dab.bounds());
-    let record=StyleGpu::brush([256;2],&batch,PAGE_SIZE,&r.device,([1.,1.,0.,0.],1.));
+    let record=StyleGpu::brush([256;2],&batch,PAGE_SIZE,&r.device,(crate::paper::Grain::FLAT,1.));
     r.queue.write_buffer(&r.style_buffer,0,style_bytes(&record));
     let normal=[0.125f32,0.25,0.5,0.75];let tiny=[0.,0.,0.,1e-30];
     for (old,new,dirty) in [(normal,normal,0),([0.,0.,0.,1.],[-0.,0.,0.,1.],1),([-0.,0.,0.,1.],[0.,0.,0.,1.],1),([0.;4],tiny,1),(tiny,[0.;4],1)] {

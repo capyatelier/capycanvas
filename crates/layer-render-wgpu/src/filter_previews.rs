@@ -184,7 +184,7 @@ impl FilterPreviews {
             data[..6].copy_from_slice(&[0., 0., width, height, width, height]);
             data[8..10].copy_from_slice(&[1., 1.]);
             data[31] = Convert::Encode.code();
-            self.scene.jobs.push(Job::Draw {
+            self.scene.jobs.push(Job::Draw { paper: [0.; 4],
                 target: encoded.1.clone(),
                 sources: [source.clone(), r.empty_view.clone(), r.empty_view.clone(), r.empty_paper_view.clone()],
                 data,
@@ -223,7 +223,7 @@ impl FilterPreviews {
             data[8] = 10.;
             data[24..32].copy_from_slice(&r.ui_rendition_parameters());
             data[12..16].copy_from_slice(&[0., 0., extent[0] as f32, extent[1] as f32]);
-            self.scene.jobs.push(Job::Draw {
+            self.scene.jobs.push(Job::Draw { paper: [0.; 4],
                 target: atlas.1.clone(),
                 sources: [previous, r.empty_view.clone(), r.empty_view.clone(), r.empty_paper_view.clone()],
                 data,

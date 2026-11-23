@@ -23,7 +23,7 @@ fn cold_fragment_family_defers_before_encoding_and_capture_prepares_only_that_fa
         data[..8].copy_from_slice(&[0.,0.,EXTENT[0] as f32,EXTENT[1] as f32,EXTENT[0] as f32,EXTENT[1] as f32,0.,0.]);
         data[8] = 6.;
         data[12..16].copy_from_slice(&[0.25,0.5,0.75,0.5]);
-        let job = Job::Draw {target:view,sources:[coverage_view,r.empty_view.clone(),r.empty_view.clone(),r.empty_paper_view.clone()],data,over:false,clip:None,source_target:None,edges:None,pipeline:None};
+        let job = Job::Draw { paper: [0.; 4],target:view,sources:[coverage_view,r.empty_view.clone(),r.empty_view.clone(),r.empty_paper_view.clone()],data,over:false,clip:None,source_target:None,edges:None,pipeline:None};
         scene.jobs.push(job.clone());
         scene.source_jobs.push(0..1);
         scene.ordered = ordered;
@@ -77,7 +77,7 @@ fn cold_compute_copy_encodes_without_admitting_fragment_pipelines() {
     let mut data = [0.;32];
     data[..8].copy_from_slice(&[0.,0.,EXTENT[0] as f32,EXTENT[1] as f32,EXTENT[0] as f32,EXTENT[1] as f32,0.,0.]);
     data[8] = 1.;data[9] = 1.;
-    scene.jobs.push(Job::Draw {target:view,sources:[source_view,r.empty_view.clone(),r.empty_view.clone(),r.empty_paper_view.clone()],
+    scene.jobs.push(Job::Draw { paper: [0.; 4],target:view,sources:[source_view,r.empty_view.clone(),r.empty_view.clone(),r.empty_paper_view.clone()],
         data,over:false,clip:None,source_target:None,edges:None,pipeline:None});
     scene.source_jobs.push(0..1);
     submit_encoded(&mut r,|r,encoder| {

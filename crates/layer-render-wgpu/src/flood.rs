@@ -182,21 +182,21 @@ impl Flood {
     }
     pub fn prepare_cache(&self,compiler:&compile::Scope,priority:startup::Class)->bool {self.lines.prepare_cache(compiler,priority)}
     #[allow(clippy::too_many_arguments)]
-    pub fn build_lines(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,extent:[u32;2],paper:([f32;4],u32,bool),(budget,demand):(f64,bool),dirty:&std::collections::BTreeSet<[u32;2]>,lines:(bool,bool))->Result<(bool,f64),GpuRasterError> {
+    pub fn build_lines(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,extent:[u32;2],paper:(paper::Grain,u32,bool),(budget,demand):(f64,bool),dirty:&std::collections::BTreeSet<[u32;2]>,lines:(bool,bool))->Result<(bool,f64),GpuRasterError> {
         let device=input.device;
         let labels=Labels::new(extent,&device.limits()).ok_or(GpuRasterError::SizeOverflow)?;
         let windows:Vec<_>=labels.windows(extent).collect();
         if !self.lines.building() {self.lines.allocate(device,extent,labels.side,&windows)?;}
         self.lines.build(input,encoder,paper,budget,demand,dirty,lines)
     }
-    pub fn build_scope(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,paper:([f32;4],u32),budget:f64,blocks:Option<std::collections::BTreeSet<[u32;2]>>)->Result<(bool,f64),GpuRasterError> {
+    pub fn build_scope(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,paper:(paper::Grain,u32),budget:f64,blocks:Option<std::collections::BTreeSet<[u32;2]>>)->Result<(bool,f64),GpuRasterError> {
         self.lines.build_scope(input,encoder,paper,budget,blocks)
     }
     pub fn lines_full(&self)->bool {self.lines.full()}
     #[cfg(test)]
     pub fn built_blocks(&self)->Option<usize> {self.lines.built_blocks()}
     pub fn lines_open(&self)->bool {self.lines.open()}
-    pub fn tap_distance(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,tap:[u32;2],grain:[f32;4]) {self.lines.tap_distance(input,encoder,tap,grain);}
+    pub fn tap_distance(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,tap:[u32;2],grain:paper::Grain) {self.lines.tap_distance(input,encoder,tap,grain);}
     pub fn read_stale(&self,device:&PipelineDevice,encoder:&mut crate::submission::CommandEncoder)->mpsc::Receiver<Result<[u32;1],GpuRasterError>> {self.lines.read_stale(device,encoder)}
     pub fn scope_blocks(&self,seed:[u32;2],flagged:impl Iterator<Item=[u32;2]>)->std::collections::BTreeSet<[u32;2]> {self.lines.scope_blocks(seed,flagged)}
     pub fn check_snap(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,tap:[u32;2],probe:&ScopeProbe,stop:Option<&wgpu::Buffer>,fill:Option<&layer_render::RegionFillQuery>) {

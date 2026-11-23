@@ -1517,6 +1517,39 @@ fn fill_contact_pixels(binding: layer_core::paper::PaperBinding, strength: f32, 
 }
 
 #[test]
+fn a_turned_paper_gives_brushes_and_fills_the_same_tooth_one_true_period_away() {
+    use layer_core::{Affine, FillTexture, RasterOperation, RasterOperationKind};
+    use crate::layer_tests::paper_shade::{TURNS, turned_surface, periods, worst_shift};
+    let extent = [256; 2];
+    let key = TileKey { plane: layer_core::raster::RasterPlane::Color, coordinate: [0; 2] };
+    let alpha = |pixels: &BTreeMap<TileKey, Vec<u8>>| pixels[&key].chunks_exact(4).map(|pixel| f32::from(pixel[3]) / 255.).collect::<Vec<_>>();
+    for turn in TURNS {
+        let painted = |target_offset: [i64; 2]| {
+            let binding = layer_core::paper::PaperBinding { surface: Arc::new(turned_surface(turn)), target_offset };
+            let stroke = alpha(&fill_contact_pixels(binding.clone(), 1., DocumentColor::default(), extent));
+            let doc = paint_document(extent, "Turned fill");
+            let id = target(&doc);
+            let (_, mut live) = engine(doc);
+            live.append_raster_operation(id, RasterOperation { placement: Affine::IDENTITY, coverage: reveal_all(extent, [0; 2]),
+                kind: RasterOperationKind::Fill { edges: None, underfill: None, texture: FillTexture { strength: 1., paper: Some(binding) },
+                    color: [0.2, 0.4, 0.8, 1.], alpha_locked: false } }).unwrap();
+            flush(&mut live);
+            [stroke, alpha(&backing(&paint(live.document()).raster))]
+        };
+        let ([stroke, fill], moved) = (painted([0, 0]), painted([1, 0]));
+        for ((name, values), moved) in [("stroke", &stroke), ("fill", &fill)].into_iter().zip(&moved) {
+            let worst = (0..256 * 255).map(|i| (moved[i / 255 * 256 + i % 255] - values[i / 255 * 256 + i % 255 + 1]).abs()).fold(0f32, f32::max);
+            assert!(worst <= 2. / 255., "the {name} on a moved layer must find the tooth of paper turned by {turn:?} at the same document point: {worst}");
+            assert!(values.iter().any(|v| *v < 0.5) && values.iter().any(|v| *v > 0.5), "the {name} must show the tooth of paper turned by {turn:?}");
+            for shift in periods(turn, 1.) {
+                let worst = worst_shift(values, 256, shift);
+                assert!(worst <= 2. / 255., "the {name} on paper turned by {turn:?} must find the same tooth one period {shift:?} away: {worst}");
+            }
+        }
+    }
+}
+
+#[test]
 fn native_fill_texture_matches_contact_and_flat_pixels_through_history() {
     use layer_core::{Affine, FillTexture, RasterOperation, RasterOperationKind, Point};
     use layer_core::color::source::{SourceBuilder, SourceChannels, SourceInterpretation};

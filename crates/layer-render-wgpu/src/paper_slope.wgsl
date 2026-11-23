@@ -22,7 +22,7 @@ fn paper_slope(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32>
         slope_texel(q + vec2(-1, 1)).r, slope_texel(q + vec2(0, 1)).r, slope_texel(q + vec2(1, 1)).r);
     let x = (h[2] + 2. * h[5] + h[8]) - (h[0] + 2. * h[3] + h[6]);
     let y = (h[6] + 2. * h[7] + h[8]) - (h[0] + 2. * h[1] + h[2]);
-    return vec4<f32>(vec2<f32>(x, y) * (slope_parameters.scale.x / 8.), 0., 1.);
+    return vec4<f32>(vec2<f32>(x, y) * (slope_parameters.scale.xy / 8.), 0., 1.);
 }
 
 @fragment

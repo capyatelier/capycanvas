@@ -141,8 +141,12 @@ the scale to the paper resolution, with the paper's origin at the document
 origin. Crop, Image Size, rotation and flips compose the mapping, as they do
 for Gradient Fill
 ([canvas geometry](../../crates/layer-core/src/canvas_geometry.rs)), so the
-tooth follows the marks. Image Rotate offers only quarter turns and flips, so
-the baked tile always stays aligned with the pixel grid.
+tooth follows the marks. Image Rotate's quarter turns and flips keep the
+paper's periods along the pixel grid. Crop Straighten can turn it by any
+angle; a turned or sheared sheet then repeats along its own period vectors,
+and every reader of the paper (brushes, fills, Enclose Fill grain, the canvas
+lighting and exports) finds the texel at the same document point
+([the bake](texture-programs.md#the-bake)).
 
 `Document::new` creates a white Paper.
 [Photo projects](../../crates/layer-color/src/photo_project.rs) open without
@@ -303,8 +307,9 @@ with Add to Library; adding it reuses an equal stored image.
   frames.
 - **Bakes are cached in memory** by program, version, values and tile size,
   shared between drawings and released when unused. A rebake follows a change
-  of texture, Size, Image Size or orientation, not a crop or a resolution-only
-  change. A disk cache is not needed: a bake costs a few milliseconds on a
+  of texture, Size, Image Size or axis-aligned orientation, not a crop, a
+  turn of an already turned sheet or a resolution-only change. A disk cache
+  is not needed: a bake costs a few milliseconds on a
   desktop GPU and is not expected to exceed the shader preparation it already
   waits behind on a tablet.
 - **Strokes wait for their paper** as they wait for shaders. The first frame
@@ -320,8 +325,9 @@ with Add to Library; adding it reuses an equal stored image.
   Scale changes and for 1.2 s after a paper is chosen, then fades out
   ([`paper.rs`](../../crates/layer-ui/src/effects/paper.rs)). A lit paper shows
   its own relief instead. While Scale moves, it stretches the slope tile of the
-  finished bake of the same paper and orientation nearest in size, scaling its
-  slopes to the new size, so every slider step shows at once, and holds bakes
+  finished bake of the same paper and orientation, or of any turned sheet of
+  that paper, nearest in size, scaling its slopes to the new size, so every
+  slider step shows at once, and holds bakes
   of that paper so the drag spends no GPU time on them; only a paper without
   any bake is baked during the drag. On release the paper's own bake and slope
   replace the stretched one. The visible interval starts after the viewport
@@ -355,6 +361,8 @@ composite regardless of the retained lighting values.
 - **Slope.** The baked height tile becomes a slope tile with a Sobel kernel in
   physical units, `relief × 100 µm` of height over the texel's width, and a
   wrapping RG16F mip chain ([`paper_slope.wgsl`](../../crates/layer-render-wgpu/src/paper_slope.wgsl)).
+  A turned sheet's slopes are along the paper's own axes and are turned into
+  the drawing's axes where they are lit, so they turn with the sheet.
   It is built once per bake on first use. The canvas samples it with the
   screen footprint, so the relief averages out as the view zooms out instead
   of shimmering.

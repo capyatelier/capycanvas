@@ -142,7 +142,7 @@ fn advanced_color(input: VertexOutput, opacity: f32) -> vec4<f32> {
     }
 
     if style.flags.y > 0.5 {
-        let grain = paper_sample(grain_texture, brush_sampler, input.world, style.grain);
+        let grain = paper_sample(grain_texture, brush_sampler, input.world, style.grain, style.grain_axes);
         coverage *= mix(1.0, grain, clamp(input.material.x * style.flags.z, 0.0, 1.0));
     }
 

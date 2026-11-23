@@ -38,7 +38,7 @@ fn unbristled_footprint(dab: Dab, world: vec2<f32>, field: vec2<f32>) -> f32 {
     );
     if coverage <= 0.0 { return 0.0; }
     if FOOTPRINT_GRAIN && style.flags.y > 0.5 {
-        coverage *= mix(1.0, paper_sample(grain_texture, brush_sampler, world, style.grain),
+        coverage *= mix(1.0, paper_sample(grain_texture, brush_sampler, world, style.grain, style.grain_axes),
             clamp(dab.material.x * style.flags.z, 0.0, 1.0));
     }
     if coverage < style.edges.w { return 0.0; }

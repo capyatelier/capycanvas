@@ -17,6 +17,7 @@ struct Style {
     bristles: vec4<f32>,
     bristle_streak: vec4<f32>,
     color_mode: vec4<f32>,
+    grain_axes: vec4<f32>,
 }
 
 struct Dab {

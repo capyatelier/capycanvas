@@ -191,12 +191,12 @@ impl RegionRequests {
         }
         Ok(output)
     }
-    fn paper(r:&WgpuRasterizer,request:&RegionRequest)->Result<(wgpu::TextureView,[f32;4],u32),GpuRasterError> {
+    pub(super) fn paper(r:&WgpuRasterizer,request:&RegionRequest)->Result<(wgpu::TextureView,paper::Grain,u32),GpuRasterError> {
         request.paper.as_ref().map(|binding| {
             let tile=paper::PaperTile::new(&binding.surface)?;
             let view=paper::PaperTile::id_for(binding).and_then(|id|r.papers.view(&id)).ok_or(GpuRasterError::NotReady)?;
-            Ok((view.clone(),tile.grain(binding),tile.grain_radius()))
-        }).unwrap_or_else(||Ok((r.empty_paper_view.clone(),[1.,1.,0.,0.],1)))
+            Ok((view.clone(),tile.grain(&layer_core::paper::PaperBinding {target_offset:[0;2],..binding.clone()}),tile.grain_radius()))
+        }).unwrap_or_else(||Ok((r.empty_paper_view.clone(),paper::Grain::FLAT,1)))
     }
     fn build_cache(&mut self,r:&mut WgpuRasterizer,request:&RegionRequest,enclosed:bool,encoder:&mut crate::submission::CommandEncoder,grant:Option<&mut crate::scene::WorkBudget>,areas:bool)->Result<(),GpuRasterError> {
         let demand=grant.is_none();
@@ -395,7 +395,7 @@ impl RegionRequests {
         self.scope=Some((id,Scope::Known(probe)));
         if built? {Ok(())}else{Err(GpuRasterError::NotReady)}
     }
-    fn scoped_lines(&mut self,input:&flood::Input<'_>,encoder:&mut crate::submission::CommandEncoder,paper:([f32;4],u32),blocks:Option<std::collections::BTreeSet<[u32;2]>>)->Result<bool,GpuRasterError> {
+    fn scoped_lines(&mut self,input:&flood::Input<'_>,encoder:&mut crate::submission::CommandEncoder,paper:(paper::Grain,u32),blocks:Option<std::collections::BTreeSet<[u32;2]>>)->Result<bool,GpuRasterError> {
         Ok(self.flood.build_scope(input,encoder,paper,flood::CHUNK_NANOSECONDS*f64::from(self.pieces),blocks)?.0)
     }
     fn submit(&mut self,r:&mut WgpuRasterizer,encoder:crate::submission::CommandEncoder) {

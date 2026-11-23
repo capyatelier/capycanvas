@@ -393,7 +393,7 @@ fn every_job_stages_the_record_an_unused_slot_would_hold() {
     let resample = |byte| Job::Resample { values: [byte; resample::UNIFORM_BYTES as usize], views: [view(), view()], size: [8; 2] };
     let jobs = [
         ("clear", Job::Clear(view(), wgpu::Color::RED)),
-        ("draw", Job::Draw { target: view(), sources: sources(), data, over: false, clip: None, source_target: None, edges: None, pipeline: None }),
+        ("draw", Job::Draw { paper: [0.; 4], target: view(), sources: sources(), data, over: false, clip: None, source_target: None, edges: None, pipeline: None }),
         ("effect", Job::Effect { target: view(), sources: sources(), data, prepared, masks: Box::new(std::array::from_fn(|_| r.empty_view.clone())),
             source_target: None, changed_cells: None }),
         ("reduce", Job::Reduce { output: view(), sources: sources(), values, size: [8; 2], kernel: Reduction::Pages, format: wgpu::TextureFormat::Rgba32Float }),

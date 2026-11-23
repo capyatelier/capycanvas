@@ -2017,15 +2017,15 @@ impl WgpuRasterizer {
         Ok(style.grain.and(style.paper.as_ref()).and_then(paper::PaperTile::id_for).is_none_or(|id| self.papers.view(&id).is_some()))
     }
 
-    fn paper_style(&self, style: &layer_render::DabStyle) -> ([f32; 4], f32) {
+    fn paper_style(&self, style: &layer_render::DabStyle) -> (paper::Grain, f32) {
         let key = Self::texture_set_key(style);
         style.grain.and(style.paper.as_ref()).and_then(|binding| {
             let tile = paper::PaperTile::new(&binding.surface).ok()?;
             Some((tile.grain(binding), self.texture_sets.iter().find(|set| set.key == key)?.relief))
-        }).unwrap_or(([1., 1., 0., 0.], 1.))
+        }).unwrap_or((paper::Grain::FLAT, 1.))
     }
 
-    fn paper_shade(&self) -> Option<(&wgpu::TextureView, [f32; 16], bool)> {
+    fn paper_shade(&self) -> Option<(&wgpu::TextureView, [f32; 24], bool)> {
         let (binding, light, separated, flash) = match (&self.paper_lighting, &self.paper_overlay) {
             (Some(lit), _) => (&lit.binding, lit.light, lit.separated, false),
             (None, Some(overlay)) => (&overlay.paper, paper::flash_light(overlay.opacity), None, true),
@@ -2034,11 +2034,13 @@ impl WgpuRasterizer {
         let tile = paper::PaperTile::new(&binding.surface).ok()?;
         let exact = self.papers.slope(&tile.id(&binding.surface));
         let (view, stretch) = exact.map(|view| (view, 1.)).or_else(|| self.papers.nearest_slope(&binding.surface, &tile))?;
-        let [pixels_x, pixels_y, offset_x, offset_y] = tile.grain(binding);
+        let paper::Grain { tile: [pixels_x, pixels_y, offset_x, offset_y], axes } = tile.grain(binding);
+        let slope = tile.slope_axes();
         let [x, y] = light.direction();
         let [r, g, b, a] = separated.unwrap_or_default();
         Some((view, [pixels_x, pixels_y, offset_x, offset_y, x, y, light.relief * stretch, light.through_paint, r, g, b, a,
-            1., f32::from(u8::from(separated.is_some())), f32::from(u8::from(flash)), 0.], flash && exact.is_some()))
+            1., f32::from(u8::from(separated.is_some())), f32::from(u8::from(flash)), 0., axes[0], axes[1], axes[2], axes[3],
+            slope[0], slope[1], slope[2], slope[3]], flash && exact.is_some()))
     }
 
     fn require_paper_slope(&mut self, binding: &layer_core::paper::PaperBinding, priority: startup::Class) -> Result<(), GpuRasterError> {
@@ -2080,7 +2082,7 @@ impl WgpuRasterizer {
         let Some(slope) = self.papers.slope(&tile.id(&binding.surface)) else { return Ok(None) };
         let offset = scene.evaluation_offset64();
         let origin = [f64::from(origin[0]) - offset[0], f64::from(origin[1]) - offset[1]];
-        export.encode(&self.device, encoder, source, coverage, slope, tile.grain(&binding), light, origin).map(Some)
+        export.encode(&self.device, encoder, source, coverage, slope, tile.grain(&binding), tile.slope_axes(), light, origin).map(Some)
     }
 
     fn advance_papers(&mut self, wait: bool, held: Option<layer_core::TextureSource>) -> Result<(), GpuRasterError> {
@@ -5579,6 +5581,7 @@ struct StyleGpu {
     bristles: [f32; 4],
     bristle_streak: [f32; 4],
     color_mode: [f32; 4],
+    grain_axes: [f32; 4],
 }
 
 fn layer_color_parameters(mode: layer_core::color::LayerColorMode, color: layer_core::color::DocumentColor) -> [f32; 4] {
@@ -5634,6 +5637,7 @@ impl StyleGpu {
             bristles: [0.0; 4],
             bristle_streak: [0.0; 4],
             color_mode: [0.0; 4],
+            grain_axes: [0.0; 4],
         }
     }
 
@@ -5650,7 +5654,7 @@ impl StyleGpu {
         result
     }
 
-    fn brush(extent: [u32; 2], batch: &DabBatch, block: u32, device: &PipelineDevice, paper: ([f32; 4], f32)) -> Self {
+    fn brush(extent: [u32; 2], batch: &DabBatch, block: u32, device: &PipelineDevice, paper: (paper::Grain, f32)) -> Self {
         let mut style = Self::for_brush(extent, &batch.style, batch.first_dab, batch.dab_count, device, paper);
         style.canvas_opacity[3] = f32::from(batch.stroke_start);
         style.operation[2] = block;
@@ -5668,10 +5672,11 @@ impl StyleGpu {
         style
     }
 
-    fn for_brush(extent: [u32; 2], style: &layer_render::DabStyle, first: u32, count: u32, device: &PipelineDevice, (paper, relief): ([f32; 4], f32)) -> Self {
+    fn for_brush(extent: [u32; 2], style: &layer_render::DabStyle, first: u32, count: u32, device: &PipelineDevice, (paper, relief): (paper::Grain, f32)) -> Self {
         let grain = style.grain.as_ref();
         let mut result = Self::plain(extent, [0.0; 4], style.opacity);
-        result.grain = paper;
+        result.grain = paper.tile;
+        result.grain_axes = paper.axes;
         result.flags = [
             f32::from(matches!(style.tip, BrushTip::AnalyticEllipse)),
             f32::from(grain.is_some()),
@@ -6922,7 +6927,7 @@ use layer_render::{DabBatchKind, DabStyle, FramePacket, ViewState};
     fn gpu_records_match_shader_layouts() {
         assert_eq!(mem::size_of::<Dab>(), 128);
         assert_eq!(mem::size_of::<DabGpu>(), 160);
-        assert_eq!(mem::size_of::<StyleGpu>(), 288);
+        assert_eq!(mem::size_of::<StyleGpu>(), 304);
         assert_eq!(mem::size_of::<TargetGpu>(), 32);
     }
 

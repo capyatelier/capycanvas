@@ -2042,7 +2042,7 @@ pub(crate) fn encode_pending(r: &mut WgpuRasterizer, encoder: &mut crate::submis
         let Some(reservation)=r.reserve_upload(class,if pending.input.is_some() {0}else {NORMALIZED_PAGE_BYTES}) else {return Ok(false);};
         let binding = if pending.pipeline(&r.scene_pipelines.source).is_some() {
             let records = r.device.create_buffer(&wgpu::BufferDescriptor { label: Some("source normalization records"),
-                size: 144, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+                size: 160, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
             let binding = uniform_binding(&r.device, &r.scene_pipelines.uniforms, &records);
             let mut data = [0; 144];
             if let Some(values)=pending.normalization_parameters() {values.write_uniform(&mut data);}

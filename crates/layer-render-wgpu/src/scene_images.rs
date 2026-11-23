@@ -222,7 +222,7 @@ impl Scene {
                 color.b as f32,
                 color.a as f32,
             ]);
-            self.jobs[start] = Job::Draw {
+            self.jobs[start] = Job::Draw { paper: [0.; 4],
                 target: destination.view.clone(),
                 sources: [r.empty_view.clone(), r.empty_view.clone(), r.empty_view.clone(), r.empty_paper_view.clone()],
                 data: fill,

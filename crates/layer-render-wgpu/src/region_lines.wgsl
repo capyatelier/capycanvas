@@ -8,6 +8,7 @@ struct LineParams {
     options: vec4<u32>,
     paper: vec4<f32>,
     job: vec4<u32>,
+    paper_axes: vec4<f32>,
 }
 @group(0) @binding(1) var<uniform> line: LineParams;
 @group(0) @binding(2) var<storage, read_write> first: array<u32>;
@@ -58,9 +59,18 @@ fn paper_texel(p:vec2<i32>,size:vec2<i32>)->u32 {
     let at=(p%size+size)%size;
     return u32(round(textureLoad(paper_height,at,0).r*255.));
 }
+fn paper_fixed(p:vec2<i32>,size:vec2<i32>)->vec2<i32> {
+    if all(line.paper_axes==vec4(1.,0.,0.,1.)) {
+        let period=max(vec2<u32>(1),vec2<u32>(line.paper.xy));
+        return vec2<i32>(vec2<u32>(paper_axis(u32(p.x),u32(line.paper.z),period.x,u32(size.x)),paper_axis(u32(p.y),u32(line.paper.w),period.y,u32(size.y))));
+    }
+    let q=vec2<f32>(p)+.5+line.paper.zw;
+    let uv=vec2(dot(line.paper_axes.xz,q),dot(line.paper_axes.yw,q))/line.paper.xy;
+    return vec2<i32>(floor(fract(uv)*vec2<f32>(size)*256.+.5));
+}
 fn height(p:vec2<i32>)->u32 {
-    let size=vec2<i32>(textureDimensions(paper_height));let period=max(vec2<u32>(1),vec2<u32>(line.paper.xy));
-    let fixed=vec2<i32>(vec2<u32>(paper_axis(u32(p.x),u32(line.paper.z),period.x,u32(size.x)),paper_axis(u32(p.y),u32(line.paper.w),period.y,u32(size.y))))-vec2<i32>(128);
+    let size=vec2<i32>(textureDimensions(paper_height));
+    let fixed=paper_fixed(p,size)-vec2<i32>(128);
     let texel=fixed>>vec2<u32>(8);let fraction=vec2<u32>(fixed-texel*256);
     let top=paper_texel(texel,size)*(256u-fraction.x)+paper_texel(texel+vec2(1,0),size)*fraction.x;
     let bottom=paper_texel(texel+vec2(0,1),size)*(256u-fraction.x)+paper_texel(texel+vec2(1,1),size)*fraction.x;
