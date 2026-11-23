@@ -4224,6 +4224,7 @@ impl CanvasRenderer for WgpuRasterizer {
         for page in &self.preview_coverage_pages { page.release_bindings(); }
         for (target, coordinate, views) in retired { self.forget_bindings(Some(target), coordinate, &views, &[]); }
         self.material_holders.release_prediction();
+        (self.reservoir.predicted, self.reservoir.taps, self.gathered_taps) = (None, None, None);
         self.live_stroke = None;
     }
     fn set_transform_preview(
