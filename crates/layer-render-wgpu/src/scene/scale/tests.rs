@@ -394,6 +394,58 @@ fn plain_raster_stroke_with_shared_overview(minified:bool) {
 }
 
 #[test]
+fn an_overview_derived_while_its_view_has_a_hole_shows_the_views_current_pixels() {
+    let extent=[4096,2048];let document=document_at(extent);let target=source_at(&document,0);
+    let mut frame=packet(document.scene(),extent);frame.composite_all=false;
+    frame.view=layer_render::ViewState {width_px:1280,height_px:1024,document_to_surface:[0.5,0.,0.,0.5,0.,0.]};
+    let blue=(0..PAGE_SIZE*PAGE_SIZE).flat_map(|_|[0.1f32,0.2,0.9,1.]).flat_map(f32::to_le_bytes).collect::<Vec<_>>();
+    let changed=[2,2];
+    let paged=|r:&mut WgpuRasterizer| {
+        crate::test_support::submit_settled(r,frame);
+        let mut dab=crate::tests::test_dab([640.,640.],[1.,0.,0.,1.],1.);dab.radii=[8.;2];
+        let batch=DabBatch {stroke_start:true,stroke_end:true,..dab_batch(target,crate::layer_tests::preset_style(DefaultBrushPreset::GPen),dab.bounds())};
+        crate::test_support::submit_ready(r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame}).unwrap();
+        crate::test_support::submit_settled(r,frame);
+    };
+    let overview=|r:&WgpuRasterizer|{let overview=r.scale_display.as_ref().unwrap().overview.as_deref().unwrap();(window_pixels(r,overview.pixels.root().unwrap(),overview.plan),overview.plan)};
+    let mut fresh=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();paged(&mut fresh);
+    crate::test_support::upload_layer_page(&mut fresh,document.scene(),target,changed,&blue);
+    crate::test_support::submit_settled(&mut fresh,frame);
+    let (expected,_)=overview(&fresh);
+    let visible=display_mips::view_bounds(frame.view,extent,0).unwrap();
+    for (visible_hole,discarded) in [(true,false),(false,false),(true,true)] {
+        let mut r=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();paged(&mut r);
+        {
+            let main=r.scale_display.as_ref().unwrap();let overview=main.overview.as_deref().expect("a partial view keeps an overview");
+            assert!(main.plan.level==1 && overview.plan.level==3 && main.pixels.committed_next().is_some(),"the view reduces its half level and derives an overview");
+            let hole=if visible_hole {PixelRect::new(2048,0,2560,512)}else {PixelRect::new(visible.max_x(),0,main.plan.bounds.max_x(),512)};
+            assert!(!hole.is_empty() && hole.intersect(visible).is_empty()!=visible_hole,"the hole is {} the view",if visible_hole {"inside"}else {"outside"});
+            let display=r.scene_tiers.display.clone();
+            let refused=display.blocked(crate::residency::Class::Visible,display.limit()+1).expect("a unit larger than the display grant is refused");
+            main.evict_window(hole);main.refuse(None,hole,&refused);
+        }
+        crate::test_support::upload_layer_page(&mut r,document.scene(),target,changed,&blue);
+        for _ in 0..6 {
+            crate::test_support::submit_ready(&mut r,frame).unwrap();crate::test_support::complete(&r);
+            if r.scale_display.as_ref().unwrap().displays(page_rect(changed)) {break;}
+        }
+        let main=r.scale_display.as_ref().unwrap();
+        assert!(main.displays(page_rect(changed)) && !main.coverage_complete(),"the changed cell composes while the hole stays open");
+        if discarded {
+            r.test.discard_frame=true;
+            crate::test_support::submit_ready(&mut r,frame).unwrap();
+            assert!(!r.test.discard_frame,"the frame that derives the change is dropped");
+        }
+        crate::test_support::submit_ready(&mut r,frame).unwrap();crate::test_support::complete(&r);
+        let (shown,plan)=overview(&r);
+        let texel=(((changed[1]*PAGE_SIZE+128)>>plan.level)*plan.size[0]+((changed[0]*PAGE_SIZE+128)>>plan.level)) as usize;
+        assert!(crate::test_support::max_error(&shown[texel..=texel],&expected[texel..=texel])<1e-3,
+            "with the hole {} the view{}, the overview keeps the changed cell's old pixels: {:?} against {:?}",if visible_hole {"inside"}else {"outside"},
+            if discarded {" and a dropped derivation"}else {""},shown[texel],expected[texel]);
+    }
+}
+
+#[test]
 fn a_view_without_an_overview_admits_its_root_window_beyond_a_quarter_of_the_scene_budget() {
     let extent=[2048,1024];let document=document_at(extent);
     let mut r=crate::memory::memory_tests::legacy_scene_renderer(document.composition().color);

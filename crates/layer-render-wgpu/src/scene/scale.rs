@@ -319,6 +319,8 @@ pub(crate) struct Cache {
     pivot_pending: bool,
     pivot_edit: Option<(OccurrenceHandle,layer_core::raster::ContentStamp,bool)>,
     pointer: Option<[f32;2]>,
+    underived: PixelRect,
+    derivations: Vec<(submission::Submission,PixelRect)>,
 }
 
 fn requires_native_effects(scene:SceneView<'_>,level:u32)->bool {
@@ -704,7 +706,7 @@ impl Cache {
             layer_count: layers,
             overview, preparing: false, declaring: false, exact_tile: None,
             graph: Default::default(), transform: r.transform_preview.clone(), retired: None, previous: None, standing: None, complete: false, contact: false, gesture: None, stroked: None, presented: pages::Accuracy::Display, asked: None,
-            streaming: Default::default(), pivot_waiting: None, pivot_refusal: None, reduction_refusal: None, pivot_pending: false, pivot_edit: None, pointer: None,
+            streaming: Default::default(), pivot_waiting: None, pivot_refusal: None, reduction_refusal: None, pivot_pending: false, pivot_edit: None, pointer: None, underived: PixelRect::EMPTY, derivations: Vec::new(),
         }
     }
     fn geometry(r: &WgpuRasterizer, plan: display_mips::Plan) -> wgpu::Buffer {
@@ -1009,21 +1011,30 @@ impl Cache {
         let with=|memory:u64|retained+memory;
         let rendered=|scene:&mut Scene,result|match result {Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>{scene.clear_unencoded_jobs();Ok(PixelRect::EMPTY)},result=>result};
         let mut stand_in=PixelRect::EMPTY;
+        let underived=&mut self.underived;
+        self.derivations.retain(|(submission,area)| {if submission.discarded() {*underived=underived.union(*area);} submission.pending()});
         if first && let Some(overview)=overview.as_deref_mut() {
             encoding.retained=with(self.window_memory());
-            let result=overview.render_graph(scene,r,packet,encoding,Destination::Overview(self,PixelRect::EMPTY));
+            let result=overview.render_graph(scene,r,packet,encoding,Destination::Overview(self,self.underived));
+            if result.is_ok() {self.derived_overview(encoding.encoder);}
             stand_in=rendered(scene,result)?;
         }
         encoding.retained=with(overview.as_deref().map_or(0,Cache::window_memory));
         let result=self.render_graph(scene,r,packet,encoding,Destination::View);
         let view=rendered(scene,result)?;
+        self.underived=self.underived.union(view);
         if !first && let Some(overview)=overview.filter(|overview|!overview.held(r)) {
             encoding.retained=with(self.window_memory());
-            let result=overview.render_graph(scene,r,packet,encoding,Destination::Overview(self,view));
+            let result=overview.render_graph(scene,r,packet,encoding,Destination::Overview(self,self.underived));
+            if result.is_ok() {self.derived_overview(encoding.encoder);}
             stand_in=stand_in.union(rendered(scene,result)?);
         }
         Ok(self.presented(view,stand_in))
     }
+    fn derived_overview(&mut self,encoder:&mut submission::CommandEncoder) {
+        if !self.underived.is_empty() {self.derivations.push((encoder.submission(),std::mem::replace(&mut self.underived,PixelRect::EMPTY)));}
+    }
+
     fn presented(&self,view:PixelRect,stand_in:PixelRect)->PixelRect {if self.complete && self.pixels.committed_root().is_some() {view} else {view.union(stand_in)}}
 
     fn render_graph(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>, encoding: &mut Encoding<'_>, destination: Destination<'_>) -> Result<PixelRect, GpuRasterError> {
@@ -1333,8 +1344,11 @@ impl Cache {
         finer:&Cache,changed:PixelRect,
     )->Result<PixelRect,GpuRasterError> {
         let region=self.cells.lock().unwrap().derivations(self.plan,changed);
-        let Some(input)=finer.pixels.committed_next().or(finer.pixels.committed_root()).map(pages::CommittedImage::image) else {return Ok(PixelRect::EMPTY);};
-        let region=region.intersect(input.plan.bounds);
+        let Some(root)=finer.pixels.committed_root().map(pages::CommittedImage::image) else {return Ok(PixelRect::EMPTY);};
+        let region=region.intersect(root.plan.bounds);
+        let [x,y,width,height]=paint_transform::texel_rect(region.window_local(root.plan.bounds),1<<root.plan.level);
+        let reduced=PixelRect::new(x,y,x+width,y+height).intersect(finer.pixels.unreduced()).is_empty();
+        let input=finer.pixels.committed_next().filter(|_|reduced).map_or(root,pages::CommittedImage::image);
         let Some(written)=self.reduce_from(scene,r,encoder,commands,input,region)? else {return Ok(PixelRect::EMPTY);};
         self.cells.lock().unwrap().reduced(self.plan,region);
         self.pixels.derived(written,encoder.submission());
