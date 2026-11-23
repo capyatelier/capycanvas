@@ -932,6 +932,11 @@ mod replacement_tests {
         let perceptual=layer_core::BlendSpace::Perceptual;
         assert_one_row_down(&native_page([0,1],perceptual,true),&native_page([0,0],perceptual,true));
     }
+    #[test]
+    fn a_linear_phased_native_page_copies_each_pixel() {
+        let linear=layer_core::BlendSpace::Linear;
+        assert_one_row_down(&native_page([0,1],linear,false),&native_page([0,0],linear,false));
+    }
 
     #[test]
     fn overlapping_source_plan_keeps_accepted_input_leases() {

@@ -115,7 +115,7 @@ fn reduce_phased(@builtin(global_invocation_id) id: vec3<u32>) {
     let page = start / 256;
     var sum = vec4(0.);
     var count: f32;
-    if cell == 1u && (region.flags & 2u) == 0u && full && all(page == (start + vec2<i32>(size) - 1) / 256) {
+    if cell == 1u && (region.flags & 2u) == 0u && full && side > 1u && all(page == (start + vec2<i32>(size) - 1) / 256) {
         let index = u32(page.y * 2 + page.x);
         count = f32(side * side / 4u);
         if (bitcast<u32>(region.paper[index]) & 16u) != 0u {
