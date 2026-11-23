@@ -237,7 +237,7 @@ async fn open_decoded(source:ImmutableBacking,limits:crate::ProjectLimits,cancel
     }
     let mut resources=resources::ResourceReader::with_budget(&manifest,&source,cancelled,limits,budget.clone());resources.waits=waits;
     let decoded=match resources.prepare_metadata().await {Ok(())=>loop {
-        match super::artwork_records::decode(&manifest,&mut resources) {Err(super::values::DecodeError::Uncovered)=>resources.covering().await,decoded=>break decoded}
+        match super::artwork_records::decode(&manifest,&mut resources) {Err(super::values::DecodeError::Uncovered)=>if let Err(error)=resources.covering().await {break Err(error)},decoded=>break decoded}
     },Err(error)=>Err(error)};
     active(cancelled)?;
     match decoded {

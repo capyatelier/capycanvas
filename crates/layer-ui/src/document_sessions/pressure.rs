@@ -10,19 +10,19 @@ pub type PressureWake=Arc<dyn Fn()>;
 #[derive(Clone)]
 pub struct StoragePressure(Arc<Pressure>);
 struct Pressure {owner:MemoryOwner,memory:MemoryBudget,state:Mutex<PressureState>}
-struct PressureState {candidates:Vec<(u64,u64,RetainedTiles)>,resident:usize,limit:usize,revision:u64,generation:u64,running:bool,wait:Option<TrimWait>,error:Option<String>,wake:Option<PressureWake>}
+struct PressureState {candidates:Vec<(u64,u64,RetainedTiles)>,resident:usize,limit:usize,revision:u64,generation:u64,running:bool,reclaim:u64,wait:Option<TrimWait>,error:Option<String>,wake:Option<PressureWake>}
 impl Pressure {
     fn allowance(&self,state:&PressureState)->usize {state.limit.min(self.owner.grant().ram_bytes.min(usize::MAX as u64) as usize)}
-    fn notify(&self) {
+    fn notify(&self)->bool {
         let (wait,result,wake)={
             let mut state=self.state.lock().unwrap();
-            if state.running {return;}
+            if state.running {return true;}
             let result=state.error.clone().map_or(Ok(()),Err);
             if result.is_err() || state.resident<=self.allowance(&state) {(state.wait.take(),result,None)}
             else {(None,result,state.wake.clone())}
         };
         if let Some(wait)=wait {wait.complete(result);}
-        if let Some(wake)=wake {wake();}
+        wake.inspect(|wake|wake()).is_some()
     }
     fn publish(&self,resident:usize) {
         assert!(self.owner.publish(MemoryReport {ram_bytes:resident as u64,demand_ram_bytes:resident as u64,..Default::default()}));
@@ -31,7 +31,7 @@ impl Pressure {
 
 impl StoragePressure {
     pub(super) fn new(owner:MemoryOwner,memory:MemoryBudget)->Self {
-        let pressure=Self(Arc::new(Pressure {owner:owner.clone(),memory,state:Mutex::new(PressureState {candidates:Vec::new(),resident:0,limit:usize::MAX,revision:0,generation:0,running:false,wait:None,error:None,wake:None})}));
+        let pressure=Self(Arc::new(Pressure {owner:owner.clone(),memory,state:Mutex::new(PressureState {candidates:Vec::new(),resident:0,limit:usize::MAX,revision:0,generation:0,running:false,reclaim:0,wait:None,error:None,wake:None})}));
         #[cfg(not(target_arch="wasm32"))]
         {let weak=Arc::downgrade(&pressure.0);owner.set_wake(Arc::new(move ||Self::notify(&weak)));}
         #[cfg(target_arch="wasm32")]
@@ -42,13 +42,13 @@ impl StoragePressure {
             SOURCES.with_borrow_mut(|sources|{sources.retain(|_,source|source.strong_count()!=0);sources.insert(id,Arc::downgrade(&pressure.0));});
             owner.set_wake(Arc::new(move || {
                 let source=SOURCES.with_borrow(|sources|sources.get(&id).cloned());
-                if let Some(source)=source {Self::notify(&source);}
+                source.is_some_and(|source|Self::notify(&source))
             }));
         }
         pressure
     }
-    fn notify(weak:&Weak<Pressure>) {
-        if let Some(source)=weak.upgrade() {source.notify();}
+    fn notify(weak:&Weak<Pressure>)->bool {
+        weak.upgrade().is_some_and(|source|source.notify())
     }
     pub fn same_source(&self,other:&Self)->bool {Arc::ptr_eq(&self.0,&other.0)}
     pub fn subscribe(&self,wake:PressureWake)->u64 {
@@ -60,10 +60,15 @@ impl StoragePressure {
         let mut state=self.0.state.lock().unwrap();
         let allowance=self.0.allowance(&state);
         if state.generation!=generation || state.running || state.error.is_some() || state.resident<=allowance {return None;}
-        state.running=true;state.wait.get_or_insert_with(TrimWait::pending);
+        state.running=true;state.reclaim=self.0.owner.reclaim_epoch();state.wait.get_or_insert_with(TrimWait::pending);
         Some((state.candidates.clone(),allowance))
     }
     pub fn completed(&self,generation:u64,result:Result<(),String>) {
+        let reclaim=self.0.state.lock().unwrap().reclaim;
+        self.finish(generation,result);
+        self.0.owner.reclaimed(reclaim);
+    }
+    fn finish(&self,generation:u64,result:Result<(),String>) {
         let (candidates,revision)={let state=self.0.state.lock().unwrap();if state.generation!=generation || !state.running {return;}(state.candidates.clone(),state.revision)};
         let bytes=layer_core::raster_storage::resident_tile_bytes(candidates.iter().map(|(_,_,tiles)|tiles)) as u64;
         {
@@ -108,7 +113,7 @@ mod tests {
         assert!(source.request(generation).is_none());
         let reads=budget.register_owner(MemoryOwnerKind::Other,MemoryClass::Pinned,None);
         let wakes=Arc::new(AtomicUsize::new(0));let count=wakes.clone();
-        reads.set_wake(Arc::new(move || {count.fetch_add(1,Ordering::Relaxed);}));
+        reads.set_wake(Arc::new(move || {count.fetch_add(1,Ordering::Relaxed);true}));
         for pinned in 1..=100 {
             reads.report(MemoryReport {pinned_ram_bytes:pinned<<20,..Default::default()});
         }

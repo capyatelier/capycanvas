@@ -21,6 +21,9 @@ impl From<std::io::Error> for DecodeError {
 impl From<String> for DecodeError { fn from(message: String) -> Self { if message == MEMORY_UNCOVERED { Self::Uncovered } else { Self::Invalid(message) } } }
 impl From<&str> for DecodeError { fn from(message: &str) -> Self { Self::Invalid(message.into()) } }
 impl From<DecodeError> for String { fn from(error: DecodeError) -> Self { error.to_string() } }
+impl From<crate::CoverageFailure> for DecodeError {
+    fn from(failure: crate::CoverageFailure) -> Self { match failure { crate::CoverageFailure::Refused => Self::MemoryBudgetExceeded, crate::CoverageFailure::Cancelled => "Package operation cancelled".into() } }
+}
 pub type DecodeResult<T> = Result<T, DecodeError>;
 
 pub fn object<'a>(value: &'a Value, allowed: &[&str]) -> DecodeResult<&'a Map<String, Value>> {

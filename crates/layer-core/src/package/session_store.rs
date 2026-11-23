@@ -716,11 +716,11 @@ impl SessionStore {
     }
     async fn load_generation(&mut self,generation:&Generation,limits:ProjectLimits,cancelled:&AtomicBool,budget:crate::MemoryBudget)->Result<OpenSession,super::session::OpenFailure> {
         let (stored,mut resources,value)=self.indexed_generation(generation,limits,cancelled).await?;
-        resources.prepare(&value,&budget).await?;
+        resources.prepare(&value,&budget,cancelled).await?;
         let programs=self.programs.get(&generation.id).cloned().unwrap_or_default();
         let session=loop {
             match super::session::open_stored_parts(&stored.metadata,&resources,limits,cancelled,&programs,budget.clone()) {
-                Err(super::session::OpenFailure::Uncovered)=>if let Some(admission)=&resources.admission {admission.covering().await;},
+                Err(super::session::OpenFailure::Uncovered)=>if let Some(admission)=&resources.admission {admission.covering(cancelled).await.map_err(super::values::DecodeError::from)?;},
                 session=>break session?,
             }
         };
@@ -959,7 +959,7 @@ pub(crate) struct StoreResources {
 }
 impl StoreResources {
     pub(crate) fn verify_opaque(&self,id:PortableId) {if !self.loaded.contains_key(&id) {self.opaque.lock().unwrap().insert(id);}}
-    async fn prepare(&mut self,metadata:&serde_json::Value,budget:&crate::MemoryBudget)->Result<(),super::session::OpenFailure> {
+    async fn prepare(&mut self,metadata:&serde_json::Value,budget:&crate::MemoryBudget,cancelled:&AtomicBool)->Result<(),super::session::OpenFailure> {
         let mut pending=Vec::new();let mut total=0u64;
         for record in metadata["resources"].as_array().ok_or("Missing stored resource records")? {
             if record["type"]=="capy.raster-tile/1" && record["encoding"]=="capy.lz4-tile/1" {continue;}
@@ -969,7 +969,7 @@ impl StoreResources {
             total=total.checked_add(location.length).ok_or("Stored resource size overflow")?;pending.push(id);
         }
         let admission=budget.admit_import(total).ok_or(super::session::OpenFailure::MemoryBudgetExceeded)?;
-        admission.covering().await;self.admission=Some(admission);
+        admission.covering(cancelled).await.map_err(super::values::DecodeError::from)?;self.admission=Some(admission);
         for id in pending {
             let bytes=self.locations.get(&id).ok_or("Missing stored resource location")?.read_all().await?;
             self.loaded.insert(id,bytes);

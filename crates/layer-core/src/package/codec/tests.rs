@@ -766,7 +766,7 @@ fn an_opened_package_decodes_only_into_room_another_owner_has_released() {
     let bytes=serialize(&prepare(&artwork,false));
     let budget=crate::MemoryBudget::with_facts(crate::MemoryFacts {override_bytes:Some(1<<30),..Default::default()});
     let limit=budget.ram_limit_bytes();
-    let cache=budget.register_owner(crate::MemoryOwnerKind::Other,crate::MemoryClass::Warm,None);
+    let cache=budget.register_owner(crate::MemoryOwnerKind::Other,crate::MemoryClass::Warm,None);cache.set_wake(Arc::new(||true));
     cache.report(crate::MemoryReport {ram_bytes:limit-MAX_RANGE_BYTES as u64,demand_ram_bytes:limit,..Default::default()});
     let cancelled=AtomicBool::new(false);
     let mut opening=Box::pin(open_async_with_budget(backing(bytes),Default::default(),&cancelled,budget.clone()));

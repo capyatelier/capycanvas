@@ -50,6 +50,8 @@ pub struct MemoryReport {
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MemoryGrant { pub ram_bytes: u64, pub gpu_bytes: u64 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoverageFailure { Refused, Cancelled }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MemoryOwnerTotals {
     pub owners: usize,
@@ -86,7 +88,7 @@ pub struct MemoryBudgetSnapshot {
     pub devices: Vec<MemoryDeviceSnapshot>,
 }
 #[derive(Default)]
-struct Grants { ram: AtomicU64, gpu: AtomicU64, working_limit: AtomicU64, wake: OnceLock<Arc<dyn Fn() + Send + Sync>> }
+struct Grants { ram: AtomicU64, gpu: AtomicU64, working_limit: AtomicU64, requested: AtomicU64, answered: AtomicU64, wake: OnceLock<Arc<dyn Fn() -> bool + Send + Sync>> }
 #[derive(Default)]
 struct PendingReport { version: AtomicU64, values: [AtomicU64; 7] }
 impl PendingReport {
@@ -140,10 +142,14 @@ struct State {
     reservations: BTreeMap<u64, Reserved>,
     import_reserved: u64,
     waiters: Vec<Waiter>,
+    reclaims: Vec<Reclaim>,
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Wait { Working { owner: u64, gpu_bytes: u64 }, Covered(u64) }
-struct Waiter { wait: Wait, wake: Arc<dyn Fn() + Send + Sync> }
+struct Waiter { owner: u64, gpu_bytes: u64, limit: u64, wake: Arc<dyn Fn() + Send + Sync> }
+struct Reclaim { waiter: u64, owner: u64, epoch: u64 }
+struct Reclaiming<'a> { budget: &'a MemoryBudget, waiter: u64 }
+impl Drop for Reclaiming<'_> {
+    fn drop(&mut self) { self.budget.0.state.lock().unwrap().reclaims.retain(|reclaim| reclaim.waiter != self.waiter); }
+}
 #[derive(Default)]
 struct BudgetCache { limit: AtomicU64, headroom: AtomicU64, refusals: AtomicU64 }
 #[derive(Default)]
@@ -166,7 +172,6 @@ impl Drop for Owner {
     fn drop(&mut self) {
         let mut state = self.budget.0.state.lock().unwrap();
         state.owners.remove(&self.id);
-        state.waiters.retain(|waiter|!matches!(waiter.wait,Wait::Working {owner,..} if owner==self.id));
         state.remove_retired_devices();
         self.budget.rebalance(state);
     }
@@ -175,7 +180,7 @@ impl std::fmt::Debug for MemoryOwner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.debug_tuple("MemoryOwner").field(&self.grant()).finish() }
 }
 impl MemoryOwner {
-    pub fn set_wake(&self, wake:Arc<dyn Fn() + Send + Sync>) {
+    pub fn set_wake(&self, wake:Arc<dyn Fn() -> bool + Send + Sync>) {
         let result=self.0.grants.wake.set(wake);debug_assert!(result.is_ok(),"Memory owner wake is already registered");
     }
     pub fn publish(&self, report: MemoryReport) -> bool {
@@ -191,6 +196,14 @@ impl MemoryOwner {
         let changed=owner.report!=report;
         owner.report = report;owner.applied=owner.pending.version.load(Ordering::Acquire);
         if changed {self.0.budget.rebalance(state);}
+    }
+    pub fn reclaim_epoch(&self) -> u64 { self.0.grants.requested.load(Ordering::Acquire) }
+    pub fn reclaim_unanswered(&self) -> bool { self.0.grants.answered.load(Ordering::Acquire) < self.reclaim_epoch() }
+    pub fn reclaimed(&self, epoch: u64) {
+        if self.0.grants.answered.load(Ordering::Acquire) >= epoch || self.0.grants.answered.fetch_max(epoch,Ordering::AcqRel) >= epoch {return;}
+        let mut state=self.0.budget.0.state.lock().unwrap();
+        state.reclaims.retain(|reclaim|reclaim.owner!=self.0.id || reclaim.epoch>epoch);
+        if state.apply_reports() {self.0.budget.rebalance(state);} else {drop(state);self.0.budget.changed();}
     }
     pub fn reported(&self) -> MemoryReport { self.0.budget.0.state.lock().unwrap().owners[&self.0.id].report }
     pub fn admit_working(&self,bytes:MemoryGrant)->Option<MemoryReservation> {
@@ -210,10 +223,11 @@ impl MemoryOwner {
         let bytes=state.working_through(self.0.id,gpu_bytes);
         if !state.fits_working(self.0.id,bytes) {
             if let Some(wake)=wake {
-                state.waiters.retain(|waiter|!matches!(waiter.wait,Wait::Working {owner,..} if owner==self.0.id) || !Arc::ptr_eq(&waiter.wake,&wake));
-                state.waiters.push(Waiter {wait:Wait::Working {owner:self.0.id,gpu_bytes},wake});
-            }
-            if changed {budget.rebalance(state);}
+                let limit=state.gpu_working_limit(self.0.id);
+                state.waiters.retain(|waiter|waiter.owner!=self.0.id || !Arc::ptr_eq(&waiter.wake,&wake));
+                state.waiters.push(Waiter {owner:self.0.id,gpu_bytes,limit,wake});
+                budget.rebalance(state);
+            } else if changed {budget.rebalance(state);}
             return None;
         }
         self.reserve(state,bytes)
@@ -260,7 +274,6 @@ struct Reservation { budget: MemoryBudget, id: u64, bytes: AtomicU64, active: At
 impl Drop for Reservation {
     fn drop(&mut self) {
         let mut state = self.budget.0.state.lock().unwrap();
-        state.waiters.retain(|waiter|waiter.wait!=Wait::Covered(self.id));
         if state.release(self.id).is_some() { self.budget.rebalance(state); }
     }
 }
@@ -276,20 +289,17 @@ impl MemoryReservation {
         if changed {self.0.budget.rebalance(state);}
         covered
     }
-    pub fn on_covered(&self, wake: Arc<dyn Fn() + Send + Sync>) {
-        let mut state=self.0.budget.0.state.lock().unwrap();
-        state.apply_reports();
-        state.waiters.retain(|waiter|waiter.wait!=Wait::Covered(self.0.id));
-        state.waiters.push(Waiter {wait:Wait::Covered(self.0.id),wake});
-        self.0.budget.rebalance(state);
-    }
-    pub fn covering(&self) -> impl std::future::Future<Output = ()> + '_ {
-        std::future::poll_fn(move |context| {
-            if self.covered() {return std::task::Poll::Ready(());}
-            let waker=context.waker().clone();
-            self.on_covered(Arc::new(move||waker.wake_by_ref()));
-            std::task::Poll::Pending
-        })
+    pub async fn covering(&self, cancel: &AtomicBool) -> Result<(), CoverageFailure> {
+        let budget=&self.0.budget;
+        let waker=Arc::new(Mutex::new(std::task::Waker::noop().clone()));
+        let _watch={let waker=waker.clone();budget.watch(Arc::new(move||waker.lock().unwrap().wake_by_ref()))};
+        let reclaiming=Reclaiming {budget,waiter:budget.request_reclaims(self.0.id)};
+        std::future::poll_fn(|context| {
+            context.waker().clone_into(&mut waker.lock().unwrap());
+            if cancel.load(Ordering::Acquire) {return std::task::Poll::Ready(Err(CoverageFailure::Cancelled));}
+            budget.flush_reports();
+            budget.0.state.lock().unwrap().coverage(self.0.id,reclaiming.waiter).map_or(std::task::Poll::Pending,std::task::Poll::Ready)
+        }).await
     }
     pub fn merge(&self, other: MemoryReservation) -> Result<(), &'static str> {
         if !Arc::ptr_eq(&self.0.budget.0,&other.0.budget.0) {return Err("Memory reservations belong to different budgets");}
@@ -358,16 +368,13 @@ std::thread_local! {pub(crate) static REBALANCES: std::cell::Cell<u64> = const {
 impl MemoryBudget {
     fn rebalance(&self, mut state: MutexGuard<'_, State>) {
         #[cfg(test)] REBALANCES.with(|count| count.set(count.get() + 1));
-        let mut wakes = state.rebalance(&self.0.cache);
+        let wakes = state.rebalance(&self.0.cache);
         let waiters = std::mem::take(&mut state.waiters);
-        let (ready, waiting): (Vec<_>, Vec<_>) = waiters.into_iter().partition(|waiter|match waiter.wait {
-            Wait::Working {owner,gpu_bytes}=>state.fits_working(owner, state.working_through(owner, gpu_bytes)),
-            Wait::Covered(id)=>state.covered(id),
-        });
+        let (ready, waiting): (Vec<_>, Vec<_>) = waiters.into_iter().partition(|waiter|state.settled(waiter));
         state.waiters = waiting;
-        wakes.extend(ready.into_iter().map(|waiter| waiter.wake));
         drop(state);
         for wake in wakes { wake(); }
+        for waiter in ready { (waiter.wake)(); }
         self.changed();
     }
     pub fn watch(&self, wake: Arc<dyn Fn() + Send + Sync>) -> MemoryWatch {
@@ -484,6 +491,23 @@ impl MemoryBudget {
         let mut state=self.0.state.lock().unwrap();
         if state.apply_reports() {self.rebalance(state);}
     }
+    fn request_reclaims(&self, reservation: u64) -> u64 {
+        self.flush_reports();
+        let (waiter,requests)={
+            let mut state=self.0.state.lock().unwrap();
+            state.next=state.next.checked_add(1).expect("Memory owner identity exhausted");
+            let waiter=state.next;
+            let requests:Vec<_>=if state.covered(reservation) {Vec::new()} else {state.owners.iter().filter_map(|(&owner,record)| {
+                let [occupied,granted,_]=state.ram_terms(record);
+                record.grants.wake.get().filter(|_|occupied>granted).map(|wake|(Reclaim {waiter,owner,epoch:record.grants.requested.fetch_add(1,Ordering::AcqRel)+1},wake.clone()))
+            }).collect()};
+            let wakes=requests.into_iter().map(|(reclaim,wake)|{let owner=reclaim.owner;state.reclaims.push(reclaim);(owner,wake)}).collect::<Vec<_>>();
+            (waiter,wakes)
+        };
+        let declined:Vec<_>=requests.into_iter().filter(|(_,wake)|!wake()).map(|(owner,_)|owner).collect();
+        if !declined.is_empty() {self.0.state.lock().unwrap().reclaims.retain(|reclaim|reclaim.waiter!=waiter || !declined.contains(&reclaim.owner));}
+        waiter
+    }
     pub fn facts(&self) -> MemoryFacts { self.0.state.lock().unwrap().facts }
     pub fn ram_limit_bytes(&self) -> u64 { self.0.cache.limit.load(Ordering::Acquire) }
     pub fn import_headroom_bytes(&self) -> u64 { self.0.cache.headroom.load(Ordering::Acquire) }
@@ -594,6 +618,17 @@ impl State {
     }
     fn release(&mut self,id:u64)->Option<Reserved> {let reserved=self.reservations.remove(&id)?;self.tally(reserved,std::ops::SubAssign::sub_assign);Some(reserved)}
     fn set_reserved(&mut self,id:u64,reserved:Reserved) {self.release(id);self.tally(reserved,std::ops::AddAssign::add_assign);self.reservations.insert(id,reserved);}
+    fn settled(&self,waiter:&Waiter)->bool {
+        if !self.owners.contains_key(&waiter.owner) {return true;}
+        let limit=self.gpu_working_limit(waiter.owner);
+        limit<waiter.limit || waiter.gpu_bytes>self.gpu_ceiling(waiter.owner) || self.fits_working(waiter.owner,self.working_through(waiter.owner,waiter.gpu_bytes))
+    }
+    fn gpu_ceiling(&self,id:u64)->u64 {
+        let Some((device,facts))=self.owners[&id].device.and_then(|device|self.devices.get(&device).map(|facts|(device,facts))) else {return 0;};
+        let physical=self.owners.values().filter(|owner|owner.device==Some(device)).fold(0u64,|sum,owner|sum.saturating_add(owner.report.gpu_bytes));
+        let limit=device_limit(*facts,physical);
+        if facts.unified {limit.min(self.ram_limit)} else {limit}
+    }
     fn gpu_working_limit(&self,id:u64)->u64 {
         let Some((device,facts))=self.owners[&id].device.and_then(|device|self.devices.get(&device).map(|facts|(device,facts))) else {return 0;};
         let occupied=|owner:&OwnerRecord|owner.held_gpu().max(owner.report.gpu_bytes);
@@ -614,17 +649,26 @@ impl State {
         bytes.gpu_bytes<=self.gpu_working_limit(id).saturating_sub(owner.held_gpu())
     }
     fn import_headroom(&self) -> u64 { self.ram_limit.saturating_sub(self.ram_physical(true)).saturating_sub(self.reserved()) }
-    fn occupied_ram(&self) -> u64 {
-        self.owners.values().fold(0u64,|sum,owner| {
-            let unified=|bytes:u64|if self.unified(owner.device) {bytes}else {0};
-            sum.saturating_add(owner.report.pinned_ram_bytes.saturating_add(owner.working.ram_bytes).saturating_add(unified(owner.held_gpu()))
-                .max(owner.report.ram_bytes.saturating_add(unified(owner.report.gpu_bytes))))
-        })
+    fn ram_terms(&self, owner: &OwnerRecord) -> [u64; 3] {
+        let unified=|bytes:u64|if self.unified(owner.device) {bytes}else {0};
+        let floor=owner.report.pinned_ram_bytes.saturating_add(owner.working.ram_bytes).saturating_add(unified(owner.held_gpu()));
+        [floor.max(owner.report.ram_bytes.saturating_add(unified(owner.report.gpu_bytes))),
+            owner.grants.ram.load(Ordering::Acquire).saturating_add(unified(owner.grants.gpu.load(Ordering::Acquire))),floor]
     }
+    fn occupied_ram(&self) -> u64 { self.owners.values().fold(0u64,|sum,owner|sum.saturating_add(self.ram_terms(owner)[0])) }
     fn free_ram(&self) -> u64 { self.ram_limit.saturating_sub(self.import_reserved).saturating_sub(self.occupied_ram()) }
     fn covered(&self, id: u64) -> bool {
         let Some(Reserved::Import(bytes))=self.reservations.get(&id).copied() else {return true;};
         self.ram_limit.saturating_sub(self.import_reserved.saturating_sub(bytes)).saturating_sub(self.occupied_ram())>=bytes
+    }
+    fn coverage(&mut self, reservation: u64, waiter: u64) -> Option<Result<(), CoverageFailure>> {
+        if !matches!(self.reservations.get(&reservation),Some(Reserved::Import(_))) {return Some(Err(CoverageFailure::Refused));}
+        if self.covered(reservation) {return Some(Ok(()));}
+        let terms:BTreeMap<u64,[u64;3]>=self.owners.iter().map(|(&id,owner)|(id,self.ram_terms(owner))).collect();
+        self.reclaims.retain(|reclaim|reclaim.waiter!=waiter || terms.get(&reclaim.owner).is_some_and(|&[occupied,granted,_]|occupied>granted));
+        let reclaiming=|owner:u64|self.reclaims.iter().any(|reclaim|reclaim.waiter==waiter && reclaim.owner==owner);
+        let fixed=terms.iter().fold(self.import_reserved,|sum,(&owner,&[occupied,_,floor])|sum.saturating_add(if reclaiming(owner) {floor}else {occupied}));
+        (fixed>self.ram_limit || !self.reclaims.iter().any(|reclaim|reclaim.waiter==waiter)).then_some(Err(CoverageFailure::Refused))
     }
     fn remove_retired_devices(&mut self) {
         self.devices.retain(|device,_| !self.retired_devices.contains(device) || self.owners.values().any(|owner|owner.device == Some(*device)));
@@ -635,7 +679,7 @@ impl State {
         self.owners.values().fold(0u64, |bytes,owner| bytes.saturating_add(if pinned {owner.report.pinned_ram_bytes}else {owner.report.ram_bytes})
             .saturating_add(if self.unified(owner.device) {if pinned {owner.report.pinned_gpu_bytes}else {owner.report.gpu_bytes}}else {0}))
     }
-    fn rebalance(&self, cache: &BudgetCache) -> Vec<Arc<dyn Fn() + Send + Sync>> {
+    fn rebalance(&self, cache: &BudgetCache) -> Vec<Arc<dyn Fn() -> bool + Send + Sync>> {
         cache.limit.store(self.ram_limit, Ordering::Release);
         let headroom=self.import_headroom();
         cache.headroom.store(headroom, Ordering::Release);
@@ -863,7 +907,7 @@ mod tests {
         let display=owner(&budget,MemoryClass::Visible,Some(device),0,256*MIB);
         let reads=owner(&budget,MemoryClass::Warm,None,64*MIB,0);
         let woken=Arc::new(AtomicU64::new(0));
-        for owner in [&display,&reads] {let woken=woken.clone();owner.set_wake(Arc::new(move||{woken.fetch_add(1,Ordering::SeqCst);}));}
+        for owner in [&display,&reads] {let woken=woken.clone();owner.set_wake(Arc::new(move||{woken.fetch_add(1,Ordering::SeqCst);true}));}
         let (grants,headroom)=([display.grant(),reads.grant()],budget.import_headroom_bytes());
         display.report(MemoryReport {gpu_bytes:128*MIB,pinned_gpu_bytes:128*MIB,demand_gpu_bytes:256*MIB,..Default::default()});
         assert_eq!([display.grant(),reads.grant()],grants,"the pin stays inside both grants");
@@ -878,7 +922,7 @@ mod tests {
         let raster=owner(&budget,MemoryClass::Visible,Some(device),0,0);
         raster.report(MemoryReport {gpu_bytes:640*MIB,pinned_gpu_bytes:640*MIB,demand_gpu_bytes:640*MIB,..Default::default()});
         let woken=Arc::new(AtomicU64::new(0));
-        {let woken=woken.clone();display.set_wake(Arc::new(move||{woken.fetch_add(1,Ordering::SeqCst);}));}
+        {let woken=woken.clone();display.set_wake(Arc::new(move||{woken.fetch_add(1,Ordering::SeqCst);true}));}
         let (grant,limit)=(display.grant().gpu_bytes,display.room().published_gpu_working_limit());
         raster.report(MemoryReport::default());
         assert!(display.grant().gpu_bytes>grant && display.room().published_gpu_working_limit()>limit,"the release raises the display's grant and working limit");
@@ -963,10 +1007,11 @@ mod tests {
             let budget = MemoryBudget(manager.upgrade().unwrap());
             if budget.0.state.try_lock().is_err() {
                 observed.store(true, Ordering::Relaxed);
-                return;
+                return true;
             }
             budget.flush_reports();
             let _ = budget.snapshot();
+            true
         }));
         let report = |bytes| MemoryReport { ram_bytes: bytes, pinned_ram_bytes: bytes,
             demand_ram_bytes: u64::MAX, ..Default::default() };
@@ -1338,33 +1383,114 @@ mod tests {
         assert_eq!(cache.grant().ram_bytes,224*MIB);
         drop(token);assert_eq!(cache.grant().ram_bytes,900*MIB);
     }
-    #[test]
-    fn an_import_reads_only_into_room_that_evictable_owners_have_released() {
-        use std::{future::Future,task::{Context,Wake,Waker}};
-        struct Count(AtomicU64);
-        impl Wake for Count {fn wake(self:Arc<Self>) {self.0.fetch_add(1,Ordering::SeqCst);}}
+    struct Count(AtomicU64);
+    impl std::task::Wake for Count {fn wake(self:Arc<Self>) {self.0.fetch_add(1,Ordering::SeqCst);}}
+    impl Count {fn get(&self)->u64 {self.0.load(Ordering::SeqCst)}}
+    fn import_beside_a_warm_owner(wake:Option<Arc<dyn Fn() -> bool + Send + Sync>>)->(MemoryBudget,MemoryOwner,MemoryReservation) {
         let budget=MemoryBudget::with_facts(MemoryFacts {override_bytes:Some(GIB),..facts()});
-        assert_eq!(budget.ram_limit_bytes(),GIB);
-        let cache=owner(&budget,MemoryClass::Warm,None,900*MIB,0);
+        let cache=budget.register_owner(MemoryOwnerKind::Other,MemoryClass::Warm,None);
+        if let Some(wake)=wake {cache.set_wake(wake);}
         cache.report(MemoryReport {ram_bytes:900*MIB,demand_ram_bytes:900*MIB,..Default::default()});
-        let artwork=owner(&budget,MemoryClass::Pinned,None,0,0);
         let token=budget.admit_import(700*MIB).unwrap();
-        let read=AtomicBool::new(false);
+        (budget,cache,token)
+    }
+    fn accepting(requests:&Arc<AtomicU64>)->Option<Arc<dyn Fn() -> bool + Send + Sync>> {
+        let requests=requests.clone();Some(Arc::new(move||{requests.fetch_add(1,Ordering::SeqCst);true}))
+    }
+    fn counted()->(Arc<Count>,std::task::Waker) {let count=Arc::new(Count(AtomicU64::new(0)));let waker=std::task::Waker::from(count.clone());(count,waker)}
+    #[test]
+    fn an_import_that_no_owner_accepts_to_reclaim_for_is_refused_at_once() {
+        use std::{future::Future,task::{Context,Poll,Waker}};
+        for wake in [None,Some(Arc::new(||false) as Arc<dyn Fn() -> bool + Send + Sync>)] {
+            let declines=wake.is_some();
+            let (_budget,_cache,token)=import_beside_a_warm_owner(wake);
+            let cancel=AtomicBool::new(false);
+            let mut waiting=Box::pin(token.covering(&cancel));
+            assert_eq!(waiting.as_mut().poll(&mut Context::from_waker(Waker::noop())),Poll::Ready(Err(CoverageFailure::Refused)),
+                "an import waiting on a warm owner that cannot answer must be refused, not wait forever (owner declines: {declines})");
+        }
+    }
+    #[test]
+    fn an_owner_that_accepts_a_reclaim_and_releases_covers_the_import() {
+        use std::{future::Future,task::{Context,Poll}};
+        let requests=Arc::new(AtomicU64::new(0));
+        let (budget,cache,token)=import_beside_a_warm_owner(accepting(&requests));
+        let asked=requests.load(Ordering::SeqCst);
+        let cancel=AtomicBool::new(false);let read=AtomicBool::new(false);
         let physical=||budget.snapshot().ram_physical_bytes+if read.load(Ordering::SeqCst) {700*MIB}else {0};
-        let mut import=Box::pin(async {token.covering().await;read.store(true,Ordering::SeqCst);});
-        let wakes=Arc::new(Count(AtomicU64::new(0)));let waker=Waker::from(wakes.clone());let mut context=Context::from_waker(&waker);
-        let _=import.as_mut().poll(&mut context);
-        assert!(physical()<=GIB,"an import must not read into bytes another owner still holds: physical {} limit {GIB}",physical());
-        cache.report(MemoryReport {ram_bytes:500*MIB,demand_ram_bytes:900*MIB,..Default::default()});
-        assert_eq!(wakes.0.load(Ordering::SeqCst),0,"a partial release does not cover the import");
+        let mut import=Box::pin(async {let covered=token.covering(&cancel).await;read.store(covered.is_ok(),Ordering::SeqCst);covered});
+        let (wakes,waker)=counted();let mut context=Context::from_waker(&waker);
         assert!(import.as_mut().poll(&mut context).is_pending());
-        cache.report(MemoryReport {ram_bytes:cache.grant().ram_bytes,demand_ram_bytes:900*MIB,..Default::default()});
-        assert_eq!(wakes.0.load(Ordering::SeqCst),1,"the release that covers the import wakes it once");
-        assert!(import.as_mut().poll(&mut context).is_ready());
+        assert_eq!(requests.load(Ordering::SeqCst),asked+1,"the waiting import asks the warm owner to reclaim");
+        assert!(physical()<=GIB,"an import must not read into bytes another owner still holds: physical {} limit {GIB}",physical());
+        assert!(cache.publish(MemoryReport {ram_bytes:cache.grant().ram_bytes,demand_ram_bytes:900*MIB,..Default::default()}));
+        assert!(wakes.get()>0,"a published release wakes the waiting import");
+        assert_eq!(import.as_mut().poll(&mut context),Poll::Ready(Ok(())));
         assert!(physical()<=GIB,"physical {} limit {GIB}",physical());
-        drop(import);
-        token.commit(&artwork,MemoryReport {ram_bytes:700*MIB,pinned_ram_bytes:700*MIB,..Default::default()}).unwrap();
-        assert!(budget.snapshot().ram_physical_bytes<=GIB);
+    }
+    #[test]
+    fn an_owner_that_accepts_a_reclaim_but_cannot_release_refuses_the_import() {
+        use std::{future::Future,task::{Context,Poll}};
+        let requests=Arc::new(AtomicU64::new(0));
+        let (_budget,cache,token)=import_beside_a_warm_owner(accepting(&requests));
+        let earlier=cache.reclaim_epoch();
+        let cancel=AtomicBool::new(false);
+        let mut waiting=Box::pin(token.covering(&cancel));
+        let (wakes,waker)=counted();let mut context=Context::from_waker(&waker);
+        assert!(waiting.as_mut().poll(&mut context).is_pending());
+        cache.report(MemoryReport {ram_bytes:500*MIB,demand_ram_bytes:900*MIB,..Default::default()});
+        cache.reclaimed(earlier);
+        assert!(waiting.as_mut().poll(&mut context).is_pending(),"a partial release from a pass that began before the request does not answer it");
+        let woken=wakes.get();
+        cache.reclaimed(cache.reclaim_epoch());
+        assert!(wakes.get()>woken,"the owner's answer wakes the import");
+        assert_eq!(waiting.as_mut().poll(&mut context),Poll::Ready(Err(CoverageFailure::Refused)));
+        assert!(!cache.reclaim_unanswered());
+    }
+    #[test]
+    fn cancelling_an_import_ends_its_coverage_wait() {
+        use std::{future::Future,task::{Context,Poll}};
+        let requests=Arc::new(AtomicU64::new(0));
+        let (_budget,_cache,token)=import_beside_a_warm_owner(accepting(&requests));
+        let cancel=AtomicBool::new(false);
+        let mut waiting=Box::pin(token.covering(&cancel));
+        let (_,waker)=counted();let mut context=Context::from_waker(&waker);
+        assert!(waiting.as_mut().poll(&mut context).is_pending());
+        cancel.store(true,Ordering::Release);
+        assert_eq!(waiting.as_mut().poll(&mut context),Poll::Ready(Err(CoverageFailure::Cancelled)));
+    }
+    #[test]
+    fn dropping_a_waiting_import_withdraws_its_wait_and_its_reclaim_request() {
+        use std::{future::Future,task::Context};
+        let requests=Arc::new(AtomicU64::new(0));
+        let (budget,cache,token)=import_beside_a_warm_owner(accepting(&requests));
+        let cancel=AtomicBool::new(false);
+        let (wakes,waker)=counted();
+        let mut waiting=Box::pin(token.covering(&cancel));
+        assert!(waiting.as_mut().poll(&mut Context::from_waker(&waker)).is_pending());
+        drop(waiting);
+        cache.report(MemoryReport {ram_bytes:cache.grant().ram_bytes,demand_ram_bytes:900*MIB,..Default::default()});
+        assert_eq!(wakes.get(),0,"a dropped wait is never woken");
+        assert!(budget.0.state.lock().unwrap().reclaims.is_empty(),"a dropped wait leaves no reclaim request open");
+        drop(token);
+        assert_eq!(budget.snapshot().reserved_bytes,0);
+    }
+    #[test]
+    fn a_working_limit_decrease_or_owner_teardown_wakes_its_working_waiter() {
+        let budget=MemoryBudget::with_facts(MemoryFacts {override_bytes:Some(GIB),..facts()});
+        let device=budget.register_device(DeviceMemoryFacts {budget_bytes:Some(GIB),..Default::default()});
+        let work=owner(&budget,MemoryClass::Visible,Some(device),0,0);
+        let other=owner(&budget,MemoryClass::Visible,Some(device),0,0);
+        let _held=other.admit_working(MemoryGrant {ram_bytes:0,gpu_bytes:640*MIB}).unwrap();
+        let wakes=Arc::new(AtomicU64::new(0));
+        let wake:Arc<dyn Fn()+Send+Sync>={let wakes=wakes.clone();Arc::new(move||{wakes.fetch_add(1,Ordering::SeqCst);})};
+        assert!(work.admit_working_through(256*MIB,Some(wake.clone())).is_none());
+        assert_eq!(wakes.load(Ordering::SeqCst),0);
+        budget.update_device(device,DeviceMemoryFacts {budget_bytes:Some(900*MIB),..Default::default()});
+        assert_eq!(wakes.load(Ordering::SeqCst),1,"a lower working limit wakes the waiting admission");
+        assert!(work.admit_working_through(128*MIB,Some(wake)).is_none());
+        drop(work);
+        assert_eq!(wakes.load(Ordering::SeqCst),2,"tearing down the owner wakes its waiting admission");
     }
     #[test]
     fn reservation_clones_resize_and_convert_to_one_physical_owner() {

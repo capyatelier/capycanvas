@@ -139,7 +139,7 @@ impl Memory {
         let resources = Arc::new(std::sync::atomic::AtomicU64::new(display.handle.grant().gpu_bytes));
         let wake: Arc<std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>> = Default::default();
         let forwarded = wake.clone();
-        display.handle.set_wake(Arc::new(move || if let Some(wake) = forwarded.lock().unwrap().clone() { wake(); }));
+        display.handle.set_wake(Arc::new(move || { let wake = forwarded.lock().unwrap().clone(); wake.inspect(|wake| wake()).is_some() }));
         let memory = Self {
             display,
             samples: samples.map_or_else(|| Owner::new(factory, Kind::DecodedSamples, MemoryReport { pinned_ram_bytes: SOURCE_WORKING_BYTES, demand_ram_bytes: DECODED_SAMPLE_BYTES, ..Default::default() }),
@@ -159,6 +159,7 @@ impl Memory {
     pub(crate) fn retention_limit(&self) -> u64 { self.retention_grant().min(self.retention_ceiling()) }
     fn retention_ceiling(&self) -> u64 { if self.unified { self.target.get() } else { u64::MAX } }
     pub(crate) fn set_wake(&self, wake: Arc<dyn Fn() + Send + Sync>) { *self.wake.lock().unwrap() = Some(wake); }
+    pub(crate) fn reclaim_unanswered(&self) -> bool { self.display.handle.reclaim_unanswered() }
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn watch(&self, budget: &layer_core::MemoryBudget, edge: Arc<dyn Fn() + Send + Sync>) { *self.watch.borrow_mut() = Some(budget.watch(edge)); }
     pub(crate) fn raster_grant(&self) -> u64 { self.raster.handle.grant().gpu_bytes }
@@ -413,8 +414,9 @@ impl WgpuRasterizer {
         self.scene=scene;self.scale_display=cache;
     }
     pub(crate) fn apply_memory_grants(&mut self,mut scene:Option<&mut scene::Scene>,cache:Option<&mut scene::scale::Cache>,encoder:&mut submission::CommandEncoder) {
+        let reclaim=self.memory.display.handle.reclaim_epoch();
         self.retire_victims(scene.as_deref_mut(),encoder);
-        if !self.memory.apply_limits(self.memory.grants()) && !self.memory.overdrawn() && !self.retention_above_grant() {return;}
+        if !self.memory.apply_limits(self.memory.grants()) && !self.memory.overdrawn() && !self.retention_above_grant() {self.memory.display.handle.reclaimed(reclaim);return;}
         let composition=self.composition_memory(scene.as_deref());
         self.memory.sync_report(Kind::Scene,self.display_memory_report(scene.as_deref(),composition));
         let raster=self.raster_memory_report();self.memory.sync_report(Kind::RasterPool,raster);
@@ -441,11 +443,12 @@ impl WgpuRasterizer {
         self.memory.sync_report(Kind::Scene,self.display_memory_report(scene.as_deref(),composition));
         self.memory.sync_report(Kind::RasterPool,self.raster_memory_report());
         if self.warm.is_none() {self.memory.carry_overdraft(self.scene_tiers.display.used());}
+        self.memory.display.handle.reclaimed(reclaim);
     }
     fn memory_pass_due(&self)->bool {
         let display=&self.scene_tiers.display;
         display.heap().pending()!=0 || self.memory.retired.get()!=Some([display.heap().epoch(),display.floor()])
-            || self.memory.limits_changed() || self.memory.overdrawn() || self.retention_above_grant()
+            || self.memory.limits_changed() || self.memory.overdrawn() || self.retention_above_grant() || self.memory.reclaim_unanswered()
     }
     fn retire_victims(&mut self,scene:Option<&mut scene::Scene>,encoder:&mut submission::CommandEncoder)->bool {
         let floor=self.scene_tiers.display.floor();

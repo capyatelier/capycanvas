@@ -477,9 +477,12 @@ impl<'a> ResourceReader<'a> {
         Ok(())
     }
     async fn charge_covered(&self, bytes: u64) -> DecodeResult<()> {
-        loop { match self.charge(bytes) { Err(DecodeError::Uncovered) => self.covering().await, result => return result } }
+        match self.charge(bytes) { Err(DecodeError::Uncovered) => self.covering().await, result => result }
     }
-    pub(crate) async fn covering(&self) { if let Some(admission) = &self.admission { admission.covering().await; } }
+    pub(crate) async fn covering(&self) -> DecodeResult<()> {
+        let Some(admission) = &self.admission else { return Ok(()) };
+        Ok(admission.covering(self.cancelled).await?)
+    }
     pub fn raster_tile(&mut self, reference:&Value) -> DecodeResult<crate::raster::RasterTile> {
         let id = reference_id(reference)?;
         if let Some(tile) = self.rasters.get(&id) { return Ok(tile.clone()); }

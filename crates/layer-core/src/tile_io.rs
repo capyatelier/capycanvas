@@ -198,7 +198,11 @@ impl ReadCache {
         let cache=Self(Arc::new(Cache {owner,state:Default::default(),scheduler:Default::default(),scheduled:AtomicBool::new(false),pending_reads:AtomicUsize::new(0),physical:AtomicU64::new(0),pinned:AtomicU64::new(0),expired:AtomicBool::new(false),
             #[cfg(not(target_arch="wasm32"))] changed:Default::default()}));
         let weak=Arc::downgrade(&cache.0);
-        cache.0.owner.set_wake(Arc::new(move || {if let Some(cache)=weak.upgrade() {let cache=ReadCache(cache);if cache.has_pending_reads() || cache.0.physical.load(Ordering::Acquire)>cache.limit_bytes() {cache.schedule();}}}));
+        cache.0.owner.set_wake(Arc::new(move || weak.upgrade().map(ReadCache).is_some_and(|cache| {
+            let drive=cache.has_pending_reads() || cache.0.physical.load(Ordering::Acquire)>cache.limit_bytes();
+            if drive {cache.schedule();}
+            drive
+        })));
         cache
     }
     pub fn process() -> Self {
@@ -351,8 +355,10 @@ impl ReadCache {
     }
     fn drive_inner(&self) {
         self.0.scheduled.store(false,Ordering::Release);
+        let epoch=self.0.owner.reclaim_epoch();
         let (task,retired)=self.take_read(&mut self.0.state.lock().unwrap());
         self.recycle(retired);
+        self.0.owner.reclaimed(epoch);
         if let Some(task)=task {self.read(task);}
     }
     pub fn drive(&self) {self.drive_inner();}

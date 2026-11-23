@@ -74,7 +74,7 @@ impl WgpuRasterizer {
             ("decodes", gated(self.moving_decode.as_ref().is_some_and(|(_, queue)| queue.pending()))),
             ("objects", objects.filter(|_| self.moving_layer.is_none())),
             ("display", self.scale_display.as_ref().and_then(|cache| cache.outstanding(self))),
-            ("display retention", self.retention_above_grant().then_some(Runnable)),
+            ("display retention", (self.retention_above_grant() || self.memory.reclaim_unanswered()).then_some(Runnable)),
             ("paper shade", self.paper_shade_work_pending().then_some(Runnable)),
             ("startup", self.startup_outstanding()),
             ("region preparation", self.region_prewarm_runnable().then_some(Runnable)),

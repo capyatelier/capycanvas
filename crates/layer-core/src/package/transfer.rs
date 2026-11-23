@@ -111,7 +111,7 @@ impl PreparedTransfer {
             }
         }
         let admission=if bytes==0 {None}else {Some(budget.admit_import(bytes).ok_or(crate::MEMORY_BUDGET_EXCEEDED)?)};
-        if let Some(admission)=&admission {admission.covering().await;}
+        if let Some(admission)=&admission {admission.covering(cancel).await.map_err(super::values::DecodeError::from)?;}
         let mut tiles=inventory.1.entries.values().filter_map(|entry|match &entry.payload {
             Payload::Tile(tile) if tile.compressed.needs_preparation() && !ranges.contains_key(&tile.resource_id())=>Some(tile),_=>None,
         });
@@ -377,7 +377,7 @@ impl TransferReceiver {
         let total=descriptor.lengths.iter().try_fold(0u64,|a,b|a.checked_add(*b).ok_or("Transfer length overflow"))?;
         if total>limits.raster_bytes.saturating_add(limits.asset_bytes).saturating_mul(2){return Err(crate::MEMORY_BUDGET_EXCEEDED.into());}
         let admission=budget.admit_import(total).ok_or(crate::MEMORY_BUDGET_EXCEEDED)?;
-        admission.covering().await;
+        admission.covering(&AtomicBool::new(false)).await.map_err(super::values::DecodeError::from)?;
         let buffers=descriptor.lengths.iter().enumerate().map(|(i,length)|{
             let length=usize::try_from(*length).map_err(|_|"Transfer allocation overflow")?;
             if words.contains(&i){if length%4!=0{return Err("Misaligned selection words".into());}Ok(PayloadBuffer::Words(Arc::<[u32]>::new_uninit_slice(length/4)))}
@@ -429,7 +429,7 @@ mod tests {
         let total=prepared.descriptor.lengths.iter().sum::<u64>();
         let budget=crate::MemoryBudget::with_facts(crate::MemoryFacts {override_bytes:Some(1<<30),..Default::default()});
         let limit=budget.ram_limit_bytes();
-        let cache=budget.register_owner(crate::MemoryOwnerKind::Other,crate::MemoryClass::Warm,None);
+        let cache=budget.register_owner(crate::MemoryOwnerKind::Other,crate::MemoryClass::Warm,None);cache.set_wake(Arc::new(||true));
         cache.report(crate::MemoryReport {ram_bytes:limit,demand_ram_bytes:limit,..Default::default()});
         let physical=|allocated:bool|budget.snapshot().ram_physical_bytes+if allocated {total}else {0};
         let mut receiving=Box::pin(TransferReceiver::receive(prepared.descriptor.clone(),ProjectLimits::default(),|_|Err("No backing".into()),budget.clone()));

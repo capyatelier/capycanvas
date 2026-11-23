@@ -366,8 +366,8 @@
         control.lock().unwrap().hold_reads=false;drop(tiles[0].compressed_on_worker().unwrap());
         assert_eq!(physical(),idle+cached,"reading a parked drawing again caches its ranges");
     }
-    #[test]
-    fn a_session_open_reads_its_resources_only_into_room_another_owner_has_released() {
+    struct FullCacheOpen {_directory:Directory,budget:crate::MemoryBudget,cache:crate::MemoryOwner,limit:u64,opened:std::sync::mpsc::Receiver<Result<bool,String>>,worker:std::thread::JoinHandle<()>}
+    fn open_beside_a_full_cache(wake:Option<Arc<dyn Fn() -> bool + Send + Sync>>)->FullCacheOpen {
         let directory=Directory::new();let cancel=AtomicBool::new(false);
         let mut document=Document::new(PortableId::random(),64,64,DocumentNames {paint:"Paint".into(),paper:"Paper".into()});
         document.artwork.metadata=Arc::new(crate::PhotoMetadata {xmp:Some(crate::authored::Resource::from(vec![7;64*1024])),..Default::default()});
@@ -377,12 +377,25 @@
         let budget=crate::MemoryBudget::with_facts(crate::MemoryFacts {override_bytes:Some(1<<30),..Default::default()});
         let limit=budget.ram_limit_bytes();
         let cache=budget.register_owner(crate::MemoryOwnerKind::Other,crate::MemoryClass::Warm,None);
+        if let Some(wake)=wake {cache.set_wake(wake);}
         cache.report(crate::MemoryReport {ram_bytes:limit,demand_ram_bytes:limit,..Default::default()});
-        let (send,receive)=std::sync::mpsc::channel();
+        let (send,opened)=std::sync::mpsc::channel();
         let worker={let path=directory.0.clone();let budget=budget.clone();std::thread::spawn(move || {
             let mut store=SessionStore::open(&path).wait().unwrap();
             send.send(store.load_with_budget(ProjectLimits::default(),&AtomicBool::new(false),budget).wait().map(|session|session.is_some())).unwrap();
         })};
+        FullCacheOpen {_directory:directory,budget,cache,limit,opened,worker}
+    }
+    #[test]
+    fn a_recovery_open_that_no_owner_can_make_room_for_fails_instead_of_waiting() {
+        let open=open_beside_a_full_cache(None);
+        assert_eq!(open.opened.recv_timeout(std::time::Duration::from_secs(10)),Ok(Err(crate::MEMORY_BUDGET_EXCEEDED.into())),
+            "a recovery open beside memory no owner will release must fail with the memory limit");
+        open.worker.join().unwrap();
+    }
+    #[test]
+    fn a_session_open_reads_its_resources_only_into_room_another_owner_has_released() {
+        let FullCacheOpen {_directory,budget,cache,limit,opened:receive,worker}=open_beside_a_full_cache(Some(Arc::new(||true)));
         assert!(receive.recv_timeout(std::time::Duration::from_millis(500)).is_err(),"the open read its resources into room another owner still holds");
         let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);
         let opened=loop {
@@ -418,7 +431,7 @@
         let location=Arc::new(StoreLocation::new(pack.clone(),pack.source(&cache),0,length,0,[0;32]));
         let mut resources=StoreResources {locations:[(id,location)].into(),..Default::default()};
         let metadata=json!({"resources":[{"id":id,"type":"capy.wgsl/1","encoding":"utf8","bytes":length.to_string(),"crc32":"00000000","data":{},"location":{"pack":"data/tiles-1.bin","offset":"0"}}]});
-        assert!(resources.prepare(&metadata,&crate::MemoryBudget::default()).wait().is_err());
+        assert!(resources.prepare(&metadata,&crate::MemoryBudget::default(),&AtomicBool::new(false)).wait().is_err());
         assert_eq!(reads.load(Ordering::Relaxed),0,"encoded bounds precede transport payload reads");
     }
     fn copy_fixture(source: &Path, destination: &Path) {
