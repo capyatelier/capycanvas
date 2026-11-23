@@ -109,13 +109,19 @@ fn reduce_phased(@builtin(global_invocation_id) id: vec3<u32>) {
     let first = texel * side;
     let size = min(vec2(side), region.extent - first);
     let start = vec2<i32>(256u - vec2(bitcast<u32>(region.opacity.x), bitcast<u32>(region.opacity.y)) + first);
-    let words = bitcast<vec4<u32>>(region.paper);
     let full = all(size == vec2(side));
-    let cell = 1u << select(0u, max(max(words.x, words.y), max(words.z, words.w)) & 15u, full);
     let page = start / 256;
+    let last = (start + vec2<i32>(size) - 1) / 256;
+    var level = 0u;
+    if full {
+        for (var y = page.y; y <= last.y; y++) {
+            for (var x = page.x; x <= last.x; x++) { level = max(level, bitcast<u32>(region.paper[y * 2 + x]) & 15u); }
+        }
+    }
+    let cell = 1u << level;
     var sum = vec4(0.);
     var count: f32;
-    if cell == 1u && (region.flags & 2u) == 0u && full && side > 1u && all(page == (start + vec2<i32>(size) - 1) / 256) {
+    if cell == 1u && (region.flags & 2u) == 0u && full && side > 1u && all(page == last) {
         let index = u32(page.y * 2 + page.x);
         count = f32(side * side / 4u);
         if (bitcast<u32>(region.paper[index]) & 16u) != 0u {

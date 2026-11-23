@@ -552,21 +552,29 @@ impl Scene {
         for (index,neighbor) in neighbors.iter().enumerate() {
             if let Some((coordinate,_))=neighbor {inputs[index]=Some(self.page_inputs(r,scene,id,*coordinate, accepted)?);}
         }
-        let read=inputs.each_ref().map(|input|input.as_ref().is_some_and(|input|!input.empty));
-        let levels:[Option<u32>;4]=std::array::from_fn(|index|read[index].then(||if neighbors[index].is_some_and(|(_,preview)|preview) {r.preview_level}else {0}));
-        let reduced=levels.into_iter().flatten().max().unwrap_or(0);
-        let units = |axis: usize| {
-            let mut halves = [0u64; 2];
+        let levels:[Option<u32>;4]=inputs.each_ref().map(|input|input.as_ref().filter(|input|!input.empty).map(|input|input.level));
+        let cells:BTreeSet<u32>=std::iter::once(1).chain(levels.iter().flatten().map(|level|1<<level)).collect();
+        let spans = |axis: usize| {
+            let mut spans = BTreeMap::<(bool, [u32; 2]), BTreeMap<u32, [u64; 2]>>::new();
             for texel in low[axis]..high[axis] {
                 let length = side.min(size[axis] - texel * side);
-                let cell = if length == side { 1 << reduced } else { 1 };
-                let snapped = (PAGE_SIZE - phase[axis] + texel * side + length.min(cell) / 2) & !(cell - 1);
-                for unit in (snapped..snapped + length).step_by(cell as usize) { halves[(unit / PAGE_SIZE) as usize] += 1; }
+                let start = PAGE_SIZE - phase[axis] + texel * side;
+                let span = spans.entry((length == side, [start / PAGE_SIZE, (start + length - 1) / PAGE_SIZE])).or_default();
+                for &cell in &cells {
+                    let snapped = (start + length.min(cell) / 2) & !(cell - 1);
+                    let halves = span.entry(cell).or_default();
+                    for unit in (snapped..snapped + length).step_by(cell as usize) { halves[(unit / PAGE_SIZE) as usize] += 1; }
+                }
             }
-            halves
+            spans
         };
-        let [x, y] = [units(0), units(1)];
-        let reads = (0..4).filter(|&page| read[page]).map(|page| x[page % 2] * y[page / 2]).sum();
+        let [across, down] = [spans(0), spans(1)];
+        let mut reads = 0;
+        for ((full_x, columns), x) in &across { for ((full_y, rows), y) in &down {
+            let touched = (rows[0]..=rows[1]).flat_map(|row| (columns[0]..=columns[1]).map(move |column| (row * 2 + column) as usize));
+            let cell = if *full_x && *full_y { 1 << touched.filter_map(|page| levels[page]).max().unwrap_or(0) } else { 1 };
+            reads += (0..4).filter(|&page| levels[page].is_some()).map(|page| x[&cell][page % 2] * y[&cell][page / 2]).sum::<u64>();
+        }}
         let origin = output_origin(tile, shift, plan);
         let mut values = [0; 20];
         values[..8].copy_from_slice(&[origin[0], origin[1], count[0], count[1], size[0], size[1], side,
@@ -876,8 +884,7 @@ mod replacement_tests {
         assert!(failures.is_empty(),"{}",failures.join("\n"));
     }
 
-    fn native_page(offset:[i64;2],blend:layer_core::BlendSpace,preview:bool)->Vec<[f32;4]> {
-        let extent=[512,256];
+    fn native_page(extent:[u32;2],tile:[u32;2],offset:[i64;2],blend:layer_core::BlendSpace,preview:Option<[f32;2]>)->Vec<[f32;4]> {
         let mut document=crate::scene::scale::tests::document_at(extent);
         let root=document.artwork.root;
         document.artwork.compositions.get_mut(root).unwrap().blend=blend;
@@ -888,13 +895,13 @@ mod replacement_tests {
         let frame=FramePacket {blend_space:blend,..crate::test_support::packet(document.scene(),extent)};
         let mut reduced=frame;reduced.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
         crate::test_support::submit_published(&mut renderer,reduced);
-        if preview {
-            let dab=crate::tests::test_dab([96.,96.],[0.02,0.07,0.15,0.63],0.9);
+        if let Some(center)=preview {
+            let dab=crate::tests::test_dab(center,[0.02,0.07,0.15,0.63],0.9);
             let mut batch=crate::test_support::dab_batch(id,crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::GPen),dab.bounds());
             batch.kind=layer_render::DabBatchKind::Preview;batch.stroke_end=false;
             crate::test_support::submit_ready(&mut renderer,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..reduced}).unwrap();
             assert_eq!(renderer.preview_level,2,"the stroke previews compact pages");
-            assert!(renderer.preview_page([0,0]).is_some() && renderer.preview_page([1,0]).is_none());
+            assert!(renderer.preview_page(center.map(|value|value as u32/PAGE_SIZE)).is_some() && renderer.preview_page(tile).is_none());
             renderer.preview_requires_base=true;
         }
         let mut scene=Scene::new(&renderer).unwrap();scene.scale_sources.prepare(&renderer,frame,&[]);
@@ -910,18 +917,18 @@ mod replacement_tests {
         super::super::super::sources::Inputs::begin_accepted_reads();
         crate::test_support::prepare_raster(&mut renderer,|r| {
             let mut work=crate::test_support::work(false);
-            cache.prepare_source(&mut scene,r,frame,&mut encoder,id,SourceRequest {plan,required:page_rect([1,0]).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut work)
+            cache.prepare_source(&mut scene,r,frame,&mut encoder,id,SourceRequest {plan,required:page_rect(tile).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut work)
         }).unwrap();
         let reads=super::super::super::sources::Inputs::take_accepted_read_results();
         assert!(reads.iter().map(|(count,_)|*count).sum::<usize>()>0 && reads.iter().all(|(_,missing)|missing.is_empty()),"{reads:?}");
         renderer.uploads.finish(&encoder);encoder.submit(&renderer.queue);crate::test_support::complete(&renderer);
         drop(warm_leases);
-        let key=scene.scale_sources.entries[&id].key(&renderer,id,0,[1,0]);
-        let image=cache.pages.lock().unwrap().get(&key,page_rect([1,0]),pages::Accuracy::Display,0,Class::Visible).expect("the native page must be prepared");
+        let key=scene.scale_sources.entries[&id].key(&renderer,id,0,tile);
+        let image=cache.pages.lock().unwrap().get(&key,page_rect(tile),pages::Accuracy::Display,0,Class::Visible).expect("the native page must be prepared");
         crate::test_support::float_pixels(&renderer,&image.texture)
     }
     fn assert_one_row_down(phased:&[[f32;4]],aligned:&[[f32;4]]) {
-        for y in 1..PAGE_SIZE as usize {for x in [0,128,254,255] {
+        for y in 1..PAGE_SIZE as usize {for x in [0,3,128,254,255] {
             let at=y*PAGE_SIZE as usize+x;
             assert!(phased[at].iter().all(|value|value.is_finite()),"phased page texel ({x},{y}) must be finite: {:?}",phased[at]);
             assert_eq!(phased[at],aligned[at-PAGE_SIZE as usize],"phased page texel ({x},{y}) must show the pixel one row up");
@@ -930,12 +937,20 @@ mod replacement_tests {
     #[test]
     fn a_phased_native_page_reads_only_the_pages_its_texels_cover() {
         let perceptual=layer_core::BlendSpace::Perceptual;
-        assert_one_row_down(&native_page([0,1],perceptual,true),&native_page([0,0],perceptual,true));
+        let page=|offset|native_page([512,256],[1,0],offset,perceptual,Some([96.,96.]));
+        assert_one_row_down(&page([0,1]),&page([0,0]));
+    }
+    #[test]
+    fn a_native_texel_beside_a_compact_prediction_reads_its_own_pixel() {
+        let perceptual=layer_core::BlendSpace::Perceptual;
+        let page=|offset|native_page([512,512],[1,1],offset,perceptual,Some([384.,96.]));
+        assert_one_row_down(&page([0,1]),&page([0,0]));
     }
     #[test]
     fn a_linear_phased_native_page_copies_each_pixel() {
         let linear=layer_core::BlendSpace::Linear;
-        assert_one_row_down(&native_page([0,1],linear,false),&native_page([0,0],linear,false));
+        let page=|offset|native_page([512,256],[1,0],offset,linear,None);
+        assert_one_row_down(&page([0,1]),&page([0,0]));
     }
 
     #[test]
