@@ -10,9 +10,16 @@ impl WgpuRasterizer {
             + page.stroke_start.as_ref().map_or(0, StrokeStart::storage_bytes) + page.secondary.as_ref().map_or(0, |surface| surface.storage_bytes())).sum()
     }
     pub(crate) fn pinned_paint_bytes(&self) -> u64 {
-        self.paint_memory_bytes().saturating_sub(self.evictable_native_color_bytes()).saturating_sub(self.idle_original_bytes())
+        let evictable = self.memory.evictable_paint(|| self.evictable_native_color_bytes());
+        self.paint_memory_bytes().saturating_sub(evictable).saturating_sub(self.idle_original_bytes())
+    }
+    #[cfg(test)]
+    pub(crate) fn walked_pinned_paint_bytes(&self) -> u64 {
+        self.paint_memory_bytes().saturating_sub(self.evictable_native_color_bytes())
+            .saturating_sub(self.liquify.as_ref().map_or(0, |liquify| liquify.walked_idle_original_bytes()))
     }
     fn evictable_native_color_bytes(&self) -> u64 {
+        #[cfg(test)] crate::test_support::PassCounts {pinned_walks:1,..Default::default()}.record();
         let Some(native) = &self.native_edit else { return 0; };
         if self.transform_preview.is_some() || self.transforms.as_ref().is_some_and(|transform| transform.has_preview()) { return 0; }
         let required = self.restore_preflight.as_ref().map_or(&[][..], |restore| restore.dependencies());
@@ -181,7 +188,9 @@ impl WgpuRasterizer {
         let leases = self.offer_native_color(batches, tiles);
         self.evict_originals(|r| { r.raster_tiers.raster.heap().evict(bytes, crate::residency::Class::Fallback); });
         self.raster_buffers.release_evicted();
-        self.take_evicted_color(leases)
+        let evicted = self.take_evicted_color(leases);
+        if !evicted.0.is_empty() { self.memory.forget_evictable_paint(); }
+        evicted
     }
     fn offer_native_color(&self, batches: &[DabBatch], tiles: &[Vec<BrushTile>]) -> std::collections::HashMap<(SourceTarget, [u32; 2], Offered), Arc<crate::residency::Lease>> {
         let mut leases = std::collections::HashMap::new();
