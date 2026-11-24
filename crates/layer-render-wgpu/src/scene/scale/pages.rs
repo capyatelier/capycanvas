@@ -79,7 +79,7 @@ pub(crate) struct PresentedPage<'a> {
 impl<'a> PresentedPage<'a> {
     pub(super) fn floor(floor:&'a CommittedImage,geometry:&'a wgpu::Buffer)->Self {Self {holes:true,detail:None,stand_in:Some(floor),geometry}}
     pub(super) fn with_floor(mut self,floor:&'a CommittedImage)->Self {
-        if self.holes && self.stand_in.is_none_or(|image|floor.image.plan.level<image.image.plan.level) {self.stand_in=Some(floor);}
+        if self.holes && self.stand_in.is_none_or(|image|floor.image.plan.level<image.image.plan.level && image.authored.is_some() && image.authored==floor.authored) {self.stand_in=Some(floor);}
         self
     }
     pub(super) fn images(&self)->impl Iterator<Item=&'a CommittedImage> {self.detail.into_iter().flatten().chain(self.stand_in)}
@@ -2087,6 +2087,30 @@ impl Cache {
             cell.derive(presented(area,derived));
             if cell.reduced && area.intersect(changed).is_empty() {cell.reduced_from=source;}
         }
+    }
+    pub(super) fn absorptions(&self,finer:&Cache,changed:PixelRect)->Vec<PixelRect> {
+        if finer.plan.level>=self.plan.level || changed.is_empty() {return Vec::new();}
+        let side=1u32<<self.plan.level;
+        let align=|area:PixelRect|PixelRect::new(area.min_x()/side*side,area.min_y()/side*side,
+            area.max_x().div_ceil(side)*side,area.max_y().div_ceil(side)*side).intersect(self.plan.bounds);
+        let finer_cells=finer.cells.lock().unwrap();
+        if finer_cells.cells.len()!=coordinates(finer.plan.bounds,finer.plan.level).count() {return Vec::new();}
+        let written=|area:PixelRect|!area.is_empty() && finer.plan.bounds.intersect(area)==area
+            && coordinates(area,finer.plan.level).all(|coordinate|finer_cells.cells[Cells::index(finer.plan,coordinate)].written());
+        let Some((mut cells,_store,_))=self.cells() else {return Vec::new();};
+        let mut parts=Vec::new();
+        for (cell,coordinate) in cells.cells.iter_mut().zip(coordinates(self.plan.bounds,self.plan.level)) {
+            if cell.derived || cell.current {continue;}
+            let Some(shown)=cell.shown.as_mut() else {continue;};
+            let area=align(bounds(coordinate,self.plan.level,self.plan.extent).intersect(changed));
+            let found:Vec<_>=if written(area) {vec![area]} else {
+                coordinates(area,finer.plan.level).map(|coordinate|align(bounds(coordinate,finer.plan.level,finer.plan.extent).intersect(area))).filter(|part|written(*part)).collect()
+            };
+            if found.is_empty() {continue;}
+            shown.recorded=None;
+            parts.extend(found);
+        }
+        parts
     }
     pub(super) fn current_window(&self,reader:&Cache)->Option<WindowSource> {
         #[cfg(test)] crate::test_support::PassCounts {navigator_checks:1,..Default::default()}.record();

@@ -1364,14 +1364,22 @@ impl Cache {
     )->Result<PixelRect,GpuRasterError> {
         let region=self.cells.lock().unwrap().derivations(self.plan,changed);
         let Some(root)=finer.pixels.committed_root().map(pages::CommittedImage::image) else {return Ok(PixelRect::EMPTY);};
+        let input=|region:PixelRect| {
+            let [x,y,width,height]=paint_transform::texel_rect(region.window_local(root.plan.bounds),1<<root.plan.level);
+            let reduced=PixelRect::new(x,y,x+width,y+height).intersect(finer.pixels.unreduced()).is_empty();
+            finer.pixels.committed_next().filter(|_|reduced).map_or(root,pages::CommittedImage::image)
+        };
+        let mut absorbed=PixelRect::EMPTY;
+        for part in self.absorptions(finer,changed) {
+            let Some(written)=self.reduce_from(scene,r,encoder,commands,input(part),part)? else {continue;};
+            self.pixels.derived(written,encoder.submission());
+            absorbed=absorbed.union(part);
+        }
         let region=region.intersect(root.plan.bounds);
-        let [x,y,width,height]=paint_transform::texel_rect(region.window_local(root.plan.bounds),1<<root.plan.level);
-        let reduced=PixelRect::new(x,y,x+width,y+height).intersect(finer.pixels.unreduced()).is_empty();
-        let input=finer.pixels.committed_next().filter(|_|reduced).map_or(root,pages::CommittedImage::image);
-        let Some(written)=self.reduce_from(scene,r,encoder,commands,input,region)? else {return Ok(PixelRect::EMPTY);};
+        let Some(written)=self.reduce_from(scene,r,encoder,commands,input(region),region)? else {return Ok(absorbed);};
         self.cells.lock().unwrap().reduced(self.plan,region,changed,encoder.submission(),finer.pixels.committed_root().and_then(pages::CommittedImage::authored));
         self.pixels.derived(written,encoder.submission());
-        Ok(region)
+        Ok(region.union(absorbed))
     }
     fn reduce_from(&mut self,scene:&Scene,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,commands:&mut RegionRecords,
         input:&Image,region:PixelRect,

@@ -38,7 +38,7 @@ const ERASER: Brush = Brush { preset: DefaultBrushPreset::Eraser, radius: 60., c
 const WIDE_PASTEL: Brush = Brush { preset: DefaultBrushPreset::PastelBlock, radius: 1000., color: [0.9, 0.7, 0.1, 1.], flow: 0.8 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Fault { Compile, Decode, Grant, Discard, View }
+enum Fault { Compile, Decode, Withheld, Grant, Discard, View }
 
 #[derive(Clone, Copy, Debug)]
 struct Case { seed: u64, brush: Brush, zoom: Zoom, pan: bool, surround: bool, layered: bool, budget: Option<u64>, fault: Option<Fault> }
@@ -64,12 +64,13 @@ cases! {
     wide_g_pen_half_cells_refused: Case { seed: 23, brush: WIDE_G_PEN, zoom: Zoom::Half, pan: false, surround: false, layered: false, budget: None, fault: Some(Fault::Grant) },
     g_pen_fit_frame_discarded: Case { seed: 24, brush: G_PEN, zoom: Zoom::Fit, pan: false, surround: false, layered: false, budget: None, fault: Some(Fault::Discard) },
     g_pen_actual_view_moved: Case { seed: 25, brush: G_PEN, zoom: Zoom::Actual, pan: false, surround: false, layered: false, budget: None, fault: Some(Fault::View) },
+    wide_g_pen_actual_inked_cells_withheld: Case { seed: 26, brush: WIDE_G_PEN, zoom: Zoom::Actual, pan: false, surround: false, layered: true, budget: None, fault: Some(Fault::Withheld) },
 }
 
 struct Frame { dabs: Vec<Dab>, batches: Vec<DabBatch>, pan: [u32; 2] }
 
 #[derive(Clone, Copy, Debug)]
-struct Schedule { fault: Fault, at: usize, until: usize, shift: [u32; 2] }
+struct Schedule { fault: Fault, at: usize, back: usize, until: usize, shift: [u32; 2] }
 
 impl Schedule {
     fn new(case: Case, sequence: &[Frame]) -> Option<Self> {
@@ -79,19 +80,21 @@ impl Schedule {
             let frame = &sequence[index];
             match fault {
                 Fault::Discard => !frame.batches.is_empty() && frame.batches.iter().all(|batch| batch.kind == DabBatchKind::Preview),
+                Fault::Withheld => sequence[..index].iter().any(|frame| batch_dabs(frame, DabBatchKind::Persistent).next().is_some()),
                 _ => true,
             }
         }).collect();
         let at = if fault == Fault::Grant { FRAMES + rng.below(2) as usize } else { eligible[rng.below(eligible.len() as u64) as usize] };
-        let until = if fault == Fault::Discard { at + 1 } else { at + 1 + rng.below(4) as usize };
-        Some(Self { fault, at, until, shift: [160 + rng.below(320) as u32, 96 + rng.below(192) as u32] })
+        let until = match fault { Fault::Discard => at + 1, Fault::Withheld => at + 3 + rng.below(3) as usize, _ => at + 1 + rng.below(4) as usize };
+        let (back, shift) = if fault == Fault::Withheld { (at + 1, [512 + rng.below(256) as u32, rng.below(128) as u32]) } else { (until, [160 + rng.below(320) as u32, 96 + rng.below(192) as u32]) };
+        Some(Self { fault, at, back, until, shift })
     }
     fn active(&self, index: usize) -> bool { (self.at..self.until).contains(&index) }
-    fn moves(&self) -> bool { matches!(self.fault, Fault::Compile | Fault::Decode | Fault::View) }
+    fn moves(&self) -> bool { matches!(self.fault, Fault::Compile | Fault::Decode | Fault::Withheld | Fault::View) }
 }
 
 #[derive(Default)]
-struct Injected { batch: Option<crate::compile::Batch>, refused: PixelRect }
+struct Injected { batch: Option<crate::compile::Batch>, refused: PixelRect, withheld: layer_core::raster_storage::RetainedTiles, gate: Option<crate::test_support::GatedStore> }
 
 impl Injected {
     fn begin(&mut self, oracle: &mut Oracle, schedule: Schedule, painted: &[Dab]) {
@@ -102,6 +105,14 @@ impl Injected {
                 oracle.presenter = crate::test_support::float_presenter(subject);
             },
             Fault::Decode => crate::test_support::evict_sources(subject),
+            Fault::Withheld => {
+                self.gate = Some(crate::test_support::GatedStore::new(&self.withheld, false));
+                crate::test_support::evict_sources(subject);
+                let samples = subject.device.source_samples.clone();
+                let limit = samples.stats().limit_bytes;
+                samples.set_limit(0); samples.trim_unused(usize::MAX); samples.set_limit(limit);
+                subject.source_tiles.borrow().release_ready(); subject.source_tiles.borrow_mut().retire_evicted();
+            },
             Fault::Grant => self.refused = painted.last().map_or(PixelRect::EMPTY, |dab| {
                 let bounds = dab.bounds();
                 let [x0, y0, x1, y1] = [bounds.min.x, bounds.min.y, bounds.max.x, bounds.max.y].map(|value| value.max(0.) as u32);
@@ -126,6 +137,10 @@ impl Injected {
                 while crate::compile::tests::queued_recipes(&subject.compilation) != 0 { subject.compilation.check().unwrap(); subject.wait_idle().unwrap(); }
             },
             Fault::Decode => crate::test_support::settle_decodes(subject),
+            Fault::Withheld => {
+                drop(self.gate.take());
+                crate::test_support::settle_decodes(subject);
+            },
             Fault::Grant => subject.scale_display.as_ref().unwrap().release(self.refused),
             Fault::Discard => assert!(!subject.test.discard_frame, "frame {}'s encoder is dropped", schedule.at),
             Fault::View => {},
@@ -449,11 +464,12 @@ impl Checker {
 
 fn run(name: &str, case: Case) {
     let (doc, target) = document(case.layered);
+    let (copy, _) = document(case.layered);
     let style = layer_render::DabStyle { blend_space: doc.composition().blend, ..crate::layer_tests::preset_style(case.brush.preset) };
     let mut sequence = strokes(case, target, &style);
     let schedule = Schedule::new(case, &sequence);
     if let Some(schedule) = schedule.filter(Schedule::moves) {
-        for frame in &mut sequence[schedule.at..schedule.until] { frame.pan = [0, 1].map(|axis| frame.pan[axis] + schedule.shift[axis]); }
+        for frame in &mut sequence[schedule.at..schedule.back] { frame.pan = [0, 1].map(|axis| frame.pan[axis] + schedule.shift[axis]); }
     }
     let outside = |dab: &Dab| dab.bounds().max.x < 0.;
     assert!(!case.surround || sequence.iter().any(|frame| batch_dabs(frame, DabBatchKind::Preview).next().is_some() && batch_dabs(frame, DabBatchKind::Preview).all(outside)),
@@ -467,12 +483,18 @@ fn run(name: &str, case: Case) {
     crate::test_support::submit_settled(subject, FramePacket { reset_layers: true, composite_all: true, ..base });
     while crate::compile::tests::queued_recipes(&subject.compilation) != 0 { subject.compilation.check().unwrap(); subject.wait_idle().unwrap(); }
     crate::test_support::submit_settled(subject, FramePacket { composite_all: true, ..base });
-    crate::test_support::submit_settled(&mut oracle.reference, FramePacket { composite_all: true, ..base });
+    crate::test_support::submit_settled(&mut oracle.reference, FramePacket { composite_all: true, scene: copy.scene(), ..base });
     assert_eq!(oracle.subject.scale_display.as_ref().unwrap().plan.level, level, "{name}: the view shows level {level}");
     let context = format!("{name} seed {}{}", case.seed, schedule.map_or(String::new(), |schedule| format!(" ({:?} from frame {} until frame {})", schedule.fault, schedule.at, schedule.until)));
     let history = History::new(&oracle, sequence.iter().map(|frame| case.zoom.view(frame.pan)), level);
     let mut checker = Checker { context: context.clone(), level, history, owing: BTreeMap::new(), painted: Vec::new(), schedule };
-    let mut injected = Injected::default();
+    let scene = doc.scene();
+    let photos: Vec<SourceImage> = scene.order().iter().filter_map(|&handle| scene.paint_base(scene.source_target(handle)?)).map(|base| (**base.image.storage()).clone()).collect();
+    let masks: Vec<SourceImage> = doc.artwork.coverage.iter().map(|(_, _, coverage)| SourceImage {
+        tiles: coverage.raster.wait_data().unwrap().tiles.iter().map(|(key, tile)| (key.coordinate, tile.wait_backing().unwrap())).collect(), ..photos[0].clone() }).collect();
+    let shown: BTreeSet<_> = page_coordinates(display_mips::view_bounds(case.zoom.view([0, 0]), EXTENT, 0).unwrap()).collect();
+    let withheld: Vec<SourceImage> = photos.iter().chain(&masks).map(|image| SourceImage { tiles: image.tiles.iter().filter(|(tile, _)| shown.contains(*tile)).map(|(tile, blob)| (*tile, blob.clone())).collect(), ..image.clone() }).collect();
+    let mut injected = Injected { withheld: layer_core::raster_storage::RetainedTiles::from_sources(&withheld), ..Default::default() };
     let mut seen = retained_keys(&oracle.subject);
     let idle = Frame { dabs: Vec::new(), batches: Vec::new(), pan: sequence.last().unwrap().pan };
     let mut missed = 0;
@@ -494,13 +516,13 @@ fn run(name: &str, case: Case) {
             });
         }
         crate::test_support::submit_ready(&mut oracle.subject, frame_packet).unwrap();
-        if let Err(error) = oracle.publish_reference(FramePacket { composite_all: true, ..frame_packet }) { panic!("{context} frame {index}: {error}"); }
+        if let Err(error) = oracle.publish_reference(FramePacket { composite_all: true, scene: copy.scene(), ..frame_packet }) { panic!("{context} frame {index}: {error}"); }
         if index < FRAMES { seen.extend(retained_keys(&oracle.subject)); }
         missed = checker.observe(&mut oracle, index, frame, frame_packet.view, false);
     }
     let frame_packet = packet_for(base, case.zoom, FRAMES + REPAIR_FRAMES + 2, &idle);
     crate::test_support::submit_settled(&mut oracle.subject, frame_packet);
-    if let Err(error) = oracle.publish_reference(FramePacket { composite_all: true, ..frame_packet }) { panic!("{context} settled: {error}"); }
+    if let Err(error) = oracle.publish_reference(FramePacket { composite_all: true, scene: copy.scene(), ..frame_packet }) { panic!("{context} settled: {error}"); }
     checker.observe(&mut oracle, FRAMES + REPAIR_FRAMES + 2, &idle, frame_packet.view, true);
     let retained = retained_keys(&oracle.subject);
     let evicted = seen.iter().filter(|key| !retained.contains(key)).count();
