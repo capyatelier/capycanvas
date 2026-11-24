@@ -102,6 +102,10 @@ impl Tier {
         if self.limit.swap(limit,SeqCst)<limit {self.release_edge();}
     }
     pub(crate) fn grant(&self) -> u64 { let grant = self.grant.load(SeqCst); self.ledger.as_ref().map_or(grant, |ledger| grant.min(ledger.gpu_grant())) }
+    pub(crate) fn owes_ledger(&self) -> bool {
+        self.used() > self.grant().saturating_add(self.retiring.as_ref().map_or(0, |retiring| retiring.used()))
+            || self.ledger.as_ref().is_some_and(layer_core::MemoryRoom::reclaim_unanswered)
+    }
     pub(crate) fn set_grant(&self, grant: u64) {
         if self.grant.swap(grant, SeqCst) < grant { self.release_edge(); }
     }

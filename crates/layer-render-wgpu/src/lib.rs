@@ -3722,7 +3722,7 @@ impl WgpuRasterizer {
         if let Some(job)=&self.analysis_job {job.set_wake(wake.clone());}
         if let Some(job)=&self.snapshot_job {job.set_wake(wake.clone());}
         for task in &self.bake_analyses {task.set_wake(wake.clone());}
-        self.memory.set_wake(wake.clone());
+        self.memory.set_wake(wake.clone(), &self.scene_tiers.display);
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.watch_ledger();

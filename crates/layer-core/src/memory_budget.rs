@@ -89,6 +89,7 @@ pub struct MemoryBudgetSnapshot {
 }
 #[derive(Default)]
 struct Grants { ram: AtomicU64, gpu: AtomicU64, working_limit: AtomicU64, requested: AtomicU64, answered: AtomicU64, wake: OnceLock<Arc<dyn Fn() -> bool + Send + Sync>> }
+impl Grants { fn reclaim_unanswered(&self) -> bool { self.answered.load(Ordering::Acquire) < self.requested.load(Ordering::Acquire) } }
 #[derive(Default)]
 struct PendingReport { version: AtomicU64, values: [AtomicU64; 7] }
 impl PendingReport {
@@ -166,6 +167,7 @@ impl MemoryRoom {
     pub fn flush(&self) {self.budget.flush_reports();}
     pub fn published_gpu_working_limit(&self)->u64 {self.grants.working_limit.load(Ordering::Acquire)}
     pub fn gpu_grant(&self)->u64 {self.grants.gpu.load(Ordering::Acquire)}
+    pub fn reclaim_unanswered(&self)->bool {self.grants.reclaim_unanswered()}
 }
 struct Owner { budget: MemoryBudget, id: u64, grants: Arc<Grants>, pending: Arc<PendingReport> }
 impl Drop for Owner {
@@ -202,7 +204,7 @@ impl MemoryOwner {
         });
     }
     pub fn reclaim_epoch(&self) -> u64 { self.0.grants.requested.load(Ordering::Acquire) }
-    pub fn reclaim_unanswered(&self) -> bool { self.0.grants.answered.load(Ordering::Acquire) < self.reclaim_epoch() }
+    pub fn reclaim_unanswered(&self) -> bool { self.0.grants.reclaim_unanswered() }
     pub fn reclaimed(&self, epoch: u64) {
         if self.0.grants.answered.load(Ordering::Acquire) >= epoch || self.0.grants.answered.fetch_max(epoch,Ordering::AcqRel) >= epoch {return;}
         let mut state=self.0.budget.0.state.lock().unwrap();

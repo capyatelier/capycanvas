@@ -88,7 +88,7 @@ pub(super) struct Memory {
     lane: std::cell::RefCell<Lane>,
     trimmed: std::cell::Cell<Option<[u64; 2]>>,
     retired: std::cell::Cell<Option<[u64; 2]>>,
-    wake: Arc<std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
+    wake: Arc<std::sync::Mutex<Option<(Arc<dyn Fn() + Send + Sync>, std::sync::Weak<crate::residency::Tier>)>>>,
     resources: Arc<std::sync::atomic::AtomicU64>,
     overdraft: std::cell::RefCell<Vec<layer_core::MemoryReservation>>,
     fruitless: std::cell::RefCell<Vec<(Arc<crate::residency::Tier>,crate::residency::Class,u64,crate::residency::Blocked)>>,
@@ -139,11 +139,14 @@ impl Memory {
         let demand = Demand {floor:working,mips:0,sources:[SOURCE_WORKING_BYTES,scene::scale::SOURCE_WORKING_BYTES+working],inputs:[0;2],resources:working};
         let display = Owner::new(factory, Kind::Scene, MemoryReport { pinned_gpu_bytes: total(demand.pinned([0;5])), demand_gpu_bytes: total(demand.pinned([0;5])), optional_gpu_bytes: u64::MAX, ..Default::default() });
         let resources = Arc::new(std::sync::atomic::AtomicU64::new(display.handle.grant().gpu_bytes));
-        let wake: Arc<std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>> = Default::default();
+        let wake: Arc<std::sync::Mutex<Option<(Arc<dyn Fn() + Send + Sync>, std::sync::Weak<crate::residency::Tier>)>>> = Default::default();
         let forwarded = wake.clone();
         let parked = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let declines = parked.clone();
-        display.handle.set_wake(Arc::new(move || { let wake = forwarded.lock().unwrap().clone(); wake.inspect(|wake| wake()).is_some() && !declines.load(std::sync::atomic::Ordering::Acquire) }));
+        display.handle.set_wake(Arc::new(move || {
+            let owed = forwarded.lock().unwrap().clone().filter(|(_, display)| display.upgrade().is_some_and(|display| display.owes_ledger()));
+            owed.inspect(|(wake, _)| wake()).is_some() && !declines.load(std::sync::atomic::Ordering::Acquire)
+        }));
         let memory = Self {
             display,
             samples: samples.report_to(|| factory.memory_owner(Kind::DecodedSamples)),
@@ -162,7 +165,7 @@ impl Memory {
     pub(crate) fn retention_grant(&self) -> u64 { self.display.handle.grant().gpu_bytes }
     pub(crate) fn retention_limit(&self) -> u64 { self.retention_grant().min(self.retention_ceiling()) }
     fn retention_ceiling(&self) -> u64 { if self.unified { self.target.get() } else { u64::MAX } }
-    pub(crate) fn set_wake(&self, wake: Arc<dyn Fn() + Send + Sync>) { *self.wake.lock().unwrap() = Some(wake); }
+    pub(crate) fn set_wake(&self, wake: Arc<dyn Fn() + Send + Sync>, display: &Arc<crate::residency::Tier>) { *self.wake.lock().unwrap() = Some((wake, Arc::downgrade(display))); }
     pub(crate) fn park(&self, parked: bool) { self.parked.store(parked, std::sync::atomic::Ordering::Release); }
     pub(crate) fn reclaim_unanswered(&self) -> bool { self.display.handle.reclaim_unanswered() }
     #[cfg(not(target_arch = "wasm32"))]
