@@ -69,18 +69,19 @@ fn dither_hides_color_mixing_without_discarding_saved_choice() {
 }
 
 #[test]
-fn taper_section_follows_tip_with_its_choice_then_the_current_mode_sliders() {
+fn taper_section_follows_smoothing_with_its_choice_then_the_current_mode_sliders() {
     let section = |s: &UiSession<Recorder>| -> Option<Vec<&'static str>> {
         let options = s.state.tool_options();
         let at = options.iter().position(|o| matches!(o, ToolOption::Choice { id: "taper", .. }))?;
         let ToolOption::Choice { label, labeled: true, segmented: true, items, heading, .. } = &options[at] else { panic!("an inline labeled bar") };
         assert_eq!((label.as_ref(), items.len()), ("Taper type", 3));
         let field = |o: &ToolOption| match o { ToolOption::Numeric(f) => Some(f.clone()), _ => None };
-        assert_eq!(field(&options[at - 1]).unwrap().group_id, MessageId::TOOL_SETTING_GROUP_TIP.key(), "the section follows Tip");
+        assert_eq!(field(&options[at - 1]).unwrap().id, "smoothing_strength", "the section follows Smoothing");
         assert_eq!(options[at].anchor(), options.get(at + 1).and_then(field).map(|f| f.id), "hosts place the choice by its anchor");
         let sliders: Vec<_> = options[at + 1..].iter().map_while(field)
             .take_while(|f| f.group_id == MessageId::TOOL_SETTING_GROUP_TAPER.key()).map(|f| f.id).collect();
         assert_eq!(sliders, s.state.tool_settings.iter().filter(|f| f.id.starts_with("taper_")).map(|f| f.id).collect::<Vec<_>>());
+        assert_eq!(options.get(at + 1 + sliders.len()).and_then(field).map(|f| f.group_id), Some(MessageId::TOOL_SETTING_GROUP_TIP.key()), "Tip follows the section");
         let titles = heading.iter().map(|h| h.to_string()).chain(options.get(at + 1).and_then(field)
             .filter(|f| f.group_id == MessageId::TOOL_SETTING_GROUP_TAPER.key()).map(|f| f.group.to_string())).collect::<Vec<_>>();
         assert_eq!(titles, ["Taper"], "one Taper heading, from the choice only when the section has no sliders");
@@ -125,7 +126,7 @@ fn stored_taper_overrides_restore_in_either_order() {
     let expected = apply(&[mode, values[0], values[1], values[2]]);
     assert_eq!(apply(&[values[0], values[1], values[2], mode]), expected);
     assert_eq!(expected, layer_core::BrushTaper {
-        mode: layer_core::TaperMode::Proportional, fixed_widths: [6., 10.], proportional_shares: [0.3, 0.2], pointiness: 0.8,
+        mode: layer_core::TaperMode::Proportional, fixed_widths: [6., 4.], proportional_shares: [0.3, 0.2], pointiness: 0.8,
     });
     for (id, value) in [("taper", 3.), ("taper_start_widths", 200.5), ("taper_end_share", 0.6), ("taper_pointiness", -0.1)] {
         assert!(edit_value(pen as u32, &layer_core::default_brush(pen), id, value).is_err(), "{id} {value}");
@@ -139,6 +140,53 @@ fn stored_taper_overrides_restore_in_either_order() {
     assert_eq!(s.engine.configured_brush().taper, expected);
     assert_eq!(s.state.tool_settings.iter().filter(|c| c.id.starts_with("taper_")).map(|c| (c.id, c.value)).collect::<Vec<_>>(),
         [("taper_start", 0.3), ("taper_end", 0.2), ("taper_pointiness", 0.8)]);
+}
+
+#[test]
+fn phone_pens_default_to_a_fixed_taper_that_saves_nothing() {
+    use layer_core::TaperMode;
+    let pen = DefaultBrushPreset::GPen as u32;
+    let sized = |platform, viewport: [u32; 2], overrides: Option<(&str, f32)>| {
+        let mut s = session(platform);
+        s.state.workspace.layout = WorkspacePreset::Painter.layout(platform);
+        if let Some((id, value)) = overrides {
+            let mut editing = s.editing_state();
+            editing.tools.overrides.insert(pen, [(id.into(), value)].into());
+            s.restore_editing(editing).unwrap();
+        }
+        s.set_viewport(viewport.map(|v| v as f32), viewport).unwrap();
+        s.select_brush(pen).unwrap();
+        s
+    };
+    let mode = |s: &UiSession<Recorder>| s.engine.configured_brush().taper.mode;
+    for (platform, viewport) in [(Platform::Gtk, [1280, 800]), (Platform::Android, [800, 1280])] {
+        let s = sized(platform, viewport, None);
+        assert!(s.phone_layout().is_none());
+        assert_eq!(mode(&s), TaperMode::Off, "{platform:?} {viewport:?}");
+    }
+
+    let mut s = sized(Platform::Android, [412, 891], None);
+    assert!(s.phone_layout().is_some());
+    assert_eq!(mode(&s), TaperMode::Fixed);
+    assert!(s.command(CommandId::TaperFixed).selected);
+    assert!(!s.editing_state().tools.overrides.contains_key(&pen), "the default saves nothing");
+    s.dispatch(UiAction::Invoke { command: CommandId::TaperOff }).unwrap();
+    assert_eq!(s.editing_state().tools.overrides[&pen]["taper"], TaperMode::Off as u8 as f32);
+    s.reset_brushes().unwrap();
+    assert_eq!(mode(&s), TaperMode::Fixed, "Reset returns to the phone default");
+    assert!(s.editing_state().tools.overrides.is_empty());
+    s.set_viewport([800., 1280.], [800, 1280]).unwrap();
+    assert_eq!(mode(&s), TaperMode::Off, "a tablet window reads the tablet default");
+    s.set_viewport([412., 891.], [412, 891]).unwrap();
+    assert_eq!(mode(&s), TaperMode::Fixed);
+
+    let s = sized(Platform::Android, [412, 891], Some(("taper", TaperMode::Off as u8 as f32)));
+    assert_eq!(mode(&s), TaperMode::Off, "a stored choice wins");
+
+    let mut s = sized(Platform::Android, [412, 891], None);
+    s.select_brush(DefaultBrushPreset::Paintbrush as u32).unwrap();
+    assert_eq!(s.engine.configured_brush().taper, layer_core::BrushTaper::default());
+    assert!(!s.state.tool_settings.iter().any(|f| f.group_id == MessageId::TOOL_SETTING_GROUP_TAPER.key()));
 }
 
 #[test]

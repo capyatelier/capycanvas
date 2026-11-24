@@ -266,9 +266,9 @@ pub(crate) fn ring_defaults(preset: u32, brush: &BrushSnapshot, controls: &[Tool
 }
 
 const GROUP_ORDER: &[MessageId] = &[
+    MessageId::TOOL_SETTING_GROUP_TAPER,
     MessageId::TOOL_SETTING_GROUP_BLENDER,
     MessageId::TOOL_SETTING_GROUP_TIP,
-    MessageId::TOOL_SETTING_GROUP_TAPER,
     MessageId::TOOL_SETTING_GROUP_MATERIAL,
     MessageId::TOOL_SETTING_GROUP_TEXTURE,
     MessageId::TOOL_SETTING_GROUP_BRISTLES,

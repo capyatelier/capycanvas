@@ -613,7 +613,7 @@ impl Default for BrushTaper {
     fn default() -> Self {
         Self {
             mode: TaperMode::Off,
-            fixed_widths: [10.0, 10.0],
+            fixed_widths: [4.0, 4.0],
             proportional_shares: [0.3, 0.3],
             pointiness: 0.5,
         }

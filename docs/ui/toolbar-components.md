@@ -130,7 +130,7 @@ It ranges from 0 to 100, defaults to 6 and uses a logarithmic slider with 30 at
 75% travel. Each brush retains its value; selection and coverage-mask tools omit
 it. Command search labels the control Smoothing.
 
-Secondary categories follow a shared order: Tip, Taper, Material, Texture, Bristles,
+Secondary categories follow a shared order: Taper, Tip, Material, Texture, Bristles,
 Mixing, Watercolor, Bleed, Liquify and Blending. Brush Color mixing joins the
 secondary Mixing category in Tool Options. For pens, the Taper section opens with
 the Taper type choice (Off, Fixed, Proportional), a labeled row of icon radio

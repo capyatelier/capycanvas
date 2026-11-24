@@ -321,7 +321,7 @@ fn complete_editing(english:&Localizer)->EditingState {
         let defaults=layer_core::default_brush(preset(id).unwrap());
         for control in crate::tool_settings::controls(id,&defaults,english) {
             let value=if control.numeric.min as f32==control.value {control.numeric.max}else{control.numeric.min} as f32;
-            editing.tools.set_override(id,control.id,value,english).unwrap();
+            editing.tools.set_override(id,control.id,value,false,english).unwrap();
         }
         editing.tools.remember(id);
     }

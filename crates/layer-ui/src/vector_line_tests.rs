@@ -1605,7 +1605,7 @@ fn a_setting_refusal_closes_when_another_brush_is_chosen() {
     s.select_brush(DefaultBrushPreset::Monoline as u32).unwrap();
     assert_eq!(s.state.notice, None, "the refusal names G-Pen's setting");
     assert!(s.dispatch(UiAction::Notice { id: notice.id, accept: true, action: Some(NoticeActionId::ResetSetting) }).is_err());
-    assert_eq!(s.tools.brush(DefaultBrushPreset::Monoline).shape.size_jitter, 0.4, "Monoline keeps its own setting");
+    assert_eq!(s.tools.brush(DefaultBrushPreset::Monoline, false).shape.size_jitter, 0.4, "Monoline keeps its own setting");
 }
 
 #[test]

@@ -378,6 +378,13 @@ pub fn preset(id: u32) -> Result<DefaultBrushPreset, String> {
         .map(|p| p.0)
         .ok_or_else(|| "Unknown brush".into())
 }
+pub(crate) fn defaults(preset: DefaultBrushPreset, phone: bool) -> BrushSnapshot {
+    let mut brush = layer_core::default_brush(preset);
+    if phone && crate::tool_settings::taper_visible(preset as u32, &brush) {
+        brush.taper.mode = layer_core::TaperMode::Fixed;
+    }
+    brush
+}
 pub(crate) fn group_presets(group: ToolGroup) -> impl Iterator<Item = u32> {
     PRESETS.iter().filter(move |preset| preset.2 == group).map(|preset| preset.0 as u32)
 }
@@ -669,8 +676,8 @@ impl ToolMemory {
         if is_sculpt(tool) { changed |= self.sculpt != Some(id); self.sculpt = Some(id); }
         changed
     }
-    pub fn set_override(&mut self, id: u32, setting: &str, value: f32, localizer: &Localizer) -> Result<(), String> {
-        let defaults = layer_core::default_brush(preset(id)?);
+    pub fn set_override(&mut self, id: u32, setting: &str, value: f32, phone: bool, localizer: &Localizer) -> Result<(), String> {
+        let defaults = defaults(preset(id)?, phone);
         crate::tool_settings::edit(id, &defaults, setting, value, localizer)?;
         let default = crate::tool_settings::value(id, &defaults, setting).ok_or("Unknown tool setting")?;
         if value == default {
@@ -708,7 +715,7 @@ impl ToolMemory {
             }
         }
         for (&id, values) in &self.overrides {
-            Self::configured(id, values)?;
+            Self::configured(id, values, false)?;
         }
         Ok(())
     }
@@ -732,8 +739,8 @@ impl ToolMemory {
     }
     /// Built-in pigment definitions use linear sRGB. Resolve them once into
     /// the destination document before exposing the configured brush to edits.
-    pub(crate) fn brush_in(&self, preset: DefaultBrushPreset, space: layer_core::color::RgbSpace) -> BrushSnapshot {
-        let mut brush = self.brush(preset);
+    pub(crate) fn brush_in(&self, preset: DefaultBrushPreset, space: layer_core::color::RgbSpace, phone: bool) -> BrushSnapshot {
+        let mut brush = self.brush(preset, phone);
         let transform = layer_core::color::RgbSpace::Srgb.linear_transform(space);
         for color in [&mut brush.color_rgba_linear, &mut brush.color_dynamics.secondary_color_rgba_linear] {
             let rgb = layer_core::color::rgb::apply(transform, [color[0] as f64, color[1] as f64, color[2] as f64]);
@@ -748,15 +755,15 @@ impl ToolMemory {
             .find(|(setting, value)| crate::tool_settings::edit_value(preset as u32, &defaults, setting, **value).is_ok_and(|brush| !brush.draws_vector_lines()))
             .map(|(setting, _)| setting.as_str())
     }
-    pub fn brush(&self, preset: DefaultBrushPreset) -> BrushSnapshot {
+    pub fn brush(&self, preset: DefaultBrushPreset, phone: bool) -> BrushSnapshot {
         self.overrides.get(&(preset as u32)).map_or_else(
-            || layer_core::default_brush(preset),
-            |values| Self::configured(preset as u32, values).expect("validated workspace brush override"),
+            || defaults(preset, phone),
+            |values| Self::configured(preset as u32, values, phone).expect("validated workspace brush override"),
         )
     }
-    fn configured(id: u32, values: &BTreeMap<String, f32>) -> Result<BrushSnapshot, crate::WorkspaceValidationError> {
+    fn configured(id: u32, values: &BTreeMap<String, f32>, phone: bool) -> Result<BrushSnapshot, crate::WorkspaceValidationError> {
         values.iter().filter(|(setting, _)| crate::tool_settings::reads(id, setting)).try_fold(
-            layer_core::default_brush(preset(id)?),
+            defaults(preset(id)?, phone),
             |brush, (setting, &value)| crate::tool_settings::edit_value(id, &brush, setting, value),
         )
     }
