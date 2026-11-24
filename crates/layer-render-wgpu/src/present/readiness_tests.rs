@@ -26,7 +26,7 @@ fn first_ready_frame_requires_only_its_viewport_variant() {
     let mut encoder = r.device().create_command_encoder(&Default::default());
     presenter.encode(&r, &mut encoder, &target, crate::test_support::view(extent), [0.; 4]).unwrap();
     assert!(presenter.recipes.paper.get().is_none(), "an unlit frame must not request lit viewport recipes");
-    let encoded = presenter.history.valid;
+    let encoded = presenter.history.valid();
     let stand_in = crate::compile::tests::requested(&r.compilation, &presenter.pipeline[1], crate::startup::ANTICIPATED)
         && !crate::compile::tests::requested(&r.compilation, &presenter.pipeline[1], crate::startup::OTHER);
     drop(encoder);
@@ -234,7 +234,7 @@ fn optional_picker_completion_repaints_without_parking_the_canvas() {
     let view = crate::test_support::view([64; 2]);
     let mut encoder = r.device.create_command_encoder(&Default::default());
     presenter.encode(&r, &mut encoder, &target, view, [0.; 4]).unwrap();
-    assert!(presenter.history.valid);
+    assert!(presenter.history.valid());
     assert!(!presenter.picker.pipeline.ready());
     assert!(!presenter.needs_present(&r, view, [0.; 4]), "a cold optional picker must allow an idle canvas");
     pollster::block_on(r.compilation.prepare_all(presenter.overview_pipeline.iter())).unwrap();

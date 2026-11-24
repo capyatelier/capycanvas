@@ -977,7 +977,7 @@ impl ViewportPresenter {
         renderer.selected_display_cache()?.content_revision()
     }
     pub fn canvas_revision(&self) -> Option<u64> {
-        self.presented_drawing.filter(|drawing| drawing.showing).and_then(|_| self.history.valid.then_some(self.history.artwork_revision))
+        self.presented_drawing.filter(|drawing| drawing.showing).and_then(|_| self.history.valid().then_some(self.history.artwork_revision))
     }
     /// Whether the last presentation drew the paper lighting; its pipelines
     /// compile when lighting is first shown.
@@ -1027,7 +1027,7 @@ impl ViewportPresenter {
         };
         let geometry=page.as_ref().map_or(&self.disabled_local_buffer,|page|page.geometry());
         let previous = &self.history;
-        !previous.valid
+        !previous.valid()
             || (self.held_alpha != self.transition_alpha(renderer))
             || self.presented_drawing != Some(renderer.presentation)
             || self.presented_view != Some((view, surround_linear, self.quarter_turns, self.corner_radius))
@@ -1155,7 +1155,7 @@ impl ViewportPresenter {
     }
     pub fn adopt_held(&mut self, held:Option<crate::HeldCanvas>) {
         self.held=held.filter(|held|held.device==*self.transition_device && held.format==self.format && held.encoding==self.color);
-        self.held_draw=None;self.history.valid=false;
+        self.held_draw=None;self.history.invalidate();
     }
 
     fn overview_view(extent: [u32;2]) -> ViewState {
@@ -1173,7 +1173,7 @@ impl ViewportPresenter {
         assert!(self.standalone_overview);
         let previous=&self.history;
         let navigator=renderer.navigator.view().unwrap_or(&renderer.empty_view);
-        !previous.valid
+        !previous.valid()
             || self.presented_drawing!=Some(renderer.presentation)
             || self.held_alpha!=self.transition_alpha(renderer)
             || self.presented_view!=Some((Self::overview_view(extent),[0.;4],self.quarter_turns,self.corner_radius))
@@ -1232,6 +1232,7 @@ impl ViewportPresenter {
         }
         let result=self.encode_content_frame(renderer,encoder,target,view,surround_linear,overview_only);
         self.uploads.finish_raw(encoder);
+        if result.is_err() {self.history.invalidate();}
         result
     }
 
@@ -1349,7 +1350,7 @@ impl ViewportPresenter {
         }
         let shade_data = shade.map(|(_, data, _)| data);
         if shade_data != self.shade.drawn {
-            self.history.valid = false;
+            self.history.invalidate();
             let bytes: Vec<u8> = shade_data.unwrap_or([0.; 24]).iter().flat_map(|v| v.to_ne_bytes()).collect();
             self.uploads.write(encoder, &self.shade.uniform, &bytes)?;
             self.shade.drawn = shade_data;
@@ -1473,7 +1474,7 @@ impl ViewportPresenter {
         // A retained target may be scanned out while this pass runs. Even a
         // full camera redraw must preserve its old pixels until the fullscreen
         // shader replaces them; a fast clear can otherwise flash on screen.
-        let preserve_target = !overview_only && self.retained && self.history.valid;
+        let preserve_target = !overview_only && self.retained && self.history.valid();
         let (mut regions, full, content_damage, moved) = if !overview_only {
             let previous = &self.history;
             // A displayed selection replaced once since the last present
@@ -1482,7 +1483,7 @@ impl ViewportPresenter {
                 .then_some(renderer.display_selection_damage)
                 .filter(|_| previous.outline_revision.wrapping_add(1) == renderer.display_selection_revision);
             let artwork = renderer.composite_damage_since(previous.revision);
-            let content = !previous.valid || artwork.is_none()
+            let content = !previous.valid() || artwork.is_none()
                 || self.held_alpha != self.transition_alpha(renderer)
                 || self.held_alpha != layer_render::CanvasFade::default() && self.held.is_none()
                 || self.presented_drawing != Some(renderer.presentation)
@@ -1556,7 +1557,7 @@ impl ViewportPresenter {
                 }
             }
             let previous = &mut self.history;
-            previous.valid = true;
+            previous.drawn(&renderer.device, encoder);
             previous.revision = renderer.composite_revision;
             previous.artwork_revision = renderer.artwork_revision;
             previous.navigator_revision = renderer.navigator.revision;
@@ -1776,7 +1777,7 @@ impl ViewportPresenter {
         self.overlays_changed = false;
         if overview_only {
             self.history.overviews.clone_from(&self.overviews);
-            self.history.valid=true;
+            self.history.drawn(&renderer.device,encoder);
             self.history.navigator_revision=renderer.navigator.revision;
             self.history.hdr=self.hdr_options;
             self.history.proof=self.proof_options;
@@ -1923,6 +1924,40 @@ mod tests {
     }
 
     #[test]
+    fn an_encode_that_is_never_submitted_leaves_its_damage_owed_to_the_retained_target() {
+        use crate::layer_tests::placement::{paint_document,set_source,occurrence_id};
+        let extent=[64;2];
+        let mut document=paint_document(extent,"Abandoned presentation");
+        set_source(&mut document,layer_core::color::source::rgba8_source(extent,|_,_|[255,0,0,255]));
+        let mut renderer=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        crate::test_support::submit_settled(&mut renderer,crate::test_support::packet(document.scene(),extent));
+        let (view,surround,format)=(crate::test_support::view(extent),[0.;4],wgpu::TextureFormat::Rgba8Unorm);
+        let (shown,surface)=crate::create_target(renderer.device(),extent,format,"retained destination");
+        let mut presenter=ViewportPresenter::for_renderer(&renderer,format);
+        presenter.set_target_retention(true);
+        pollster::block_on(presenter.prepare(&renderer)).unwrap();
+        presenter.present(&renderer,&surface,view,surround).unwrap();
+        let before=crate::layer_tests::page_bytes(&renderer,&shown);
+        let handle=occurrence_id(&document);
+        let mut hidden=document.scene().occurrence(handle).unwrap().clone();
+        hidden.visible=false;
+        document.apply(layer_core::Edit::Occurrence(layer_core::authored::RecordChange::replace(&document.artwork.occurrences,handle,Some(hidden)).unwrap())).unwrap();
+        crate::test_support::submit_settled(&mut renderer,crate::test_support::packet(document.scene(),extent));
+        let mut abandoned=renderer.device.create_command_encoder(&Default::default());
+        presenter.encode(&renderer,&mut abandoned,&surface,view,surround).unwrap();
+        drop(abandoned);
+        assert!(presenter.needs_present(&renderer,view,surround),"an encode that was never submitted claimed the edit was shown");
+        presenter.present(&renderer,&surface,view,surround).unwrap();
+        let (fresh,fresh_surface)=crate::create_target(renderer.device(),extent,format,"fresh destination");
+        let mut reference=ViewportPresenter::for_renderer(&renderer,format);
+        pollster::block_on(reference.prepare(&renderer)).unwrap();
+        reference.present(&renderer,&fresh_surface,view,surround).unwrap();
+        let expected=crate::layer_tests::page_bytes(&renderer,&fresh);
+        assert_ne!(expected,before,"the fixture's edit must change the picture");
+        assert_eq!(crate::layer_tests::page_bytes(&renderer,&shown),expected,"the retained target kept the picture before the edit");
+    }
+
+    #[test]
     fn cold_viewport_defers_before_consuming_presentation_history() {
         let document=crate::layer_tests::placement::paint_document([8;2],"Viewport admission");
         let mut renderer=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
@@ -1932,12 +1967,12 @@ mod tests {
         let (_,target)=crate::create_target(renderer.device(),[8;2],wgpu::TextureFormat::Rgba8Unorm,"viewport admission");
         let mut encoder=renderer.device.create_command_encoder(&Default::default());
         presenter.encode(&renderer,&mut encoder,&target,crate::test_support::view([8;2]),[1.;4]).unwrap();
-        assert!(!presenter.history.valid);
+        assert!(!presenter.history.valid());
         assert!(presenter.pipeline.iter().all(|pipeline|!pipeline.ready()));
         assert!(renderer.compilation.pending()>0);
         pollster::block_on(presenter.prepare(&renderer)).unwrap();
         presenter.encode(&renderer,&mut encoder,&target,crate::test_support::view([8;2]),[1.;4]).unwrap();
-        assert!(presenter.history.valid);
+        assert!(presenter.history.valid());
         drop(batch);
     }
     #[test]

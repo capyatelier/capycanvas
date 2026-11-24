@@ -139,14 +139,14 @@ fn cold_keyed_projection_preserves_pixels_and_history_until_ready() {
         let submission = fixture.encode(&mut presenter);
         assert_eq!(presenter.camera_data, camera);
         assert_eq!(presenter.last_artwork_pipeline, bound);
-        assert!(!presenter.history.valid);
+        assert!(!presenter.history.valid());
         assert!(!presenter.pipeline[0].ready(), "encoding cannot compile the cold viewport inline");
         fixture.complete(submission);
         assert_eq!(fixture.pixels(), previous);
         prepare_projection(&fixture.renderer, &presenter);
         let submission = fixture.encode(&mut presenter);
         fixture.assert_binding(&presenter);
-        assert!(presenter.history.valid);
+        assert!(presenter.history.valid());
         fixture.complete(submission);
         assert_ne!(fixture.pixels(), previous);
         fixture.assert_pixels();

@@ -52,7 +52,7 @@ pub(super) fn damage(rect: PixelRect, view: ViewState, turns: u32) -> PixelRect 
 /// State for an explicitly retained destination (not an acquired FIFO image).
 /// No extra full-screen texture is allocated for this mode.
 pub(super) struct Retained {
-    pub valid: bool,
+    valid: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub revision: u64,
     pub artwork_revision: u64,
     pub navigator_revision: u64,
@@ -68,7 +68,7 @@ pub(super) struct Retained {
 impl Default for Retained {
     fn default() -> Self {
         Self {
-            valid: false,
+            valid: Default::default(),
             revision: u64::MAX,
             artwork_revision: u64::MAX,
             navigator_revision: u64::MAX,
@@ -81,6 +81,15 @@ impl Default for Retained {
             picker: None,
             overviews: Vec::new(),
         }
+    }
+}
+
+impl Retained {
+    pub fn valid(&self) -> bool { self.valid.load(std::sync::atomic::Ordering::Acquire) }
+    pub fn invalidate(&self) { self.valid.store(false, std::sync::atomic::Ordering::Release); }
+    pub fn drawn(&self, device: &crate::PipelineDevice, encoder: &wgpu::CommandEncoder) {
+        self.valid.store(true, std::sync::atomic::Ordering::Release);
+        crate::submission::CacheWrite::shared(self.valid.clone()).track_raw(device, encoder);
     }
 }
 
