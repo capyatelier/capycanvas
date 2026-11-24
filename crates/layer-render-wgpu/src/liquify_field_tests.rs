@@ -123,7 +123,7 @@ fn liquify_indexed_originals_cross_array_layers_and_sparse_tile_borders() {
 
 #[test]
 fn liquify_sparse_original_atlas_chunks_match_unfragmented_source() {
-    let render = |fragmented: bool| {
+    let render = |fragmented: bool, poisoned: bool| {
         let extent = [512, 256];
         let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         let mut doc = placement::paint_document(extent, "liquify fragmented original atlases");
@@ -156,10 +156,28 @@ fn liquify_sparse_original_atlas_chunks_match_unfragmented_source() {
             let texture = base.texture.clone();
             let view = base.view.clone();
             let tier = base._charge.tier().clone();
-            for _ in 1..12 {
+            let poison = || {
+                assert_eq!(r.device.working_format(), wgpu::TextureFormat::Rgba32Float);
+                let texture = r.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("stale original tiles"), size: wgpu::Extent3d { width: PAGE_SIZE, height: PAGE_SIZE, depth_or_array_layers: ORIGINAL_LAYERS },
+                    mip_level_count: 9, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: r.device.working_format(),
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[],
+                });
+                for level in 0..9 {
+                    let side = PAGE_SIZE >> level;
+                    let bytes = [0f32, 1., 0., 1.].repeat((side * side * ORIGINAL_LAYERS) as usize).iter().flat_map(|value| value.to_ne_bytes()).collect::<Vec<_>>();
+                    r.queue.write_texture(wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                        &bytes, wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(side * 16), rows_per_image: Some(side) },
+                        wgpu::Extent3d { width: side, height: side, depth_or_array_layers: ORIGINAL_LAYERS });
+                }
+                let view = texture.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
+                (texture, view)
+            };
+            for slot in 1..if poisoned { 13 } else { 12 } {
+                let (texture, view) = if poisoned && slot != 11 { poison() } else { (texture.clone(), view.clone()) };
                 originals.atlases.push(Some(OriginalAtlas {
                     id: NEXT_RESOURCE.fetch_add(1, Ordering::Relaxed),
-                    texture: texture.clone(), view: view.clone(), held: false, _charge: tier.charge(0),
+                    texture, view, held: false, _charge: tier.charge(0),
                 }));
             }
             let distant = originals.tiles[&[1, 0]].clone();
@@ -188,8 +206,11 @@ fn liquify_sparse_original_atlas_chunks_match_unfragmented_source() {
             "the cross-tile sample must use red and blue original tiles: {:?}", &image[at..at + 4]);
         image
     };
-    assert_eq!(render(false), render(true),
+    let packed = render(false, false);
+    assert!(packed == render(true, false),
         "splitting the two needed originals across atlas chunks must preserve all reconstructed pixels");
+    assert!(packed == render(true, true),
+        "slots holding no page of the tile index, filled with stale green, must never be read as another page's original");
 }
 
 #[test]
@@ -1578,5 +1599,95 @@ fn liquify_shaders_store_footprints_without_hlsl_matrix_member_setters() {
         naga::back::hlsl::Writer::new(&mut hlsl,&options,&pipeline).write(&module,&info,None).unwrap();
         let calls:Vec<_>=hlsl.lines().filter(|line|line.contains("SetMat")&&!line.trim_start().starts_with("void ")).collect();
         assert!(calls.is_empty(),"naga's HLSL matrix member setters copy their struct, so Direct3D drops the stored footprint: {calls:?}");
+    }
+}
+
+type Pages=BTreeMap<[u32;2],Vec<[f32;4]>>;
+fn row_11_photo(x:u32,y:u32)->[u8;4] {[(x%251) as u8,(y%239) as u8,((x+y)%173) as u8,if (x/23+y/29)%4==0 {0} else {255}]}
+fn photo_differences(pages:&Pages)->impl Iterator<Item=([u32;2],usize,[f32;4],[f32;4])>+'_ {
+    pages.iter().flat_map(|(at,pixels)|pixels.iter().enumerate().map(move|(index,pixel)| {
+        let code=row_11_photo(at[0]*PAGE_SIZE+index as u32%PAGE_SIZE,at[1]*PAGE_SIZE+index as u32/PAGE_SIZE);
+        let original=[0,1,2].map(|c|layer_core::color::RgbSpace::Srgb.decode(f64::from(code[c])/255.) as f32);
+        (*at,index,*pixel,[original[0],original[1],original[2],f32::from(code[3])/255.])
+    }))
+}
+fn push_across_row_11(extent:[u32;2],locked:bool,adjust:Option<f32>)->(bool,Pages) {
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut doc=placement::paint_document(extent,"Liquify across page row 11");
+    placement::set_source(&mut doc,layer_core::color::source::rgba8_source(extent,row_11_photo));
+    placement::occurrence_mut(&mut doc).alpha_locked=locked;
+    crate::test_support::submit_ready(&mut r,FramePacket{reset_layers:true,..crate::test_support::packet(doc.scene(),extent)}).unwrap();
+    let target=placement::target(&doc);
+    let dabs=(0..8).map(|step| {
+        let mut push=dab([0.;4]);push.center=Point{x:1400.,y:2700.+25.*step as f32};push.radii=[120.;2];push.motion=[0.,25.];push.material[3]=1.;push
+    }).collect::<Vec<_>>();
+    let mut style=preset_style(DefaultBrushPreset::LiquifyPush);
+    style.alpha_locked=locked;
+    style.liquify=Some(Arc::new(layer_core::liquify::Context::for_source(placement::paint(&doc),locked)));
+    let mut stroke=crate::test_support::dab_batch(target,style,dabs.iter().fold(layer_core::Rect::EMPTY,|bounds,push|bounds.union(push.bounds())));
+    stroke.stroke_id=StrokeId(330);stroke.dab_count=dabs.len() as u32;
+    placement::paint_mut(&mut doc).raster=RasterRevision::pending();
+    let (_,writes)=crate::test_support::liquify_writes(||crate::test_support::submit_ready(&mut r,FramePacket{dabs:&dabs,dab_batches:&[stroke],
+        ..crate::test_support::packet(doc.scene(),extent)}).unwrap());
+    let partial=writes.iter().any(|(pass,_,previous)|writes.iter().any(|(other,written,_)|other[0]==pass[0] && written==previous));
+    if let Some(amount)=adjust {
+        let mut context=layer_core::liquify::Context::for_source(placement::paint(&doc),locked);
+        let tiles=context.field.as_ref().expect("the stroke publishes its field").tiles();
+        context.amount=Some(amount);
+        let mut style=preset_style(DefaultBrushPreset::LiquifyReconstruct);
+        style.alpha_locked=locked;style.liquify=Some(Arc::new(context));
+        let mut edit=crate::test_support::dab_batch(target,style,tiles.into_iter().fold(layer_core::Rect::EMPTY,|bounds,tile|bounds.union(page_rect(tile).to_rect())));
+        edit.stroke_id=StrokeId(331);edit.dab_count=0;
+        placement::paint_mut(&mut doc).raster=RasterRevision::pending();
+        crate::test_support::submit_ready(&mut r,FramePacket{dabs:&[],dab_batches:&[edit],..crate::test_support::packet(doc.scene(),extent)}).unwrap();
+    }
+    let pages=r.paint_layers.iter().find(|layer|layer.id==target).unwrap().pages.iter()
+        .filter(|page|(4..7).contains(&page.coordinate[0]) && (9..13).contains(&page.coordinate[1]))
+        .map(|page|(page.coordinate,crate::test_support::float_pixels(&r,&r.read_color_page(target,page,false,None).unwrap().value().texture)))
+        .collect::<Pages>();
+    assert!(pages.contains_key(&[5,10]) && pages.contains_key(&[5,11]),"{extent:?}: the pages on both sides of row 11 under the stroke are read back");
+    (partial,pages)
+}
+fn assert_alike(whole:&Pages,blocked:&Pages,context:&str) {
+    assert!(whole.keys().eq(blocked.keys()),"{context}: both targets hold the same pages under the stroke");
+    let difference=whole.iter().flat_map(|(at,pixels)|pixels.iter().zip(&blocked[at]).flat_map(|(x,y)|(0..4).map(move|c|(x[c]-y[c]).abs()))).fold(0.,f32::max);
+    assert!(difference<=1e-5,"{context}: both sides of the boundary reconstruct the same pixels, largest difference {difference}");
+}
+fn deformed(pages:&Pages)->bool {photo_differences(pages).any(|(_,_,pixel,original)|original[3]==1. && (0..3).any(|c|(pixel[c]-original[c]).abs()>0.05))}
+
+#[test]
+fn liquify_targets_of_208_and_209_pages_reconstruct_a_push_across_page_row_11_alike() {
+    assert!(Layout::of([4096,3328]).whole && !Layout::of([2816,4864]).whole && !Layout::of([4096,3584]).whole,
+        "208 pages fit one group of thirteen arrays; 209 and 224 pages use the 16 x 11 blocks");
+    let (whole_partial,whole)=push_across_row_11([4096,3328],false,None);
+    let (blocked_partial,blocked)=push_across_row_11([2816,4864],false,None);
+    assert!(!whole_partial && blocked_partial,"the 208-page target sums each pixel in one dispatch and the 209-page one across its blocks: {whole_partial} {blocked_partial}");
+    assert!(deformed(&whole),"the stroke deforms the photo");
+    assert_alike(&whole,&blocked,"Push");
+}
+
+#[test]
+fn an_alpha_locked_push_across_page_row_11_keeps_every_original_alpha_on_both_sides_of_208_pages() {
+    let [(_,whole),(_,blocked)]=[[4096,3328],[2816,4864]].map(|extent|push_across_row_11(extent,true,None));
+    for pages in [&whole,&blocked] {
+        assert!(deformed(pages),"the stroke moves color");
+        for (at,index,pixel,original) in photo_differences(pages) {
+            assert!(pixel[3]==original[3],"page {at:?} pixel {index} keeps its original alpha: {pixel:?} against {original:?}");
+        }
+    }
+    assert_alike(&whole,&blocked,"alpha-locked Push");
+}
+
+#[test]
+fn adjusting_a_push_across_page_row_11_matches_on_both_sides_of_208_pages_and_returns_the_photo_at_zero() {
+    let [(_,whole),(_,blocked)]=[[4096,3328],[2816,4864]].map(|extent|push_across_row_11(extent,false,Some(0.5)));
+    assert!(deformed(&whole),"Adjust at half keeps part of the deformation");
+    assert_alike(&whole,&blocked,"Adjust at half");
+    for extent in [[4096,3328],[2816,4864]] {
+        let (_,reset)=push_across_row_11(extent,false,Some(0.));
+        for (at,index,pixel,original) in photo_differences(&reset) {
+            assert!(pixel[3]==original[3] && (original[3]==0. || (0..3).all(|c|(pixel[c]-original[c]).abs()<=1e-5)),
+                "{extent:?}: Adjust at zero returns page {at:?} pixel {index} to the photo: {pixel:?} against {original:?}");
+        }
     }
 }
