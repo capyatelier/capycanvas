@@ -52,7 +52,7 @@ impl Floor {
     pub(crate) fn demand(r: &WgpuRasterizer) -> Option<crate::frame_demand::Outstanding> {
         let document = r.presentation.document?;
         let source = Self::source(r)?;
-        r.floor.as_ref().filter(|floor| floor.document == document).is_none_or(|floor| floor.wants(source, false))
+        r.floor.as_ref().filter(|floor| floor.document == document).is_none_or(|floor| floor.wants(source, r.idle_frame_settles()))
             .then(|| if Self::ready(r, source) { crate::frame_demand::Outstanding::Runnable } else { crate::frame_demand::Outstanding::Blocked(crate::frame_demand::Input::Compile) })
     }
 

@@ -1312,7 +1312,7 @@ fn a_level_change_without_a_committed_root_presents_the_floor() {
 }
 
 #[test]
-fn a_missing_floor_demands_frames_and_a_stale_floor_refreshes_on_the_next_settled_frame() {
+fn a_missing_or_stale_floor_demands_the_frames_that_publish_it() {
     let extent = [512, 512];
     let mut doc = super::document_at(extent);
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
@@ -1338,14 +1338,19 @@ fn a_missing_floor_demands_frames_and_a_stale_floor_refreshes_on_the_next_settle
         crate::test_support::submit_ready(&mut r, frame).unwrap();
         r.wait_idle().unwrap();
         assert!(r.scale_display.as_ref().unwrap().picture().is_some(), "frame {step} keeps a whole picture");
-        assert!(!r.outstanding_terms().iter().any(|(term, _)| *term == "floor"), "frame {step}: a stale floor demands no frames");
+        assert!(r.outstanding_terms().contains(&("floor", crate::frame_demand::Outstanding::Runnable)), "frame {step}: a stale floor asks for the settled frame that refreshes it");
         assert_eq!(r.floor.as_ref().unwrap().image().unwrap().authored(), published, "frame {step} is not settled and keeps the earlier floor");
     }
-    crate::test_support::submit_ready(&mut r, still).unwrap();
-    r.wait_idle().unwrap();
+    let mut frames = 0;
+    while r.next_frame() == layer_render::FrameDemand::Work {
+        crate::test_support::submit_ready(&mut r, still).unwrap();
+        r.wait_idle().unwrap();
+        frames += 1;
+        assert!(frames < 8, "the demanded frames settle: {:?}", r.outstanding_terms());
+    }
     let source = r.scale_display.as_ref().unwrap().picture().unwrap().authored();
     assert!(source.is_some() && source != published);
-    assert_eq!(r.floor.as_ref().unwrap().image().unwrap().authored(), source, "the settled frame publishes the edited floor");
+    assert_eq!(r.floor.as_ref().unwrap().image().unwrap().authored(), source, "the demanded settled frame publishes the edited floor");
 }
 
 #[test]

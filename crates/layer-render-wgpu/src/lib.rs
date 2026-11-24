@@ -928,6 +928,10 @@ impl RetainedTextures {
     }
 }
 
+fn animates(scene: layer_core::SceneView<'_>) -> bool {
+    scene.order().iter().any(|&handle| scene.visible(handle) && scene.effect(handle).is_some_and(|effect| effect.animated()))
+}
+
 fn texture_bytes(texture: &wgpu::Texture) -> u64 {
     let format = texture.format();
     let (block_width, block_height) = format.block_dimensions();
@@ -3891,8 +3895,11 @@ impl WgpuRasterizer {
         Ok(())
     }
     fn motion(&self,packet:FramePacket<'_>)->bool {
-        !packet.dab_batches.is_empty() || self.moving_layer.is_some() || self.transform_preview.as_ref().is_some_and(|preview|preview.moving)
-            || self.artwork_frame.as_ref().is_none_or(|old|old.view!=packet.view)
+        !packet.dab_batches.is_empty() || self.holds_motion() || self.artwork_frame.as_ref().is_none_or(|old|old.view!=packet.view)
+    }
+    fn holds_motion(&self)->bool {self.moving_layer.is_some() || self.transform_preview.as_ref().is_some_and(|preview|preview.moving)}
+    pub(crate) fn idle_frame_settles(&self)->bool {
+        !self.holds_motion() && self.artwork_frame.as_ref().is_none_or(|frame|!animates(frame.scene.view()))
     }
     fn preparation_can_wake(&self)->bool {
         #[cfg(not(target_arch="wasm32"))] {self.preparation_wake.is_some()}
@@ -5442,7 +5449,7 @@ impl WgpuRasterizer {
         }
 
         self.drain_image_decodes(&mut encoder)?;
-        let animated = packet.scene.order().iter().any(|&h| packet.scene.visible(h) && packet.scene.effect(h).is_some_and(|e| e.animated()));
+        let animated = animates(packet.scene);
         // Newly populated display pages change visible pixels too, even when
         // the document itself did not change (for example after navigation).
         if !dirty.is_empty() || animated || display_rebuilt || !unchanged || self.objects_outstanding()

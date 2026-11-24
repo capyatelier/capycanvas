@@ -32,8 +32,7 @@ impl Frame {
     /// Source identity and raster publication catch edits without scanning pixels.
     pub fn same_evaluation(&self, packet: FramePacket<'_>) -> bool {
         self.blend_space == packet.blend_space
-            && (self.time == packet.time_seconds || !packet.scene.order().iter().any(|&h|
-                packet.scene.visible(h) && packet.scene.effect(h).is_some_and(|e| e.animated())))
+            && (self.time == packet.time_seconds || !animates(packet.scene))
     }
     pub fn same_artwork(&self, packet: FramePacket<'_>) -> bool {
         let old = self.scene.view();
