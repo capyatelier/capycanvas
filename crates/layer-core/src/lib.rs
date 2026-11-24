@@ -9,7 +9,7 @@ mod atomic_file;
 #[cfg(unix)]
 pub use atomic_file::{atomic_write, atomic_write_checked};
 mod cancellable;
-pub use cancellable::Cancellable;
+pub use cancellable::{Cancellable, cancel};
 pub mod temp_files;
 pub mod memory_budget;
 mod document_memory;

@@ -52,7 +52,7 @@ impl CaptureControl {
         }
     }
     pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Relaxed);
+        layer_core::cancel(&self.cancelled);
         {
             let wake = self.decode_wake.lock().unwrap().take();
             if let Some(waker) = wake { waker.wake(); }

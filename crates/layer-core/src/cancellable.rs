@@ -1,5 +1,19 @@
-//! Worker file streams that fail every operation once their job is cancelled.
-use std::io::{self, Read, Seek, SeekFrom, Write};
+//! Job cancellation: `cancel` sets a job's flag and wakes the futures waiting
+//! on it, and worker file streams fail every operation once it is set.
+use std::{io::{self, Read, Seek, SeekFrom, Write}, sync::{Arc, Mutex, Weak, atomic::{AtomicBool, Ordering}}};
+
+static WAITING: Mutex<Vec<(usize, Weak<dyn Fn() + Send + Sync>)>> = Mutex::new(Vec::new());
+fn address(flag: &AtomicBool) -> usize { std::ptr::from_ref(flag).addr() }
+pub fn cancel(flag: &AtomicBool) {
+    flag.store(true, Ordering::Release);
+    let wakes: Vec<_> = WAITING.lock().unwrap().iter().filter(|(waiting, _)| *waiting == address(flag)).filter_map(|(_, wake)| wake.upgrade()).collect();
+    for wake in wakes { wake(); }
+}
+pub(crate) fn wake_on_cancel(flag: &AtomicBool, wake: &Arc<dyn Fn() + Send + Sync>) {
+    let mut waiting = WAITING.lock().unwrap();
+    waiting.retain(|(_, wake)| wake.strong_count() != 0);
+    waiting.push((address(flag), Arc::downgrade(wake)));
+}
 
 pub struct Cancellable<T, F: Fn() -> bool> {
     pub inner: T,

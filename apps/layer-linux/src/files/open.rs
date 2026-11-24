@@ -81,7 +81,7 @@ async fn run(
     let cancelled = Arc::new(AtomicBool::new(false));
     let signal = dialog.connect_response(Some("cancel"), {
         let cancelled = cancelled.clone();
-        move |_, _| cancelled.store(true, Ordering::Release)
+        move |_, _| layer_core::cancel(&cancelled)
     });
     crate::page_dialog::present_intent(&dialog, window, copy.progress_dialog);
     let control = cancelled.clone();

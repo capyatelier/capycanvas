@@ -650,7 +650,7 @@ impl DocumentService {
         if let DocumentAction::Cancel { id } = action
             && let Some(active) = self.active.as_ref().filter(|a| a.id == id)
             && let Some(cancelled) = &active.cancelled {
-            cancelled.store(true, Ordering::Release);
+            layer_core::cancel(cancelled);
             return Ok(());
         }
         if let DocumentAction::DropImages { epoch, revision, active_layer, paths, screen, layer } = action {
@@ -1038,7 +1038,7 @@ impl DocumentService {
         self.palettes.stop();
         self.papers.stop();
         if let Some(package)=&self.package {package.cancelled.store(true,Ordering::Release);}
-        if let Some(cancelled) = self.active.as_ref().and_then(|a| a.cancelled.as_ref()) { cancelled.store(true, Ordering::Release); }
+        if let Some(cancelled) = self.active.as_ref().and_then(|a| a.cancelled.as_ref()) { layer_core::cancel(cancelled); }
         let recovery = self.recovery.as_mut().map_or(Ok(()), |recovery| recovery.stop());
         self.tone.clear();
         let proof = self.proof.stop();

@@ -297,7 +297,9 @@ impl MemoryReservation {
     pub async fn covering(&self, cancel: &AtomicBool) -> Result<(), CoverageFailure> {
         let budget=&self.0.budget;
         let waker=Arc::new(Mutex::new(std::task::Waker::noop().clone()));
-        let _watch={let waker=waker.clone();budget.watch(Arc::new(move||waker.lock().unwrap().wake_by_ref()))};
+        let wake:Arc<dyn Fn() + Send + Sync>={let waker=waker.clone();Arc::new(move||{let waker=waker.lock().unwrap().clone();waker.wake()})};
+        crate::cancellable::wake_on_cancel(cancel,&wake);
+        let _watch=budget.watch(wake);
         let reclaiming=Reclaiming {budget,waiter:budget.request_reclaims(self.0.id)};
         std::future::poll_fn(|context| {
             context.waker().clone_into(&mut waker.lock().unwrap());
@@ -1453,16 +1455,43 @@ mod tests {
         assert!(!cache.reclaim_unanswered());
     }
     #[test]
-    fn cancelling_an_import_ends_its_coverage_wait() {
+    fn cancelling_an_import_wakes_and_ends_its_coverage_wait() {
         use std::{future::Future,task::{Context,Poll}};
         let requests=Arc::new(AtomicU64::new(0));
         let (_budget,_cache,token)=import_beside_a_warm_owner(accepting(&requests));
         let cancel=AtomicBool::new(false);
         let mut waiting=Box::pin(token.covering(&cancel));
-        let (_,waker)=counted();let mut context=Context::from_waker(&waker);
+        let (wakes,waker)=counted();let mut context=Context::from_waker(&waker);
         assert!(waiting.as_mut().poll(&mut context).is_pending());
-        cancel.store(true,Ordering::Release);
+        let woken=wakes.get();
+        std::thread::scope(|scope|scope.spawn(||crate::cancel(&cancel)).join().unwrap());
+        assert!(wakes.get()>woken,"cancelling wakes the waiting import without any ledger change");
         assert_eq!(waiting.as_mut().poll(&mut context),Poll::Ready(Err(CoverageFailure::Cancelled)));
+    }
+    #[test]
+    fn a_coverage_wake_that_reenters_the_ledger_does_not_deadlock() {
+        use std::{future::Future,task::{Context,Wake,Waker}};
+        struct Reentering {cache:MemoryOwner,wakes:AtomicU64}
+        impl Wake for Reentering {
+            fn wake(self:Arc<Self>) {self.wake_by_ref();}
+            fn wake_by_ref(self:&Arc<Self>) {
+                if self.wakes.fetch_add(1,Ordering::SeqCst)==0 {self.cache.report(MemoryReport {ram_bytes:800*MIB,demand_ram_bytes:900*MIB,..Default::default()});}
+            }
+        }
+        let (done,finished)=std::sync::mpsc::channel();
+        std::thread::spawn(move||{
+            let requests=Arc::new(AtomicU64::new(0));
+            let (_budget,cache,token)=import_beside_a_warm_owner(accepting(&requests));
+            let cancel=AtomicBool::new(false);
+            let reentering=Arc::new(Reentering {cache:cache.clone(),wakes:AtomicU64::new(0)});
+            let waker=Waker::from(reentering.clone());
+            let mut waiting=Box::pin(token.covering(&cancel));
+            assert!(waiting.as_mut().poll(&mut Context::from_waker(&waker)).is_pending());
+            assert!(cache.publish(MemoryReport {ram_bytes:850*MIB,demand_ram_bytes:900*MIB,..Default::default()}));
+            done.send(reentering.wakes.load(Ordering::SeqCst)).unwrap();
+        });
+        let wakes=finished.recv_timeout(std::time::Duration::from_secs(10)).expect("a coverage wake that re-enters the ledger must not deadlock");
+        assert!(wakes>=2,"the re-entered ledger change wakes the import again: {wakes} wakes");
     }
     #[test]
     fn dropping_a_waiting_import_withdraws_its_wait_and_its_reclaim_request() {
