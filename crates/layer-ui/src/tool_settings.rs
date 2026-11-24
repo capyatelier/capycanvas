@@ -756,7 +756,12 @@ fn four_times() -> NumericControl {
 }
 
 fn taper_widths() -> NumericControl {
-    NumericControl { soft_max: 50., ..NumericControl::number(0., f64::from(BrushTaper::MAX_FIXED_WIDTHS), 0.1, 1) }
+    NumericControl {
+        soft_max: 50.,
+        mapping: crate::NumericMapping::Log,
+        log_offset: 50. * SMOOTHING_LOG_OFFSET,
+        ..NumericControl::number(0., f64::from(BrushTaper::MAX_FIXED_WIDTHS), 0.1, 1)
+    }
 }
 
 fn taper_share() -> NumericControl {

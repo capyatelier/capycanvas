@@ -197,3 +197,32 @@ fn taper_rows_keep_their_identity_when_the_taper_type_changes() {
     s.dispatch(UiAction::Invoke { command: CommandId::TaperOff }).unwrap();
     assert!(rows(&s).is_empty(), "Off hides the rows");
 }
+
+#[test]
+fn fixed_taper_sliders_follow_the_smoothness_curve_to_fifty_widths() {
+    use crate::{NumericMapping, NumericOperation};
+    let mut s = session(Platform::Gtk);
+    s.select_brush(DefaultBrushPreset::GPen as u32).unwrap();
+    let numeric = |s: &UiSession<Recorder>, id: &str| s.state.tool_settings.iter().find(|c| c.id == id).unwrap().numeric.clone();
+    let at = |control: &crate::NumericControl, position: f64| control.resolve(0., NumericOperation::Position { position }).unwrap().value;
+    let smoothness = numeric(&s, "smoothing_strength");
+    let curve = |position: f64| smoothness.log_offset * ((1. + smoothness.log_offset) / smoothness.log_offset).powf(position) - smoothness.log_offset;
+    s.dispatch(UiAction::Invoke { command: CommandId::TaperFixed }).unwrap();
+    for id in ["taper_start", "taper_end"] {
+        let widths = numeric(&s, id);
+        assert_eq!((widths.mapping, widths.soft_max, widths.max), (NumericMapping::Log, 50., 200.), "{id}");
+        for position in [0., 0.1, 0.25, 0.5, 0.75, 0.9, 1.] {
+            assert!((at(&smoothness, position) - curve(position)).abs() <= 0.005, "Smoothness at {position}");
+            assert!((at(&widths, position) - 50. * curve(position)).abs() <= 0.05, "{id} at {position}: {}", at(&widths, position));
+        }
+        assert_eq!(widths.resolve(0., NumericOperation::Expression { text: "120".into() }).unwrap().value, 120.);
+    }
+    s.dispatch(UiAction::SetToolSetting { id: "taper_start".into(), value: 120. }).unwrap();
+    assert_eq!(s.engine.configured_brush().taper.fixed_widths[0], 120.);
+    s.dispatch(UiAction::Invoke { command: CommandId::TaperProportional }).unwrap();
+    for id in ["taper_start", "taper_end"] {
+        let share = numeric(&s, id);
+        assert_eq!(share.mapping, NumericMapping::Linear, "{id}");
+        assert!((at(&share, 0.5) - 0.25).abs() <= 0.001, "{id} stays linear");
+    }
+}

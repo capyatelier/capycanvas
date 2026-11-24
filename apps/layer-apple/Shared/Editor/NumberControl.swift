@@ -139,7 +139,7 @@ struct NumberControl: View {
         .onChange(of: label, initial: true) { _, next in numericLabels = NativeTextContext.numericLabels(next, language: store.interfaceLanguage) }
         .onChange(of: value) { _, next in field.receive(next); format(); registerAdmission?(key, .updated(admissionOwner, admit)) }
         .onChange(of: presentedText) { _, _ in format() }
-        .onChange(of: control.stableKey) { _, _ in registerAdmission?(key, .updated(admissionOwner, admit)) }
+        .onChange(of: control.stableKey) { _, _ in format(); measureInlineRange(); registerAdmission?(key, .updated(admissionOwner, admit)) }
         .onChange(of: contact) { _, active in if !active { cancelDrag() } }
         .onChange(of: enabled) { _, active in if !active { cancelDrag() } }
         .onDisappear { registerAdmission?(key, .unmounted(admissionOwner)); cancelDrag() }
