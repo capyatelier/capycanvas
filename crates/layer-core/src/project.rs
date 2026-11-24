@@ -229,8 +229,8 @@ mod capacity_tests {
         let [bytes, _] = crate::package::codec::tile_record_cost();
         assert!((full - empty) / tiles.len() < bytes, "{} manifest bytes per tile against an estimate of {bytes}", (full - empty) / tiles.len());
         let capacity = ProjectLimits::default().tile_capacity();
-        let full_layer = (crate::MAX_EXTENT / TILE_SIZE).pow(2) as usize;
-        assert!(capacity > 2 * full_layer && capacity * bytes < 63 * 1024 * 1024, "{capacity} tiles of {bytes} bytes must fit the package and recovery metadata");
+        let widest_half_square = (crate::MAX_EXTENT / TILE_SIZE).pow(2) as usize / 2;
+        assert!(capacity > widest_half_square && capacity * bytes < 63 * 1024 * 1024, "{capacity} tiles of {bytes} bytes must fit the package and recovery metadata");
     }
 
     #[test]

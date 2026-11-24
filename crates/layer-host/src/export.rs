@@ -442,7 +442,7 @@ mod tests {
         let jpeg = ExportRecipe::web_share().draft_canonical(ExportDraftAction::Format(ExportFormat::Jpeg)).recipe;
         assert_eq!(task.configure(jpeg), Err(ColorFeatureError::JpegLimit));
         let control = CaptureControl::with_allocation_tracking();
-        for (size, output) in [(layer_ui::ExportSize::Original, extent), (layer_ui::ExportSize::Fit { bounds: [4096, 4096], enlarge: false }, [4096, 8])] {
+        for (size, output) in [(layer_ui::ExportSize::Original, extent), (layer_ui::ExportSize::Fit { bounds: [4096, 4096], enlarge: false }, [4096, 4])] {
             task.configure(ExportRecipe { size, ..ExportRecipe::web_share() }).unwrap();
             let mut bytes = Vec::new();
             task.write(Cursor::new(&mut bytes), control.clone()).unwrap();

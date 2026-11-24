@@ -1666,6 +1666,21 @@ fn localized_crop_bar_preserves_actions_and_fallback_captions() {
 }
 
 #[test]
+fn transform_controls_reach_the_far_edge_of_the_widest_canvas() {
+    let doc = Document::new(layer_core::authored::PortableId::random(), layer_core::MAX_EXTENT, 512, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let mut s = UiSession::new(Recorder::default(), doc, [1600, 1000], Platform::Gtk).unwrap();
+    let right = layer_core::MAX_EXTENT as f32;
+    let selection = rectangle([right - 300., 100., right - 100., 300.]);
+    s.fill_selection(selection.clone()).unwrap();
+    s.layer_edit(canvas_bar_selection_edit(s.engine.document(), Some(selection))).unwrap();
+    s.frame(1, 1).unwrap();
+    invoke(&mut s, CommandId::ScaleRotate);
+    let x = s.state.tool_settings.iter().find(|control| control.id == "transform_x").unwrap().value;
+    assert!(x > right - 300.);
+    s.set_transform_control("transform_x", x + 25.).unwrap();
+}
+
+#[test]
 fn transform_again_replays_only_the_last_accepted_layer_delta_once_and_atomically() {
     let mut doc = Document::new(layer_core::authored::PortableId::random(), 400, 300, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let id = doc.working.occurrence.unwrap();

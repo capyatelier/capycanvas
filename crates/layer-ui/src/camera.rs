@@ -6,7 +6,7 @@ use layer_render::ViewState;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const MIN_ZOOM: f32 = 0.02;
+pub const MIN_ZOOM: f32 = 0.01;
 pub const MAX_ZOOM: f32 = 16.0;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

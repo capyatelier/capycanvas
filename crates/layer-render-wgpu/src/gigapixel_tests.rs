@@ -48,7 +48,7 @@ fn paints_its_far_edge_like_its_origin(extent: [u32; 2], texture: u32) {
 
 #[test]
 fn a_panorama_wider_than_the_device_texture_paints_its_far_edge_exactly() {
-    paints_its_far_edge_like_its_origin([65536, 16384], 8192);
+    paints_its_far_edge_like_its_origin([layer_core::MAX_EXTENT, 8192], 8192);
 }
 
 #[test]

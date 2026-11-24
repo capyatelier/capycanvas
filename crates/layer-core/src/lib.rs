@@ -117,7 +117,7 @@ use std::{
 pub type Revision = u64;
 
 /// Largest canvas or layer extent, in pixels per side.
-pub const MAX_EXTENT: u32 = 65536;
+pub const MAX_EXTENT: u32 = 131072;
 pub const MEMORY_BUDGET_EXCEEDED: &str = "The drawing exceeds the memory limit";
 pub const SAVE_CAPACITY_EXCEEDED: &str = "The drawing holds the most pixels a drawing file can save";
 

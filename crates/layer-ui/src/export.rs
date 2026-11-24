@@ -920,8 +920,8 @@ mod tests {
         for (format, fitted, refusal) in [
             (ExportFormat::Png, source, None), (ExportFormat::Tiff, source, None),
             (ExportFormat::Exr, source, None), (ExportFormat::PngHdr, source, None),
-            (ExportFormat::Jpeg, [65535, 256], Some(ColorFeatureError::JpegLimit)), (ExportFormat::JpegHdrMapped, [65535, 256], Some(ColorFeatureError::JpegLimit)),
-            (ExportFormat::AvifHdr, [32768, 128], Some(ColorFeatureError::AvifLimit)), (ExportFormat::Webp, [16384, 64], Some(ColorFeatureError::WebpLimit)),
+            (ExportFormat::Jpeg, [65535, 128], Some(ColorFeatureError::JpegLimit)), (ExportFormat::JpegHdrMapped, [65535, 128], Some(ColorFeatureError::JpegLimit)),
+            (ExportFormat::AvifHdr, [32768, 64], Some(ColorFeatureError::AvifLimit)), (ExportFormat::Webp, [16384, 32], Some(ColorFeatureError::WebpLimit)),
         ] {
             let recipe = ExportRecipe { format, ..ExportRecipe::web_share() };
             assert_eq!(recipe.output_extent(source), refusal.map_or(Ok(source), Err), "{format:?}");

@@ -639,7 +639,7 @@ Parking an idle drawing releases held keys and temporary tools, so returning to
 it cannot retain a shortcut as a repeated press. Drawing-switch commands remain
 available when its renderer is unavailable.
 
-Zoom stays between 2% and 1600%. **View ▸ Actual Pixels** (Ctrl+Alt+0 or
+Zoom stays between 1% and 1600%. **View ▸ Actual Pixels** (Ctrl+Alt+0 or
 Ctrl+1; Ctrl+1 in the Photoshop and Affinity keymaps, 1 in GIMP's) shows
 one image pixel per device pixel, zooming about the work-area centre. When the
 view rotation is a quarter turn, `Camera::zoom_to` also rounds the translation

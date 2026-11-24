@@ -78,7 +78,7 @@ fn canvas_size_converts_percent_and_relative_values_and_validates_limits() {
     let view = canvas_view(&s);
     assert_eq!(view.values, [100.; 2]);
     assert_eq!(view.numeric[0].unit, "%");
-    assert_eq!(view.numeric[0].max, 6553.6);
+    assert_eq!(view.numeric[0].max, 13107.2);
     canvas_size(&mut s, CanvasSizeAction::Width { value: 50. });
     assert_eq!(canvas_view(&s).message, "New size: 500 × 1000 px");
     canvas_size(&mut s, CanvasSizeAction::Relative { relative: true });
@@ -86,7 +86,7 @@ fn canvas_size_converts_percent_and_relative_values_and_validates_limits() {
     canvas_size(&mut s, CanvasSizeAction::Unit { unit: CanvasSizeUnit::Pixels });
     let view = canvas_view(&s);
     assert_eq!(view.values, [-500., 0.]);
-    assert_eq!((view.numeric[0].min, view.numeric[0].max), (-999., 64536.));
+    assert_eq!((view.numeric[0].min, view.numeric[0].max), (-999., 130072.));
     canvas_size(&mut s, CanvasSizeAction::Relative { relative: false });
     assert_eq!(canvas_view(&s).values, [500., 1000.]);
     canvas_size(&mut s, CanvasSizeAction::Width { value: f64::from(layer_core::MAX_EXTENT) + 1. });

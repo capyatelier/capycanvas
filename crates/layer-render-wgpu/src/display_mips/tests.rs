@@ -36,6 +36,17 @@ fn large_photo_display_plans_bound_pixels_without_changing_document_dimensions()
     }
 }
 
+#[test]
+fn whole_layer_records_at_the_widest_square_fit_one_uniform_buffer() {
+    let r = WgpuRasterizer::new_native_headless(DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::U8 }).unwrap();
+    let pipelines = Pipelines::new(&r.device);
+    let image = Image::with_mips(&r, Plan::at([PAGE_SIZE; 2], 4), MAX_LEVEL);
+    let views: Vec<_> = std::iter::once(&image.view).chain(&image.reduced).collect();
+    let scope = r.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    drop(CompleteUpdates::from_level(&r.device, &pipelines, Plan::at([layer_core::MAX_EXTENT + PAGE_SIZE; 2], MAX_LEVEL), 4, &views));
+    assert!(pollster::block_on(scope.pop()).is_none());
+}
+
 fn value(x: u32, y: u32) -> [f32; 4] {
     let alpha = ((x * 7 + y * 3) % 17) as f32 / 16.;
     [

@@ -683,7 +683,7 @@ color-profile-library-limit = Batas pustaka profil adalah 128 profil dan 64 MiB;
 
 color-profile-hidden-limit = Terlalu banyak profil tersembunyi; tampilkan atau hapus entri yang tidak digunakan.
 
-color-export-dimensions-range = Dimensi gambar harus antara 1 dan 65536 piksel.
+color-export-dimensions-range = Dimensi gambar harus antara 1 dan 131072 piksel.
 
 color-export-resolution-range = Resolusi harus antara 1 dan 65535 piksel per inci.
 

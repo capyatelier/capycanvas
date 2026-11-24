@@ -719,10 +719,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         let Some(t) = self.operation.current.as_ref().filter(|t| t.mode != TransformMode::Warp) else {
             return Vec::new();
         };
+        let reach = 2. * f64::from(layer_core::MAX_EXTENT);
         let pixels = |span: f32| NumericControl {
-            soft_min: -f64::from(span.clamp(256., 65536.)),
-            soft_max: f64::from(span.clamp(256., 65536.)),
-            ..NumericControl::number(-65536., 65536., 1., 1).unit("px")
+            soft_min: -f64::from(span).clamp(256., reach),
+            soft_max: f64::from(span).clamp(256., reach),
+            ..NumericControl::number(-reach, reach, 1., 1).unit("px")
         };
         let percent = || NumericControl {
             digits: 0,

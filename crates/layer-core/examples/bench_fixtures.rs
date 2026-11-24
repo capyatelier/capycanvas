@@ -1,5 +1,5 @@
 //! Benchmark drawings for one canvas size: heavy.capy, with 32 layers of every kind, and vector.capy, with crowded vector paths.
-//! The gigapixel set is giga-panorama.png (65,536 x 16,384) and giga-square.png (32,768 square), photos with a line-art band,
+//! The gigapixel set is giga-panorama.png (131,072 x 8,192) and giga-square.png (32,768 square), photos with a line-art band,
 //! and giga-layers.capy, 32,768 square.
 //! Usage: bench_fixtures OUT_DIR WIDTH HEIGHT | bench_fixtures OUT_DIR gigapixel
 mod capy_fixture;
@@ -13,7 +13,7 @@ use std::{collections::BTreeMap, error::Error, f64::consts::{FRAC_PI_2, TAU}, fs
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 type Tiles = BTreeMap<[u32; 2], Arc<TileBlob>>;
 const LOW_TIER_PIXELS: f64 = 4248. * 2832.;
-const PANORAMA: [u32; 2] = [65_536, 16_384];
+const PANORAMA: [u32; 2] = [131_072, 8_192];
 const SQUARE: [u32; 2] = [32_768; 2];
 const RINGS: u32 = 7;
 

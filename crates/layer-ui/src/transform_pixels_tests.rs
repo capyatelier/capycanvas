@@ -372,9 +372,9 @@ fn source_less_move_rejected_motion_and_release_commit_last_valid_preview_once()
     let original_origin = before.target_offset(before.active_target().unwrap());
     assert_eq!(moved_origin, original_origin.map(|v| v + 10));
     assert!(!s.engine.can_undo());
-    send(&mut s, 3, PenPhase::Move, Point { x: 100000., y: 100000. }).unwrap();
+    send(&mut s, 3, PenPhase::Move, Point { x: 200000., y: 200000. }).unwrap();
     assert_eq!(s.engine.document().artwork.occurrences.get(bake_owner(s.engine.document())).unwrap(), &valid);
-    send(&mut s, 4, PenPhase::Up, Point { x: 100000., y: 100000. }).unwrap();
+    send(&mut s, 4, PenPhase::Up, Point { x: 200000., y: 200000. }).unwrap();
     assert!(s.layer_interaction.path.is_empty());
     assert!(!s.operation.active());
     let owner = SourceTarget::Paint(bake_paint_handle(&before));

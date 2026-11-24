@@ -160,6 +160,7 @@ pub(super) struct CompleteUpdates {
     pipeline: Deferred<wgpu::ComputePipeline>,
     fused_pipeline: Deferred<wgpu::ComputePipeline>,
     columns: u32,
+    slots: u32,
     stride: u32,
     first: u32,
     pending: Vec<[u32; 2]>,
@@ -172,11 +173,14 @@ impl CompleteUpdates {
         let stride = device.limits().min_uniform_buffer_offset_alignment.max(16);
         let columns = plan.extent[0].div_ceil(PAGE_SIZE);
         let count = plan.level-first;
-        let mut bytes = vec![0; (u64::from(columns) * u64::from(plan.extent[1].div_ceil(PAGE_SIZE)) * u64::from(count) * u64::from(stride)) as usize];
+        let fused = count / 4;
+        let slots = count - 3 * fused;
+        let mut bytes = vec![0; (u64::from(columns) * u64::from(plan.extent[1].div_ceil(PAGE_SIZE)) * u64::from(slots) * u64::from(stride)) as usize];
         for y in 0..plan.extent[1].div_ceil(PAGE_SIZE) {
             for x in 0..columns {
-                for level in first+1..=plan.level {
-                    let offset = ((y * columns + x) * count + level-first-1) * stride;
+                for index in (0..count).filter(|index| index % 4 == 0 || *index >= 4 * fused) {
+                    let level = first + 1 + index;
+                    let offset = ((y * columns + x) * slots + record_slot(index, fused)) * stride;
                     for (i, value) in [plan.extent[0], plan.extent[1], 1 << (level - 1), x | (y << 16)]
                         .into_iter().enumerate() {
                         bytes[offset as usize + i * 4..offset as usize + i * 4 + 4]
@@ -210,7 +214,7 @@ impl CompleteUpdates {
             })
         }).collect();
         Self { bindings, fused_bindings, pipeline: pipelines.reduce.clone(),
-            fused_pipeline: pipelines.fused_reduce.clone(), columns, stride,
+            fused_pipeline: pipelines.fused_reduce.clone(), columns, slots, stride,
             first, pending: Vec::with_capacity(Self::BATCH) }
     }
 
@@ -249,7 +253,7 @@ impl CompleteUpdates {
                     && self.pending[end] == [x + (end - first) as u32, y] {
                     end += 1;
                 }
-                let offset = ((y * self.columns + x) * self.bindings.len() as u32 + level as u32) * self.stride;
+                let offset = ((y * self.columns + x) * self.slots + record_slot(level as u32, self.fused_bindings.len() as u32)) * self.stride;
                 pass.set_bind_group(0, binding, &[offset]);
                 pass.dispatch_workgroups(side.div_ceil(8), side.div_ceil(8), (end - first) as u32);
                 first = end;
@@ -259,6 +263,8 @@ impl CompleteUpdates {
         self.pending.clear();
     }
 }
+
+fn record_slot(index: u32, fused: u32) -> u32 { index - 3 * (index / 4).min(fused) }
 
 pub(super) struct Image {
     pub plan: Plan,

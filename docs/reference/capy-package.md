@@ -180,7 +180,7 @@ Layer names are at most 4,096 bytes. Resource bindings, including repeated
 tile references, do not consume evaluation edges. There are at most 262,144
 resource records. Project admission also bounds layers, dimensions, retained
 source bytes and raster bytes using the same units on reopen. Composition,
-source, image and selection extents are at most 65,536 pixels per side. There is
+source, image and selection extents are at most 131,072 pixels per side. There is
 no fixed tile count: the resource and metadata bounds above limit a document's
 tiles, and new pixels are admitted against free disk space when they are
 imported or pasted. Readers that admitted at most 32,768 pixels per side and

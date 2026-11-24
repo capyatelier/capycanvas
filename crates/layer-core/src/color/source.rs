@@ -239,7 +239,7 @@ pub fn rgba8_source(extent: [u32; 2], pixel: impl Fn(u32, u32) -> [u8; 4]) -> Ar
 
 /// Source decoding accumulates one row band and compresses it before continuing.
 /// `max_bytes` limits final compressed ownership; packing is one 256-row band
-/// plus one tile (128.5 MiB at the 65536×RGBA16 limit).
+/// plus one tile (256.5 MiB at the 131072×RGBA16 limit).
 pub struct SourceBuilder {
     image: SourceImage,
     next_y: u32,

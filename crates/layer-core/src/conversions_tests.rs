@@ -103,12 +103,12 @@ fn rasterize_refuses_other_layers_locks_and_unaddressable_content_without_change
 #[test]
 fn a_small_image_far_beyond_the_canvas_rasterizes_without_spanning_to_it() {
     let mut doc = fixture::document([600, 400], &["Ink"]);
-    let far = images(&mut doc, &[translation(100_000.5, -50_000.)]);
+    let far = images(&mut doc, &[translation(f64::from(crate::MAX_EXTENT) + 100_000.5, -50_000.)]);
     let plan = doc.rasterize_plan(far, false).unwrap();
     let occurrence = occurrence_after(&plan.edits, far);
     let OccurrenceContent::Paint(paint) = occurrence.content else { panic!("paint") };
     let source = changed(&plan.edits, |e| match e { Edit::Paint(c) if c.handle == paint => c.value.clone(), _ => None });
-    assert_eq!((occurrence.offset, source.domain), ([99_840, -50_176], [203, 209]), "only the image's pages, not the span to the canvas");
+    assert_eq!((occurrence.offset, source.domain), ([i64::from(crate::MAX_EXTENT) + 99_840, -50_176], [203, 209]), "only the image's pages, not the span to the canvas");
     let near = images(&mut doc, &[translation(50., 60.)]);
     let plan = doc.rasterize_plan(near, false).unwrap();
     let occurrence = occurrence_after(&plan.edits, near);

@@ -409,7 +409,7 @@ adds a warm one), and a single version is judged only on the tier targets: fps,
 update rate, gaps and pen-down meet or miss, while latency, settle, memory,
 `saved_bytes` and `disk_use_bytes` are reported. The pass opens three photos
 and drawings in turn: `giga-square.jpg` (32,768², exactly the 16,384-tile
-limit), `giga-panorama.png` (65,536 × 16,384; JPEG stops at 65,535 px) and
+limit), `giga-panorama.png` (131,072 × 8,192; JPEG stops at 65,535 px) and
 `giga-layers.capy` (32,768² with four kinds of layer). `bench_fixtures.py
 gigapixel` writes them to `/mnt/localssd/capy-bench/fixtures/gigapixel/` from
 its own v1.0.15 tree with `bench-patches/v1.0.15-gigapixel-fixtures.patch`,
