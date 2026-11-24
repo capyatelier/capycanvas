@@ -349,6 +349,23 @@ function Select-Layer([string]$Label){
 }
 function Prefixed([string]$Pattern,$Within=$root){@($Within.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)|Where-Object {$_.Current.AutomationId -match $Pattern -and !$_.Current.IsOffscreen})}
 function Tabs{$strip=Find 'drawing-tabs';if($strip){Prefixed '^drawing-tab-(?!slide$)' $strip}else{@()}}
+function Drawing-Tab([string]$Stem){
+ $tab=@(Tabs|Where-Object {$_.Current.Name -like "*$Stem*"})
+ if(!$tab.Count -and (Find 'drawing-selector' -Visible)){
+  $previous=$script:CapyPopups;$script:CapyPopups=$true
+  try{
+   Invoke-Id 'drawing-selector'
+   $list=Control 'drawing-list' -Arranged
+   $text=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Text)
+   $tab=@(Prefixed '^drawing-row-\d+$' $list|Where-Object {
+    $title=$_.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$text)
+    $title -and $title.Current.Name -like "*$Stem*"
+   })
+  }finally{$script:CapyPopups=$previous}
+ }
+ if($tab.Count -ne 1){throw "Repeat: no single drawing tab named like '$Stem'"}
+ $tab[0]
+}
 function Discard{
  $condition=[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Discard Changes'),[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button))
  $owned=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id)
@@ -631,9 +648,8 @@ $handlers=@{
      continue
     }
     if($s.tabs){
-     $stem=[IO.Path]::GetFileNameWithoutExtension((Document-Path $item));$tab=@(Tabs|Where-Object {$_.Current.Name -like "*$stem*"})
-     if($tab.Count -ne 1){throw "Repeat: no single drawing tab named like '$stem'"}
-     Tap-Latency $e "tab:$item" (Center $tab[0]) 2 {$root.Current.Name -like "*$stem*" -and (Canvas-Ready)} -Changed -Stable -Surface $s.surface
+     $stem=[IO.Path]::GetFileNameWithoutExtension((Document-Path $item));$tab=Drawing-Tab $stem
+     Tap-Latency $e "tab:$item" (Center $tab) 2 {$root.Current.Name -like "*$stem*" -and (Canvas-Ready)} -Changed -Stable -Surface $s.surface
      $script:active=$item
      continue
     }

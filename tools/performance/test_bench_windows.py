@@ -93,6 +93,39 @@ $null=Screen-Hash ([Windows.Rect]::new(10,0,30,30))
 ''')
         self.assertEqual(result, {'settled': 580000000, 'captures': [0, 2, 2, 2, 10], 'current_x': 2})
 
+    def test_drawing_tab_uses_compact_drawing_row_title(self):
+        result = self.run_functions(('Drawing-Tab',), r'''
+function Peer([string]$Id,[string]$Name,[string]$Title){
+ $peer=[pscustomobject]@{Current=[pscustomobject]@{AutomationId=$Id;Name=$Name};Title=$Title}
+ $peer|Add-Member ScriptMethod FindFirst {
+  param($Scope,$Condition)
+  [pscustomobject]@{Current=[pscustomobject]@{Name=$this.Title}}
+ }
+ $peer
+}
+function Tabs {if($script:mode -eq 'strip'){Peer 'drawing-tab-2' 'giga-panorama' ''}}
+function Find([string]$Name,[switch]$Visible){if($Name -eq 'drawing-selector' -and $Visible -and $script:mode -eq 'compact'){Peer $Name '' ''}}
+function Invoke-Id([string]$Id){$script:opened+=@($Id)}
+function Control([string]$Name,[switch]$Arranged){if($Name -ne 'drawing-list' -or !$Arranged -or !$script:CapyPopups){throw 'Expected arranged owned drawing list'};$Name}
+function Prefixed([string]$Pattern,$Within){
+ if($Within -ne 'drawing-list' -or 'drawing-row-2' -notmatch $Pattern){throw 'Expected drawing rows'}
+ Peer 'drawing-row-1' 'ItemContainer' 'Untitled 1'
+ Peer 'drawing-row-2' 'ItemContainer' 'giga-panorama'
+ Peer 'drawing-row-3' 'ItemContainer' 'giga-layers.capy'
+}
+$results=@{}
+foreach($mode in 'strip','compact'){
+ $script:opened=@();$script:CapyPopups=$false
+ $selected=Drawing-Tab 'giga-panorama'
+ $results[$mode]=@{id=$selected.Current.AutomationId;opened=$script:opened;popups=$script:CapyPopups}
+}
+$results|ConvertTo-Json -Compress
+''')
+        self.assertEqual(result, {
+            'strip': {'id': 'drawing-tab-2', 'opened': [], 'popups': False},
+            'compact': {'id': 'drawing-row-2', 'opened': ['drawing-selector'], 'popups': False},
+        })
+
     def test_layers_list_uses_visible_native_route(self):
         result = self.run_functions(('Layers-List',), r'''
 function Find([string]$Name,[switch]$Visible){
