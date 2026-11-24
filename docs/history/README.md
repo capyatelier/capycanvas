@@ -69,3 +69,5 @@ Progress notes, validation reports and other work records are not committed
   runtime reuses large GSK allocations, the alternatives and upstream GTK's direction.
 - [Vulkan rendering with native Windows presentation](windows-vulkan-presentation.md),
   a deferred candidate.
+- [Magic Wand and Fill on gigapixel drawings](large-region-tools.md): why both refuse
+  drawings above about 107 MP, and the deferred design for a window around the tap.
