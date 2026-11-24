@@ -5451,6 +5451,7 @@ impl WgpuRasterizer {
         }
 
         self.drain_image_decodes(&mut encoder)?;
+        let mut publications = [PixelRect::EMPTY; 3];
         let animated = animates(packet.scene);
         // Newly populated display pages change visible pixels too, even when
         // the document itself did not change (for example after navigation).
@@ -5474,11 +5475,10 @@ impl WgpuRasterizer {
                 Err(GpuRasterError::NotReady)
             } else {scene.compose(self, packet, &mut encoder, &mut work)};
             self.scene = Some(scene);
-            let published=match result {
+            publications[0]=match result {
                 Err(error) if error.is_preparation_pending()=>PixelRect::EMPTY,
                 result=>result?,
             };
-            if !published.is_empty() {self.publish(published);}
         }
         let mut navigator = std::mem::take(&mut self.navigator);
         let navigator_revision = navigator.revision;
@@ -5498,10 +5498,8 @@ impl WgpuRasterizer {
             let result = scene.refine_display(self, packet, &mut encoder, &mut work);
             self.scene = Some(scene);
             let changed=match result {Err(error) if error.is_preparation_pending()=>PixelRect::EMPTY,result=>result?};
-            if !changed.is_empty() {
-                refined = true;
-                self.publish(changed);
-            }
+            refined = !changed.is_empty();
+            publications[1] = changed;
         }
         if self.transform_preview.is_none() && !reset && packet.dabs.is_empty()
             && packet.dab_batches.is_empty() && packet.restore_rasters.is_empty()
@@ -5529,7 +5527,7 @@ impl WgpuRasterizer {
         if match scene::scale::Floor::publish(self,&mut encoder,settled) {Err(error) if error.is_preparation_pending()=>false,result=>result?} {
             let visible=display_mips::view_bounds(packet.view,self.document_extent,0).unwrap_or(PixelRect::EMPTY);
             let holes=self.selected_display_cache().map_or(visible,|cache|cache.hole_area(visible));
-            if !holes.is_empty() {self.publish(holes);}
+            publications[2] = holes;
         }
         self.apply_frame_grants(&mut encoder);
         self.uploads.finish(&encoder);
@@ -5549,6 +5547,7 @@ impl WgpuRasterizer {
         self.frame_pace.submitted(&encoder, submitting);
         let submission = encoder.submit(&self.queue)
             .ok_or_else(|| GpuRasterError::WaitFailed("GPU device service retired".into()))?;
+        for damage in publications.into_iter().filter(|damage| !damage.is_empty()) { self.publish(damage); }
         #[cfg(test)]
         { self.test.frame_work = work.counts(); }
         if let Some(liquify)=&mut self.liquify {liquify.publish(packet.scene,packet.dab_batches,&publication);}

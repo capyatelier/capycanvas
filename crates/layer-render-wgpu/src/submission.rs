@@ -650,6 +650,46 @@ mod tests {
     }
 
     #[test]
+    fn a_frame_dropped_before_submission_publishes_no_composite_damage_and_its_retry_is_presented() {
+        use crate::layer_tests::placement::{paint_document,set_source,occurrence_id};
+        let extent=[128;2];
+        let mut doc=paint_document(extent,"Dropped publication");
+        set_source(&mut doc,layer_core::color::source::rgba8_source(extent,|_,_|[255,0,0,255]));
+        let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        crate::test_support::submit_settled(&mut r,FramePacket {composite_all:false,..packet(doc.scene(),extent)});
+        let (view,format)=(crate::test_support::view(extent),wgpu::TextureFormat::Rgba8Unorm);
+        let (shown,surface)=crate::create_target(r.device(),extent,format,"retained publication");
+        let mut retained=ViewportPresenter::for_renderer(&r,format);
+        retained.set_target_retention(true);
+        pollster::block_on(retained.prepare(&r)).unwrap();
+        retained.present(&r,&surface,view,[0.;4]).unwrap();
+        let before=crate::layer_tests::page_bytes(&r,&shown);
+        let handle=occurrence_id(&doc);
+        let mut hidden=doc.scene().occurrence(handle).unwrap().clone();
+        hidden.visible=false;
+        doc.apply(layer_core::Edit::Occurrence(layer_core::authored::RecordChange::replace(&doc.artwork.occurrences,handle,Some(hidden)).unwrap())).unwrap();
+        let edit=FramePacket {composite_all:false,time_seconds:0.01,..packet(doc.scene(),extent)};
+        let revision=r.composite_revision;
+        r.test.discard_frame=true;
+        crate::test_support::submit_ready(&mut r,edit).unwrap();
+        assert!(!r.test.discard_frame,"the edit frame's encoder is dropped");
+        assert_eq!((r.composite_revision,r.composite_damage_since(revision)),(revision,Some(crate::pixel_rect::PixelRect::EMPTY)),
+            "a frame that was never submitted published composite damage");
+        retained.set_cursor(r.device(),&[layer_render::CursorSegment {from:[4.,4.],to:[12.,12.],distance:0.,marker:2.,scale:1.}],1.);
+        retained.present(&r,&surface,view,[0.;4]).unwrap();
+        retained.set_cursor(r.device(),&[],1.);
+        crate::test_support::submit_settled(&mut r,FramePacket {time_seconds:0.02,..edit});
+        retained.present(&r,&surface,view,[0.;4]).unwrap();
+        let (fresh,fresh_surface)=crate::create_target(r.device(),extent,format,"fresh publication");
+        let mut reference=ViewportPresenter::for_renderer(&r,format);
+        pollster::block_on(reference.prepare(&r)).unwrap();
+        reference.present(&r,&fresh_surface,view,[0.;4]).unwrap();
+        let expected=crate::layer_tests::page_bytes(&r,&fresh);
+        assert_ne!(expected,before,"the fixture's edit must change the picture");
+        assert_eq!(crate::layer_tests::page_bytes(&r,&shown),expected,"the retained target lost the retried edit");
+    }
+
+    #[test]
     fn discarded_backdrop_uniform_upload_is_reencoded_before_rendering() {
         let mut r = renderer();
         let doc = document([64, 128]);
