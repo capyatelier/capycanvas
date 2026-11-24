@@ -555,7 +555,7 @@ mod tests {
     #[derive(Clone,Copy,PartialEq)]
     enum Mishap {None,DroppedRecord,Released,Restroked,DroppedPublication,BlockedCell(usize)}
     #[derive(Clone,Copy,Debug)]
-    struct Contact {id:Option<u64>,shown:bool,sourced:bool,remembered:bool}
+    struct Contact {id:Option<u64>,shown:bool,owed:bool,sourced:bool,remembered:bool}
     struct Followed {display:display_mips::Plan,navigator:display_mips::Plan,reduced:Vec<[u64;2]>,published:Vec<[bool;2]>,contacts:Vec<Contact>,pending:[bool;2]}
     impl Followed {
         fn whole(&self)->u64 {self.navigator.size.map(u64::from).into_iter().product()}
@@ -626,7 +626,9 @@ mod tests {
             reduced.push(frames.map(|(texels,_)|texels));published.push(frames.map(|(_,published)|published));
             let [contact,_]=twins.each_ref().map(|r| {
                 let display=r.scale_display.as_ref().unwrap();
+                let cell=pages::coordinates(under_the_stroke(),display.plan.level).next().unwrap();
                 Contact {id:display.contact_id(),shown:display.coverage_complete(),remembered:r.navigator.inherited.is_some(),
+                    owed:display.shown_cells().into_iter().any(|(coordinate,shown)|coordinate==cell && shown.is_none()),
                     sourced:display.contact_id().zip(r.navigator.cache.as_ref()).is_some_and(|(id,cache)|display.contact_window(id,cache).is_some())}
             });
             contacts.push(contact);
@@ -668,20 +670,15 @@ mod tests {
             assert!(refreshes[0]==followed.whole() && refreshes[1..].iter().any(|texels|texels*4<followed.whole()),
                 "the first refresh after {label} reduces the whole window, and a later one part of it: {:?}",followed.reduced);
         }
-        for (zoom,at,sourced) in [(1.,MISHAP_FRAME+1,true),(0.25,MISHAP_FRAME+4,false)] {
+        for (zoom,at) in [(1.,MISHAP_FRAME+1),(0.25,MISHAP_FRAME+4)] {
             let blocked=follows_like_a_navigator_that_reduces_the_whole_window("a cell blocked on a tile that is not decoded",zoom,GPen,false,Mishap::BlockedCell(at));
-            let [before,during,after]=[at-1,at,at+1].map(|step|blocked.contacts[step]);
-            assert!(during.id.is_some() && [before.id,after.id]==[during.id;2] && before.shown && !during.shown && after.shown,
-                "at {zoom} a cell is blocked in frame {at} of a contact and composes in the next: {:?}",&blocked.contacts[at-1..=at+1]);
+            let contacts=[at-1,at,at+1].map(|step|blocked.contacts[step]);
+            let [before,during,after]=contacts;
+            assert!(during.id.is_some() && [before.id,after.id]==[during.id;2] && contacts.iter().all(|contact|contact.shown) && !before.owed && during.owed && !after.owed,
+                "at {zoom} a cell is blocked in frame {at} of a contact, keeps its ink and composes in the next: {contacts:?}");
             let (whole,next)=(blocked.whole(),blocked.refreshes_from(at+1)[0]);
-            assert_eq!(during.sourced,sourced,"at {zoom} the blocked frame leaves the Navigator a window to follow: {during:?}");
-            if sourced {
-                assert!(blocked.published[at][0] && blocked.reduced[at][0]*4<whole && (blocked.cell()..whole).contains(&next),
-                    "at {zoom} the Navigator follows the half-size level, which the blocked frame leaves unreduced, and reduces the cell's {} texels once it composes: {:?}",blocked.cell(),blocked.reduced);
-            }else {
-                assert!(!during.remembered && !blocked.published[at][0] && next==whole,
-                    "at {zoom} the Navigator does not follow a window whose record is not current, and its next follow refresh reduces the whole window: {during:?} {:?}",blocked.reduced);
-            }
+            assert!(!during.sourced && !during.remembered && !blocked.published[at][0] && next==whole,
+                "at {zoom} the Navigator does not follow a window whose record is not current, and its next follow refresh reduces the whole window: {during:?} {:?}",blocked.reduced);
         }
     }
 
