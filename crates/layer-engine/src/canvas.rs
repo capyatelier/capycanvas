@@ -2564,7 +2564,12 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 return;
             }
         };
-        let (now_elapsed, requested_elapsed) = tip_times(active.feedback, latest,
+        let feedback = if active.style.execution == BrushExecution::Liquify {
+            InstantFeedbackConfig { use_platform_prediction: false, prediction_horizon_micros: 0, ..active.feedback }
+        } else {
+            active.feedback
+        };
+        let (now_elapsed, requested_elapsed) = tip_times(feedback, latest,
             |timestamp| self.builder.elapsed_micros_at(timestamp).unwrap_or(latest.elapsed_micros), timestamp_ns, presentation_timestamp_ns);
         if active.feedback.enabled {
             self.recording.query(
@@ -2583,7 +2588,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             } else {
                 &[]
             },
-            platform: self.builder.predicted_points(), brush: &active.brush, feedback: active.feedback,
+            platform: if feedback.use_platform_prediction { self.builder.predicted_points() } else { &[] }, brush: &active.brush, feedback,
             transform: self.view.document_to_surface, now: now_elapsed, requested: requested_elapsed,
             ending: self.pending_up.and_then(|(_, parked)| self.builder.elapsed_micros_at(parked)),
             boundary,
@@ -3322,6 +3327,28 @@ mod tests {
         engine.active_stroke.take();
         engine.build_predicted_preview(None, None, false);
         assert!(engine.batches.is_empty());
+    }
+
+    #[test]
+    fn a_liquify_preview_shows_its_real_input_without_an_extrapolated_tip() {
+        let (mut input, mut engine) = engine("liquify without tip", 1024, 128);
+        engine.set_instant_feedback(InstantFeedbackConfig { use_platform_prediction: false, prediction_horizon_micros: 64_000, ..Default::default() }).unwrap();
+        engine.set_brush(default_brush(DefaultBrushPreset::LiquifyPush)).unwrap();
+        let mut last = event(1, PenPhase::Down, 100.);
+        for index in 0..41 {
+            last = PenEvent {
+                timestamp_ns: 1_000_000_000 + index * 10_000_000,
+                surface_position: Point { x: 100. + index as f32 * 4., y: 64. },
+                phase: if index == 0 { PenPhase::Down } else { PenPhase::Move },
+                sequence: index + 1,
+                ..last
+            };
+            input.push(last).unwrap();
+            engine.render_frame_for(last.timestamp_ns, last.timestamp_ns + 8_000_000).unwrap();
+        }
+        assert_eq!((engine.metrics().engine_prediction_frames, engine.metrics().platform_prediction_frames), (0, 0));
+        assert!(engine.backend().preview.iter().all(|dab| dab.center.x <= last.surface_position.x + 0.5), "the preview reaches no further than the pen");
+        assert!(!engine.backend().preview.is_empty(), "the preview still shows the stroke's uncommitted input");
     }
 
     #[derive(Debug)]
@@ -7427,7 +7454,7 @@ mod tests {
     #[test]
     fn smoothed_preview_of_a_spaced_brush_follows_the_pen() {
         let (mut input, mut engine) = engine("spaced smoothing preview", 1600, 1000);
-        let mut brush = default_brush(DefaultBrushPreset::LiquifyPinch);
+        let mut brush = default_brush(DefaultBrushPreset::Smudge);
         brush.diameter = 300.;
         brush.stabilization.strength = 0.06;
         engine.set_brush(brush).unwrap();
