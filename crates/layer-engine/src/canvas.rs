@@ -7384,6 +7384,8 @@ mod tests {
             ("tapered", BrushSnapshot { diameter: 100., taper, ..pen.clone() }, 1., 0.0166, 228),
             ("thin", pen.clone(), 1., 0.0166, 228),
             ("fast", pen, 1., 0.0497, 76),
+            ("airbrush", BrushSnapshot { diameter: 100., ..default_brush(DefaultBrushPreset::Airbrush) }, 1., 0.0166, 228),
+            ("eraser", BrushSnapshot { diameter: 15., ..default_brush(DefaultBrushPreset::Eraser) }, 1., 0.0166, 228),
         ]
         .into_iter()
         .map(|(label, brush, scale, turn, events)| (label, ink_lost_while_landing(brush, scale, turn, events)))

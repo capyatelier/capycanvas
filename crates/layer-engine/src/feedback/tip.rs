@@ -121,7 +121,7 @@ impl PreviewTip {
             if let Some(endpoint) = tip.modeled_position() {
                 tip.reach_endpoint(endpoint, start, self.preview_taper, input.brush, output);
             }
-            if self.preview_taper {
+            if self.preview_taper && (input.ending.is_none() || input.brush.rendering.accumulation != BrushAccumulation::Flow) {
                 taper_prediction(&mut output[extra_start..], taper_start, self.curve_preview.taper_amount());
             }
             return estimate.filter(|_| input.ending.is_none()).map(|estimate| estimate.source);
