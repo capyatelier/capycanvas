@@ -69,6 +69,7 @@ impl Submission {
     pub(crate) fn observation_id(&self)->usize {std::sync::Arc::as_ptr(&self.0) as usize}
     pub fn submitted(&self)->bool {matches!(self.0.load(std::sync::atomic::Ordering::Acquire),value if value==SubmissionState::Submitted as u8 || value==SubmissionState::Complete as u8)}
     pub fn discarded(&self)->bool {self.0.load(std::sync::atomic::Ordering::Acquire)==SubmissionState::Discarded as u8}
+    pub fn complete(&self)->bool {self.0.load(std::sync::atomic::Ordering::Acquire)==SubmissionState::Complete as u8}
     pub fn pending(&self)->bool {self.0.load(std::sync::atomic::Ordering::Acquire)<SubmissionState::Discarded as u8}
 }
 struct PendingSubmission(Submission);

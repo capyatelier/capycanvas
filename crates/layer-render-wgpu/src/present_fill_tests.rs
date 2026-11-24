@@ -90,3 +90,32 @@ fn fill_reveal_presents_before_after_and_circles_without_raster_work() {
     assert_eq!(capture(&mut presenter,&engine),before);
     assert_eq!(engine.document().artwork,authored);assert!(!engine.can_undo());
 }
+
+#[test]
+fn a_dropped_fill_frame_is_not_ready_and_the_next_frame_draws_its_fill() {
+    let extent=[32;2];
+    let document=paint_document(extent,"Dropped fill frame");
+    let fill=|revision,color| FillPreview {transaction:1,revision,target:target(&document),operation:RasterOperation {placement:Affine::IDENTITY,
+        coverage:reveal_all(extent,[0;2]),kind:RasterOperationKind::Fill {color,texture:Default::default(),alpha_locked:false,edges:None,underfill:None}}};
+    let mut r=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+    let mut presenter=crate::test_support::float_presenter(&r);
+    let shown=|presenter:&mut ViewportPresenter,r:&WgpuRasterizer| {
+        let (texture,surface)=crate::create_target(r.device(),extent,wgpu::TextureFormat::Rgba32Float,"dropped fill viewport");
+        presenter.present(r,&surface,view(extent),[0.;4]).unwrap();
+        (r.fill_preview_ready(),crate::test_support::float_pixels(r,&texture)[16*32+16].map(f32::round))
+    };
+    let frame=packet(document.scene(),extent);
+    r.set_fill_preview(Some(fill(2,[1.,0.,0.,1.])));
+    submit_settled(&mut r,frame);
+    assert_eq!(shown(&mut presenter,&r),(Some((1,2)),[1.,0.,0.,1.]));
+    let idle=layer_render::FramePacket {composite_all:false,..frame};
+    r.set_fill_preview(Some(fill(3,[0.,0.,1.,1.])));
+    r.test.discard_frame=true;
+    crate::test_support::submit_ready(&mut r,idle).unwrap();
+    assert!(!r.test.discard_frame,"the frame that draws the new fill is dropped");
+    r.wait_idle().unwrap();
+    assert_eq!(r.fill_preview_ready(),None,"a dropped fill frame reports its fill ready");
+    assert!(r.outstanding_terms().contains(&("fill preview",crate::frame_demand::Outstanding::Runnable)),"a dropped fill frame owes no repair");
+    submit_settled(&mut r,idle);
+    assert_eq!(shown(&mut presenter,&r),(Some((1,3)),[0.,0.,1.,1.]),"the next stationary frames draw the fill");
+}

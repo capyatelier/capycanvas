@@ -119,7 +119,8 @@ fn a_frame_result_in_flight_asks_for_no_frame_that_cannot_deliver_it() {
     let frame=packet(document.scene(),extent);
     submit_settled(&mut r,frame);
     r.wait_idle().unwrap();
-    r.fill_preview_done=Some(Arc::new(std::sync::atomic::AtomicBool::new(false)));
+    let mut in_flight=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    r.fill_preview_shown=Some(((0,0,target(&document)),in_flight.submission()));
     assert!(r.settled() && r.frame_results_pending());
     let idle=FramePacket {composite_all:false,..frame};
     let (started,mut frames)=(Instant::now(),0);

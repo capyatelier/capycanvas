@@ -1172,8 +1172,7 @@ pub struct WgpuRasterizer {
     preparation: layer_render::PreparationContext,
     transform_preview: Option<layer_render::TransformPreview>,
     fill_preview: Option<layer_render::FillPreview>,
-    fill_preview_shown: Option<(u64,u64,SourceTarget)>,
-    fill_preview_done:Option<Arc<std::sync::atomic::AtomicBool>>,
+    fill_preview_shown: Option<((u64,u64,SourceTarget),submission::Submission)>,
     fill_reveal: Option<layer_render::FillReveal>,
     refused_transform: Option<layer_render::TransformPreview>,
     transform_sources_pending: bool,
@@ -1612,7 +1611,6 @@ impl WgpuRasterizer {
             transform_preview: None,
             fill_preview: None,
             fill_preview_shown: None,
-            fill_preview_done:None,
             fill_reveal: None,
             refused_transform: None,
             transform_sources_pending: false,
@@ -4258,7 +4256,7 @@ impl CanvasRenderer for WgpuRasterizer {
     fn set_fill_preview(&mut self,preview:Option<layer_render::FillPreview>) {self.fill_preview=preview;}
     fn fill_preview_ready(&self)->Option<(u64,u64)> {
         let key=self.fill_preview.as_ref()?.key();
-        (self.fill_preview_shown==Some(key) && self.fill_preview_done.as_ref()?.load(std::sync::atomic::Ordering::Acquire)).then_some((key.0,key.1))
+        self.fill_preview_shown.as_ref().filter(|(shown,receipt)|*shown==key && receipt.complete()).map(|_|(key.0,key.1))
     }
     fn set_fill_reveal(&mut self,reveal:Option<layer_render::FillReveal>) {self.fill_reveal=reveal;}
     fn request_region(
@@ -4495,7 +4493,7 @@ impl WgpuRasterizer {
         packet.commit_rasters && !packet.composite_all && !packet.reset_layers && packet.restore_rasters.is_empty()
             && packet.dabs.is_empty() && packet.dab_batches.is_empty()
             && preview.is_none() && self.transform_preview.is_none()
-            && self.fill_preview.as_ref().map(layer_render::FillPreview::key)==self.fill_preview_shown
+            && self.fill_preview.as_ref().map(layer_render::FillPreview::key)==self.fill_preview_drawn()
             && self.transform_damage.is_empty()
             && self.moving_layer.is_none() && self.moving_pixels.is_none()
             && self.vector_preview.as_ref().map(|p| (p.owner, p.revision)) == self.vector_preview_shown.map(|(owner, revision, _)| (owner, revision))
@@ -4503,6 +4501,9 @@ impl WgpuRasterizer {
             && self.vector_motion_paths.as_ref().filter(|_| self.vector_motion.is_some()).map(Arc::as_ptr) == self.vector_motion_paths_drawn.as_ref().map(Arc::as_ptr)
             && !self.vector_selection_changed
             && self.artwork_frame.as_ref().is_some_and(|frame| frame.view == packet.view && frame.same_artwork(packet))
+    }
+    fn fill_preview_drawn(&self)->Option<(u64,u64,SourceTarget)> {
+        self.fill_preview_shown.as_ref().filter(|(_,receipt)|!receipt.discarded()).map(|(key,_)|*key)
     }
     fn retained_transition_frame(&self, packet: FramePacket<'_>, preview: Option<&layer_render::TransformPreview>) -> bool {
         self.canvas_transition.drawing.is_some() && self.presentation.showing && self.presentation.navigator && !self.analysis_dirty
@@ -4839,7 +4840,7 @@ impl WgpuRasterizer {
         self.transform_damage.extend(raster_damage);
 
         let fill_preview=self.fill_preview.clone();
-        let fill_changed=fill_preview.as_ref().map(layer_render::FillPreview::key)!=self.fill_preview_shown;
+        let fill_changed=fill_preview.as_ref().map(layer_render::FillPreview::key)!=self.fill_preview_drawn();
         let old_preview_damage = self.preview_damage;
         let old_preview_footprint = if packet.commit_rasters {std::mem::take(&mut self.preview_footprint)} else {Default::default()};
         let mut new_preview_footprint = std::collections::BTreeSet::new();
@@ -5348,8 +5349,7 @@ impl WgpuRasterizer {
             self.scene=Some(scene);
             result?;
         }
-        self.fill_preview_shown=fill_preview.as_ref().map(layer_render::FillPreview::key);
-        if fill_changed {self.fill_preview_done=None;}
+        if fill_changed {self.fill_preview_shown=fill_preview.as_ref().map(|fill|(fill.key(),encoder.submission()));}
         if preview_is_watercolor { self.canonicalize_preview_watercolor(&mut encoder)?; }
         self.withdraw_incomplete_preview(&encoder.submission());
         if let Some(started) = started { cpu_phases[3] = started.elapsed().as_secs_f64() * 1000.; }
@@ -5530,10 +5530,6 @@ impl WgpuRasterizer {
         self.metrics.command_passes += encoder.pass_count();
         let trim=!moving && self.artwork_frame.as_ref().is_some_and(|old| old.view==packet.view);
         self.retire_display_resources(&mut encoder, trim);
-        if fill_preview.is_some() && self.fill_preview_done.is_none() {
-            let done=Arc::new(std::sync::atomic::AtomicBool::new(false));self.fill_preview_done=Some(done.clone());
-            let done=CompletionFlag(done);encoder.hold(done);
-        }
         #[cfg(test)]
         if std::mem::take(&mut self.test.discard_frame) {drop(encoder);return Ok(());}
         self.background_frame = settled;

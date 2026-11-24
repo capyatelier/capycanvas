@@ -99,10 +99,10 @@ impl WgpuRasterizer {
     fn fill_preview_outstanding(&self) -> Option<Outstanding> {
         let key = self.fill_preview.as_ref()?.key();
         if self.fill_preview_ready().is_some() { return None; }
-        Some(if self.fill_preview_shown == Some(key) && self.fill_preview_done.is_some() { Outstanding::Blocked(Input::Gpu) } else { Outstanding::Runnable })
+        Some(if self.fill_preview_drawn() == Some(key) { Outstanding::Blocked(Input::Gpu) } else { Outstanding::Runnable })
     }
     pub(crate) fn fill_preview_in_flight(&self) -> bool {
-        self.fill_preview_done.as_ref().is_some_and(|done| !done.load(std::sync::atomic::Ordering::Acquire))
+        self.fill_preview_shown.as_ref().is_some_and(|(_, receipt)| receipt.pending())
     }
     pub(crate) fn wakes(&self, input: Input) -> bool {
         self.preparation_can_wake() && (input != Input::Gpu || self.gpu_results_pending())
@@ -138,7 +138,7 @@ impl WgpuRasterizer {
             || self.bake_preflight.as_ref().is_some_and(|state| state.waiting());
         let lost: Vec<_> = self.outstanding().into_iter().filter(|(_, state)| match state {
             Some(Outstanding::Blocked(Input::Decode)) => !decodes,
-            Some(Outstanding::Blocked(Input::Gpu)) => self.fill_preview_done.is_none() && self.settling.is_none(),
+            Some(Outstanding::Blocked(Input::Gpu)) => self.fill_preview_shown.is_none() && self.settling.is_none(),
             _ => false,
         }).collect();
         debug_assert!(lost.is_empty(), "an idle renderer waits on inputs that are not outstanding: {lost:?}");
