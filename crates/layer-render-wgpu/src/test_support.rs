@@ -676,6 +676,20 @@ pub(crate) fn submit_ready(r: &mut WgpuRasterizer, frame: FramePacket<'_>) -> Re
     }
 }
 
+pub(crate) fn submit_behind_refinement(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
+    let idle = FramePacket { composite_all: false, ..frame };
+    r.background_ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    r.background_refinement = true;
+    submit_ready(r, idle).unwrap();
+    r.background_ready.store(true, std::sync::atomic::Ordering::Release);
+    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+    while r.next_frame() == layer_render::FrameDemand::Work {
+        assert!(std::time::Instant::now() < deadline, "demanded frames must settle: {:?}", r.outstanding_terms());
+        submit_ready(r, idle).unwrap();
+        r.wait_idle().unwrap();
+    }
+}
+
 /// Submit `frame`, then idle frames as the engine does, until it publishes.
 pub(crate) fn submit_published(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
     submit_published_observing(r, frame, |_| {});

@@ -11,6 +11,7 @@ pub(super) struct Frame {
     pub view: ViewState,
     pub blend_space: layer_core::BlendSpace,
     pub time: f32,
+    pub inspect_mask: Option<layer_core::authored::OccurrenceHandle>,
     pub previews: Vec<DabBatch>,
     preview_dabs: Vec<Dab>,
 }
@@ -102,6 +103,7 @@ impl Frame {
             view: packet.view,
             blend_space: packet.blend_space,
             time: packet.time_seconds,
+            inspect_mask: packet.inspect_mask,
             previews,
             preview_dabs,
         }

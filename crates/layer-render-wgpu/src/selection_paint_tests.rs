@@ -220,6 +220,9 @@ fn saved_selection_overlay_uses_working_visibility_without_changing_authored_art
     assert!(r.selection_previews.texture.is_none());
     crate::test_support::submit_settled(&mut r, base);
     assert!(r.selection_previews.texture.is_none());
+    visibility.visibility.insert(handle, true);
+    crate::test_support::submit_behind_refinement(&mut r, FramePacket { selection_overlays: Some(&visibility), ..base });
+    assert!(r.selection_previews.texture.is_some(), "an overlay shown behind unfinished refinement is drawn");
     assert_eq!(document.artwork, authored);
 }
 

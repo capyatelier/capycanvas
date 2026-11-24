@@ -146,6 +146,27 @@ fn composite_queries_ignore_inspection_and_need_no_display_texture() {
 }
 
 #[test]
+fn inspecting_a_mask_behind_unfinished_refinement_reaches_the_display() {
+    let color = DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U16 };
+    let mut doc = document(color);
+    let mut mask = CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(), EXTENT, [0, 0]);
+    mask.source.default_coverage = 0.5;
+    let owner = doc.scene().order()[0];
+    crate::tests::image_windows::set_mask(&mut doc, owner, mask);
+    let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
+    r.set_preparation_wake(Arc::new(|| {}));
+    submit_settled(&mut r, frame(&doc));
+    let plain = crate::scene::scale::tests::display_pixels(&r);
+    doc.working.inspect_mask = Some(owner);
+    crate::test_support::submit_behind_refinement(&mut r, frame(&doc));
+    let mut fresh = WgpuRasterizer::new_native_headless(color).unwrap();
+    submit_settled(&mut fresh, frame(&doc));
+    let inspected = crate::scene::scale::tests::display_pixels(&fresh);
+    assert_ne!(plain, inspected, "inspection changes the display");
+    assert!(crate::scene::scale::tests::display_pixels(&r) == inspected, "the inspected mask reaches the display once refinement finishes");
+}
+
+#[test]
 fn filtered_query_crops_match_full_resolution_and_reject_excessive_dependencies() {
     let mut doc = document(DocumentColor {
         space: RgbSpace::ProPhoto,

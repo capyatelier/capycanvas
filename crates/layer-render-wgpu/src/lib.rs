@@ -4510,7 +4510,7 @@ impl WgpuRasterizer {
             && self.vector_motion.as_ref() == self.vector_motion_drawn.as_ref().map(|(motion, _)| motion)
             && self.vector_motion_paths.as_ref().filter(|_| self.vector_motion.is_some()).map(Arc::as_ptr) == self.vector_motion_paths_drawn.as_ref().map(Arc::as_ptr)
             && !self.vector_selection_changed
-            && self.artwork_frame.as_ref().is_some_and(|frame| frame.view == packet.view && frame.same_artwork(packet))
+            && self.artwork_frame.as_ref().is_some_and(|frame| frame.view == packet.view && frame.inspect_mask == packet.inspect_mask && frame.same_artwork(packet))
     }
     fn fill_preview_drawn(&self)->Option<(u64,u64,SourceTarget)> {
         self.fill_preview_shown.as_ref().filter(|(_,receipt)|!receipt.discarded()).map(|(key,_)|*key)
@@ -4624,10 +4624,10 @@ impl WgpuRasterizer {
             if matches!(error, GpuRasterError::WholeDrawingFilter { .. }) { self.filter_refusals += 1; }
             return Err(error);
         }
+        let packet = FramePacket { inspect_mask: if self.clipping_preview.iter().any(|enabled| *enabled) { None } else { packet.inspect_mask }, ..packet };
         let retained_transition = self.retained_transition_frame(packet, self.transform_preview.as_ref());
         let analysis_dirty = std::mem::take(&mut self.analysis_dirty);
         let packet = FramePacket {composite_all: packet.composite_all || analysis_dirty, ..packet};
-        let packet = FramePacket { inspect_mask: if self.clipping_preview.iter().any(|enabled| *enabled) { None } else { packet.inspect_mask }, ..packet };
         if packet.document_extent.iter().any(|n| *n > layer_core::MAX_EXTENT) {
             return Err(GpuRasterError::ExtentUnsupported);
         }
@@ -4638,7 +4638,7 @@ impl WgpuRasterizer {
             && !self.scale_display.as_ref().is_some_and(scene::scale::Cache::approximating)
             && self.document_damage.is_empty()
             && self.empty_artwork_frame(packet, self.transform_preview.as_ref()))
-        { return Ok(()); }
+        { return self.prepare_selection_previews(packet); }
         self.update_paper_lighting(packet.scene)?;
         let display_request = scene::scale::request(self, packet)?;
         let mut trace_phase = performance_trace::Span::new(c"capy.prepare");
