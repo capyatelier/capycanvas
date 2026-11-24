@@ -322,6 +322,7 @@ pub(crate) struct Cache {
     pivot_edit: Option<(OccurrenceHandle,layer_core::raster::ContentStamp,bool)>,
     pointer: Option<[f32;2]>,
     underived: pages::Backlog,
+    unabsorbed: pages::Backlog,
 }
 
 fn requires_native_effects(scene:SceneView<'_>,level:u32)->bool {
@@ -653,7 +654,8 @@ impl Cache {
         if old.plan!=plan && old.overview.as_ref().is_some_and(|overview|overview.plan==plan) {
             let (mut next,replaced)=Self::select(old.overview.take().map(|overview|*overview),r,packet,request);
             old.exit_contact();
-            next.retired=Some(Box::new(old)).filter(|old|old.has_direct_cells());
+            let owed=next.owes_absorption();
+            next.retired=Some(Box::new(old)).filter(|old|owed || old.has_direct_cells());
             return (next,replaced);
         }
         if old.plan.extent==plan.extent && old.plan.level==plan.level && old.plan.bounds.intersect(required)==required
@@ -681,7 +683,13 @@ impl Cache {
                 let lease=r.scene_tiers.display.heap().lease(&Arc::default());lease.offer(old.window_bytes(),0);
                 old.previous=None;old.standing=Some(lease);next.previous=Some(old);
             },
-            Some(mut old)=>{next.previous=old.previous.take().filter(|_|view);next.retired=Some(old).filter(|old|old.has_direct_cells());},
+            Some(mut old)=>{
+                next.previous=old.previous.take().filter(|_|view);
+                match next.overview.as_deref_mut().filter(|overview|overview.owes_absorption()) {
+                    Some(overview)=>overview.retired=Some(old),
+                    None=>next.retired=Some(old).filter(|old|old.has_direct_cells()),
+                }
+            },
             None=>{},
         }
         next.release_previous(r);
@@ -708,7 +716,7 @@ impl Cache {
             layer_count: layers,
             overview, preparing: false, declaring: false, exact_tile: None,
             graph: Default::default(), transform: r.transform_preview.clone(), retired: None, previous: None, standing: None, complete: false, contact: false, gesture: None, stroked: None, presented: pages::Accuracy::Display, asked: None,
-            streaming: Default::default(), pivot_waiting: None, pivot_refusal: None, reduction_refusal: None, pivot_pending: false, pivot_edit: None, pointer: None, underived: Default::default(),
+            streaming: Default::default(), pivot_waiting: None, pivot_refusal: None, reduction_refusal: None, pivot_pending: false, pivot_edit: None, pointer: None, underived: Default::default(), unabsorbed: Default::default(),
         }
     }
     fn geometry(r: &WgpuRasterizer, plan: display_mips::Plan) -> wgpu::Buffer {
@@ -1058,9 +1066,12 @@ impl Cache {
         let finer=match destination {Destination::Overview(finer,changed)=>Some((finer,changed)),_=>None};
         let view=matches!(destination,Destination::View);
         self.ask(pages::Asked {view:packet.view,moving:view && budget.motion});
+        let absorbed=match self.retired.take() {
+            Some(mut previous)=>{let absorbed=self.absorb(scene,r,encoder,commands,&previous)?;previous.write_back(r,scene,encoder)?;absorbed},
+            None=>PixelRect::EMPTY,
+        };
         self.derive_cells(finer);
-        if let Some(mut previous)=self.retired.take() {previous.write_back(r,scene,encoder)?;}
-        if let Some(previous)=self.previous.as_deref_mut() {previous.write_back(r,scene,encoder)?;}
+        if let Some(previous)=self.previous.as_deref_mut() {previous.hand_over(scene,r,encoder,commands)?;previous.write_back(r,scene,encoder)?;}
         let stroking=!packet.dab_batches.is_empty();
         let from=self.pointer;
         if view && let Some(centre)=dab_centre(packet) {self.pointer=Some(centre);}
@@ -1334,7 +1345,7 @@ impl Cache {
             self.reduce_output(scene,r,encoder,commands)?;
             r.telemetry.phase_end(11, encoder);
         }
-        Ok(document(shown))
+        Ok(document(shown.union(texels(absorbed))))
     }
     fn encode_units(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, encoder: &mut submission::CommandEncoder,
         units: impl IntoIterator<Item = Unit>,
@@ -1362,24 +1373,41 @@ impl Cache {
     fn derive(&mut self,scene:&Scene,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,commands:&mut RegionRecords,
         finer:&Cache,changed:PixelRect,
     )->Result<PixelRect,GpuRasterError> {
-        let region=self.cells.lock().unwrap().derivations(self.plan,changed);
-        let Some(root)=finer.pixels.committed_root().map(pages::CommittedImage::image) else {return Ok(PixelRect::EMPTY);};
-        let input=|region:PixelRect| {
-            let [x,y,width,height]=paint_transform::texel_rect(region.window_local(root.plan.bounds),1<<root.plan.level);
-            let reduced=PixelRect::new(x,y,x+width,y+height).intersect(finer.pixels.unreduced()).is_empty();
-            finer.pixels.committed_next().filter(|_|reduced).map_or(root,pages::CommittedImage::image)
-        };
+        self.unabsorbed.add(changed);
+        let region=self.cells.lock().unwrap().derivations(self.plan,changed).intersect(finer.plan.bounds);
+        let Some(input)=finer.reduction_input(region) else {return Ok(PixelRect::EMPTY);};
+        let Some(written)=self.reduce_from(scene,r,encoder,commands,input,region)? else {return Ok(PixelRect::EMPTY);};
+        self.cells.lock().unwrap().reduced(self.plan,region,changed,encoder.submission(),finer.pixels.committed_root().and_then(pages::CommittedImage::authored));
+        self.pixels.derived(written,encoder.submission());
+        Ok(region)
+    }
+    fn owes_absorption(&self)->bool {!self.unabsorbed.region().is_empty()}
+    fn absorb(&mut self,scene:&Scene,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,commands:&mut RegionRecords,
+        finer:&Cache,
+    )->Result<PixelRect,GpuRasterError> {
+        if !self.owes_absorption() || finer.pixels.committed_root().is_none() {return Ok(PixelRect::EMPTY);}
         let mut absorbed=PixelRect::EMPTY;
-        for part in self.absorptions(finer,changed) {
-            let Some(written)=self.reduce_from(scene,r,encoder,commands,input(part),part)? else {continue;};
+        for part in self.absorptions(finer,self.unabsorbed.region()) {
+            let Some(written)=self.reduce_from(scene,r,encoder,commands,finer.reduction_input(part).unwrap(),part)? else {continue;};
+            #[cfg(test)] crate::test_support::PassCounts {absorbed_texels:written.area(),..Default::default()}.record();
             self.pixels.derived(written,encoder.submission());
             absorbed=absorbed.union(part);
         }
-        let region=region.intersect(root.plan.bounds);
-        let Some(written)=self.reduce_from(scene,r,encoder,commands,input(region),region)? else {return Ok(absorbed);};
-        self.cells.lock().unwrap().reduced(self.plan,region,changed,encoder.submission(),finer.pixels.committed_root().and_then(pages::CommittedImage::authored));
-        self.pixels.derived(written,encoder.submission());
-        Ok(region.union(absorbed))
+        self.unabsorbed.take(encoder.submission());
+        if !absorbed.is_empty() {self.commit_window(r,encoder)?;}
+        Ok(absorbed)
+    }
+    fn hand_over(&mut self,scene:&Scene,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,commands:&mut RegionRecords)->Result<(),GpuRasterError> {
+        let Some(mut overview)=self.overview.take() else {return Ok(());};
+        let absorbed=overview.absorb(scene,r,encoder,commands,self);
+        self.overview=Some(overview);
+        absorbed.map(|_|())
+    }
+    fn reduction_input(&self,region:PixelRect)->Option<&Image> {
+        let root=self.pixels.committed_root()?.image();
+        let [x,y,width,height]=paint_transform::texel_rect(region.window_local(root.plan.bounds),1<<root.plan.level);
+        let reduced=PixelRect::new(x,y,x+width,y+height).intersect(self.pixels.unreduced()).is_empty();
+        Some(self.pixels.committed_next().filter(|_|reduced).map_or(root,pages::CommittedImage::image))
     }
     fn reduce_from(&mut self,scene:&Scene,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,commands:&mut RegionRecords,
         input:&Image,region:PixelRect,

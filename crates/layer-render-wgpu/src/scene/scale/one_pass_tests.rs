@@ -134,3 +134,21 @@ fn an_engine_driven_pencil_stroke_at_72_percent_over_painted_tiles_composes_patc
         assert!(texels[2..].iter().all(|texels|*texels>=cell || *texels<cell/64),"every other frame composes a small patch: {texels:?}");
     }
 }
+
+#[test]
+fn a_stroke_at_actual_size_over_a_complete_window_leaves_the_overview_absorption_owed() {
+    let extent=[2048,1024];
+    let mut document=blank_document(extent);
+    let layer=paint_occurrence(&mut document,"Wash",Some(rgba8_source(extent,|x,y|[(x/8) as u8,90,(y/4) as u8,255]).into()));
+    insert_occurrence(&mut document,layer,1);
+    let mut harness=Harness::new(document);
+    harness.frame([1.,0.,0.,1.,-512.,-256.]);harness.settle();
+    let cache=harness.engine.backend().scale_display.as_ref().unwrap();
+    assert!(cache.plan.level==0 && cache.complete && cache.overview.is_some(),"the settled Actual window is complete and stands over an overview");
+    let mut brush=layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);brush.diameter=160.;
+    let before=crate::test_support::PassCounts::snapshot();
+    harness.queue(1,&[[600.,300.],[760.,380.],[920.,460.]],brush);harness.finish();
+    assert_eq!(crate::test_support::PassCounts::snapshot().delta(before).absorbed_texels,0,"stroke frames reduce no ink into overview cells the window covers in part");
+    let overview=harness.engine.backend().scale_display.as_ref().unwrap().overview.as_deref().unwrap();
+    assert!(overview.owes_absorption(),"the overview owes the stroke's partly covered cells until it is handed over");
+}
