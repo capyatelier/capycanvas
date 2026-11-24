@@ -16,7 +16,7 @@
   less than whole pages would reduce it.
 
 - **Very wide tapered pens shorten their end.** A 1024 px G-Pen with a 10-width
-  end needs more than the 128-page held allowance, so its end shrinks to the
+  end needs more than the 256-page held allowance, so its end shrinks to the
   contacts that fit ([tapers](../internals/brushes.md#tapers)). The early save and
   lift replay behind the TCL's lift p99 of 214 → 495 ms are gone; lift has not been
   re-measured.

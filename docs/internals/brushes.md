@@ -100,8 +100,8 @@ available for mouse and screenless tablets without adding input prediction lead.
 
 Taper narrows a line's ends. Off, Fixed and Proportional are one choice that opens
 the Taper section, after Tip:
-- Fixed measures each end in full line widths: the slider reaches 50 and typed
-  values reach 200 (`BrushTaper::MAX_FIXED_WIDTHS`).
+- Fixed measures each end in full line widths: the slider follows Smoothness's
+  curve up to 50 and typed values reach 200 (`BrushTaper::MAX_FIXED_WIDTHS`).
 - Proportional measures each end as a share of the line (0–50 %), at most 50
   full widths.
 - Where the ends overlap on a short line, the narrower one wins. A Fixed line
@@ -145,7 +145,7 @@ share its random values.
 
 Each frame's accepted input is one slice. Slices are saved in order, in one batch
 per pass, once no later input can change them. Held work has one allowance, the
-constants at the top of `brush::taper`: 16,384 contacts, 4 MiB and 128 pages (or
+constants at the top of `brush::taper`: 16,384 contacts, 4 MiB and 256 pages (or
 the pages one full-width contact covers, if more), with dab bounds deciding the
 pages. Once the newest contacts no longer fit it, the zones stop growing there: a
 Proportional line keeps the start and end lengths it had, a Fixed start without an

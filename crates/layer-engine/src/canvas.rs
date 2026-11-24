@@ -7040,7 +7040,7 @@ mod tests {
     fn a_fixed_end_longer_than_the_allowance_is_capped_without_a_repair() {
         let (mut input, mut engine) = engine("taper", 4096, 4096);
         let mut brush = default_brush(DefaultBrushPreset::GPen);
-        (brush.diameter, brush.stabilization.strength) = (1024., 0.);
+        (brush.diameter, brush.stabilization.strength) = (2048., 0.);
         brush.taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, ..Default::default() };
         engine.set_brush(brush).unwrap();
         let events = pen_stroke(1, 3000, 1_000_000_000, |i| {
@@ -7048,9 +7048,9 @@ mod tests {
             ([2048. + 1500. * angle.cos(), 2048. + 1500. * angle.sin()], 0.6 + 0.3 * (i as f32 * 0.01).sin())
         });
         let (live, saved, capped) = draw_uncapped_or_capped(&mut engine, &mut input, &events, 4);
-        assert!(capped && !saved.is_empty(), "a 1024 px end of 10 widths holds more than its allowance");
+        assert!(capped && !saved.is_empty(), "a 2048 px end of 10 widths holds more than its allowance");
         let tip = engine.backend.persistent.last().unwrap();
-        assert!(tip.radii[0] * 2. <= 0.15 * 1024., "the capped end still comes to a point: {}", tip.radii[0] * 2.);
+        assert!(tip.radii[0] * 2. <= 0.15 * 2048., "the capped end still comes to a point: {}", tip.radii[0] * 2.);
         assert_matches_replay(&mut engine, &live);
     }
 
@@ -7085,8 +7085,8 @@ mod tests {
         let taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Proportional, proportional_shares: [0.5, 0.5], ..Default::default() };
         for feedback in [false, true] {
             let (mut input, mut engine) = tapered_engine(taper, feedback);
-            engine.set_brush(BrushSnapshot { diameter: 512., ..engine.configured_brush().clone() }).unwrap();
-            let events = pen_stroke(1, 2000, 1_000_000_000, |i| ([4. * i as f32, 512.], if i % 2 == 0 { 0.7 } else { 0.85 }));
+            engine.set_brush(BrushSnapshot { diameter: 1024., ..engine.configured_brush().clone() }).unwrap();
+            let events = pen_stroke(1, 3000, 1_000_000_000, |i| ([4. * i as f32, 512.], if i % 2 == 0 { 0.7 } else { 0.85 }));
             let (live, saved, capped) = draw_uncapped_or_capped(&mut engine, &mut input, &events, 4);
             assert!(capped && !saved.is_empty(), "feedback {feedback}: the held line reached its allowance and saved its start");
             assert_matches_replay(&mut engine, &live);

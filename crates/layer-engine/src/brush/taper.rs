@@ -9,7 +9,7 @@ use std::collections::{HashMap, VecDeque};
 const PROPORTIONAL_LIMIT_WIDTHS: f32 = 50.;
 const MAX_HELD_CONTACTS: usize = 16384;
 const MAX_HELD_BYTES: usize = 4 << 20;
-const MAX_HELD_PAGES: usize = 128;
+const MAX_HELD_PAGES: usize = 256;
 const PREVIEW_RUN: usize = 32;
 const MAX_INSERTIONS: f32 = 64.;
 const SAVED: Resolution = Resolution { share: 0.02, minimum: 0.05, preview: None };
