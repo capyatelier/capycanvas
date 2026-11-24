@@ -96,6 +96,7 @@ pub(super) struct Memory {
     watch: std::cell::RefCell<Option<layer_core::MemoryWatch>>,
     unified: bool,
     pub idle: std::sync::atomic::AtomicBool,
+    parked: Arc<std::sync::atomic::AtomicBool>,
     pass_evictable: std::cell::Cell<Option<Option<u64>>>,
 }
 pub(super) fn retained_limit(grant: u64, occupied: u64) -> u64 { grant.saturating_sub(occupied) }
@@ -140,14 +141,16 @@ impl Memory {
         let resources = Arc::new(std::sync::atomic::AtomicU64::new(display.handle.grant().gpu_bytes));
         let wake: Arc<std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>> = Default::default();
         let forwarded = wake.clone();
-        display.handle.set_wake(Arc::new(move || { let wake = forwarded.lock().unwrap().clone(); wake.inspect(|wake| wake()).is_some() }));
+        let parked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let declines = parked.clone();
+        display.handle.set_wake(Arc::new(move || { let wake = forwarded.lock().unwrap().clone(); wake.inspect(|wake| wake()).is_some() && !declines.load(std::sync::atomic::Ordering::Acquire) }));
         let memory = Self {
             display,
             samples: samples.report_to(|| factory.memory_owner(Kind::DecodedSamples)),
             raster: Owner::new(factory, Kind::RasterPool, MemoryReport { pinned_gpu_bytes: working, pinned_ram_bytes: working, demand_gpu_bytes: working, demand_ram_bytes: working, ..Default::default() }),
             staging: Owner::new(factory, Kind::Staging, MemoryReport { pinned_gpu_bytes: working, demand_gpu_bytes: working, ..Default::default() }),
             demand: std::cell::Cell::new(demand), demand_key: std::cell::Cell::new(None), applied_limits: std::cell::Cell::new(None), limits_dirty: std::cell::Cell::new(true), preparation: std::cell::Cell::new(0), target: std::cell::Cell::new(total(demand.wanted(0))), refused: Default::default(), lane: Default::default(), trimmed: Default::default(), retired: Default::default(), wake, resources, overdraft: Default::default(), fruitless: Default::default(), #[cfg(not(target_arch = "wasm32"))] watch: Default::default(),
-            unified: factory.unified_memory(), idle: std::sync::atomic::AtomicBool::new(true), pass_evictable: Default::default(),
+            unified: factory.unified_memory(), idle: std::sync::atomic::AtomicBool::new(true), parked, pass_evictable: Default::default(),
         };
         samples.set_demand(SOURCE_WORKING_BYTES, DECODED_SAMPLE_BYTES);
         memory.applied_limits.set(Some(memory.grants()));
@@ -160,6 +163,7 @@ impl Memory {
     pub(crate) fn retention_limit(&self) -> u64 { self.retention_grant().min(self.retention_ceiling()) }
     fn retention_ceiling(&self) -> u64 { if self.unified { self.target.get() } else { u64::MAX } }
     pub(crate) fn set_wake(&self, wake: Arc<dyn Fn() + Send + Sync>) { *self.wake.lock().unwrap() = Some(wake); }
+    pub(crate) fn park(&self, parked: bool) { self.parked.store(parked, std::sync::atomic::Ordering::Release); }
     pub(crate) fn reclaim_unanswered(&self) -> bool { self.display.handle.reclaim_unanswered() }
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn watch(&self, budget: &layer_core::MemoryBudget, edge: Arc<dyn Fn() + Send + Sync>) { *self.watch.borrow_mut() = Some(budget.watch(edge)); }

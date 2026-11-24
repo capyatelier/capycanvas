@@ -49,6 +49,27 @@ fn a_resumed_drawing_presents_its_retained_display_without_composing() {
     assert_eq!(PassCounts::snapshot().delta(before).composite_commits, 0, "an unchanged view composes nothing after resuming");
 }
 
+#[test]
+fn an_import_beside_a_parked_drawing_over_its_warm_grant_settles_without_a_frame() {
+    use std::{future::Future, task::{Context, Waker}};
+    let doc = crate::scene::scale::tests::document_at([2048, 1536]);
+    let mut r = crate::memory::memory_tests::renderer(doc.composition().color, layer_core::DeviceMemoryFacts { unified: true, ..Default::default() }).unwrap();
+    submit_settled(&mut r, reduced(&doc));
+    r.set_preparation_wake(Arc::new(|| {}));
+    r.park_warm(&doc, reduced(&doc).view, false);
+    complete(&r);
+    let budget = r.factory.memory_budget().clone();
+    let display = r.memory.display_owner();
+    let parked = display.reported();
+    let ledger = budget.snapshot();
+    let import = budget.admit_import(ledger.ram_limit_bytes - ledger.ram_physical_bytes + parked.gpu_bytes - parked.pinned_gpu_bytes).unwrap();
+    assert!(parked.gpu_bytes > display.grant().gpu_bytes, "the parked display holds {} bytes over its {} byte warm grant",
+        parked.gpu_bytes, display.grant().gpu_bytes);
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let mut waiting = Box::pin(import.covering(&cancel));
+    assert!(waiting.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_ready(), "an import beside a parked drawing that draws no frame must settle");
+}
+
 fn pressure(r: &WgpuRasterizer) -> layer_core::MemoryOwner {
     let budget = r.factory.memory_budget();
     let device = budget.snapshot().devices[0];

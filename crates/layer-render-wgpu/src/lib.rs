@@ -4338,6 +4338,7 @@ impl CanvasRenderer for WgpuRasterizer {
     }
     fn resume_retained(&mut self, document: &layer_core::Document) -> bool {
         let Some(warm) = self.warm.take() else { return false; };
+        self.memory.park(false);
         self.memory.invalidate_limits();
         self.publish_memory();
         self.publish_sample_demand();

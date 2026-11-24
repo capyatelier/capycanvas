@@ -22,7 +22,8 @@ impl Pressure {
             else {(None,result,state.wake.clone())}
         };
         if let Some(wait)=wait {wait.complete(result);}
-        wake.inspect(|wake|wake()).is_some()
+        let Some(wake)=wake else {self.owner.reclaimed(self.owner.reclaim_epoch());return false;};
+        wake();true
     }
     fn report(resident:usize)->MemoryReport {MemoryReport {ram_bytes:resident as u64,demand_ram_bytes:resident as u64,..Default::default()}}
     fn publish(&self,resident:usize) {assert!(self.owner.publish(Self::report(resident)));}
@@ -140,4 +141,33 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_reclaim_accepted_during_a_trim_is_answered_when_the_trim_fails() {
+        use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey,TILE_SIZE};
+        use std::{future::Future,task::{Context,Poll,Waker}};
+        let mut document=layer_core::Document::new(layer_core::PortableId::random(),64,64,layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+        let layer_core::SourceTarget::Paint(target)=document.working.target.unwrap() else {panic!()};
+        let descriptor=document.composition().color.paint_descriptor();
+        let pixels=[23,47,83,255].repeat((TILE_SIZE*TILE_SIZE) as usize);
+        document.artwork.paint.get_mut(target).unwrap().raster=RasterRevision::backed(RasterData {
+            tiles:[(TileKey {plane:RasterPlane::Color,coordinate:[0;2]},RasterTile::backed(TileBlob::encode(descriptor,&pixels).unwrap()))].into(),
+            ..Default::default()
+        });
+        let tiles=layer_core::Editor::new(document).retained_tiles();
+        let resident=layer_core::raster_storage::resident_tile_bytes([&tiles]);
+        assert!(resident>1);
+        let budget=MemoryBudget::with_facts(layer_core::MemoryFacts {override_bytes:Some(1<<30),..Default::default()});
+        let source=StoragePressure::new(budget.register_owner(MemoryOwnerKind::ParkedTabs,MemoryClass::Warm,None),budget.clone());
+        let generation=source.subscribe(Arc::new(||{}));
+        source.update(vec![(1,1,tiles)],resident,usize::MAX,None);
+        let import=budget.admit_import(budget.ram_limit_bytes()-resident as u64/2).unwrap();
+        assert!(source.request(generation).is_some());
+        let cancel=std::sync::atomic::AtomicBool::new(false);
+        let mut waiting=Box::pin(import.covering(&cancel));
+        let mut context=Context::from_waker(Waker::noop());
+        assert!(waiting.as_mut().poll(&mut context).is_pending());
+        source.completed(generation,Err("Disk full".into()));
+        assert_eq!(waiting.as_mut().poll(&mut context),Poll::Ready(Err(layer_core::CoverageFailure::Refused)),
+            "a trim that fails with its tiles still resident answers the reclaim it accepted while running");
+    }
 }
