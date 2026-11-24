@@ -320,7 +320,7 @@ impl TargetRestore {
                 let version=super::contents::fallback(&self.defaults[0],*coordinate);
                 if let Some(originals)=&self.originals {
                     read.consumed(&r.source_tiles.borrow());
-                    liquify::Liquify::restore_original(r,originals,room,*coordinate,self.extent,&version,read.sampled(),encoder)?;
+                    liquify::Liquify::restore_original(r,originals,room,*coordinate,&version,read.sampled(),encoder)?;
                     self.next+=1;continue;
                 }
                 let page=self.pages.colors.iter_mut().find(|page|page.coordinate==*coordinate).unwrap();page.primary_needs_clear=false;
@@ -338,7 +338,7 @@ impl TargetRestore {
                 if !read.encode(r,encoder,crate::residency::Class::Authored)? {break;}
                 if let Some(originals)=&self.originals {
                     read.consumed(&r.source_tiles.borrow());
-                    liquify::Liquify::restore_original(r,originals,room,key.coordinate,self.extent,&tile.content_version(),read.sampled(),encoder)?;
+                    liquify::Liquify::restore_original(r,originals,room,key.coordinate,&tile.content_version(),read.sampled(),encoder)?;
                     self.next+=1;continue;
                 }
                 let page=self.pages.colors.iter_mut().find(|page|page.coordinate==key.coordinate).unwrap();page.primary_needs_clear=false;

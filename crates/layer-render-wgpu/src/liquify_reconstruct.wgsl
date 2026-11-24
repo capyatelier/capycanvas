@@ -3,10 +3,6 @@ struct Sources { header: vec4<u32>, pages: array<vec4<u32>, 9> }
 @group(0) @binding(0) var<uniform> style: Style;
 @group(0) @binding(1) var output_color: texture_storage_2d<rgba32float, write>;
 @group(1) @binding(0) var<uniform> render_target: Target;
-@group(2) @binding(11) var<uniform> sources: Sources;
-@group(2) @binding(12) var field: texture_2d<u32>;
-@group(2) @binding(13) var previous_color: texture_2d<f32>;
-@group(2) @binding(14) var original_color: texture_2d<f32>;
 struct SourceIndices { extent: vec4<u32>, tiles: array<u32> }
 @group(2) @binding(15) var<storage, read> source_indices: SourceIndices;
 @group(2) @binding(16) var current_color: texture_2d<f32>;
@@ -75,24 +71,26 @@ fn prior_value(pixel: vec2<i32>, block: u32, size: vec2<u32>) -> vec4<u32> {
     return pack_map(MapSample(displacement, footprint + IDENTITY));
 }
 
-fn block_average(image: texture_2d<f32>, pixel: vec2<i32>, block: u32, size: vec2<u32>) -> vec4<f32> {
+fn current_average(pixel: vec2<i32>, block: u32, size: vec2<u32>) -> vec4<f32> {
+    if block == 1u { return textureLoad(current_color, pixel, 0); }
     var color = vec4(0.);
     for (var y = 0u; y < size.y; y++) {
         for (var x = 0u; x < size.x; x++) {
-            color += textureLoad(image, pixel * i32(block) + vec2<i32>(i32(x), i32(y)), 0);
+            color += textureLoad(current_color, pixel * i32(block) + vec2<i32>(i32(x), i32(y)), 0);
         }
     }
     return color / f32(size.x * size.y);
 }
 
-fn current_average(pixel: vec2<i32>, block: u32, size: vec2<u32>) -> vec4<f32> {
-    if block == 1u { return textureLoad(current_color, pixel, 0); }
-    return block_average(current_color, pixel, block, size);
-}
-
 fn original_average(pixel: vec2<i32>, block: u32, size: vec2<u32>) -> vec4<f32> {
-    if all(size == vec2(block)) { return textureLoad(original_color, pixel, i32(log2(f32(block)))); }
-    return block_average(original_color, pixel, block, size);
+    if all(size == vec2(block)) { return original_at(pixel, i32(log2(f32(block)))); }
+    var color = vec4(0.);
+    for (var y = 0u; y < size.y; y++) {
+        for (var x = 0u; x < size.x; x++) {
+            color += original_at(pixel * i32(block) + vec2<i32>(i32(x), i32(y)), 0);
+        }
+    }
+    return color / f32(size.x * size.y);
 }
 
 @compute @workgroup_size(16, 8)
@@ -139,7 +137,7 @@ fn reconstruct(@builtin(global_invocation_id) invocation: vec3<u32>) {
         }
     }
     color /= f32(count.x * count.y);
-    if sources.header.y != 0u { color += textureLoad(previous_color, pixel, 0); }
+    if sources.header.y != 0u { color += previous_at(pixel); }
     if sources.header.z != 0u {
         if style.color.a > .5 {
             let original = original_average(pixel, block, size);

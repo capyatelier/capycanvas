@@ -4,13 +4,24 @@ use std::{collections::{BTreeMap, BTreeSet}, sync::{Mutex, Weak, atomic::{Atomic
 
 const ORIGINAL_LAYERS: u32 = 16;
 const ORIGINAL_BINDINGS: usize = 11;
-const CHUNK_TILES: u32 = ORIGINAL_BINDINGS as u32 * ORIGINAL_LAYERS;
+const WHOLE_BINDINGS: usize = 13;
 pub(super) const ORIGINAL_ATLAS_BYTES: u64 = 87381 * ORIGINAL_LAYERS as u64 * 16;
 const MAP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Uint;
 static NEXT_RESOURCE: AtomicU64 = AtomicU64::new(1);
 
-fn original_chunk(coordinate: [u32; 2], extent: [u32; 2]) -> u32 {
-    coordinate[1] / ORIGINAL_BINDINGS as u32 * extent[0].div_ceil(PAGE_SIZE).div_ceil(ORIGINAL_LAYERS) + coordinate[0] / ORIGINAL_LAYERS
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Layout { columns: u32, whole: bool }
+impl Layout {
+    fn of(extent: [u32; 2]) -> Self {
+        let [columns, rows] = extent.map(|n| n.div_ceil(PAGE_SIZE));
+        Self { columns, whole: u64::from(columns) * u64::from(rows) <= (WHOLE_BINDINGS as u64) * u64::from(ORIGINAL_LAYERS) }
+    }
+    fn bindings(self) -> usize { if self.whole { WHOLE_BINDINGS } else { ORIGINAL_BINDINGS } }
+    fn chunk_tiles(self) -> u32 { self.bindings() as u32 * ORIGINAL_LAYERS }
+    fn chunk(self, coordinate: [u32; 2]) -> u32 {
+        if self.whole { 0 } else { coordinate[1] / ORIGINAL_BINDINGS as u32 * self.columns.div_ceil(ORIGINAL_LAYERS) + coordinate[0] / ORIGINAL_LAYERS }
+    }
+    fn chunk_of(self, index: u32) -> usize { (index / self.chunk_tiles()) as usize }
 }
 fn new_atlases(missing: impl IntoIterator<Item = usize>) -> u64 {
     missing.into_iter().map(|count| (count as u64).div_ceil(u64::from(ORIGINAL_LAYERS))).sum()
@@ -97,9 +108,10 @@ pub(crate) struct Originals {
     atlases: Vec<Option<OriginalAtlas>>,
     free: BTreeSet<u32>,
     idle: Arc<AtomicU64>,
+    layout: Layout,
 }
 impl Originals {
-    fn new(versions:raster::contents::Versions,idle:Arc<AtomicU64>)->Self {Self {versions,tiles:BTreeMap::new(),atlases:Vec::new(),free:BTreeSet::new(),idle}}
+    fn new(versions:raster::contents::Versions,extent:[u32;2],idle:Arc<AtomicU64>)->Self {Self {versions,tiles:BTreeMap::new(),atlases:Vec::new(),free:BTreeSet::new(),idle,layout:Layout::of(extent)}}
     fn set_held(&mut self,atlas:usize,held:bool) {
         let Some(atlas)=self.atlases.get_mut(atlas).and_then(Option::as_mut).filter(|atlas|atlas.held!=held) else {return;};
         atlas.held=held;
@@ -113,12 +125,13 @@ impl Originals {
         self.atlases.iter().enumerate().filter(|(_,atlas)|atlas.as_ref().is_some_and(|atlas|!atlas.held)).map(|(at,_)|at)
     }
     fn release(&mut self) {for atlas in 0..self.atlases.len() {self.set_held(atlas,false);}}
-    fn hold(&mut self,needed:&BTreeSet<[u32;2]>,extent:[u32;2])->u64 {
+    fn hold(&mut self,needed:&BTreeSet<[u32;2]>)->u64 {
         let (mut held,mut missing)=(Vec::new(),BTreeMap::<u32,usize>::new());
-        for at in needed {match self.tiles.get(at) {Some(tile)=>held.push(tile.index),None=>*missing.entry(original_chunk(*at,extent)).or_default()+=1}}
+        for at in needed {match self.tiles.get(at) {Some(tile)=>held.push(tile.index),None=>*missing.entry(self.layout.chunk(*at)).or_default()+=1}}
         let mut unplaced=Vec::new();
+        let span=self.layout.chunk_tiles();
         for (chunk,count) in missing {
-            let reused=self.free.range(chunk*CHUNK_TILES..(chunk+1)*CHUNK_TILES).copied().take(count).collect::<Vec<_>>();
+            let reused=self.free.range(chunk*span..(chunk+1)*span).copied().take(count).collect::<Vec<_>>();
             unplaced.push(count-reused.len());
             held.extend(reused);
         }
@@ -275,9 +288,9 @@ pub(super) struct Pipelines {
     map_layout: wgpu::BindGroupLayout,
     color_layout: wgpu::BindGroupLayout,
     map_sources: [wgpu::BindGroupLayout; 2],
-    color_sources: wgpu::BindGroupLayout,
+    color_sources: [wgpu::BindGroupLayout; 2],
     update: [Deferred<wgpu::ComputePipeline>; 16],
-    pub reconstruct: Deferred<wgpu::ComputePipeline>,
+    pub reconstruct: [Deferred<wgpu::ComputePipeline>; 2],
     pub mips: display_mips::Pipelines,
 }
 
@@ -309,25 +322,37 @@ fn map_shader(mode: u32, analytic: bool) -> String {
     else { source }
 }
 
-pub(super) fn color_shader(device: &PipelineDevice) -> String {
+pub(super) fn color_shader(device: &PipelineDevice, count: usize) -> String {
     let packing = include_str!("liquify_map.wgsl").split("fn liquify_hash").next().unwrap();
     let mut sampling =
         "fn sample_tile(image:texture_2d_array<f32>,pixel:vec2<i32>,t:vec2<f32>,layer:i32,level:u32)->vec4<f32> {\n\
             return mix(mix(textureLoad(image,pixel,layer,i32(level)),textureLoad(image,pixel+vec2(1,0),layer,i32(level)),t.x),\n\
                 mix(textureLoad(image,pixel+vec2(0,1),layer,i32(level)),textureLoad(image,pixel+vec2(1,1),layer,i32(level)),t.x),t.y);\n}\n".to_string();
     sampling += "fn sample_source(index:u32,pixel:vec2<i32>,t:vec2<f32>,layer:i32,level:u32)->vec4<f32> { switch index {\n";
-    for i in 0..ORIGINAL_BINDINGS {
+    for i in 0..count {
         sampling += &format!("case {i}u: {{return sample_tile(source_{i},pixel,t,layer,level);}}\n");
     }
     sampling += "default: {return vec4(0.);} } }\n";
+    sampling += &format!("@group(2) @binding({count}) var<uniform> sources: Sources;\n@group(2) @binding({}) var field: texture_2d<u32>;\n", count + 1);
+    sampling += &if count == WHOLE_BINDINGS {
+        "fn previous_at(pixel:vec2<i32>)->vec4<f32> {return vec4(0.);}\n\
+         fn original_at(pixel:vec2<i32>,level:i32)->vec4<f32> {return load_source(sources.pages[3].x,pixel,i32(sources.pages[3].y),level);}\n".to_string()
+    } else {
+        format!("@group(2) @binding({}) var previous_color: texture_2d<f32>;\n@group(2) @binding({}) var original_color: texture_2d<f32>;\n\
+            fn previous_at(pixel:vec2<i32>)->vec4<f32> {{return textureLoad(previous_color,pixel,0);}}\n\
+            fn original_at(pixel:vec2<i32>,level:i32)->vec4<f32> {{return textureLoad(original_color,pixel,level);}}\n", count + 2, count + 3)
+    };
     compose_wgsl(&[&working_color::shader(device), include_str!("brush_types.wgsl"), packing,
-        &source_bindings(false, ORIGINAL_BINDINGS), &sampling, include_str!("liquify_reconstruct.wgsl")]).into_owned()
+        &source_bindings(false, count), &sampling, include_str!("liquify_reconstruct.wgsl")]).into_owned()
 }
 
 impl Pipelines {
     pub fn update(&self, style: &layer_render::DabStyle) -> &Deferred<wgpu::ComputePipeline> {
         let analytic = matches!(style.tip, BrushTip::AnalyticEllipse) && style.grain.is_none() && style.selection.is_none();
         &self.update[liquify_mode_code(style.deform.mode) as usize * 2 + usize::from(analytic)]
+    }
+    pub fn reconstruct_for(&self, extent: [u32; 2]) -> &Deferred<wgpu::ComputePipeline> {
+        &self.reconstruct[usize::from(Layout::of(extent).whole)]
     }
 
     pub fn new(r: &WgpuRasterizer) -> Self {
@@ -349,15 +374,18 @@ impl Pipelines {
             entries.push(bindings::buffer(count, stages, wgpu::BufferBindingType::Uniform, true, NonZeroU64::new(160)));
             entries.push(bindings::texture_of(count + 1, stages, wgpu::TextureSampleType::Uint, wgpu::TextureViewDimension::D2));
             if !integer {
-                entries.extend([bindings::texture(count + 2, stages, false), bindings::texture(count + 3, stages, false)]);
-                entries.push(bindings::buffer(count + 4, stages, wgpu::BufferBindingType::Storage { read_only: true }, false, None));
-                entries.push(bindings::texture(count + 5, stages, false));
-                entries.push(bindings::texture_of(count + 6, stages, wgpu::TextureSampleType::Uint, wgpu::TextureViewDimension::D2));
+                let next = if count == WHOLE_BINDINGS as u32 { count + 2 } else {
+                    entries.extend([bindings::texture(count + 2, stages, false), bindings::texture(count + 3, stages, false)]);
+                    count + 4
+                };
+                entries.push(bindings::buffer(next, stages, wgpu::BufferBindingType::Storage { read_only: true }, false, None));
+                entries.push(bindings::texture(next + 1, stages, false));
+                entries.push(bindings::texture_of(next + 2, stages, wgpu::TextureSampleType::Uint, wgpu::TextureViewDimension::D2));
             }
             bindings::layout(&r.device, "liquify sparse inputs", &entries)
         };
         let map_sources = [9, 12].map(|count| inputs(true, count));
-        let color_sources = inputs(false, ORIGINAL_BINDINGS as u32);
+        let color_sources = [ORIGINAL_BINDINGS, WHOLE_BINDINGS].map(|count| inputs(false, count as u32));
         let make = |label, output, inputs, code: String, entry, textures| {
             let mut layouts = vec![Some(output), Some(&r.target_layout), Some(inputs)];
             if textures { layouts.push(Some(&r.advanced_texture_layout)); }
@@ -369,7 +397,8 @@ impl Pipelines {
         };
         let update = std::array::from_fn(|i| make("liquify compose coordinates", &map_layout, &map_sources[usize::from(map_bindings(i as u32 / 2) == 12)],
             map_shader(i as u32 / 2, i % 2 == 1), "update_map", true));
-        let reconstruct = make("liquify reconstruct original", &color_layout, &color_sources, color_shader(&r.device), "reconstruct", false);
+        let reconstruct = std::array::from_fn(|i| make("liquify reconstruct original", &color_layout, &color_sources[i],
+            color_shader(&r.device, [ORIGINAL_BINDINGS, WHOLE_BINDINGS][i]), "reconstruct", false));
         Self { map_layout, color_layout, map_sources, color_sources, update, reconstruct,
             mips: display_mips::Pipelines::new(&r.device) }
     }
@@ -474,22 +503,22 @@ impl Liquify {
             if !preview {session.fields.extend(outputs);}
         }
         let mut demand=OriginalDemand::default();
-        let mut shared:Vec<(Arc<Mutex<Originals>>,BTreeSet<[u32;2]>,[u32;2])>=Vec::new();
+        let mut shared:Vec<(Arc<Mutex<Originals>>,BTreeSet<[u32;2]>)>=Vec::new();
         for (target,session) in sessions {
-            let extent=packet.scene.target_extent(target);
             let Some(originals)=session.originals else {
+                let layout=Layout::of(packet.scene.target_extent(target));
                 let mut chunks=BTreeMap::<u32,usize>::new();
-                for at in &session.needed {*chunks.entry(original_chunk(*at,extent)).or_default()+=1;}
+                for at in &session.needed {*chunks.entry(layout.chunk(*at)).or_default()+=1;}
                 demand.atlases+=new_atlases(chunks.into_values());
                 continue;
             };
             if let Some(source)=session.source.filter(|_|!session.staged.is_empty()) {demand.staged.push((target,source,originals.clone(),session.staged.into_iter().collect()));}
-            match shared.iter_mut().find(|(known,..)|Arc::ptr_eq(known,&originals)) {
-                Some((_,needed,_))=>needed.extend(session.needed),
-                None=>shared.push((originals,session.needed,extent)),
+            match shared.iter_mut().find(|(known,_)|Arc::ptr_eq(known,&originals)) {
+                Some((_,needed))=>needed.extend(session.needed),
+                None=>shared.push((originals,session.needed)),
             }
         }
-        for (originals,needed,extent) in shared {demand.atlases+=originals.lock().expect("liquify sources").hold(&needed,extent);}
+        for (originals,needed) in shared {demand.atlases+=originals.lock().expect("liquify sources").hold(&needed);}
         demand
     }
 
@@ -583,14 +612,13 @@ impl Liquify {
             }
             None
         };
-        let extent=r.target_extent(target);
         let mut room=r.original_room();
-        let stored=Self::store(r,&mut room,&mut stroke.field.originals.lock().expect("liquify sources"),coordinate,extent,capture,prior,source,encoder,pending,writes);
+        let stored=Self::store(r,&mut room,&mut stroke.field.originals.lock().expect("liquify sources"),coordinate,capture,prior,source,encoder,pending,writes);
         r.keep_original_room(room);
         stored
     }
 
-    pub(crate) fn restore_original(r:&WgpuRasterizer,originals:&Mutex<Originals>,room:&mut Option<crate::residency::Reservation>,coordinate:[u32;2],extent:[u32;2],
+    pub(crate) fn restore_original(r:&WgpuRasterizer,originals:&Mutex<Originals>,room:&mut Option<crate::residency::Reservation>,coordinate:[u32;2],
         version:&layer_core::raster::ContentVersion,source:source_access::Sampled<source_access::RawTile>,encoder:&mut submission::CommandEncoder)->Result<(),GpuRasterError> {
         let mut originals=originals.lock().expect("liquify sources");
         let capture=originals.versions.tile(layer_core::raster::RasterPlane::Color,coordinate);
@@ -598,19 +626,19 @@ impl Liquify {
         if originals.readable(coordinate) {return Ok(());}
         let prior=originals.tiles.get(&coordinate).cloned();
         let (mut pending,mut writes)=(Vec::new(),Vec::new());
-        Self::store(r,room,&mut originals,coordinate,extent,capture,prior,Some(source),encoder,&mut pending,&mut writes)?;
+        Self::store(r,room,&mut originals,coordinate,capture,prior,Some(source),encoder,&mut pending,&mut writes)?;
         display_mips::CompleteUpdates::flush_all(&mut pending,encoder);
         let actual=encoder.submission();
         for (_,encoding) in writes {encoding.publish(&actual);}
         Ok(())
     }
 
-    fn store(r:&WgpuRasterizer,room:&mut Option<crate::residency::Reservation>,originals:&mut Originals,coordinate:[u32;2],extent:[u32;2],
+    fn store(r:&WgpuRasterizer,room:&mut Option<crate::residency::Reservation>,originals:&mut Originals,coordinate:[u32;2],
         capture:layer_core::raster::ContentVersion,prior:Option<Arc<OriginalTile>>,source:Option<source_access::Sampled<source_access::RawTile>>,encoder:&mut submission::CommandEncoder,
         pending:&mut Vec<display_mips::CompleteUpdates>,writes:&mut Vec<(Arc<OriginalTile>,resident::Encoding)>)->Result<Arc<OriginalTile>,GpuRasterError> {
         let receipt=encoder.submission();
-        let chunk=original_chunk(coordinate,extent);
-        let layers=chunk*CHUNK_TILES..(chunk+1)*CHUNK_TILES;
+        let (chunk,span,bindings)=(originals.layout.chunk(coordinate),originals.layout.chunk_tiles(),originals.layout.bindings());
+        let layers=chunk*span..(chunk+1)*span;
         if prior.is_none() && originals.free.range(layers.clone()).next().is_none() {
             crate::prepared_raster_output(room.as_mut().and_then(|room|room.split(ORIGINAL_ATLAS_BYTES)).map(drop))?;
             let texture=r.device.create_texture(&wgpu::TextureDescriptor {
@@ -620,8 +648,8 @@ impl Liquify {
                 view_formats:&[],
             });
             let view=texture.create_view(&wgpu::TextureViewDescriptor {dimension:Some(wgpu::TextureViewDimension::D2Array),..Default::default()});
-            let first=chunk as usize*ORIGINAL_BINDINGS;
-            let atlas=(first..first+ORIGINAL_BINDINGS).find(|at|originals.atlases.get(*at).is_none_or(Option::is_none))
+            let first=chunk as usize*bindings;
+            let atlas=(first..first+bindings).find(|at|originals.atlases.get(*at).is_none_or(Option::is_none))
                 .ok_or(GpuRasterError::Invariant("Liquify original chunk is full"))?;
             if originals.atlases.len()<=atlas {originals.atlases.resize_with(atlas+1,||None);}
             originals.atlases[atlas]=Some(OriginalAtlas {id:NEXT_RESOURCE.fetch_add(1,Ordering::Relaxed),held:true,_charge:r.raster_tiers.paint.charge(texture_bytes(&texture)),texture,view});
@@ -684,9 +712,10 @@ impl Liquify {
     }
 
     fn dispatch(&self, r: &mut WgpuRasterizer, encoder: &mut submission::CommandEncoder, batch_index: usize,
-        batch: &DabBatch, passes: &[Vec<Dispatch>], map: bool) {
+        batch: &DabBatch, passes: &[Vec<Dispatch>], reconstruct: Option<Layout>) {
         let count = passes.iter().map(Vec::len).sum::<usize>();
         if count == 0 { return; }
+        let map = reconstruct.is_none();
         let phase = if map { 16 } else { 18 };
         let measured = r.telemetry.phase_begin(phase, &r.device, &r.queue, encoder);
         performance_trace::counter(if map { c"Capy Liquify map dispatches" } else { c"Capy Liquify reconstruct dispatches" }, count as u64);
@@ -694,7 +723,7 @@ impl Liquify {
         let size = PAGE_SIZE / r.dry_material_block(batch);
         for jobs in passes.iter().filter(|jobs| !jobs.is_empty()) {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("liquify sparse tiles"), timestamp_writes: None });
-            pass.set_pipeline(if map { self.pipelines.update(&batch.style) } else { &self.pipelines.reconstruct });
+            pass.set_pipeline(reconstruct.map_or_else(|| self.pipelines.update(&batch.style), |layout| &self.pipelines.reconstruct[usize::from(layout.whole)]));
             if map {
                 let key = WgpuRasterizer::texture_set_key(&batch.style);
                 pass.set_bind_group(3, &r.texture_sets.iter().find(|t| t.key == key).unwrap().bind_group, &[]);
@@ -733,7 +762,7 @@ impl Liquify {
             let owner=original_scene.view().source_owner(batch.target).ok_or(GpuRasterError::MissingPaintLayer(batch.target))?;
             original_scene.scope=SceneScope::Members(vec![owner].into());
             let originals=match previous {Some(field)=>field.originals.clone(),None=> {
-                let originals=Arc::new(Mutex::new(Originals::new(r.raster_versions(original_scene.view(),batch.target)?,self.idle.clone())));
+                let originals=Arc::new(Mutex::new(Originals::new(r.raster_versions(original_scene.view(),batch.target)?,context.target_extent,self.idle.clone())));
                 self.sessions.retain(|session|session.strong_count()!=0);
                 self.sessions.push(Arc::downgrade(&originals));
                 originals
@@ -817,7 +846,7 @@ impl Liquify {
             outputs.push((tile.coordinate, output));
         }
         #[cfg(test)] if preview {for (coordinate,_) in &outputs {crate::test_support::record_liquify_tile(crate::test_support::LiquifyVisit::Preview,*coordinate);}}
-        self.dispatch(r, encoder, batch_index, batch, &[dispatches], true);
+        self.dispatch(r, encoder, batch_index, batch, &[dispatches], None);
         let actual=encoder.submission();
         for publication in map_publications {publication.publish(&actual);}
         let mut color_bounds = BTreeMap::new();
@@ -869,6 +898,7 @@ impl Liquify {
             }
         }
         let originals = stroke.field.originals.lock().expect("liquify sources");
+        let bindings = originals.layout.bindings();
         let grid = extent.map(|n| n.div_ceil(PAGE_SIZE));
         let mut indices = vec![0u32; (4 + (grid[0] * grid[1]) as usize).max(8)];
         indices[..2].copy_from_slice(&grid);
@@ -886,7 +916,7 @@ impl Liquify {
                 if let Some(tile)=originals.tiles.get(&at) {
                     let read=tile.read(&receipt)?;complete&=read.complete();
                     if originals.atlases[tile.index as usize/ORIGINAL_LAYERS as usize].as_ref().is_none_or(|atlas|read.value().texture.raw()!=&atlas.texture) {return Err(GpuRasterError::InvalidExtent);}
-                    chunks.insert(tile.index as usize/(ORIGINAL_BINDINGS*ORIGINAL_LAYERS as usize));
+                    chunks.insert(originals.layout.chunk_of(tile.index));
                 }
             }
             Ok((chunks.into_iter().collect::<Vec<_>>(),complete))
@@ -903,14 +933,16 @@ impl Liquify {
             let prior_view=stroke.colored(coordinate).and_then(|tile|tile.read(&receipt).ok()).map(|read|read.value().view.clone());
             let field_view=field.read(&receipt)?.value().view.clone();
             let local = color_bounds.get(coordinate).copied().unwrap_or_else(|| PixelRect::full([PAGE_SIZE; 2]));
+            let original=originals.tiles.get(coordinate).ok_or(GpuRasterError::Invariant("Liquify original is not prepared"))?;
             let first_record = r.prepare_records(chunks.iter().enumerate().map(|(index, &chunk)| {
-                let count = (originals.atlases.len() - chunk * ORIGINAL_BINDINGS).min(ORIGINAL_BINDINGS);
+                let count = (originals.atlases.len() - chunk * bindings).min(bindings);
                 material_sources::record([count as u32, u32::from(index > 0), u32::from(index + 1 == chunks.len()), if preview { 4 } else { 16 }],
-                    [[(chunk * ORIGINAL_BINDINGS) as u32, ORIGINAL_LAYERS, u32::from(preview), u32::from(prior_view.is_some())],
+                    [[(chunk * bindings) as u32, ORIGINAL_LAYERS, u32::from(preview), u32::from(prior_view.is_some())],
                         [local.min_x(), local.min_y(), local.max_x(), local.max_y()],
-                        [field.bounds.min.x.to_bits(), field.bounds.min.y.to_bits(), field.bounds.max.x.to_bits(), field.bounds.max.y.to_bits()]])
+                        [field.bounds.min.x.to_bits(), field.bounds.min.y.to_bits(), field.bounds.max.x.to_bits(), field.bounds.max.y.to_bits()],
+                        [original.index / ORIGINAL_LAYERS, original.index % ORIGINAL_LAYERS, 0, 0]])
             }), encoder)?;
-            let original_view=source_access::Sampled::read(&originals.tiles.get(coordinate).ok_or(GpuRasterError::Invariant("Liquify original is not prepared"))?.read(&receipt)?).take(&mut complete);
+            let original_view=source_access::Sampled::read(&original.read(&receipt)?).take(&mut complete);
             r.accepted_raster_output(batch.target,if preview {RasterOutput::PreviewColor(*coordinate)}else {RasterOutput::Color(*coordinate)})?;
             let preview_version=if preview {Some(r.preview_version(batch.target,layer_core::raster::RasterPlane::Color,*coordinate,scene::PreviewStage::AfterBatch(batch_index))?)}else {None};
             let intent=match &preview_version {Some(version)=>version.input().clone(),None=>r.raster_intent(batch.target,layer_core::raster::RasterPlane::Color,*coordinate)?};
@@ -944,18 +976,19 @@ impl Liquify {
                     wgpu::BindingResource::Buffer(wgpu::BufferBinding {buffer: &r.style_buffer, offset: 0, size: NonZeroU64::new(mem::size_of::<StyleGpu>() as u64)}),
                     wgpu::BindingResource::TextureView(output_view),
                 ]);
-                let inputs = bindings::group(&r.device, "liquify original inputs", &self.pipelines.color_sources,
-                    (0..ORIGINAL_BINDINGS).map(|i| wgpu::BindingResource::TextureView(&originals.atlases.get(chunk * ORIGINAL_BINDINGS + i).and_then(Option::as_ref).unwrap_or(resident).view))
-                        .chain([wgpu::BindingResource::Buffer(r.material_records.binding()), wgpu::BindingResource::TextureView(&field_view),
-                            wgpu::BindingResource::TextureView(previous),
-                            wgpu::BindingResource::TextureView(&original_view), index_buffer.as_entire_binding(),
+                let partial = [wgpu::BindingResource::TextureView(previous), wgpu::BindingResource::TextureView(&original_view)];
+                let inputs = bindings::group(&r.device, "liquify original inputs", &self.pipelines.color_sources[usize::from(originals.layout.whole)],
+                    (0..bindings).map(|i| wgpu::BindingResource::TextureView(&originals.atlases.get(chunk * bindings + i).and_then(Option::as_ref).unwrap_or(resident).view))
+                        .chain([wgpu::BindingResource::Buffer(r.material_records.binding()), wgpu::BindingResource::TextureView(&field_view)])
+                        .chain(partial.into_iter().filter(|_| !originals.layout.whole))
+                        .chain([index_buffer.as_entire_binding(),
                             wgpu::BindingResource::TextureView(current), wgpu::BindingResource::TextureView(prior_view.as_ref().unwrap_or(&self.empty.view))]));
                 passes[round + index].push(Dispatch { output: output_binding, sources: inputs, coordinate: *coordinate,
                     record: r.material_records.offset(first_record + index) });
             }
             used += partials_of(source);
         }
-        self.dispatch(r, encoder, batch_index, batch, &passes, false);
+        self.dispatch(r, encoder, batch_index, batch, &passes, Some(originals.layout));
         let actual=encoder.submission();
         r.publish_material(batch,publications.into_iter().map(|publication|publication.encoded(&actual)).collect())?;
         drop(originals);
@@ -1032,7 +1065,7 @@ mod publication_tests {
         let encoding=write.encoded(tile.capture.clone());
         producer.submit(&r.queue);encoding.publish(&receipt);
         let field=||Field {content:layer_core::raster::ContentName::fresh(),device:(*r.device).clone(),
-            tiles:BTreeMap::from([([0,0],tile.clone())]),originals:Arc::new(Mutex::new(Originals::new(versions.clone(),Default::default())))};
+            tiles:BTreeMap::from([([0,0],tile.clone())]),originals:Arc::new(Mutex::new(Originals::new(versions.clone(),extent,Default::default())))};
         let source=placement::paint(&doc);
         let previous=Arc::new(layer_core::liquify::State::new(original.clone(),Arc::new(field()),source,false));
         let mut batch=crate::test_support::dab_batch(target,preset_style(layer_core::DefaultBrushPreset::LiquifyPush),layer_core::Rect::from_extent(extent));

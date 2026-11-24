@@ -324,7 +324,8 @@ impl Needs {
         if mask { return; }
         if style.execution == BrushExecution::Liquify {
             let pipelines = r.recipes.liquify.get().unwrap();
-            self.compute.extend([pipelines.reconstruct.clone(), pipelines.mips.reduce.clone(), pipelines.mips.fused_reduce.clone()]);
+            let reconstruct = style.liquify.as_ref().map_or(&pipelines.reconstruct[..], |context| std::slice::from_ref(pipelines.reconstruct_for(context.current.domain)));
+            self.compute.extend(reconstruct.iter().cloned().chain([pipelines.mips.reduce.clone(), pipelines.mips.fused_reduce.clone()]));
             return;
         }
         let plan = BrushPassPlan::for_device(style, &r.device);

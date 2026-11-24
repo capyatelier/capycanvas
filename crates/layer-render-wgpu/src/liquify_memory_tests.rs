@@ -303,14 +303,36 @@ fn drag<T>(extent: [u32; 2], scale: f32, start: [f32; 2], mut frame: impl FnMut(
 
 #[test]
 fn a_fit_drag_across_original_chunks_reconstructs_no_tile_that_waits_on_another_in_its_pass() {
-    let frames = drag([1024, 3072], 0.25, [200., 2750.], |r, submit| crate::test_support::liquify_writes(|| submit(r)).1);
+    let frames = drag([4608, 3072], 0.25, [200., 2750.], |r, submit| crate::test_support::liquify_writes(|| submit(r)).1);
     assert!(frames.iter().any(|writes| writes.iter().any(|(_, _, previous)| writes.iter().any(|(_, written, _)| written == previous))),
-        "the drag across page row 11 reconstructs tiles from two chunks of originals");
+        "the drag across page row 11 of a 216-page target reconstructs tiles from two chunks of originals");
     for (frame, writes) in frames.iter().enumerate() {
         for (pass, written, _) in writes {
             assert!(writes.iter().filter(|(other, again, _)| other == pass && again == written).count() == 1
                 && writes.iter().all(|(other, _, previous)| other != pass || previous != written),
                 "frame {frame}: reconstruct pass {pass:?} writes a surface that another dispatch of the same pass writes or reads");
+        }
+    }
+}
+
+#[test]
+fn a_fit_drag_across_page_row_11_of_a_204_page_target_reconstructs_each_destination_in_one_dispatch() {
+    const EXTENT: [u32; 2] = [4352, 3072];
+    let frames = drag(EXTENT, 0.25, [200., 2750.], |r, submit| {
+        let writes = crate::test_support::liquify_writes(|| submit(r)).1;
+        let crossed = r.liquify.as_ref().unwrap().strokes.values().flat_map(|stroke| stroke.field.tiles.values()).any(|tile| {
+            let rows = page_coordinates(tile.source_bounds(EXTENT, true)).map(|[_, y]| y).collect::<BTreeSet<_>>();
+            rows.contains(&10) && rows.contains(&11)
+        });
+        (writes, crossed)
+    });
+    assert!(frames.iter().any(|(_, crossed)| *crossed), "the drag's source regions span page rows 10 and 11");
+    assert!(frames.iter().any(|(writes, _)| !writes.is_empty()), "the drag reconstructs color");
+    for (frame, (writes, _)) in frames.iter().enumerate() {
+        for (at, (_, written, previous)) in writes.iter().enumerate() {
+            assert!(writes.iter().enumerate().all(|(other, (_, again, _))| other == at || again != written)
+                && writes.iter().all(|(_, earlier, _)| earlier != previous),
+                "frame {frame}: a destination reconstructs in more than one dispatch or from a partial sum");
         }
     }
 }

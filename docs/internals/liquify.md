@@ -575,8 +575,12 @@ its field the same way; accept it rather than restrict these tools.
   the more expensive traces, while the smaller layout reduces lookup cost for
   the other modes. The prior map and three brush textures keep both layouts
   within the portable limit of sixteen sampled textures. Original pixels
-  occupy 16-layer texture arrays, with a sparse tile-index buffer.
-  Reconstruction binds at most eleven arrays per source chunk. Large sources use
+  occupy 16-layer texture arrays, with a sparse tile-index buffer. A target of
+  at most 208 pages binds all its originals, up to thirteen arrays, and
+  reconstructs each tile in one dispatch that reads the tile's own original
+  from its array layer. Above 208 pages reconstruction binds at most eleven
+  arrays per source chunk, with the previous sum and the tile's original as the
+  other two textures. Large sources use
   additional chunks, each in its own pass; every tile accumulates their disjoint
   contributions in its own scratch texture, so no dispatch in a pass waits for
   another. The scratch pool holds two pages' bytes at the preview's block size,
