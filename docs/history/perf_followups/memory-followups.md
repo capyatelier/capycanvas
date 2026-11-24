@@ -255,3 +255,13 @@ against fixed shares (a third for decode, an eighth for the source).
 - **Clone on the Galaxy Tab S7** raised live Vulkan by about 683 MB, most of it
   RasterPool and Scene rather than retouch pages; the RasterPool part did not
   reproduce without a window.
+
+### Liquify on the Galaxy Note 10
+
+On `80168fc83`, lmkd killed the app on the Galaxy Note 10 (SM-N970U1) during
+Liquify on a 12 MP photo in a cold pass: 164 MB RSS plus 209 MB swap, with OS
+available memory down to 291 MB against a minimum of 864 MB on 1.0.15. An earlier
+build ran the same step without a kill. It has not been rerun on the phone since
+the Liquify originals admission, the import changes and the retouch charge landed.
+Rerun the cold pass on the phone; if it still dies, trace app PSS and GPU during
+Liquify and bound the step to the device.
