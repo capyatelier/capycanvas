@@ -2832,6 +2832,10 @@ pub(super) mod query_tests {
             .chain([&renderer.scene_pipelines.scale.output(format).project,&renderer.scene_pipelines.scale.full.reduce,&renderer.scene_pipelines.constant.2,&renderer.scene_pipelines.fold.pipeline]))).unwrap();
         let mut encoder=submission::CommandEncoder::new(&renderer.device,&Default::default());
         for coordinate in page_coordinates(PixelRect::full(extent)) {
+            if renderer.source_tiles.borrow().uploads_full(crate::residency::Class::Visible) {
+                let uploaded=std::mem::replace(&mut encoder,submission::CommandEncoder::new(&renderer.device,&Default::default()));
+                renderer.uploads.finish(&uploaded);uploaded.submit(&renderer.queue);crate::test_support::complete(&renderer);
+            }
             let pixels=crate::prepare_image_tile(source,coordinate,renderer.device.working_space(),&renderer.device.source_samples,None).unwrap();
             Scene::decode_prepared_for(&mut renderer,&mut encoder,source,coordinate,pixels,
                 crate::scene::sources::SourceUse::Exact,crate::residency::Class::Visible).unwrap();
