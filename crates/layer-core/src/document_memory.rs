@@ -1,36 +1,43 @@
-use crate::{MemoryBudget, MemoryClass, MemoryOwner, MemoryOwnerKind, MemoryReport, MemoryReservation};
-use std::sync::{Arc, Weak, Mutex, atomic::{AtomicBool, AtomicU64, Ordering}};
+use crate::{MemoryBudget, MemoryClass, MemoryOwner, MemoryOwnerKind, MemoryReport, MemoryReservation, raster_storage::{CONTENT_TREE_METADATA, RetainedTiles}};
+use std::{collections::{HashMap, hash_map::Entry}, sync::{Arc, Weak, Mutex, atomic::{AtomicBool, AtomicU64, Ordering}}};
 
 #[derive(Clone)]
 pub struct DocumentMemory {
     pub(crate) owner: Arc<Owner>,
     pub(crate) reservation: Option<MemoryReservation>,
-    preview_inventory: Option<Arc<crate::raster_storage::RetainedTiles>>,
+    preview_inventory: Option<Arc<RetainedTiles>>,
     _capture: Option<Arc<CaptureMemory>>,
 }
-struct CaptureMemory { inventory: Arc<crate::raster_storage::RetainedTiles>, owner: Weak<Owner>, reservation: Option<MemoryReservation> }
+struct CaptureMemory { inventory: Arc<RetainedTiles>, owner: Weak<Owner>, reservation: Option<MemoryReservation> }
 impl Drop for CaptureMemory {
     fn drop(&mut self) {
         if let Some(owner)=self.owner.upgrade() {
             let current=owner.inventories.lock().unwrap().current.clone();
-            if owner.parked.load(Ordering::Relaxed) || !Arc::ptr_eq(&self.inventory,&current) { owner.refresh(); }
+            if !Arc::ptr_eq(&self.inventory,&current) { owner.refresh(); }
         }
     }
 }
 #[derive(Default)]
-struct Inventories { current: Arc<crate::raster_storage::RetainedTiles>, captures: Vec<Weak<CaptureMemory>> }
+struct Inventories { current: Arc<RetainedTiles>, captures: Vec<Weak<CaptureMemory>>, reservation: Option<MemoryReservation>, ticket: u64 }
+struct Snapshot { ticket: u64, current: Arc<RetainedTiles>, captures: Vec<Arc<CaptureMemory>>, reservation: Option<MemoryReservation> }
+#[derive(Clone, Copy, Default)]
+struct Classification { authored: u64, history: u64, authored_metadata: u64, history_metadata: u64, captured: u64 }
+#[derive(Default)]
+struct Published { ticket: u64, classification: Classification, parked: bool }
+impl Published {
+    fn rows(&self) -> [MemoryReport; 2] {
+        let Classification {authored,history,authored_metadata,history_metadata,captured}=self.classification;
+        let rows=if self.parked {[authored_metadata.saturating_add(captured),history_metadata]} else {[authored_metadata.saturating_add(authored),history_metadata.saturating_add(history)]};
+        rows.map(|bytes|MemoryReport {ram_bytes:bytes,pinned_ram_bytes:bytes,..Default::default()})
+    }
+}
 pub(crate) struct Owner {
     storage_identity:u64,
     inventories: Mutex<Inventories>,
-    captured_resident: AtomicU64,
+    published: Mutex<Published>,
     memory: MemoryOwner,
     history: MemoryOwner,
     budget: MemoryBudget,
-    resident: AtomicU64,
-    history_resident: AtomicU64,
-    metadata: AtomicU64,
-    history_metadata: AtomicU64,
-    parked: AtomicBool,
     initialized: AtomicBool,
     package:AtomicBool,package_pending:AtomicBool,presented:AtomicBool,
     storage:Mutex<Option<crate::package::session_store::DrawingStore>>,
@@ -44,9 +51,9 @@ impl Default for DocumentMemory {
 impl DocumentMemory {
     pub fn new(budget: MemoryBudget, reservation: Option<MemoryReservation>) -> Self {
         static NEXT:AtomicU64=AtomicU64::new(1);
-        Self { _capture: None, owner: Arc::new(Owner {storage_identity:NEXT.fetch_add(1,Ordering::Relaxed), inventories:Mutex::new(Inventories::default()), captured_resident:AtomicU64::new(0), memory: budget.register_owner(MemoryOwnerKind::Authored, MemoryClass::Pinned, None),
+        Self { _capture: None, owner: Arc::new(Owner {storage_identity:NEXT.fetch_add(1,Ordering::Relaxed), inventories:Default::default(), published:Default::default(), memory: budget.register_owner(MemoryOwnerKind::Authored, MemoryClass::Pinned, None),
             history: budget.register_owner(MemoryOwnerKind::History, MemoryClass::Pinned, None), budget,
-            resident: AtomicU64::new(0), history_resident: AtomicU64::new(0), metadata: AtomicU64::new(0), history_metadata: AtomicU64::new(0), parked: AtomicBool::new(false), initialized: AtomicBool::new(false),package:AtomicBool::new(false),package_pending:AtomicBool::new(false),presented:AtomicBool::new(false),storage:Default::default() }), reservation, preview_inventory: None }
+            initialized: AtomicBool::new(false),package:AtomicBool::new(false),package_pending:AtomicBool::new(false),presented:AtomicBool::new(false),storage:Default::default() }), reservation, preview_inventory: None }
     }
     pub fn package_failure(&self)->Option<String> {
         if !self.has_package() {return None;}
@@ -56,7 +63,7 @@ impl DocumentMemory {
     pub fn package_pending(&self)->bool {self.owner.package_pending.load(Ordering::Acquire)}
     pub fn has_package(&self)->bool {self.owner.package.load(Ordering::Acquire)}
     pub fn presented(&self) {self.owner.presented.store(true,Ordering::Release);}
-    pub fn package_inventory(&self,awaited:bool)->Option<Arc<crate::raster_storage::RetainedTiles>> {
+    pub fn package_inventory(&self,awaited:bool)->Option<Arc<RetainedTiles>> {
         (self.package_pending() && (awaited || self.owner.presented.load(Ordering::Acquire))).then(||self.owner.inventories.lock().unwrap().current.clone())
     }
     pub fn storage_identity(&self)->u64 {self.owner.storage_identity}
@@ -85,7 +92,6 @@ impl DocumentMemory {
         let capture=Arc::new(CaptureMemory {inventory,owner:self.weak(),reservation:self.reservation.clone()});
         inventories.captures.push(Arc::downgrade(&capture));
         drop(inventories);
-        if self.owner.parked.load(Ordering::Relaxed) {self.owner.refresh();}
         Self {owner:self.owner.clone(),reservation:self.reservation.clone(),preview_inventory:self.preview_inventory.clone(),_capture:Some(capture)}
     }
     pub(crate) fn capture(&self, document: &crate::Document) -> Self {
@@ -95,73 +101,76 @@ impl DocumentMemory {
         self.owner.refresh();
         Self {owner:self.owner.clone(),reservation:self.reservation.clone(),preview_inventory:self.preview_inventory.clone(),_capture:Some(capture)}
     }
-    pub(crate) fn cache_preview(&mut self, inventory: crate::raster_storage::RetainedTiles) {
+    pub(crate) fn cache_preview(&mut self, inventory: RetainedTiles) {
         self.preview_inventory=Some(Arc::new(inventory));
     }
-    pub(crate) fn report(&mut self, inventory: crate::raster_storage::RetainedTiles, force: bool) {
+    pub(crate) fn report(&mut self, inventory: RetainedTiles) {
         if !self.owner.initialized.load(Ordering::Relaxed) && inventory.try_blobs().ok().flatten().is_some_and(|blobs|blobs.iter().any(|blob|blob.has_package_origin())) {self.owner.package.store(true,Ordering::Release);self.owner.package_pending.store(true,Ordering::Release);}
-        self.owner.inventories.lock().unwrap().current=Arc::new(inventory);
+        let reservation=self.reservation.take().filter(MemoryReservation::active);
+        let (snapshot,_replaced)=self.owner.snapshot(|inventories|(std::mem::replace(&mut inventories.current,Arc::new(inventory)),
+            reservation.and_then(|reservation|inventories.reservation.replace(reservation))));
         self.preview_inventory=None;
-        let (parts,_captures)=self.owner.parts(true);
-        let fields=[&self.owner.resident,&self.owner.history_resident,&self.owner.metadata,&self.owner.history_metadata];
-        let changed=fields.iter().zip(parts).fold(0u64,|bytes,(field,value)|bytes.saturating_add(field.load(Ordering::Relaxed).abs_diff(value)));
-        if !force && self.reservation.is_none() && changed<1024*1024 {return;}
-        for (field,value) in fields.into_iter().zip(parts) {field.store(value,Ordering::Relaxed);}
         self.owner.initialized.store(true,Ordering::Relaxed);
-        let [authored,history]=self.owner.reports();
-        if let Some(reservation)=self.reservation.take().filter(|reservation|reservation.active()) {
-            self.owner.history.publish(history);
-            reservation.commit(&self.owner.memory,authored).expect("reservation and document share a budget");
-        } else if force {
-            self.owner.memory.report(authored);self.owner.history.report(history);
-        } else {
-            self.owner.memory.publish(authored);self.owner.history.publish(history);
-        }
+        self.owner.publish(snapshot,None);
     }
     pub(crate) fn initialized(&self) -> bool { self.owner.initialized.load(Ordering::Relaxed) }
     pub(crate) fn weak(&self) -> Weak<Owner> { Arc::downgrade(&self.owner) }
 }
 impl Owner {
-    fn parts(&self, committing: bool)->([u64;4],Vec<Arc<CaptureMemory>>) {
-        let (current,captures)={
-            let mut inventories=self.inventories.lock().unwrap();
-            inventories.captures.retain(|capture|capture.strong_count()!=0);
-            (inventories.current.clone(),inventories.captures.iter().filter_map(Weak::upgrade).collect::<Vec<_>>())
-        };
-        let mut resident=std::collections::HashMap::new();
-        let mut metadata=[0u64;2];
-        for capture in captures.iter().filter(|capture|committing || !capture.reservation.as_ref().is_some_and(MemoryReservation::active)) {
-            capture.inventory.resident_owners(&mut resident);metadata[0]=metadata[0].saturating_add(capture.inventory.metadata_bytes as u64);
+    fn snapshot<T>(&self, update: impl FnOnce(&mut Inventories)->T)->(Snapshot,T) {
+        let mut inventories=self.inventories.lock().unwrap();
+        let updated=update(&mut inventories);
+        inventories.captures.retain(|capture|capture.strong_count()!=0);
+        inventories.ticket+=1;
+        let snapshot=Snapshot {ticket:inventories.ticket,current:inventories.current.clone(),captures:inventories.captures.iter().filter_map(Weak::upgrade).collect(),
+            reservation:inventories.reservation.as_ref().filter(|reservation|reservation.active()).cloned()};
+        (snapshot,updated)
+    }
+    fn classify(snapshot:&Snapshot)->Classification {
+        let current=&snapshot.current;
+        let mut owners=HashMap::new();current.resident_owners(&mut owners);
+        let mut classification=Classification {authored_metadata:current.authored_metadata as u64,history_metadata:current.metadata_bytes.saturating_sub(current.authored_metadata) as u64,..Default::default()};
+        let mut inventories=vec![Arc::as_ptr(current)];let mut captured=HashMap::new();
+        let committed=|reservation:&MemoryReservation|!reservation.active() || snapshot.reservation.as_ref()==Some(reservation);
+        for capture in snapshot.captures.iter().filter(|capture|capture.reservation.as_ref().is_none_or(committed)) {
+            if inventories.contains(&Arc::as_ptr(&capture.inventory)) {continue;}
+            inventories.push(Arc::as_ptr(&capture.inventory));
+            capture.inventory.resident_owners(&mut captured);
+            classification.authored_metadata=classification.authored_metadata.saturating_add(capture.inventory.metadata_bytes as u64);
         }
-        self.captured_resident.store(resident.iter().filter(|((kind,_),_)|*kind!=crate::raster_storage::CONTENT_TREE_METADATA).fold(0u64,|total,(_,(bytes,_))|total.saturating_add(*bytes as u64)),Ordering::Relaxed);
-        current.resident_owners(&mut resident);
-        metadata[0]=metadata[0].saturating_add(current.authored_metadata as u64);
-        metadata[1]=current.metadata_bytes.saturating_sub(current.authored_metadata) as u64;
-        let mut parts=[0,0,metadata[0],metadata[1]];
-        for ((kind,_),(bytes,authored)) in &resident {
-            let index=usize::from(!*authored)+if *kind==crate::raster_storage::CONTENT_TREE_METADATA {2}else{0};
-            parts[index]=parts[index].saturating_add(*bytes as u64);
+        for (key,(bytes,authored)) in captured {
+            match owners.entry(key) {
+                Entry::Occupied(mut entry)=>{let (size,held)=entry.get_mut();*size=(*size).max(bytes);*held|=authored;},
+                Entry::Vacant(entry)=>{if key.0!=CONTENT_TREE_METADATA {classification.captured=classification.captured.saturating_add(bytes as u64);}entry.insert((bytes,authored));},
+            }
         }
-        (parts,captures)
+        for ((kind,_),(bytes,authored)) in owners {
+            let field=match (kind==CONTENT_TREE_METADATA,authored) {
+                (false,true)=>&mut classification.authored,(false,false)=>&mut classification.history,
+                (true,true)=>&mut classification.authored_metadata,(true,false)=>&mut classification.history_metadata,
+            };
+            *field=field.saturating_add(bytes as u64);
+        }
+        classification
+    }
+    fn publish(&self, snapshot: Snapshot, transition: Option<(bool,&MemoryOwner,MemoryReport)>) {
+        let classification=Self::classify(&snapshot);
+        let elsewhere=self.budget.transact(|ledger| {
+            if let Some(reservation)=&snapshot.reservation {ledger.commit(reservation,&self.memory).expect("reservation and document share a budget");}
+            let mut published=self.published.lock().unwrap();
+            if snapshot.ticket>published.ticket {published.ticket=snapshot.ticket;published.classification=classification;}
+            let elsewhere=transition.and_then(|(parked,tabs,report)|{published.parked=parked;ledger.report(tabs,report).err().map(|_|(tabs,report))});
+            for (owner,report) in [&self.memory,&self.history].into_iter().zip(published.rows()) {ledger.report(owner,report).expect("document rows share the document budget");}
+            elsewhere
+        });
+        if let Some((tabs,report))=elsewhere {tabs.report(report);}
     }
     pub(crate) fn refresh(&self) {
-        let (parts,_captures)=self.parts(false);
-        for (field,value) in [&self.resident,&self.history_resident,&self.metadata,&self.history_metadata].into_iter().zip(parts) {field.store(value,Ordering::Relaxed);}
-        let [authored,history]=self.reports();self.memory.publish(authored);self.history.publish(history);
+        self.publish(self.snapshot(|_|()).0,None);
     }
-    fn reports(&self)->[MemoryReport;2] {
-        let parked=self.parked.load(Ordering::Relaxed);
-        std::array::from_fn(|index|{
-            let (resident,metadata)=if index==0 {(&self.resident,&self.metadata)}else{(&self.history_resident,&self.history_metadata)};
-            let bytes=metadata.load(Ordering::Relaxed).saturating_add(if parked {if index==0 {self.captured_resident.load(Ordering::Relaxed)}else{0}}else{resident.load(Ordering::Relaxed)});
-            MemoryReport {ram_bytes:bytes,pinned_ram_bytes:bytes,..Default::default()}
-        })
-    }
-    pub(crate) fn parked(&self, parked: bool) {
-        if self.parked.swap(parked,Ordering::Relaxed)!=parked {
-            self.refresh();
-            let [authored,history]=self.reports();self.memory.report(authored);self.history.report(history);
-        }
+    pub(crate) fn park(&self, parked: bool, inventory: &RetainedTiles, tabs: &MemoryOwner, report: MemoryReport) {
+        let (snapshot,_replaced)=self.snapshot(|inventories|parked.then(||std::mem::replace(&mut inventories.current,Arc::new(inventory.clone()))));
+        self.publish(snapshot,Some((parked,tabs,report)));
     }
 }
 
@@ -178,7 +187,7 @@ impl crate::Document {
     pub fn initialize_memory(&mut self) {
         if self.memory.initialized() {return;}
         let editor=crate::Editor {document:self.clone(),undo:Vec::new(),redo:Vec::new(),checkpoint:0,next_checkpoint:1,ledger:Default::default(),memory_dirty:false,amends:Vec::new()};
-        self.memory.report(editor.retained_tiles(),true);
+        self.memory.report(editor.retained_tiles());
     }
     pub fn reserve_import(&mut self) -> Result<(), String> {
         let editor = crate::Editor { document: self.clone(), undo: Vec::new(), redo: Vec::new(), checkpoint: 0, next_checkpoint: 1, ledger: Default::default(), memory_dirty: false, amends: Vec::new() };

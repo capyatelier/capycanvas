@@ -24,9 +24,8 @@ impl Pressure {
         if let Some(wait)=wait {wait.complete(result);}
         wake.inspect(|wake|wake()).is_some()
     }
-    fn publish(&self,resident:usize) {
-        assert!(self.owner.publish(MemoryReport {ram_bytes:resident as u64,demand_ram_bytes:resident as u64,..Default::default()}));
-    }
+    fn report(resident:usize)->MemoryReport {MemoryReport {ram_bytes:resident as u64,demand_ram_bytes:resident as u64,..Default::default()}}
+    fn publish(&self,resident:usize) {assert!(self.owner.publish(Self::report(resident)));}
 }
 
 impl StoragePressure {
@@ -84,8 +83,9 @@ impl StoragePressure {
     pub fn storage_completed(&self,result:Result<(),String>) {
         self.0.state.lock().unwrap().error=result.err();self.0.notify();
     }
-    pub(super) fn update(&self,candidates:Vec<(u64,u64,RetainedTiles)>,resident:usize,limit:usize) {
-        {let mut state=self.0.state.lock().unwrap();state.candidates=candidates;state.resident=resident;state.limit=limit;state.revision=state.revision.wrapping_add(1);self.0.publish(resident);}
+    pub(super) fn update(&self,candidates:Vec<(u64,u64,RetainedTiles)>,resident:usize,limit:usize,transition:Option<(&RetainedTiles,bool)>) {
+        {let mut state=self.0.state.lock().unwrap();state.candidates=candidates;state.resident=resident;state.limit=limit;state.revision=state.revision.wrapping_add(1);if transition.is_none() {self.0.publish(resident);}}
+        if let Some((tiles,parked))=transition {tiles.set_parked(parked,&self.0.owner,Pressure::report(resident));}
         self.0.memory.flush_reports();self.0.notify();
     }
 }
@@ -109,7 +109,7 @@ mod tests {
         let queued=Arc::new(AtomicUsize::new(0));let executor=queued.clone();
         let generation=source.subscribe(Arc::new(move || {executor.fetch_add(1,Ordering::Relaxed);}));
         owner.report(MemoryReport {ram_bytes:1<<20,demand_ram_bytes:1<<20,..Default::default()});
-        source.update(Vec::new(),1<<20,usize::MAX);
+        source.update(Vec::new(),1<<20,usize::MAX,None);
         assert!(source.request(generation).is_none());
         let reads=budget.register_owner(MemoryOwnerKind::Other,MemoryClass::Pinned,None);
         let wakes=Arc::new(AtomicUsize::new(0));let count=wakes.clone();
@@ -119,7 +119,7 @@ mod tests {
         }
         assert_eq!(wakes.load(Ordering::Relaxed),100);
         assert_eq!(queued.load(Ordering::Relaxed),0);
-        source.update(Vec::new(),1<<20,0);
+        source.update(Vec::new(),1<<20,0,None);
         assert_eq!(queued.load(Ordering::Relaxed),1);
         assert_eq!(source.request(generation).unwrap().1,0);
     }
@@ -130,10 +130,10 @@ mod tests {
         for dropped in [false,true] {
             let owner=budget.register_owner(MemoryOwnerKind::ParkedTabs,MemoryClass::Warm,None);
             let source=StoragePressure::new(owner,budget.clone());
-            let generation=source.subscribe(Arc::new(||{}));source.update(Vec::new(),1<<20,0);
+            let generation=source.subscribe(Arc::new(||{}));source.update(Vec::new(),1<<20,0,None);
             source.request(generation).unwrap();let mut wait=source.wait().unwrap();
             source.0.state.lock().unwrap().running=false;
-            if dropped {drop(source);}else {source.update(Vec::new(),1<<20,usize::MAX);assert!(!source.in_flight());}
+            if dropped {drop(source);}else {source.update(Vec::new(),1<<20,usize::MAX,None);assert!(!source.in_flight());}
             let result=Pin::new(&mut wait).poll(&mut Context::from_waker(Waker::noop()));
             assert!(matches!(result,Poll::Ready(Err(_)))==dropped);
             if !dropped {assert_eq!(result,Poll::Ready(Ok(())));}

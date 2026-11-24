@@ -283,8 +283,11 @@ impl RetainedTiles {
             let mut seen=HashSet::new();blobs.retain(|blob|seen.insert(blob.owner_identity()));Ok(blobs)
         }
     }
-    pub fn set_parked(&self, parked: bool) {
-        if let Some(owner) = self.owner.as_ref().and_then(std::sync::Weak::upgrade) { owner.parked(parked); }
+    pub fn set_parked(&self, parked: bool, tabs: &crate::MemoryOwner, report: crate::MemoryReport) {
+        match self.owner.as_ref().and_then(std::sync::Weak::upgrade) {
+            Some(owner) => owner.park(parked, self, tabs, report),
+            None => tabs.report(report),
+        }
         if parked { self.release_reads(); }
     }
     fn release_reads(&self) {

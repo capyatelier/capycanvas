@@ -374,7 +374,7 @@
         let (file,offset,length,crc,completion)=control.lock().unwrap().reads.pop_front().expect("one running tile read");
         let reading=file.allocation_bytes(offset,length) as u64;
         assert_eq!(physical(),idle+cached+held_bytes+reading);
-        parked.set_parked(true);
+        parked.set_parked(true,&budget.register_owner(crate::MemoryOwnerKind::ParkedTabs,crate::MemoryClass::Warm,None),Default::default());
         assert_eq!(physical(),idle+held_bytes+reading,"parking keeps only held and running reads");
         file.read(offset,length,crc,completion);
         let Poll::Ready(Ok(bytes))=running.as_mut().poll(&mut context) else {panic!("the running read completes after parking")};drop(running);

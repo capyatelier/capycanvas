@@ -14,7 +14,7 @@ pub mod temp_files;
 pub mod memory_budget;
 mod document_memory;
 pub use document_memory::DocumentMemory;
-pub use memory_budget::{CoverageFailure, MemoryBudget, MemoryFacts, DeviceMemoryFacts, MemoryDevice, MemoryOwner, MemoryRoom, MemoryReservation, MemoryWatch, MemoryOwnerKind, MemoryClass, MemoryReport, MemoryGrant, MemoryBudgetSnapshot, MemoryOwnerTotals, MemoryDeviceSnapshot};
+pub use memory_budget::{CoverageFailure, MemoryBudget, MemoryFacts, DeviceMemoryFacts, MemoryDevice, MemoryLedger, MemoryOwner, MemoryRoom, MemoryReservation, MemoryWatch, MemoryOwnerKind, MemoryClass, MemoryReport, MemoryGrant, MemoryBudgetSnapshot, MemoryOwnerTotals, MemoryDeviceSnapshot};
 
 use std::collections::BTreeSet;
 pub mod color;
@@ -2486,20 +2486,20 @@ impl Editor {
             memory_dirty: false,
             amends: Vec::new(),
         };
-        if !editor.document.memory.initialized() { editor.report_memory(true); }
+        if !editor.document.memory.initialized() { editor.report_memory(); }
         editor
     }
-    pub(crate) fn report_memory(&mut self, force: bool) {
+    pub(crate) fn report_memory(&mut self) {
         let tiles = self.retained_tiles();
-        self.document.memory.report(tiles, force);
+        self.document.memory.report(tiles);
         self.memory_dirty = false;
     }
     pub fn memory_report_pending(&self) -> bool { self.memory_dirty }
     pub fn flush_memory(&mut self) {
-        if self.memory_dirty { self.report_memory(false); }
+        if self.memory_dirty { self.report_memory(); }
     }
     fn update_memory(&mut self) {
-        if self.document.memory.requires_inventory_commit() { self.report_memory(false); }
+        if self.document.memory.requires_inventory_commit() { self.report_memory(); }
         else { self.memory_dirty = true; }
     }
     pub fn document(&self) -> &Document {

@@ -36,20 +36,21 @@ fn shared_raster_content_metadata_is_charged_once_across_history_and_captures() 
         editor.flush_memory();
         let inventory=current_inventory(&editor);
         let captures=(0..capture_count).map(|_|editor.document().memory.capture_current()).collect::<Vec<_>>();
-        let (parts,_)=editor.document().memory.owner.parts(false);
+        let parts=Owner::classify(&editor.document().memory.owner.snapshot(|_|()).0);
         let mut owners=std::collections::HashMap::new();inventory.resident_owners(&mut owners);
         let authored_trees=owners.iter().filter(|((kind,_),(_,authored))|*kind==CONTENT_TREE_METADATA && *authored).map(|(_, (bytes,_))|*bytes as u64).sum::<u64>();
         let history_trees=owners.iter().filter(|((kind,_),(_,authored))|*kind==CONTENT_TREE_METADATA && !*authored).map(|(_, (bytes,_))|*bytes as u64).sum::<u64>();
         assert!(authored_trees>=current_owners.iter().map(|(_,bytes)|*bytes as u64).sum());
         assert!(history_trees>=old_owners.iter().map(|(_,bytes)|*bytes as u64).sum());
-        assert_eq!(parts[2],inventory.authored_metadata as u64+capture_count as u64*inventory.metadata_bytes as u64+authored_trees,
+        assert_eq!(parts.authored_metadata,inventory.authored_metadata as u64+authored_trees,
             "authored tree owners are metadata, shared by every capture and cloned revision");
-        assert_eq!(parts[3],(inventory.metadata_bytes-inventory.authored_metadata) as u64+history_trees,
+        assert_eq!(parts.history_metadata,(inventory.metadata_bytes-inventory.authored_metadata) as u64+history_trees,
             "history-only tree owners remain history metadata");
         let payload=owners.iter().filter(|((kind,_),_)|*kind!=CONTENT_TREE_METADATA).map(|(_, (bytes,_))|*bytes as u64).sum::<u64>();
-        assert_eq!(parts[0]+parts[1],payload,"tree metadata must not remain in spillable resident parts");
-        assert_eq!(parts.iter().sum::<u64>(),owners.values().map(|(bytes,_)|*bytes as u64).sum::<u64>()
-            +(capture_count as u64+1)*inventory.metadata_bytes as u64,"classification preserves the single-inventory physical total");
+        assert_eq!(parts.authored+parts.history,payload,"tree metadata must not remain in spillable resident parts");
+        assert_eq!(parts.captured,0,"captures of the current inventory hold nothing beyond it");
+        assert_eq!(parts.authored+parts.history+parts.authored_metadata+parts.history_metadata,owners.values().map(|(bytes,_)|*bytes as u64).sum::<u64>()
+            +inventory.metadata_bytes as u64,"classification preserves the single-inventory physical total");
         drop(captures);
     }}
 }
@@ -361,13 +362,6 @@ fn unchanged_frame_captures_share_the_current_inventory() {
         drop(capture);
     }
     assert!(Arc::ptr_eq(&inventory,&current_inventory(&editor)));
-    let capture=document_memory.capture_current();
-    document_memory.owner.parked(true);
-    let pinned=memory.snapshot().ram_pinned_bytes;
-    assert!(pinned>0);
-    drop(capture);
-    memory.flush_reports();
-    assert!(memory.snapshot().ram_pinned_bytes<pinned);
 }
 
 #[test]
@@ -506,4 +500,73 @@ fn pressure_durability_releases_captured_tile_pins_before_a_store_read() {
     assert!(editor.can_undo());
     assert_eq!(capture.artwork().checkpoint.document, editor.document().artwork.id);
     assert!(pressure.active());
+}
+
+fn document_rows(memory:&MemoryBudget)->[u64;2] {
+    memory.flush_reports();let rows=memory.snapshot().rows;
+    [crate::MemoryOwnerKind::Authored,crate::MemoryOwnerKind::History].map(|kind|rows[kind as usize][MemoryClass::Pinned as usize].ram_bytes)
+}
+
+#[test]
+fn capture_refreshes_racing_editor_commits_never_leave_stale_rows() {
+    use crate::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileKey};
+    let memory=budget();
+    let document=Document::new(crate::PortableId::random(),4096,4096,DocumentNames {paint:"Ink".into(),paper:"Paper".into()})
+        .with_memory(DocumentMemory::new(memory.clone(),None));
+    let target=document.working.target.unwrap();
+    let descriptor=RasterPlane::Color.descriptor(Default::default());
+    let mut random=17u32;
+    let mut noise=||Arc::new(TileBlob::encode(descriptor,&(0..TILE_SIZE*TILE_SIZE*4).map(|_|{random^=random<<13;random^=random>>17;random^=random<<5;random as u8}).collect::<Vec<_>>()).unwrap());
+    let unique=(0..8).map(|_|noise()).collect::<Vec<_>>();let shared=noise();
+    let big=RasterRevision::backed(RasterData {tiles:(0..16).flat_map(|y|(0..16).map(move|x|[x,y])).enumerate()
+        .map(|(index,coordinate)|(TileKey {plane:RasterPlane::Color,coordinate},RasterTile::backed_shared(unique.get(index).unwrap_or(&shared).clone()))).collect(),..Default::default()});
+    let mut editor=Editor::new(document);
+    let occurrence=editor.document().artwork.occurrences.iter().next().unwrap().0;
+    let rename=|editor:&Editor,name:String| {
+        let mut value=editor.document().artwork.occurrences.get(occurrence).unwrap().clone();value.name=name.into();
+        Edit::Occurrence(RecordChange::replace(&editor.document().artwork.occurrences,occurrence,Some(value)).unwrap())
+    };
+    let started=std::time::Instant::now();
+    let (mut rounds,mut stale)=(0u32,0u32);
+    while rounds<200 && started.elapsed()<std::time::Duration::from_secs(20) {
+        editor.perform(Edit::SetRaster {target,revision:big.clone()}).unwrap();editor.flush_memory();
+        let capture=editor.document().memory.capture_current();
+        editor.perform(rename(&editor,format!("Kept {rounds}"))).unwrap();editor.flush_memory();
+        assert!(editor.undo().unwrap() && editor.undo().unwrap());
+        editor.perform(rename(&editor,format!("Round {rounds}"))).unwrap();
+        let barrier=Arc::new(std::sync::Barrier::new(2));
+        let refresh={let barrier=barrier.clone();std::thread::spawn(move||{barrier.wait();drop(capture);})};
+        barrier.wait();
+        editor.flush_memory();
+        refresh.join().unwrap();
+        let published=document_rows(&memory);
+        editor.document().memory.owner.refresh();
+        if published!=document_rows(&memory) {stale+=1;}
+        rounds+=1;
+    }
+    assert_eq!(stale,0,"{stale} of {rounds} rounds left Authored or History stale after both writers finished");
+}
+
+#[test]
+fn captures_sharing_an_inventory_charge_its_metadata_once() {
+    let memory=budget();
+    let mut document=Document::new(crate::PortableId::random(),256,256,DocumentNames {paint:"Paint".into(),paper:"Paper".into()});
+    let SourceTarget::Paint(target)=document.working.target.unwrap() else {panic!()};
+    document.artwork.paint.get_mut(target).unwrap().base=Some(crate::PaintBase::new(source_grid(1,1).into()));
+    let mut editor=Editor::new(document.with_memory(DocumentMemory::new(memory.clone(),None)));
+    let alone=document_rows(&memory);
+    let first=editor.document().memory.capture_current();let second=editor.document().memory.capture_current();
+    editor.document().memory.owner.refresh();
+    assert_eq!(document_rows(&memory),alone,"captures of the current inventory add nothing");
+    let mut paint=editor.document().artwork.paint.get(target).unwrap().clone();paint.domain=[257,256];
+    editor.perform(Edit::Paint(RecordChange::replace(&editor.document().artwork.paint,target,Some(paint)).unwrap())).unwrap();
+    editor.flush_memory();
+    editor.document().memory.owner.refresh();
+    let both=document_rows(&memory);
+    drop(second);
+    editor.document().memory.owner.refresh();
+    assert_eq!(document_rows(&memory),both,"a second capture of the same inventory adds no metadata");
+    drop(first);
+    editor.document().memory.owner.refresh();
+    assert!(document_rows(&memory)[0]<both[0]);
 }

@@ -188,24 +188,18 @@ impl MemoryOwner {
         if published {self.0.budget.changed();}
         published
     }
-    pub fn report(&self, report: MemoryReport) { self.apply(self.0.budget.0.state.lock().unwrap(), report); }
+    pub fn report(&self, report: MemoryReport) { self.0.budget.transact(|ledger| ledger.install(self, report)); }
     pub fn report_pinned_gpu(&self, total: &AtomicU64) {
-        let state = self.0.budget.0.state.lock().unwrap();
-        let bytes = total.load(Ordering::Acquire);
-        self.apply(state, MemoryReport { gpu_bytes: bytes, pinned_gpu_bytes: bytes, ..Default::default() });
+        self.0.budget.transact(|ledger| {
+            let bytes = total.load(Ordering::Acquire);
+            ledger.install(self, MemoryReport { gpu_bytes: bytes, pinned_gpu_bytes: bytes, ..Default::default() });
+        });
     }
     pub fn report_ram(&self, [ram, pinned, demand]: &[AtomicU64; 3]) {
-        let state = self.0.budget.0.state.lock().unwrap();
-        let [ram_bytes, pinned_ram_bytes, demand_ram_bytes] = [ram, pinned, demand].map(|bytes| bytes.load(Ordering::Acquire));
-        self.apply(state, MemoryReport { ram_bytes, pinned_ram_bytes, demand_ram_bytes, ..Default::default() });
-    }
-    fn apply(&self, mut state: MutexGuard<'_, State>, mut report: MemoryReport) {
-        report.ram_bytes = report.ram_bytes.max(report.pinned_ram_bytes);
-        report.gpu_bytes = report.gpu_bytes.max(report.pinned_gpu_bytes);
-        let owner=state.owners.get_mut(&self.0.id).unwrap();
-        let changed=owner.report!=report;
-        owner.report = report;owner.applied=owner.pending.version.load(Ordering::Acquire);
-        if changed {self.0.budget.rebalance(state);}
+        self.0.budget.transact(|ledger| {
+            let [ram_bytes, pinned_ram_bytes, demand_ram_bytes] = [ram, pinned, demand].map(|bytes| bytes.load(Ordering::Acquire));
+            ledger.install(self, MemoryReport { ram_bytes, pinned_ram_bytes, demand_ram_bytes, ..Default::default() });
+        });
     }
     pub fn reclaim_epoch(&self) -> u64 { self.0.grants.requested.load(Ordering::Acquire) }
     pub fn reclaim_unanswered(&self) -> bool { self.0.grants.answered.load(Ordering::Acquire) < self.reclaim_epoch() }
@@ -280,6 +274,37 @@ impl Reserved {
 }
 #[derive(Clone)]
 pub struct MemoryReservation(Arc<Reservation>);
+impl PartialEq for MemoryReservation {
+    fn eq(&self, other: &Self) -> bool { Arc::ptr_eq(&self.0, &other.0) }
+}
+pub struct MemoryLedger<'a> { state: &'a mut State, budget: &'a MemoryBudget, changed: bool }
+impl MemoryLedger<'_> {
+    pub fn report(&mut self, owner: &MemoryOwner, report: MemoryReport) -> Result<(), &'static str> {
+        if !Arc::ptr_eq(&owner.0.budget.0, &self.budget.0) { return Err("Memory owner belongs to another budget"); }
+        self.install(owner, report);
+        Ok(())
+    }
+    fn install(&mut self, owner: &MemoryOwner, mut report: MemoryReport) {
+        report.ram_bytes = report.ram_bytes.max(report.pinned_ram_bytes);
+        report.gpu_bytes = report.gpu_bytes.max(report.pinned_gpu_bytes);
+        let record = self.state.owners.get_mut(&owner.0.id).unwrap();
+        self.changed |= record.report != report;
+        record.report = report;record.applied = record.pending.version.load(Ordering::Acquire);
+    }
+    pub fn commit(&mut self, reservation: &MemoryReservation, owner: &MemoryOwner) -> Result<bool, &'static str> {
+        if !Arc::ptr_eq(&reservation.0.budget.0, &self.budget.0) || !Arc::ptr_eq(&owner.0.budget.0, &self.budget.0) { return Err("Memory reservation belongs to another budget"); }
+        match self.state.reservations.get(&reservation.0.id) {
+            None => return Ok(false),
+            Some(Reserved::Working {owner:id,..}) if *id != owner.0.id => return Err("Working reservation belongs to another owner"),
+            Some(_) => {}
+        }
+        self.state.release(reservation.0.id);
+        reservation.0.bytes.store(0, Ordering::Release);
+        reservation.0.active.store(false, Ordering::Release);
+        self.changed = true;
+        Ok(true)
+    }
+}
 struct Reservation { budget: MemoryBudget, id: u64, bytes: AtomicU64, active: AtomicBool, _owner:Option<MemoryOwner> }
 impl Drop for Reservation {
     fn drop(&mut self) {
@@ -355,21 +380,12 @@ impl MemoryReservation {
         let record=state.owners.get_mut(&owner.0.id).unwrap();record.report=report;record.applied=record.pending.version.load(Ordering::Acquire);
         budget.rebalance(state);Ok(())
     }
-    pub fn commit(self, owner: &MemoryOwner, mut report: MemoryReport) -> Result<(), &'static str> {
-        if !Arc::ptr_eq(&self.0.budget.0, &owner.0.budget.0) { return Err("Memory reservation belongs to another budget"); }
-        let mut state = self.0.budget.0.state.lock().unwrap();
-        state.apply_reports();
-        let Some(reserved)=state.reservations.get(&self.0.id) else {return Err("Memory reservation is already complete");};
-        if matches!(reserved,Reserved::Working {owner:id,..} if *id!=owner.0.id) {return Err("Working reservation belongs to another owner");}
-        state.release(self.0.id);
-        report.ram_bytes = report.ram_bytes.max(report.pinned_ram_bytes);
-        report.gpu_bytes = report.gpu_bytes.max(report.pinned_gpu_bytes);
-        let owner=state.owners.get_mut(&owner.0.id).unwrap();
-        owner.report = report;owner.applied=owner.pending.version.load(Ordering::Acquire);
-        self.0.bytes.store(0, Ordering::Release);
-        self.0.active.store(false,Ordering::Release);
-        self.0.budget.rebalance(state);
-        Ok(())
+    pub fn commit(self, owner: &MemoryOwner, report: MemoryReport) -> Result<(), &'static str> {
+        self.0.budget.transact(|ledger| {
+            ledger.changed = ledger.state.apply_reports();
+            if !ledger.commit(&self, owner)? { return Err("Memory reservation is already complete"); }
+            ledger.report(owner, report)
+        })
     }
 }
 impl std::fmt::Debug for MemoryBudget {
@@ -378,6 +394,14 @@ impl std::fmt::Debug for MemoryBudget {
 #[cfg(test)]
 std::thread_local! {pub(crate) static REBALANCES: std::cell::Cell<u64> = const {std::cell::Cell::new(0)};}
 impl MemoryBudget {
+    pub fn transact<T>(&self, apply: impl FnOnce(&mut MemoryLedger<'_>) -> T) -> T {
+        let mut state = self.0.state.lock().unwrap();
+        let mut ledger = MemoryLedger { state: &mut state, budget: self, changed: false };
+        let result = apply(&mut ledger);
+        let changed = ledger.changed;
+        if changed { self.rebalance(state); }
+        result
+    }
     fn rebalance(&self, mut state: MutexGuard<'_, State>) {
         #[cfg(test)] REBALANCES.with(|count| count.set(count.get() + 1));
         let wakes = state.rebalance(&self.0.cache);

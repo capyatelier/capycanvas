@@ -513,7 +513,7 @@ fn open_parts_checked_with_budget(metadata:&[u8],resource_pack:ImmutableBacking,
         if retained>crate::history_budget::BYTE_BUDGET {return Err("Session history exceeds the Undo/Redo memory limit".into());}
     }
     editor.document.memory=crate::DocumentMemory::new(budget,cache.admission.clone());
-    editor.report_memory(true);
+    editor.report_memory();
     Ok(OpenSession {editor,metadata:SessionMetadata {value:record.metadata,profiles}})
 }
 

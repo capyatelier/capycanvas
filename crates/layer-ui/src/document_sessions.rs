@@ -158,7 +158,6 @@ impl<T> DocumentSessions<T> {
         self.parked.get_mut(&id).map(|p| &mut p.owner)
     }
     fn park(&mut self, id: u64, owner: T, tiles: RetainedTiles) {
-        tiles.set_parked(true);
         self.clock = self.clock.saturating_add(1);
         let old = self.parked.insert(
             id,
@@ -170,7 +169,7 @@ impl<T> DocumentSessions<T> {
             },
         );
         debug_assert!(old.is_none(), "an active drawing cannot already be parked");
-        self.refresh_memory(true);
+        self.refresh_memory(true, Some((&self.parked[&id].tiles, true)));
     }
     /// Publish a prepared drawing only after its initiating request completes.
     /// The host installs the new active owner; this retains the outgoing one.
@@ -262,10 +261,10 @@ impl<T> DocumentSessions<T> {
         let Some(next) = self.parked.remove(&id) else {
             return Err((DocumentSessionError::TabClosed, outgoing));
         };
+        self.refresh_memory(true, Some((&next.tiles, false)));
         self.park(self.selected(), outgoing, tiles);
         self.tabs.select(id);
         self.untitled = next.untitled;
-        next.tiles.set_parked(false);
         Ok(next.owner)
     }
     /// Exchange a host's retained active slot without a placeholder editor.
@@ -283,7 +282,7 @@ impl<T> DocumentSessions<T> {
         let Some(mut incoming) = self.parked.remove(&id) else {
             return Err(DocumentSessionError::TabClosed);
         };
-        incoming.tiles.set_parked(false);
+        self.refresh_memory(true, Some((&incoming.tiles, false)));
         swap(&mut incoming.owner);
         self.park(self.selected(), incoming.owner, tiles);
         self.tabs.select(id);
@@ -296,13 +295,12 @@ impl<T> DocumentSessions<T> {
     pub fn close_selected(&mut self) -> Option<T> {
         self.tabs.close(self.selected());
         self.untitled.clear();
-        let next = self.parked.remove(&self.selected()).map(|next| {
+        let next = self.parked.remove(&self.selected());
+        self.refresh_memory(true, next.as_ref().map(|next| (&next.tiles, false)));
+        next.map(|next| {
             self.untitled = next.untitled;
-            next.tiles.set_parked(false);
             next.owner
-        });
-        self.refresh_memory(true);
-        next
+        })
     }
     pub fn reorder(&mut self, id: u64, before: Option<u64>) -> bool {
         self.tabs.reorder(id, before)
@@ -316,21 +314,21 @@ impl<T> DocumentSessions<T> {
     pub fn resident_bytes(&self) -> usize {
         layer_core::raster_storage::resident_tile_bytes(self.parked.values().map(|p| &p.tiles))
     }
-    fn refresh_memory(&self, force: bool) {
+    fn refresh_memory(&self, force: bool, transition: Option<(&RetainedTiles, bool)>) {
         let resident = self.resident_bytes();
         let previous = self.reported.get();
         if force || previous.abs_diff(resident) >= 1024 * 1024 {
             self.reported.set(resident);
-            self.pressure.update(self.parked.iter().map(|(&id,parked)|(id,parked.used,parked.tiles.clone())).collect(),resident,self.budget.inactive_ram);
+            self.pressure.update(self.parked.iter().map(|(&id,parked)|(id,parked.used,parked.tiles.clone())).collect(),resident,self.budget.inactive_ram,transition);
         }
     }
     pub fn inactive_ram_budget(&self) -> usize {
-        self.refresh_memory(false);
+        self.refresh_memory(false, None);
         self.budget.inactive_ram.min(self.memory_owner.grant().ram_bytes.min(usize::MAX as u64) as usize)
     }
     pub fn pressure_source(&self)->StoragePressure {self.pressure.clone()}
     pub fn set_inactive_ram_budget(&mut self,bytes:usize) {
-        if self.budget.inactive_ram!=bytes {self.budget.inactive_ram=bytes;self.refresh_memory(true);}
+        if self.budget.inactive_ram!=bytes {self.budget.inactive_ram=bytes;self.refresh_memory(true, None);}
     }
     pub fn pressure_needed(&self)->bool {self.resident_bytes()>self.inactive_ram_budget()}
     /// Oldest inactive resident payload first. Recount shared handles after each
@@ -561,6 +559,46 @@ mod tests {
     }
     fn inventory() -> RetainedTiles {
         RetainedTiles::default()
+    }
+    #[test]
+    fn parking_moves_each_resident_allocation_between_authored_and_parked_tabs_in_one_revision() {
+        use std::sync::{Arc, Mutex};
+        for captured in [false, true] {
+            let budget = test_budget(256 * 1024 * 1024);
+            let mut document = Document::new(layer_core::PortableId::random(), 1024, 1024, layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() })
+                .with_memory(layer_core::DocumentMemory::new(budget.clone(), None));
+            let layer_core::SourceTarget::Paint(target) = document.working.target.unwrap() else { panic!() };
+            let source = layer_core::color::source::rgba8_source([1024, 1024], |x, y| {
+                (x.wrapping_mul(2654435761) ^ y.wrapping_mul(40503)).wrapping_mul(2246822519).to_le_bytes()
+            });
+            document.artwork.paint.get_mut(target).unwrap().base = Some(layer_core::PaintBase::new(source.into()));
+            let editor = layer_core::Editor::new(document);
+            let capture = captured.then(|| editor.document().capture_artwork(Default::default()));
+            let resident = editor.retained_tiles().resident_bytes() as u64;
+            let total = |budget: &MemoryBudget| {
+                let rows = budget.snapshot().rows;
+                rows[MemoryOwnerKind::Authored as usize][MemoryClass::Pinned as usize].ram_bytes
+                    + rows[MemoryOwnerKind::History as usize][MemoryClass::Pinned as usize].ram_bytes
+                    + rows[MemoryOwnerKind::ParkedTabs as usize][MemoryClass::Warm as usize].ram_bytes
+            };
+            let mut sessions = DocumentSessions::with_memory_budget(&english(), budget.clone());
+            budget.flush_reports();
+            let expected = total(&budget);
+            assert!(resident > 2 * 1024 * 1024 && expected >= resident && expected < 2 * resident);
+            let observed = Arc::new(Mutex::new(Vec::new()));
+            let _watch = {
+                let (watched, observed) = (budget.clone(), observed.clone());
+                budget.watch(Arc::new(move || observed.lock().unwrap().push(total(&watched))))
+            };
+            sessions.append((), editor.retained_tiles(), &english());
+            sessions.exchange(1, (), RetainedTiles::default()).unwrap();
+            budget.flush_reports();
+            let observed = std::mem::take(&mut *observed.lock().unwrap());
+            assert!(!observed.is_empty());
+            assert!(observed.iter().all(|&bytes| bytes == expected),
+                "captured {captured}: every ledger revision charges the drawing once, expected {expected}, observed {observed:?}");
+            drop((capture, sessions, editor));
+        }
     }
     #[test]
     fn parked_tiles_share_one_warm_owner_and_spill_only_above_its_grant() {
