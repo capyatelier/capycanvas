@@ -20,6 +20,7 @@ pub(super) struct ChangedCells {
     retired:Vec<wgpu::Buffer>,
     side:u32,
     admission:Option<(display_mips::Plan,u64)>,
+    baseline:Option<Arc<crate::scene::scale::SignatureFrame>>,
     charge:crate::residency::Charge,
 }
 impl ChangedCells {
@@ -28,7 +29,7 @@ impl ChangedCells {
             label:Some("disabled changed cells"),size:20,usage:wgpu::BufferUsages::STORAGE,mapped_at_creation:false,
         });
         let charge=display.charge(disabled.size());
-        Self {disabled,pages:BTreeMap::new(),forced:BTreeSet::new(),retired:Vec::new(),side:1,admission:None,charge}
+        Self {disabled,pages:BTreeMap::new(),forced:BTreeSet::new(),retired:Vec::new(),side:1,admission:None,baseline:None,charge}
     }
     fn recharge(&mut self,r:&WgpuRasterizer) {
         let bytes=self.storage_bytes();
@@ -44,8 +45,10 @@ impl ChangedCells {
             r.forget_bindings(Some(id),coordinate,&[],std::slice::from_ref(&buffer));
             self.retired.push(buffer);
         }
+        if self.pages.is_empty() {self.baseline=None;}
         self.recharge(r);
     }
+    pub fn baseline(&self)->Option<&Arc<crate::scene::scale::SignatureFrame>> {self.baseline.as_ref()}
     pub fn buffer(&self,id:SourceTarget,coordinate:[u32;2])->Option<&wgpu::Buffer> {
         self.pages.get(&(id,coordinate))
     }
@@ -90,8 +93,11 @@ impl ChangedCells {
         }
         self.retire(r,&wanted,side);
         let missing=wanted.iter().filter(|key|!self.pages.contains_key(key)).count() as u64*bytes;
-        let Ok(reservation)=r.admit_display(None,crate::residency::Class::Authored,missing) else {return;};
+        let Ok(reservation)=r.admit_display(None,crate::residency::Class::Authored,missing) else {
+            self.retire(r,&BTreeSet::new(),self.side);return;
+        };
         self.admission=Some(admission);
+        self.baseline=cache.expected_frame();
         self.side=side;
         for key in wanted {
             let buffer=self.pages.entry(key).or_insert_with(|| {

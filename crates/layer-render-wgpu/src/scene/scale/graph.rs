@@ -462,9 +462,10 @@ impl stack::Compositor for Builder<'_> {
 }
 
 impl Cache {
-    pub(super) fn initialized_pages(&self,target:&Target)->Option<BTreeSet<[u32;2]>> {
-        if self.pixels.root().is_some_and(|window|window.view==target.view) {return Some(self.shown_pages(target.plan.bounds));}
-        self.pages.lock().unwrap().initialized_view(&target.view,target.plan.bounds)
+    pub(super) fn evaluated_from(&self,target:&Target,bounds:PixelRect,frame:&SignatureFrame)->Option<BTreeSet<[u32;2]>> {
+        let bounds=bounds.intersect(target.plan.bounds);
+        if self.pixels.root().is_some_and(|window|window.view==target.view) {return Some(self.shown_from(bounds,frame));}
+        self.pages.lock().unwrap().evaluated_from(&target.view,bounds,frame,self.required_input_level())
     }
 }
 impl Evaluator<'_> {

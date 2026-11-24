@@ -143,7 +143,9 @@ impl Evaluator<'_> {
 
     fn capture_native_jobs(&mut self, handle: OccurrenceHandle, target: &Target, region: DocRect) -> Result<(), GpuRasterError> {
         let (packet, plan, regions, origin) = capture_frame(self.packet, target, &[region])?;
-        let initialized = self.cache.initialized_pages(target).filter(|_| target.plan.doc_bounds == DocRect::from(target.plan.bounds));
+        let captured = regions.iter().fold(PixelRect::EMPTY, |bounds, region| bounds.union(*region));
+        let initialized = self.r.changed_cells.as_ref().and_then(|cells| cells.baseline().cloned()).filter(|_| target.plan.doc_bounds == DocRect::from(target.plan.bounds))
+            .and_then(|baseline| self.cache.evaluated_from(target, captured, &baseline));
         let destination = Image { texture: target.view.texture().clone(), view: target.view.clone(), plan };
         let previous = self.scene.images.doc_bounds;
         self.scene.images.doc_bounds = previous.translated(origin.map(|v| -v));

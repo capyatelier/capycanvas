@@ -779,13 +779,9 @@ impl Store {
         }
         covered
     }
-    pub(super) fn initialized(&self,key:&Key,view:&wgpu::TextureView,bounds:PixelRect)->Option<BTreeSet<[u32;2]>> {
-        let page=self.pages.get(key).filter(|page|page.image.view==*view)?;
-        Some(page_coordinates(bounds).filter(|coordinate|Coverage::covers(&page.coverage.written,
-            page_rect(*coordinate).intersect(bounds))).collect())
-    }
-    pub(super) fn initialized_view(&self,view:&wgpu::TextureView,bounds:PixelRect)->Option<BTreeSet<[u32;2]>> {
-        self.pages.iter().find(|(_,page)|page.image.view==*view).and_then(|(key,_)|self.initialized(key,view,bounds))
+    pub(super) fn evaluated_from(&self,view:&wgpu::TextureView,bounds:PixelRect,frame:&SignatureFrame,required_input_level:u32)->Option<BTreeSet<[u32;2]>> {
+        let page=self.pages.values().find(|page|page.image.view==*view)?;
+        Some(page_coordinates(bounds).filter(|coordinate|page.matches(Some(frame),page_rect(*coordinate).intersect(bounds),required_input_level)==Some(true)).collect())
     }
     pub(super) fn set_optional(&mut self,key:&Key) {let page=self.pages.get_mut(key).unwrap();page.set_optional(true);self.victims.touch(page);self.victims.compact(&self.pages);self.touch(key);}
     pub(super) fn set_optional_content(&mut self,expression:&graph::Node) {
@@ -1957,10 +1953,14 @@ impl Cache {
         let reached=Cells::reached(self.plan,region);
         !reached.is_empty() && reached.into_iter().all(|index|cells.cells.get(index).is_some_and(|cell|cell.refused(r,r.arrival_token())))
     }
-    pub(super) fn shown_pages(&self,bounds:PixelRect)->BTreeSet<[u32;2]> {
-        let Some((cells,_store,_))=self.cells() else {return BTreeSet::new();};
-        page_coordinates(bounds).filter(|coordinate|Cells::reached(self.plan,page_rect(*coordinate).intersect(bounds)).into_iter()
-            .all(|index|cells.cells[index].shown.is_some())).collect()
+    pub(super) fn shown_from(&self,bounds:PixelRect,frame:&SignatureFrame)->BTreeSet<[u32;2]> {
+        let Some((cells,_store,template))=self.cells() else {return BTreeSet::new();};
+        let input_level=self.required_input_level();
+        page_coordinates(bounds).filter(|coordinate| {
+            let page=page_rect(*coordinate).intersect(bounds);
+            Cells::reached(self.plan,page).into_iter().all(|index|cells.cells[index].keyed(page)
+                .is_some_and(|recorded|recorded.matches_as(frame,&template.expression,input_level)==Some(true)))
+        }).collect()
     }
     #[cfg(test)]
     pub(super) fn evict_window(&self,area:PixelRect) {
@@ -2910,7 +2910,8 @@ pub(super) mod query_tests {
         overview.pixels.ensure(&renderer,overview.plan,overview.precision.format(),renderer.scene_tiers.windows.charge(0));
         let key=overview.page_key(overview.graph.root.clone().unwrap(),overview.plan.bounds);
         let claimed=overview.pages.lock().unwrap().claim(&renderer,key.clone(),u64::MAX,WindowId::default(),crate::residency::Class::Visible).unwrap();
-        assert!(overview.pages.lock().unwrap().initialized(&key,&claimed.view,key.plan().bounds).unwrap().is_empty());
+        let frame=overview.expected_frame().unwrap();
+        assert!(overview.pages.lock().unwrap().evaluated_from(&claimed.view,key.plan().bounds,&frame,overview.required_input_level()).unwrap().is_empty());
         assert!(claimed.texture.width()>0);
         assert!(overview.pixels.root().is_some() && overview.pixels.next().is_some());
         assert!(overview.presentation().is_none(),"allocation and validity bookkeeping cannot mint a committed page handle");
@@ -3778,7 +3779,7 @@ pub(super) mod query_tests {
             match update {
                 "block"=>cache.block(r.arrival_token(),cache.plan.bounds,None),
                 "refuse"=>cache.refuse(None,cache.plan.bounds,&refused),
-                "shown"=>assert!(cache.shown_pages(cache.plan.bounds).is_empty()),
+                "shown"=>assert!(cache.shown_from(cache.plan.bounds,&cache.expected_frame().unwrap()).is_empty()),
                 "evict"=>cache.evict_window(cache.plan.bounds),
                 _=>unreachable!(),
             }

@@ -337,24 +337,29 @@ fn attached_pointwise_alpha_filters_update_only_changed_contact_regions() {
     }
 }
 
+fn checkered_pointwise_document(extent: [u32; 2], name: &str) -> (Document, SourceTarget) {
+    let mut doc = document_at(extent);
+    paint_mut(&mut doc, 0).base = (Some(rgba8_source(extent, |x, y| {
+        let gray = if (x / 3 + y / 2) % 2 == 0 { 126 } else { 130 };
+        [gray, gray, gray, if (x / 13 + y / 7) % 2 == 0 { 37 } else { 193 }]
+    }))).map(|source|layer_core::authored::PaintBase::new(source.into()));
+    let paint = source_at(&doc, 0);
+    let filter = effect(&mut doc, name);
+    if name == "threshold" {
+        set_effect_value(&mut doc, filter, "colors", EffectValue::Choice(1));
+        set_effect_value(&mut doc, filter, "transparency", EffectValue::Choice(1));
+        set_effect_value(&mut doc, filter, "alpha_threshold", EffectValue::Number(37.));
+    }
+    doc.artwork.occurrences.get_mut(filter).unwrap().attachment = Attachment::Effect;
+    insert_occurrence(&mut doc, filter, 0);
+    (doc, paint)
+}
+
 #[test]
 fn native_pointwise_warm_prediction_replacement_and_removal_match_full_rebuilds() {
     let extent = [517, 259];
     for name in ["threshold", "brightness_to_opacity"] { for blend in layer_core::BlendSpace::ALL { for level in [0, 2] {
-        let mut doc = document_at(extent);
-        paint_mut(&mut doc, 0).base = (Some(rgba8_source(extent, |x, y| {
-            let gray = if (x / 3 + y / 2) % 2 == 0 { 126 } else { 130 };
-            [gray, gray, gray, if (x / 13 + y / 7) % 2 == 0 { 37 } else { 193 }]
-        }))).map(|source|layer_core::authored::PaintBase::new(source.into()));
-        let paint = source_at(&doc, 0);
-        let filter = effect(&mut doc, name);
-        if name == "threshold" {
-            set_effect_value(&mut doc, filter, "colors", EffectValue::Choice(1));
-            set_effect_value(&mut doc, filter, "transparency", EffectValue::Choice(1));
-            set_effect_value(&mut doc, filter, "alpha_threshold", EffectValue::Number(37.));
-        }
-        doc.artwork.occurrences.get_mut(filter).unwrap().attachment = Attachment::Effect;
-        insert_occurrence(&mut doc, filter, 0);
+        let (doc, paint) = checkered_pointwise_document(extent, name);
         let mut incremental = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         let mut rebuilt = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         let mut frame = packet(doc.scene(), extent);
@@ -411,6 +416,49 @@ fn native_pointwise_warm_prediction_replacement_and_removal_match_full_rebuilds(
         }
         assert_presentation_mip(&incremental);
     }}}
+}
+
+#[test]
+fn native_pointwise_reuse_reevaluates_cells_painted_while_their_output_waited() {
+    let extent = [2048, 1024];
+    for name in ["threshold", "brightness_to_opacity"] {
+        let (doc, paint) = checkered_pointwise_document(extent, name);
+        let mut frame = packet(doc.scene(), extent);
+        frame.composite_all = false;
+        frame.view = layer_render::ViewState { width_px: 256, height_px: 256, document_to_surface: [0.25, 0., 0., 0.25, 0., 0.] };
+        let mut incremental = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let mut rebuilt = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        for r in [&mut incremental, &mut rebuilt] { crate::test_support::submit_settled(r, frame); }
+        assert_eq!(incremental.scale_display.as_ref().unwrap().plan.bounds, PixelRect::full(extent));
+        let dabs = |positions: &[[f32; 2]]| positions.iter().map(|&position| {
+            let mut dab = crate::tests::test_dab(position, [0.9, 0.1, 0.3, 1.], 1.);
+            dab.radii = [13.25, 11.75];
+            dab
+        }).collect::<Vec<_>>();
+        let stroke = |dabs: &[Dab]| DabBatch { dab_count: dabs.len() as u32,
+            ..dab_batch(paint, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dabs.iter().skip(1).fold(dabs[0].bounds(), |bounds, dab| bounds.union(dab.bounds()))) };
+        let deferred = dabs(&[[500.5, 500.5], [1100.5, 100.5]]);
+        let deferred_batch = stroke(&deferred);
+        let deferred_frame = FramePacket { dabs: &deferred, dab_batches: std::slice::from_ref(&deferred_batch), ..frame };
+        let before = display_pixels(&incremental);
+        crate::test_support::with_pace([0, crate::frame_pace::IDLE_TAPS], || crate::test_support::submit_ready(&mut incremental, deferred_frame)).unwrap();
+        crate::test_support::submit_settled(&mut rebuilt, FramePacket { composite_all: true, ..deferred_frame });
+        let width = incremental.scale_display.as_ref().unwrap().plan.size[0] as usize;
+        let painted = |pixels: &[[f32; 4]], [x, y]: [usize; 2]| (0..5).flat_map(|dy| (0..5).map(move |dx| pixels[(y / 4 + dy - 2) * width + x / 4 + dx - 2])).collect::<Vec<_>>();
+        assert_eq!(painted(&display_pixels(&incremental), [1100, 100]), painted(&before, [1100, 100]), "{name}: the off-view cell waits through the paced stroke");
+        assert_ne!(painted(&display_pixels(&rebuilt), [1100, 100]), painted(&before, [1100, 100]), "{name}: the stroke changes the effect output");
+        let later = dabs(&[[1200.5, 200.5]]);
+        let later_batch = stroke(&later);
+        let whole = layer_render::ViewState { width_px: 512, height_px: 256, ..frame.view };
+        let later_frame = FramePacket { dabs: &later, dab_batches: std::slice::from_ref(&later_batch), view: whole, ..frame };
+        crate::test_support::submit_ready(&mut incremental, later_frame).unwrap();
+        crate::test_support::submit_settled(&mut rebuilt, FramePacket { composite_all: true, ..later_frame });
+        let (actual, expected) = (display_pixels(&incremental), display_pixels(&rebuilt));
+        for point in [[1100, 100], [1200, 200], [500, 500]] {
+            assert!(crate::test_support::max_error(&painted(&actual, point), &painted(&expected, point)) < 2e-5,
+                "{name}: the frame that brings the waiting cell into view shows its reduced effect at {point:?} like a full reduction");
+        }
+    }
 }
 
 #[test]

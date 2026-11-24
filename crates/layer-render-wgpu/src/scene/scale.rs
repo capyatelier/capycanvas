@@ -818,8 +818,9 @@ impl Cache {
         if !self.presentation()?.images().all(|image|image.authored()==Some(authored)) {return None;}
         Some((frame.scene().owner(),frame.scene().revision()))
     }
+    pub(crate) fn expected_frame(&self)->Option<Arc<SignatureFrame>> {self.pages.lock().unwrap().expected().cloned()}
     fn current_authored(&self)->Option<(Arc<SignatureFrame>,layer_core::raster::ContentStamp)> {
-        let frame=self.pages.lock().unwrap().expected()?.clone();
+        let frame=self.expected_frame()?;
         let expression=self.graph.content.as_ref().or(self.graph.root.as_ref())?;
         let authored=frame.authored_revision(expression).ok()?;
         Some((frame,authored))
