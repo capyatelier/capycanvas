@@ -310,6 +310,48 @@ fn a_paper_that_loads_during_a_stroke_applies_after_it() {
 }
 
 #[test]
+fn layer_choices_that_overtake_the_pen_up_apply_once_the_stroke_lands() {
+    let mut s = session(Platform::Gtk);
+    s.frame(1, 1).unwrap();
+    let masked = s.engine.document().working.occurrence.unwrap();
+    let id = crate::occurrence_token(masked);
+    layer(&mut s, LayerAction::AddMask { id, replace: false });
+    layer(&mut s, LayerAction::New { group: true, clipped: false });
+    let group = s.engine.document().working.occurrence.unwrap();
+    let group_id = crate::occurrence_token(group);
+    layer(&mut s, LayerAction::Select { id, mask: false });
+    settle(&mut s);
+    let target = s.engine.document().working.target.unwrap();
+    let painted = s.engine.document().target_raster(target).unwrap().identity();
+    let strokes = s.engine.metrics().committed_strokes;
+    s.pen(event(&s, 1, PenPhase::Down, 0.5));
+    s.pen(event(&s, 2, PenPhase::Move, 0.5));
+    s.frame(2, 2).unwrap();
+    for action in [UiAction::Layer { action: LayerAction::SelectRow { id: group_id, extend: false, toggle: false } },
+        UiAction::SetLayerVisibility { id: group_id, visible: false },
+        UiAction::SetLayerOpacity { id: Some(id), opacity: 0.5 }] {
+        s.dispatch_user_action(action).unwrap();
+    }
+    s.frame(3, 3).unwrap();
+    s.pen(event(&s, 3, PenPhase::Move, 0.5));
+    assert_eq!(s.deferred_edits.len(), 3, "the live contact's samples reach the engine ahead of the queued choices");
+    s.pen(event(&s, 4, PenPhase::Up, 0.5));
+    s.renderer_mut().settling = true;
+    settle(&mut s);
+    assert_eq!(s.engine.document().working.occurrence, Some(masked), "the choices wait for the stroke's raster work");
+    land(&mut s);
+    let doc = s.engine.document();
+    assert_eq!(doc.working.occurrence, Some(group), "the row choice applies once the stroke lands");
+    assert_eq!(s.state.layer_tools.editing_layer.as_ref().map(|layer| layer.id), Some(group_id), "Properties follows the chosen layer");
+    assert!(!doc.scene().occurrence(group).unwrap().visible);
+    assert_eq!(doc.scene().occurrence(masked).unwrap().opacity, 0.5);
+    assert_eq!(s.engine.metrics().committed_strokes, strokes + 1);
+    assert_ne!(doc.target_raster(target).unwrap().identity(), painted, "the stroke lands on the layer it started on");
+    assert_eq!(notice_text(&s), None);
+    assert!(s.deferred_edits.is_empty());
+}
+
+#[test]
 fn a_paste_lands_before_the_undo_queued_behind_its_request() {
     let mut s = session(Platform::Gtk);
     s.renderer_mut().tiled_sources = true;

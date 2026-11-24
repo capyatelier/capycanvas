@@ -52,6 +52,11 @@ fn configures_brush(action: &UiAction) -> bool {
     }
 }
 
+fn edits_layers(action: &UiAction) -> bool {
+    matches!(action, UiAction::Layer { .. } | UiAction::SelectLayer { .. } | UiAction::SetLayerVisibility { .. } | UiAction::SetLayerOpacity { .. })
+        && !held_actions::selects_tool(action)
+}
+
 fn configures_transform(action: &UiAction) -> bool {
     match action {
         UiAction::ToolbarEdit { action, .. } | UiAction::CanvasBarEdit { action, .. } => configures_transform(action),
@@ -148,12 +153,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return;
         }
         let holding = self.holding_input();
-        let contact = self.held_contact(event.device_id).filter(|_| !starts_contact(&event));
-        let contact_end = contact.map(|start| {
-            start + 1 + self.deferred_edits.iter().skip(start + 1)
-                .rposition(|edit| matches!(&edit.input, EditInput::Pen { event: queued, .. } if queued.device_id == event.device_id))
-                .map_or(0, |last| last + 1)
-        });
+        let contact_end = self.contact_end(&event);
         self.defer_edit(EditInput::Pen { event, camera: self.state.camera.clone(), pressure:self.engine.configured_pressure_curve().clone(), tilt:self.engine.configured_tilt_curve().clone() });
         if let Some(position) = contact_end.filter(|position| *position + 1 < self.deferred_edits.len()) {
             let edit = self.deferred_edits.pop_back().unwrap();
@@ -174,7 +174,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             if event.phase != PenPhase::Down || !real(&event) { return; }
         }
         let held = starts_contact(&event) && !self.paint_ready();
-        if self.deferred_edits.is_empty() && !held {
+        if !held && (self.deferred_edits.is_empty() || self.contact_end(&event) == Some(0)) {
             if let Err(event) = self.pen_ready(event) { self.defer_pen(event); }
             return;
         }
@@ -205,6 +205,17 @@ impl<R: CanvasRenderer> UiSession<R> {
         let ended = self.deferred_edits.iter().skip(index + 1).any(|edit| matches!(&edit.input, EditInput::Pen { event, .. }
             if event.device_id == id && real(event) && matches!(event.phase, PenPhase::Up | PenPhase::Cancel)));
         (!ended).then_some(index)
+    }
+    fn contact_end(&self, event: &PenEvent) -> Option<usize> {
+        if starts_contact(event) { return None; }
+        let start = match self.held_contact(event.device_id) {
+            Some(index) => index + 1,
+            None if self.pen_contact => 0,
+            None => return None,
+        };
+        Some(start + self.deferred_edits.iter().skip(start)
+            .rposition(|edit| matches!(&edit.input, EditInput::Pen { event: queued, .. } if queued.device_id == event.device_id))
+            .map_or(0, |last| last + 1))
     }
     fn discard_held(&mut self, index: usize) -> bool {
         let EditInput::Pen { event, .. } = &self.deferred_edits[index].input else { return true };
@@ -258,7 +269,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         let configures_brush = configures_brush(action);
         !(self.rendering_suspended || self.workspace_read_only || self.workspace_transition
             || (self.deferred_contact().unwrap_or(self.pen_contact) && !configures_brush
-                && !(self.deferred_contact() == Some(true) && held_actions::selects_tool(action)))
+                && !(self.deferred_contact() == Some(true) && held_actions::selects_tool(action))
+                && !(self.deferred_contact().is_none() && edits_layers(action)))
             || self.state.document_file.close_ready
             || matches!(action, UiAction::Invoke { command } if Self::command_without_document(*command) || NAVIGATOR_COMMANDS.contains(command) || matches!(command, CommandId::FitCanvas | CommandId::ActualPixels))
             || !(configures_brush || held_actions::selects_tool(action) || matches!(action, UiAction::Invoke { .. } | UiAction::FileDrop { .. } | UiAction::Selection { .. }
@@ -275,6 +287,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let history = matches!(action, UiAction::Invoke { command: CommandId::Undo | CommandId::Redo });
         let applying = self.applying_mode() && self.applies_open_mode(action);
         applying || self.fill_waits_for_commit() || !self.deferred_edits.is_empty() || self.painted_selections.busy()
+            || (self.pen_contact && edits_layers(action))
             || (history && (self.region_tools.publishing_edit() || self.files.pending.is_some()))
             || (self.engine.raster_backing_pending() && !held_actions::selects_tool(action) && !configures_brush(action)
                 && !(configures_transform(action) && self.files.pending.is_none() && !self.region_tools.publishing_edit()))
@@ -301,7 +314,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || matches!(&edit.input,EditInput::Action(_)) && self.fill_waits_for_commit()
             || matches!(&edit.input, EditInput::Pen { event, .. } if starts_contact(event) && !self.paint_ready() || self.contact_waits_for_raster_backing(event))
             || (matches!(&edit.input, EditInput::Action(action) if !configures_brush(action))
-                && (self.painted_selections.busy() || self.region_tools.publishing_edit()
+                && (self.pen_contact || self.painted_selections.busy() || self.region_tools.publishing_edit()
                     || self.input_pending || self.engine.has_pending_input() || self.engine.has_active_stroke()))
     }
     pub(super) fn deferred_edits_runnable(&self) -> bool {

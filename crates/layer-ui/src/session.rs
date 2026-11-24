@@ -19609,7 +19609,7 @@ mod tests {
         );
         app.pen(event(&app, 1, PenPhase::Down, 0.2));
         assert!(!app.command(CommandId::AddLayer).enabled);
-        assert!(app.dispatch(UiAction::SelectLayer { id: 1 }).is_err());
+        assert!(app.dispatch(UiAction::SelectLayer { id: 1 }).is_ok());
         let change = app.frame(10_000_000, 18_000_000).unwrap();
         assert_eq!(change.regions & regions::COMMANDS, 0, "pen-down must not restyle commands");
         assert_eq!(app.state.commands, commands);
