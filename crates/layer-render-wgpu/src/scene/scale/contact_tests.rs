@@ -1364,7 +1364,7 @@ fn pencil_cells(r:&WgpuRasterizer,[x,y]:[f32;2],radius:f32)->usize {
         .collect::<BTreeSet<_>>().len()
 }
 fn a_cell_blocked_on_a_decode_mid_contact_keeps_its_ink_while_its_neighbour_writes(lift:bool) {
-    let extent=[1024,512];
+    let extent=[2048,512];
     let mut doc=Document::new(PortableId::random(),extent[0],extent[1],layer_core::DocumentNames {paint:"Current ink".into(),paper:"Paper".into()});
     let below=paint_occurrence(&mut doc,"Below",Some(rgba8_source(extent,|x,y|[(x/5) as u8,(y/3) as u8,140,255])));
     let working=doc.scene().position(doc.working.occurrence.unwrap()).unwrap();
@@ -1383,21 +1383,41 @@ fn a_cell_blocked_on_a_decode_mid_contact_keeps_its_ink_while_its_neighbour_writ
     let masked=doc.artwork.coverage.get(mask).unwrap().raster.wait_data().unwrap().tiles.iter()
         .find(|(key,_)|key.coordinate==blocked).map(|(_,tile)|tile.wait_backing().unwrap()).expect("the mask stores a tile under the blocked cell");
     let photo=doc.scene().paint_base(doc.scene().source_target(below).unwrap()).unwrap().image.storage().clone();
-    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=crate::test_support::view([640,512]);
+    let idle=FramePacket {dabs:&[],dab_batches:&[],..frame};
+    let style=crate::layer_tests::preset_style(DefaultBrushPreset::Pencil);
+    let xs=[380.,400.,420.,496.,500.,504.,508.];
+    let draw=|r:&mut WgpuRasterizer,step:usize| {
+        predicted_frame(r,frame,ink,&style,1,&[pencil(xs[step],128.,12.,&style),pencil(xs[step]+12.,128.,12.,&style)],step==0,0.01*(step+1) as f32);
+        crate::test_support::complete(r);
+    };
+    let texels=|r:&WgpuRasterizer| {
+        let display=r.scale_display.as_ref().unwrap();
+        [display,display.overview.as_deref().expect("the partial view keeps an overview")].map(|cache| {
+            let image=cache.pixels.root().unwrap();
+            super::window_pixels(r,image,display_mips::Plan {bounds:PixelRect::new(500,128,502,130),..image.plan})[0]
+        })
+    };
+    let serve=|r:&mut WgpuRasterizer| {
+        let mut frames=0;
+        while r.frame_demand()==layer_render::FrameDemand::Work && frames<8 {crate::test_support::submit_ready(r,idle).unwrap();crate::test_support::complete(r);frames+=1;}
+        frames
+    };
+    let mut fresh=renderer(&doc);
+    crate::test_support::submit_settled(&mut fresh,frame);
+    fresh.set_preparation_wake(Arc::new(||{}));
+    for step in 0..xs.len() {draw(&mut fresh,step);}
+    if lift {pencil_lift(&mut fresh,frame,ink,1,[512.,128.],12.);}
+    serve(&mut fresh);
+    let expected=texels(&fresh);
     let mut r=renderer(&doc);
     crate::test_support::submit_settled(&mut r,frame);
-    let style=crate::layer_tests::preset_style(DefaultBrushPreset::Pencil);
     let written=|r:&WgpuRasterizer| {
         let cache=r.scale_display.as_ref().unwrap();
         let index=pages::coordinates(cache.plan.bounds,cache.plan.level).position(|cell|cell==blocked).unwrap();
         crate::test_support::published_coverage(crate::test_support::coverage_hash(&cache.geometry)).is_some_and(|coverage|coverage.written[index/32]>>(index%32)&1==1)
     };
-    let mut step=0;
-    let mut draw=|r:&mut WgpuRasterizer,x:f32| {
-        predicted_frame(r,frame,ink,&style,1,&[pencil(x,128.,12.,&style),pencil(x+12.,128.,12.,&style)],step==0,0.01*(step+1) as f32);
-        crate::test_support::complete(r);step+=1;
-    };
-    for x in [380.,400.,420.] {draw(&mut r,x);}
+    for step in 0..3 {draw(&mut r,step);}
     let contact=r.scale_display.as_ref().unwrap().contact_id();
     assert!(contact.is_some() && written(&r),"the stroke shows its ink in cell {blocked:?} in contact");
     let stored=SourceImage {tiles:std::collections::BTreeMap::from([(blocked,masked)]),..(*photo).clone()};
@@ -1409,23 +1429,40 @@ fn a_cell_blocked_on_a_decode_mid_contact_keeps_its_ink_while_its_neighbour_writ
     }
     let pending=|store:&crate::test_support::GatedStore|store.gate.reads.load(std::sync::atomic::Ordering::Acquire)>0;
     let mut held=0;
-    for x in [496.,500.,504.,508.] {
-        draw(&mut r,x);
+    for step in 3..xs.len() {
+        draw(&mut r,step);
         held+=usize::from(pending(&store));
         assert_eq!(r.scale_display.as_ref().unwrap().contact_id(),contact,"the stroke stays in its contact");
-        assert!(lift || written(&r),"cell {blocked:?} keeps the ink it showed while its decode is pending and its neighbour writes");
+        assert!(written(&r),"cell {blocked:?} keeps the ink it showed while its decode is pending and its neighbour writes");
     }
     assert!(held>=2,"the decode of the mask tile under cell {blocked:?} stays pending across the frames its neighbour writes: {held}");
-    if lift {
-        pencil_lift(&mut r,frame,ink,1,[512.,128.],12.);
-        assert!(written(&r),"cell {blocked:?} keeps the ink it showed when the contact ends before its decode lands");
-    }
+    if lift {pencil_lift(&mut r,frame,ink,1,[512.,128.],12.);}
+    let (signal,woken)=std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move||{let _=signal.send(());}));
+    let served=serve(&mut r);
+    assert!(!lift || served<8,"the lifted pen leaves the renderer waiting on the decode: {:?}",r.outstanding_terms());
+    assert_eq!(r.scale_display.as_ref().unwrap().contact_id(),contact.filter(|_|!lift),"the resting pen stays in its contact and the lifted one leaves it");
+    assert!(written(&r),"cell {blocked:?} keeps the ink it showed {} before its decode lands",if lift {"after the pen lifts"}else {"while the pen rests"});
+    let display=r.outstanding_terms().into_iter().find(|(term,_)|*term=="display").map(|(_,state)|state);
+    assert!(display.is_some_and(|state|!lift || state==crate::frame_demand::Outstanding::Blocked(crate::frame_demand::Input::Decode)),
+        "the view and its overview report the blocked cell's repair as outstanding: {:?}",r.outstanding_terms());
+    assert!(r.scale_display.as_ref().unwrap().approximating(),"the display does not report its overview complete over the blocked cell");
+    let [shown,overview]=texels(&r);
+    assert!(max_error(&[shown],&[expected[0]])>1e-3 && max_error(&[overview],&[expected[1]])>1e-3,
+        "after {served} demanded frames, the texel the stroke changed during the block still shows the old ink in the view and its overview: {shown:?} {overview:?} against {expected:?}");
     store.gate.release();
-    crate::test_support::settle_decodes(&mut r);
-    if !lift {pencil_lift(&mut r,frame,ink,1,[512.,128.],12.);}
-    crate::test_support::submit_settled(&mut r,frame);
-    let repaired=r.scale_display.as_ref().unwrap().shown_cells().into_iter().any(|(cell,shown)|cell==blocked && shown.is_some());
-    assert!(repaired,"cell {blocked:?} is composed again once its decode lands");
+    let mut frames=0;
+    while max_error(&texels(&r),&expected)>=1e-4 {
+        assert!(frames<2,"the decode's wake repairs cell {blocked:?} and its overview within two frames: {:?} against {expected:?}",texels(&r));
+        layer_render::CanvasRenderer::poll_pending(&mut r,frame.view).unwrap();
+        if r.frame_demand()!=layer_render::FrameDemand::Work {
+            woken.recv_timeout(crate::test_support::WAIT_BOUND).expect("the landed decode wakes the renderer");
+            continue;
+        }
+        crate::test_support::submit_ready(&mut r,idle).unwrap();crate::test_support::complete(&r);frames+=1;
+    }
+    assert!(frames>0,"the repair takes frames the renderer asked for");
+    assert_eq!(r.scale_display.as_ref().unwrap().contact_id(),contact.filter(|_|!lift),"the repair keeps the pen's contact state");
 }
 
 #[test]
