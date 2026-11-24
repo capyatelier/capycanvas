@@ -435,6 +435,54 @@ fn a_finished_contact_leaves_every_original_for_other_edits_to_take() {
 }
 
 #[test]
+fn a_live_fit_contact_captures_each_original_once_while_the_lane_takes_every_idle_original() {
+    use crate::layer_tests::{dab, placement, preset_style};
+    const PATH: [f32; 9] = [400., 700., 1000., 1300., 1600., 1300., 1000., 700., 400.];
+    let extent = [2048, 1536];
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut doc = placement::paint_document(extent, "Liquify live originals");
+    placement::set_source(&mut doc, layer_core::color::source::rgba8_source(extent, |x, y| [(x % 251) as u8, (y % 239) as u8, ((x + y) % 173) as u8, 255]));
+    let target = placement::target(&doc);
+    let view = layer_render::ViewState { width_px: extent[0] / 4, height_px: extent[1] / 4, document_to_surface: [0.25, 0., 0., 0.25, 0., 0.] };
+    crate::test_support::submit_settled(&mut r, FramePacket { view, ..crate::test_support::packet(doc.scene(), extent) });
+    let mut style = preset_style(layer_core::DefaultBrushPreset::LiquifyPush);
+    style.liquify = Some(Arc::new(layer_core::liquify::Context::for_source(placement::paint(&doc), false)));
+    let (mut captured, mut repeated) = (BTreeSet::new(), Vec::new());
+    for (step, x) in PATH.into_iter().enumerate() {
+        let end = step + 1 == PATH.len();
+        let mut real = dab([0.; 4]);
+        real.center = layer_core::Point { x, y: 700. };real.radii = [140.; 2];real.motion = [40., 10.];real.material[3] = 1.;
+        let mut predicted = real;predicted.center.x += 45.;
+        let dabs = [real, predicted];
+        let mut persistent = crate::test_support::dab_batch(target, style.clone(), real.bounds());
+        persistent.stroke_id = StrokeId(67);persistent.stroke_start = step == 0;persistent.stroke_end = end;
+        let mut preview = crate::test_support::dab_batch(target, style.clone(), predicted.bounds());
+        preview.stroke_id = StrokeId(67);preview.kind = DabBatchKind::Preview;preview.stroke_start = false;preview.stroke_end = false;preview.first_dab = 1;
+        let batches = [persistent, preview];
+        if end { placement::paint_mut(&mut doc).raster = layer_core::raster::RasterRevision::pending(); }
+        let sent = if end { 1 } else { 2 };
+        let packet = FramePacket { view, composite_all: false, dabs: &dabs[..sent], dab_batches: &batches[..sent], ..crate::test_support::packet(doc.scene(), extent) };
+        let (submitted, visits) = crate::test_support::liquify_tiles(|| crate::test_support::submit_ready(&mut r, packet));
+        submitted.unwrap();
+        repeated.push(visits.iter().filter(|((visit, _), _)| *visit == crate::test_support::LiquifyVisit::Capture)
+            .map(|((_, at), count)| *count as usize - usize::from(captured.insert(*at))).sum::<usize>());
+        if !end {
+            Liquify::required_sources(&r, FramePacket { view, ..crate::test_support::packet(doc.scene(), extent) }, &[], &mut BTreeMap::new());
+            crate::test_support::evict_published_pages(&mut r);
+        }
+    }
+    assert!(!captured.is_empty() && repeated.iter().all(|count| *count == 0),
+        "no frame copies or reduces an original the contact already captured, whatever a preflight plans and the lane takes: {repeated:?} repeated captures per frame over {} tiles", captured.len());
+    let atlases = |r: &WgpuRasterizer| r.liquify.as_ref().unwrap().sessions.iter().filter_map(Weak::upgrade)
+        .map(|session| session.lock().unwrap().atlases.iter().flatten().count() as u64).sum::<u64>();
+    let held = atlases(&r);
+    assert!(held > 0 && r.idle_original_bytes() == held * ORIGINAL_ATLAS_BYTES,
+        "pen-up leaves all {held} of the contact's atlases for other edits to take, not {} B", r.idle_original_bytes());
+    crate::test_support::evict_published_pages(&mut r);
+    assert!(atlases(&r) == 0 && r.idle_original_bytes() == 0, "the lane takes every original of the finished contact");
+}
+
+#[test]
 fn a_sessions_idle_originals_stay_counted_from_open_to_close() {
     let counted = |r: &WgpuRasterizer| r.liquify.as_ref().map_or([0; 2], |liquify| [liquify.idle_original_bytes(), liquify.walked_idle_original_bytes()]);
     let mut steps = Vec::new();

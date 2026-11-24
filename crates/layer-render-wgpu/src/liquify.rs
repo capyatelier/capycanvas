@@ -222,6 +222,7 @@ impl Stroke {
     fn dirty_at(&self,at:&[u32;2])->Option<PixelRect> {
         self.pending.as_ref().and_then(|pending|pending.dirty.get(at)).map_or_else(||self.dirty.get(at).copied(),|area|*area)
     }
+    fn release(&self) {self.field.originals.lock().expect("liquify sources").release();}
     fn dirty(&self)->impl Iterator<Item=([u32;2],PixelRect)>+'_ {
         self.dirty.iter().filter(|(at,_)|self.pending.as_ref().is_none_or(|pending|!pending.dirty.contains_key(*at))).map(|(at,area)|(*at,*area))
             .chain(self.pending.iter().flat_map(|pending|pending.dirty.iter().filter_map(|(at,area)|area.map(|area|(*at,area)))))
@@ -409,8 +410,11 @@ impl Liquify {
         if let Some(liquify) = &mut r.liquify {
             for stroke in liquify.strokes.values_mut() {stroke.resolve();}
             liquify.unchanged_previews.clear();
-            liquify.strokes.retain(|target, stroke| !stroke.preview_only || packet.dab_batches.iter()
-                .any(|batch| batch.target == *target && batch.stroke_id == stroke.id));
+            liquify.strokes.retain(|target, stroke| {
+                let kept = !stroke.preview_only || packet.dab_batches.iter().any(|batch| batch.target == *target && batch.stroke_id == stroke.id);
+                if !kept { stroke.release(); }
+                kept
+            });
             for (target, stroke) in &mut liquify.strokes {
                 if !packet.dab_batches.iter().any(|batch| batch.kind == DabBatchKind::Preview
                     && batch.target == *target && batch.stroke_id == stroke.id) { stroke.preview_tiles.clear(); }
@@ -458,7 +462,7 @@ impl Liquify {
 
     pub fn required_sources(r:&WgpuRasterizer,packet:FramePacket<'_>,plans:&[Vec<BrushTile>],required:&mut BTreeMap<SourceTarget,BTreeSet<[u32;2]>>)->OriginalDemand {
         let plane=layer_core::raster::RasterPlane::Color;
-        for session in r.liquify.iter().flat_map(|liquify|&liquify.sessions).filter_map(Weak::upgrade) {session.lock().expect("liquify sources").release();}
+        for session in r.liquify.iter().flat_map(|liquify|liquify.finished_sessions()) {session.lock().expect("liquify sources").release();}
         let mut sessions:Vec<(SourceTarget,Session)>=Vec::new();
         for (batch,tiles) in packet.dab_batches.iter().zip(plans).filter(|(batch,_)|batch.style.execution==BrushExecution::Liquify) {
             let preview=batch.kind==DabBatchKind::Preview;
@@ -531,6 +535,10 @@ impl Liquify {
             sessions: Vec::new(), idle: Default::default() }
     }
 
+    fn finished_sessions(&self)->impl Iterator<Item=Arc<Mutex<Originals>>>+'_ {
+        self.sessions.iter().filter_map(Weak::upgrade).filter(|session|self.strokes.values().all(|stroke|!Arc::ptr_eq(&stroke.field.originals,session)))
+    }
+
     pub fn idle_original_bytes(&self)->u64 {self.idle.load(Ordering::SeqCst)}
     #[cfg(test)]
     pub fn walked_idle_original_bytes(&self)->u64 {
@@ -549,7 +557,10 @@ impl Liquify {
         }).collect()
     }
 
-    pub fn reset(&mut self) { self.strokes.clear(); self.unchanged_previews.clear(); }
+    pub fn reset(&mut self) {
+        for stroke in std::mem::take(&mut self.strokes).into_values() { stroke.release(); }
+        self.unchanged_previews.clear();
+    }
 
     pub fn preview_unchanged(&self, target: SourceTarget, coordinate: [u32; 2]) -> bool {
         self.unchanged_previews.contains(&(target, coordinate))
@@ -571,7 +582,7 @@ impl Liquify {
             let Some(stroke)=self.strokes.get(&target).filter(|s|s.id==batch.stroke_id) else {continue;};
             if stroke.field.tiles.values().any(|tile|tile.read(receipt).is_err()) {continue;}
             let stroke=self.strokes.remove(&target).unwrap();
-            stroke.field.originals.lock().expect("liquify sources").release();
+            stroke.release();
             if batch.style.execution != BrushExecution::Liquify { continue; }
             let SourceTarget::Paint(handle) = target else { continue };
             let Some(source) = scene.paint(handle).filter(|s| s.raster.try_data().is_none()) else { continue };
@@ -636,6 +647,7 @@ impl Liquify {
     fn store(r:&WgpuRasterizer,room:&mut Option<crate::residency::Reservation>,originals:&mut Originals,coordinate:[u32;2],
         capture:layer_core::raster::ContentVersion,prior:Option<Arc<OriginalTile>>,source:Option<source_access::Sampled<source_access::RawTile>>,encoder:&mut submission::CommandEncoder,
         pending:&mut Vec<display_mips::CompleteUpdates>,writes:&mut Vec<(Arc<OriginalTile>,resident::Encoding)>)->Result<Arc<OriginalTile>,GpuRasterError> {
+        #[cfg(test)] crate::test_support::record_liquify_tile(crate::test_support::LiquifyVisit::Capture,coordinate);
         let receipt=encoder.submission();
         let (chunk,span,bindings)=(originals.layout.chunk(coordinate),originals.layout.chunk_tiles(),originals.layout.bindings());
         let layers=chunk*span..(chunk+1)*span;
@@ -773,11 +785,12 @@ impl Liquify {
                 document_extent:extent,time_seconds:original_scene.context.elapsed,blend_space:original_scene.view().composition().blend,
                 dabs:&[],dab_batches:&[],restore_rasters:&[],reset_layers:false,composite_all:false,commit_rasters:true,inspect_mask:None,selection_overlays:None},
                 crate::IdMap::from_iter([(batch.target,versions)]))?;
-            self.strokes.insert(batch.target, Stroke { pending:None,source,id: batch.stroke_id, preview_only: preview, original, dirty: Default::default(),
+            let replaced=self.strokes.insert(batch.target, Stroke { pending:None,source,id: batch.stroke_id, preview_only: preview, original, dirty: Default::default(),
                 colored_tiles: previous.map_or_default(|f| f.tiles.clone()),
                 preview_tiles: Default::default(),
                 field: Field { content:previous.map_or_else(layer_core::raster::ContentName::fresh,|field|field.content), device: (*r.device).clone(), tiles: previous.map_or_default(|f| f.tiles.clone()),
                     originals } });
+            if let Some(replaced)=replaced.filter(|replaced|!Arc::ptr_eq(&replaced.field.originals,&self.strokes[&batch.target].field.originals)) {replaced.release();}
         }
         self.strokes.get_mut(&batch.target).unwrap().stage(&encoder.submission())?;
         let stroke = self.strokes.get(&batch.target).unwrap();
