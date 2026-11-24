@@ -484,8 +484,19 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
 
+    fn saved_ring(&self, brush: u32) -> Option<Vec<String>> {
+        self.state.workspace.layout.bubbles.ring(brush).map(|saved| {
+            saved.iter().map(|id| tool_settings::row(id)).fold(Vec::new(), |mut ring, id| {
+                if !ring.iter().any(|kept: &String| kept == id) {
+                    ring.push(id.to_owned());
+                }
+                ring
+            })
+        })
+    }
+
     fn ring_ids(&self, brush: u32, snapshot: &BrushSnapshot, controls: &[ToolSetting]) -> Vec<&'static str> {
-        match self.state.workspace.layout.bubbles.ring(brush) {
+        match self.saved_ring(brush) {
             Some(saved) => saved.iter().filter_map(|id| controls.iter().find(|c| c.id == id)).map(|c| c.id).collect(),
             None => tool_settings::ring_defaults(brush, snapshot, controls),
         }
@@ -840,10 +851,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let preset = tools::preset(brush)?;
                 let snapshot = self.tools.brush(preset);
                 let controls = tool_settings::controls(brush, &snapshot, self.localization());
-                let mut shown = self.state.workspace.layout.bubbles.ring(brush).map_or_else(
-                    || self.ring_ids(brush, &snapshot, &controls).into_iter().map(str::to_owned).collect(),
-                    <[String]>::to_vec);
-                let setting = controls.iter().find(|c| c.id == setting).ok_or("This setting is not used by the brush")?.id;
+                let mut shown = self.saved_ring(brush)
+                    .unwrap_or_else(|| self.ring_ids(brush, &snapshot, &controls).into_iter().map(str::to_owned).collect());
+                let setting = tool_settings::shown(&controls, &setting).ok_or("This setting is not used by the brush")?.id;
                 if let Some(index) = shown.iter().position(|id| *id == setting) {
                     shown.remove(index);
                 } else if shown.len() < MAX_RING_SETTINGS {
@@ -1472,7 +1482,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let snapshot = self.tools.brush(tools::preset(brush).ok()?);
         let controls = tool_settings::controls(brush, &snapshot, self.localization());
         let shown = self.ring_ids(brush, &snapshot, &controls);
-        let count = self.state.workspace.layout.bubbles.ring(brush).map_or(shown.len(), <[String]>::len);
+        let count = self.saved_ring(brush).map_or(shown.len(), |saved| saved.len());
         let rows = controls
             .iter()
             .map(|c| {

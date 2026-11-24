@@ -298,7 +298,7 @@ impl UiState {
             }
             UiAction::SetBrushStrength { .. } => ToolbarNumericBinding::BrushStrength.field(self).is_some(),
             UiAction::SetToolSetting { id, .. } | UiAction::ResetToolSetting { id } | UiAction::ToolSettingContact { id, .. } => {
-                self.tool_settings.iter().any(|f| f.id == id)
+                crate::tool_settings::shown(&self.tool_settings, id).is_some()
             }
             UiAction::Invoke { command }
                 if self.tool_actions.iter().any(|a| a.command == *command) =>

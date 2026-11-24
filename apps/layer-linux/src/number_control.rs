@@ -9,7 +9,7 @@ mod imp {
     use super::*;
     #[derive(Default)]
     pub struct NumberControl {
-        pub spec: OnceCell<NumericControl>,
+        pub spec: RefCell<Option<NumericControl>>,
         pub localization: RefCell<Option<std::sync::Arc<layer_ui::Localizer>>>,
         pub value: Cell<f64>,
         pub presented_text: RefCell<Option<String>>,
@@ -444,7 +444,7 @@ impl NumberControl {
             .0;
         // Keep normal app typography before spending scarce width on units.
         let show_unit =
-            imp.separate_unit.get() && imp.show_units.get() && unscaled + unit_width <= available;
+            imp.separate_unit.get() && imp.show_units.get() && !self.spec().unit.is_empty() && unscaled + unit_width <= available;
         unit.set_visible(show_unit);
         if show_unit {
             available -= unit_width;
@@ -503,8 +503,7 @@ impl NumberControl {
             });
         }
         imp.separate_unit.set(stacked);
-        imp.show_units
-            .set(show_units && !self.spec().unit.is_empty());
+        imp.show_units.set(show_units);
         if let Some(unit) = imp.unit.get() {
             unit.set_visible(stacked && show_units && !self.spec().unit.is_empty());
         }
@@ -524,7 +523,7 @@ impl NumberControl {
         localization: std::sync::Arc<layer_ui::Localizer>,
     ) -> Self {
         let control: Self = glib::Object::new();
-        control.imp().spec.set(spec.clone()).unwrap();
+        *control.imp().spec.borrow_mut() = Some(spec.clone());
         *control.imp().localization.borrow_mut() = Some(localization);
         *control.imp().editor_title.borrow_mut() = title.to_string();
         *control.imp().caption_description.borrow_mut() = description.to_string();
@@ -678,16 +677,7 @@ impl NumberControl {
             if inline {
                 // Reserve the full formatted range, not the current value's
                 // digit count. Expressions scroll inside this same footprint.
-                let chars = spec
-                    .width_samples(compact)
-                    .iter()
-                    .map(|v| v.chars().count())
-                    .max()
-                    .unwrap_or(1) as i32;
-                value_label.set_width_chars(if compact { 0 } else { chars });
-                value_label.set_max_width_chars(if compact { -1 } else { chars });
-                entry.set_width_chars(if compact { 1 } else { chars });
-                entry.set_max_width_chars(if compact { 1 } else { chars });
+                Self::fit_range(&value_label, &entry, &spec, compact);
             }
             gtk::prelude::EditableExt::set_alignment(&entry, if compact { 0.5 } else { 1.0 });
             entry.add_css_class("number-entry");
@@ -711,20 +701,7 @@ impl NumberControl {
                 // this fixed footprint instead of resizing nearby controls.
                 let reserve = gtk::Stack::new();
                 reserve.set_hhomogeneous(true);
-                for text in spec.width_samples(compact) {
-                    let sample = gtk::Button::new();
-                    sample.add_css_class("number-value");
-                    sample.add_css_class("flat");
-                    let label = gtk::Label::new(Some(
-                        &text
-                            .chars()
-                            .map(|c| if c.is_ascii_digit() { '8' } else { c })
-                            .collect::<String>(),
-                    ));
-                    label.add_css_class("number-readout");
-                    sample.set_child(Some(&label));
-                    reserve.add_child(&sample);
-                }
+                Self::fill_reserve(&reserve, &spec, compact);
                 stack.add_named(&reserve, Some("measure"));
                 control.imp().width_reserve.set(reserve.upcast()).unwrap();
             }
@@ -1103,8 +1080,64 @@ impl NumberControl {
         key == gtk::gdk::Key::Escape && focus.ancestor(Self::static_type()).and_downcast::<Self>()
             .is_some_and(|control| control.imp().scrubbing.get())
     }
-    fn spec(&self) -> &NumericControl {
-        self.imp().spec.get().unwrap()
+    fn spec(&self) -> std::cell::Ref<'_, NumericControl> {
+        std::cell::Ref::map(self.imp().spec.borrow(), |spec| spec.as_ref().unwrap())
+    }
+    fn fit_range(label: &gtk::Label, entry: &gtk::Entry, spec: &NumericControl, compact: bool) {
+        let chars = spec.width_samples(compact).iter().map(|v| v.chars().count()).max().unwrap_or(1) as i32;
+        label.set_width_chars(if compact { 0 } else { chars });
+        label.set_max_width_chars(if compact { -1 } else { chars });
+        entry.set_width_chars(if compact { 1 } else { chars });
+        entry.set_max_width_chars(if compact { 1 } else { chars });
+    }
+    fn fill_reserve(reserve: &gtk::Stack, spec: &NumericControl, compact: bool) {
+        while let Some(child) = reserve.first_child() {
+            reserve.remove(&child);
+        }
+        for text in spec.width_samples(compact) {
+            let sample = gtk::Button::new();
+            sample.add_css_class("number-value");
+            sample.add_css_class("flat");
+            let label = gtk::Label::new(Some(&text.chars().map(|c| if c.is_ascii_digit() { '8' } else { c }).collect::<String>()));
+            label.add_css_class("number-readout");
+            sample.set_child(Some(&label));
+            reserve.add_child(&sample);
+        }
+    }
+    pub fn set_spec(&self, spec: NumericControl) {
+        if *self.spec() == spec {
+            return;
+        }
+        let imp = self.imp();
+        *imp.spec.borrow_mut() = Some(spec.clone());
+        imp.updating.set(true);
+        if let Some(spin) = imp.spin.get() {
+            spin.set_range(spec.min * spec.scale, spec.max * spec.scale);
+            spin.set_increments(spec.step * spec.scale, spin.adjustment().page_increment());
+            spin.set_digits(spec.digits);
+        }
+        imp.updating.set(false);
+        if let Some(unit) = imp.unit.get() {
+            unit.set_text(&spec.unit);
+            unit.set_visible(imp.separate_unit.get() && imp.show_units.get() && !spec.unit.is_empty());
+        }
+        if let Some(reserve) = imp.width_reserve.get().and_then(|reserve| reserve.downcast_ref::<gtk::Stack>()) {
+            Self::fill_reserve(reserve, &spec, imp.compact.get());
+            if let (true, Some(label), Some(entry)) = (reserve.is_visible(), imp.value_label.get(), imp.entry.get()) {
+                Self::fit_range(label, entry, &spec, imp.compact.get());
+            }
+        }
+        if let Some(dial) = imp.dial.get() {
+            dial.update_property(&[
+                gtk::accessible::Property::ValueMin(spec.min * spec.scale),
+                gtk::accessible::Property::ValueMax(spec.max * spec.scale),
+            ]);
+        }
+        if let Some(editor) = imp.popover_control.get() {
+            editor.set_spec(spec);
+        }
+        let text = imp.presented_text.borrow().clone();
+        self.present_value(self.value(), text.as_deref());
     }
     pub fn value(&self) -> f64 {
         self.imp().value.get()

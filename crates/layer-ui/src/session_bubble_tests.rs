@@ -2379,13 +2379,36 @@ fn halo_arcs_that_shape_the_dab_show_it_under_the_contact() {
 }
 
 #[test]
+fn rings_saved_with_a_taper_type_setting_id_show_the_taper_row() {
+    let pen = DefaultBrushPreset::GPen as u32;
+    let mut s = desk();
+    let id = take(&mut s, brush(DefaultBrushPreset::GPen), FAR);
+    tap(&mut s, id);
+    tap(&mut s, id);
+    s.dispatch(UiAction::Invoke { command: CommandId::TaperFixed }).unwrap();
+    let mut capture = s.capture_workspace().unwrap();
+    capture.history.head.current.layout.bubbles.set_ring(pen, ["hardness", "taper_end_widths", "taper_end_share"].map(String::from).to_vec());
+    let capture = serde_json::from_str(&serde_json::to_string(&capture).unwrap()).unwrap();
+    let mut restored = desk();
+    restored.restore_editing(s.editing_state()).unwrap();
+    restored.adopt_workspace(PreparedWorkspace::new(capture).unwrap()).unwrap();
+    tap(&mut restored, id);
+    let ring = |s: &UiSession<Recorder>| view(s, id).rings.iter().map(|r| r.setting).collect::<Vec<_>>();
+    assert_eq!(ring(&restored), ["hardness", "taper_end"], "the saved Taper end shows its row once");
+    restored.dispatch(UiAction::Invoke { command: CommandId::TaperProportional }).unwrap();
+    assert_eq!(ring(&restored), ["hardness", "taper_end"]);
+    act(&mut restored, BubbleAction::ToggleRingSetting { brush: pen, setting: "taper_end_widths".into() }).unwrap();
+    assert_eq!(ring(&restored), ["hardness"], "either saved ID removes the row");
+}
+
+#[test]
 fn taper_arcs_preview_a_fitted_tapered_line_while_dabs_keep_canvas_scale() {
     let mut s = desk();
     let id = take(&mut s, brush(DefaultBrushPreset::GPen), FAR);
     tap(&mut s, id);
     tap(&mut s, id);
     s.dispatch(UiAction::Invoke { command: CommandId::TaperFixed }).unwrap();
-    for setting in ["taper_start_widths", "hardness"] {
+    for setting in ["taper_start", "hardness"] {
         if !view(&s, id).rings.iter().any(|r| r.setting == setting) {
             act(&mut s, BubbleAction::ToggleRingSetting { brush: DefaultBrushPreset::GPen as u32, setting: setting.into() }).unwrap();
         }
@@ -2401,7 +2424,7 @@ fn taper_arcs_preview_a_fitted_tapered_line_while_dabs_keep_canvas_scale() {
     for (diameter, zoom) in [(10., 1.), (200., 1.), (200., 2.5)] {
         s.dispatch(UiAction::SetBrushSize { value: diameter }).unwrap();
         s.state.camera.zoom = zoom;
-        let (size, key, line) = press(&mut s, "taper_start_widths");
+        let (size, key, line) = press(&mut s, "taper_start");
         assert_eq!(size, TAPER_STAMP, "{diameter} px at {zoom}x");
         let width = |dab: &layer_render::Dab| dab.radii[0].min(dab.radii[1]);
         assert!((8..=192).contains(&line.dabs.len()), "{} contacts", line.dabs.len());
@@ -2424,13 +2447,13 @@ fn taper_arc_stamps_follow_the_latest_value_one_request_at_a_time() {
     tap(&mut s, id);
     tap(&mut s, id);
     s.dispatch(UiAction::Invoke { command: CommandId::TaperFixed }).unwrap();
-    for setting in ["taper_start_widths", "hardness"] {
+    for setting in ["taper_start", "hardness"] {
         if !view(&s, id).rings.iter().any(|r| r.setting == setting) {
             act(&mut s, BubbleAction::ToggleRingSetting { brush: DefaultBrushPreset::GPen as u32, setting: setting.into() }).unwrap();
         }
     }
     let ring = |s: &UiSession<StampRecorder>, setting| view(s, id).rings.into_iter().find(|r| r.setting == setting).unwrap();
-    let taper = ring(&s, "taper_start_widths");
+    let taper = ring(&s, "taper_start");
     let poll = |s: &mut UiSession<StampRecorder>, known| s.toolbar_stamp(s.state.toolbar_context(), known).unwrap();
     act(&mut s, BubbleAction::Ring { id, phase: ContactPhase::Down, position: taper.arc.point(0.1) }).unwrap();
     assert!(poll(&mut s, None).is_none());

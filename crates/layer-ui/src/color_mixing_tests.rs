@@ -92,10 +92,10 @@ fn taper_section_follows_tip_with_its_choice_then_the_current_mode_sliders() {
     assert!(s.state.tool_actions.iter().all(|a| tool_settings::taper(a.command).is_none()), "the choice is not a mode bar");
     assert_eq!(section(&s).unwrap(), [""; 0]);
     s.dispatch(UiAction::Invoke { command: CommandId::TaperFixed }).unwrap();
-    assert_eq!(section(&s).unwrap(), ["taper_start_widths", "taper_end_widths", "taper_pointiness"]);
+    assert_eq!(section(&s).unwrap(), ["taper_start", "taper_end", "taper_pointiness"]);
     s.dispatch(UiAction::SetToolSetting { id: "taper_start_widths".into(), value: 4.5 }).unwrap();
     s.dispatch(UiAction::Invoke { command: CommandId::TaperProportional }).unwrap();
-    assert_eq!(section(&s).unwrap(), ["taper_start_share", "taper_end_share", "taper_pointiness"]);
+    assert_eq!(section(&s).unwrap(), ["taper_start", "taper_end", "taper_pointiness"]);
     s.dispatch(UiAction::SetToolSetting { id: "taper_end_share".into(), value: 0.45 }).unwrap();
     s.dispatch(UiAction::Invoke { command: CommandId::TaperOff }).unwrap();
     assert_eq!(section(&s).unwrap(), [""; 0]);
@@ -138,7 +138,7 @@ fn stored_taper_overrides_restore_in_either_order() {
     s.select_brush(pen as u32).unwrap();
     assert_eq!(s.engine.configured_brush().taper, expected);
     assert_eq!(s.state.tool_settings.iter().filter(|c| c.id.starts_with("taper_")).map(|c| (c.id, c.value)).collect::<Vec<_>>(),
-        [("taper_start_share", 0.3), ("taper_end_share", 0.2), ("taper_pointiness", 0.8)]);
+        [("taper_start", 0.3), ("taper_end", 0.2), ("taper_pointiness", 0.8)]);
 }
 
 #[test]
@@ -164,4 +164,36 @@ fn only_pens_take_taper_values_from_settings_or_saved_overrides() {
     assert_eq!(s.editing_state().tools.overrides[&(brush as u32)].len(), 3, "reading keeps the values it ignores");
     let restored = crate::EditingState::restore(&text, &crate::Localizer::shared(crate::UiLanguage::English));
     assert_eq!(restored.tools.overrides[&(brush as u32)].len(), 3);
+}
+
+#[test]
+fn taper_rows_keep_their_identity_when_the_taper_type_changes() {
+    let taper = MessageId::TOOL_SETTING_GROUP_TAPER.key();
+    let rows = |s: &UiSession<Recorder>| -> Vec<_> {
+        s.state.tool_settings.iter().filter(|f| f.group_id == taper).map(|f| (f.id, f.label.clone(), f.numeric.clone(), f.value)).collect()
+    };
+    let identities = |rows: &[(&'static str, std::sync::Arc<str>, crate::NumericControl, f32)]| -> Vec<_> { rows.iter().map(|row| (row.0, row.1.clone())).collect() };
+    let anchor = |s: &UiSession<Recorder>| s.state.tool_options().iter().find_map(|o| match o { ToolOption::Choice { id: "taper", before, .. } => Some(*before), _ => None });
+    let pen = DefaultBrushPreset::GPen as u32;
+    let mut s = session(Platform::Gtk);
+    s.select_brush(pen).unwrap();
+    s.dispatch(UiAction::Invoke { command: CommandId::TaperFixed }).unwrap();
+    s.dispatch(UiAction::SetToolSetting { id: "taper_start".into(), value: 4.5 }).unwrap();
+    let (fixed, fixed_anchor) = (rows(&s), anchor(&s));
+    s.dispatch(UiAction::Invoke { command: CommandId::TaperProportional }).unwrap();
+    s.dispatch(UiAction::SetToolSetting { id: "taper_end".into(), value: 0.45 }).unwrap();
+    let proportional = rows(&s);
+    assert_eq!(identities(&fixed), identities(&proportional), "Fixed and Proportional show the same rows");
+    assert_eq!(anchor(&s), fixed_anchor, "the Taper type choice keeps its place");
+    assert_ne!(fixed[0].2, proportional[0].2, "the unit and range follow the type");
+    assert_eq!((fixed[0].3, proportional[1].3), (4.5, 0.45));
+    let overrides = &s.tools.overrides[&pen];
+    assert_eq!((overrides.get("taper_start_widths"), overrides.get("taper_end_share")), (Some(&4.5), Some(&0.45)), "values keep their saved IDs");
+    s.dispatch(UiAction::ResetToolSetting { id: "taper_end".into() }).unwrap();
+    assert_eq!(s.engine.configured_brush().taper.proportional_shares[1], layer_core::BrushTaper::default().proportional_shares[1]);
+    s.dispatch(UiAction::Invoke { command: CommandId::TaperFixed }).unwrap();
+    assert_eq!(identities(&rows(&s)), identities(&fixed));
+    assert_eq!(rows(&s)[0].3, 4.5);
+    s.dispatch(UiAction::Invoke { command: CommandId::TaperOff }).unwrap();
+    assert!(rows(&s).is_empty(), "Off hides the rows");
 }

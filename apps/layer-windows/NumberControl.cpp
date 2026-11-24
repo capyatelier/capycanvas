@@ -68,8 +68,9 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     std::function<double()> get,std::function<void(double)> set,Bindings& bindings,Bindings* commits,bool valueOnly,hstring const& identifier,bool inlineTrack,NumberPresentation const& presentation,NumericAdmissions* admissions){
     return number(data,ControlSurface::Panel,title,spec,std::move(get),std::move(set),bindings,commits,valueOnly,identifier,inlineTrack,presentation,admissions);
 }
-StackPanel number(std::shared_ptr<WorkspaceData> const& data,ControlSurface surfaceKind,hstring const& title,J const& spec,
+StackPanel number(std::shared_ptr<WorkspaceData> const& data,ControlSurface surfaceKind,hstring const& title,J const& initial,
     std::function<double()> get,std::function<void(double)> set,Bindings& bindings,Bindings* commits,bool valueOnly,hstring const& identifier,bool inlineTrack,NumberPresentation const& presentation,NumericAdmissions* admissions){
+    auto spec=J::Parse(initial.Stringify());
     auto currentTitle=presentation.title?presentation.title:std::function<hstring()>([title]{return title;});
     auto caption=std::make_shared<NumericCaption>();
     auto numericCopy=[source=std::weak_ptr<WorkspaceData>(data),currentTitle,caption]{
@@ -237,7 +238,8 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,ControlSurface surf
     double textInset=std::max(0.,(valueHeight-local->measuredHeight)/2);
     entry.Padding({preference?8.:data->panelMetric(L"field_padding")-1,textInset-1-optical,preference?8.:data->panelMetric(L"field_padding")-1,textInset-1+optical});
     auto surface=make_weak(valueSurface);
-    auto setText=[data,local,measureText,readout,panelValueBox,surface,hiddenText,ranged,valueOnly,inlineTrack,preference,panel,dialWeak,dialDot,dialSize,scale=num(spec,L"scale",1),weak=make_weak(entry)](hstring const& value){
+    auto setText=[data,local,measureText,readout,panelValueBox,surface,hiddenText,ranged,valueOnly,inlineTrack,preference,panel,dialWeak,dialDot,dialSize,spec,weak=make_weak(entry)](hstring const& value){
+        double scale=num(spec,L"scale",1);
         bool previous=std::exchange(local->formatting,true);
         struct Reset{bool& value;bool previous;~Reset(){value=previous;}} reset{local->formatting,previous};
         if(dialDot){
@@ -553,7 +555,11 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,ControlSurface surf
         auto panel=color(str(palette,L"panel")),ink=color(str(palette,L"text"));
         track.Color({255,uint8_t((int(panel.R)+ink.R)/2),uint8_t((int(panel.G)+ink.G)/2),uint8_t((int(panel.B)+ink.B)/2)});
     });
-    bindings.emplace_back([data,entrySurface,local,caption,spec,get,entry,slider,setText,setPosition,presented,finish,captures,finishSliderKey,identity=presentation.identity]{
+    bindings.emplace_back([data,entrySurface,local,caption,spec,get,entry,slider,setText,setPosition,presented,finish,captures,finishSliderKey,dialRange,current=presentation.spec,identity=presentation.identity]{
+        if(current)if(auto next=current();next.Size()&&next.Stringify()!=spec.Stringify()){
+            spec.Clear();for(auto const& pair:next)spec.SetNamedValue(pair.Key(),Windows::Data::Json::JsonValue::Parse(pair.Value().Stringify()));
+            if(dialRange){dialRange->scale=num(spec,L"scale",1);dialRange->minimum=num(spec,L"min");dialRange->maximum=num(spec,L"max");dialRange->step=num(spec,L"step");}
+        }
         if(identity && local->identity!=identity()){
             ++local->contactGeneration;for(auto const& capture:*captures)capture->Cancel();finishSliderKey(true);finish(L"cancel");
             local->identity=identity();local->editing=false;local->dragging=false;local->scrubbing=false;local->turning=false;
@@ -627,8 +633,9 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,ControlSurface surf
             auto control=sender.as<Button>();control.Opacity(control.IsEnabled()?1.:.36);
         });
         if(ranged){Grid::SetColumn(step,direction<0?0:2);trackRow.Children().Append(step);}else spin.Children().Append(step);
-        bindings.emplace_back([local,spec,step,direction]{
-            bool enabled=direction<0?local->value>num(spec,L"min"):local->value<num(spec,L"max");
+        bindings.emplace_back([local,spec,current=presentation.spec,step,direction]{
+            auto bounds=current?current():J{};if(!bounds.Size())bounds=spec;
+            bool enabled=direction<0?local->value>num(bounds,L"min"):local->value<num(bounds,L"max");
             step.IsEnabled(enabled);step.Opacity(step.IsEnabled()?1.:.36);
         });
     }

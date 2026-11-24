@@ -25,6 +25,17 @@ test('tool category measurements reserve every fractional pixel before shared pa
   context.arrange();assert.equal(requests.length,1);
 });
 
+test('a Tool Settings rebuild returns every scrolled container to its offset',()=>{
+  const begin=source.indexOf('  function holdScroll(node) {'),end=source.indexOf('  function toolSettings(root) {',begin);
+  assert.ok(begin>=0&&end>begin,'Tool Settings holds its scroll across a rebuild');
+  const context={};runInNewContext(source.slice(begin,end)+'\nglobalThis.holdScroll=holdScroll;',context);
+  const viewport={scrollTop:335,parentElement:null},panel={scrollTop:0,parentElement:viewport},root={scrollTop:0,parentElement:panel};
+  const restore=context.holdScroll(root);
+  viewport.scrollTop=0;panel.scrollTop=12;restore();
+  assert.deepEqual([viewport.scrollTop,panel.scrollTop,root.scrollTop],[335,12,0]);
+  assert.match(source,/const restoreScroll=holdScroll\(root\);[^]*contentChanged\("tool_settings"\);\s*restoreScroll\(\);/,'the rebuild restores after its content change');
+});
+
 test('New Drawing acknowledges creation only when the shared dialog closes',()=>{
   const source=readFileSync(new URL('new-drawing.js',import.meta.url),'utf8');
   let drawing={},accepted,create=false;

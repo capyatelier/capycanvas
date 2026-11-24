@@ -380,6 +380,7 @@ impl ToolSettings {
         let context=state.toolbar_context();
         let context_changed=self.extra_context.get()!=Some(context);
         let same=self.extra_context.get()==Some(context) && self.extra_fields.borrow().len()==state.tool_extra.len() && self.extra_fields.borrow().iter().zip(&state.tool_extra).all(|((old,_),next)|old.same_schema(next));
+        let mut held = if same { None } else { self.hold_scroll() };
         if !same {
             self.extra_context.set(Some(context));
             self.extra_fields.borrow_mut().clear();
@@ -400,7 +401,7 @@ impl ToolSettings {
             && fields.iter().zip(controls).all(|((old, _), next)| {
                 old.id == next.id
                     && old.group_id == next.group_id
-                    && old.numeric == next.numeric
+                    && if compact { old.numeric == next.numeric } else { old.numeric.kind == next.numeric.kind }
             })
             && actions.len() == state.tool_actions.len()
             && actions
@@ -408,6 +409,7 @@ impl ToolSettings {
                 .zip(&state.tool_actions)
                 .all(|((old, _, _), next)| old == next);
         if !same_schema {
+            if held.is_none() { held = self.hold_scroll(); }
             if let Some(range) = self.range.borrow().as_ref() { range.retire(); }
             for (option, field) in self.extra_fields.borrow().iter() {
                 if option.anchor().is_some()
@@ -609,6 +611,10 @@ impl ToolSettings {
         }
         for ((old, input), control) in fields.iter_mut().zip(controls) {
             if old.label != control.label { input.set_caption(&control.label, "", workspace.localization()); input.set_tooltip_text(Some(&control.tooltip_localized(&workspace.localization()))); }
+            if old.numeric != control.numeric {
+                input.set_spec(control.numeric.clone());
+                input.fit_spin_width();
+            }
             *old = control.clone();
             input.set_value(control.value as f64);
         }
@@ -656,7 +662,49 @@ impl ToolSettings {
         self.fields.replace(fields);
         self.actions.replace(actions);
         self.updating.set(false);
+        if let Some(held) = held { held.restore(&self.root); }
     }
+    fn hold_scroll(&self) -> Option<HeldScroll> {
+        let scroller = self.root.ancestor(gtk::ScrolledWindow::static_type()).and_downcast::<gtk::ScrolledWindow>()?;
+        let window = self.root.root();
+        let focus = window.as_ref().and_then(|window| window.focus()).filter(|focus| focus.is_ancestor(&self.root));
+        let name = focus.as_ref().and_then(|focus| std::iter::successors(Some(focus.clone()), |widget| widget.parent())
+            .take_while(|widget| widget != self.root.upcast_ref::<gtk::Widget>())
+            .find(|widget| widget.widget_name() != widget.type_().name()))
+            .map(|widget| widget.widget_name());
+        if let (Some(window), Some(_)) = (&window, &focus) { window.set_focus(None::<&gtk::Widget>); }
+        Some(HeldScroll { offset: scroller.vadjustment().value(), scroller, focus: name })
+    }
+}
+
+struct HeldScroll {
+    scroller: gtk::ScrolledWindow,
+    offset: f64,
+    focus: Option<glib::GString>,
+}
+
+impl HeldScroll {
+    fn restore(self, root: &gtk::Box) {
+        let (root, laid_out) = (root.clone(), Cell::new(false));
+        self.scroller.clone().add_tick_callback(move |scroller, _| {
+            if !laid_out.replace(true) {
+                return glib::ControlFlow::Continue;
+            }
+            let adjustment = scroller.vadjustment();
+            adjustment.set_value(self.offset.min(adjustment.upper() - adjustment.page_size()).max(adjustment.lower()));
+            if let Some(widget) = self.focus.as_deref().and_then(|name| named(root.upcast_ref(), name)) {
+                widget.grab_focus();
+            }
+            glib::ControlFlow::Break
+        });
+    }
+}
+
+fn named(widget: &gtk::Widget, name: &str) -> Option<gtk::Widget> {
+    if widget.widget_name() == name {
+        return Some(widget.clone());
+    }
+    std::iter::successors(widget.first_child(), |child| child.next_sibling()).find_map(|child| named(&child, name))
 }
 
 pub fn size_grid(workspace: &Rc<Workspace>) -> (adw::WrapBox, Vec<(f32, gtk::Button)>) {

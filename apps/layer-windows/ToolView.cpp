@@ -278,18 +278,18 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
     void refresh(){
         if(picking(data->state))return refreshPicker();
         auto target=settingsContext(data->state);bool contextChanged=fieldContext&&*fieldContext!=target;A schema;hstring previousGroup;
-        for(auto value:array(data->state,L"tool_settings")){
-            auto item=value.GetObject();auto group=str(item,L"group_id");
-            schema.Append(O({{L"id",S(str(item,L"id"))},{L"group_boundary",B(previousGroup!=group)},{L"numeric",object(item,L"numeric")},{L"preview",B(flag(item,L"preview"))}}));previousGroup=group;
-        }
         auto actions=array(data->state,L"tool_actions");auto extra=array(data->state,L"tool_extra");
+        bool compact=false;for(auto value:extra)compact=compact||str(object(value.GetObject(),L"Choice"),L"id")==L"tonal-tones";
+        for(auto value:array(data->state,L"tool_settings")){
+            auto item=value.GetObject();auto group=str(item,L"group_id");auto numeric=object(item,L"numeric");
+            schema.Append(O({{L"id",S(str(item,L"id"))},{L"group_boundary",B(previousGroup!=group)},{L"numeric",compact?numeric:O({{L"kind",S(str(numeric,L"kind"))}})},{L"preview",B(flag(item,L"preview"))}}));previousGroup=group;
+        }
         bool gradient=false;for(auto value:extra)gradient=gradient||object(value.GetObject(),L"Gradient").Size()!=0;
         auto next=O({{L"context",S(gradient?target:hstring{})},{L"fields",schema},{L"actions",actions},{L"extra",extraSchema(extra)}}).Stringify();
         if(next!=key){
             auto context=fieldContext=std::make_shared<hstring>(target);
             key=next;fields.clear();if(range){range->Dispose();range=nullptr;}root.Children().Clear();hstring group;
             auto weak=weak_from_this();
-            bool compact=false;for(auto value:extra)compact=compact||str(object(value.GetObject(),L"Choice"),L"id")==L"tonal-tones";
             root.Spacing(data->panelMetric(L"group_spacing"));body=StackPanel();body.Spacing(data->panelMetric(L"control_spacing"));modeSection=StackPanel();modeSection.Spacing(data->panelMetric(L"control_spacing"));
             std::map<std::wstring,Grid> modeRows;std::map<std::wstring,size_t> modeIndices;bool selectionTool=false;
             for(auto value:actions){auto item=value.GetObject();auto id=str(item,L"group");selectionTool=selectionTool||id==L"selection-mode";
@@ -419,6 +419,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                 presentation.reset=[weak,id,context]{if(auto self=weak.lock();self&&settingsContext(self->data->state)==*context)
                     self->data->dispatch(O({{L"type",S(L"reset_tool_setting")},{L"id",S(id)}}));};
                 presentation.title=[weak,id]{if(auto self=weak.lock())return str(find(self->data->state,L"tool_settings",L"id",id),L"label");return hstring();};
+                presentation.spec=[weak,id]{if(auto self=weak.lock())return object(find(self->data->state,L"tool_settings",L"id",id),L"numeric");return J{};};
                 auto control=number(data,str(item,L"label"),object(item,L"numeric"),
                     [weak,id]{if(auto self=weak.lock())return num(find(self->data->state,L"tool_settings",L"id",id),L"value");return 0.;},
                     [weak,id,context](double value){if(auto self=weak.lock();self&&settingsContext(self->data->state)==*context)

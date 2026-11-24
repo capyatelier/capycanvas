@@ -251,7 +251,7 @@ fn blender_cell_size() -> NumericControl {
 }
 
 pub(crate) fn defined(id: &str) -> bool {
-    DEFINITIONS.iter().any(|d| d.id == id)
+    DEFINITIONS.iter().any(|d| d.id == id || row(d.id) == id)
 }
 
 pub(crate) fn ring_defaults(preset: u32, brush: &BrushSnapshot, controls: &[ToolSetting]) -> Vec<&'static str> {
@@ -325,6 +325,30 @@ pub(crate) fn reads(preset: u32, id: &str) -> bool {
     pen(preset) || id != TAPER && !shapes_taper(id)
 }
 
+const TAPER_START: &str = "taper_start";
+const TAPER_END: &str = "taper_end";
+
+pub(crate) fn row(id: &str) -> &str {
+    match id {
+        "taper_start_widths" | "taper_start_share" => TAPER_START,
+        "taper_end_widths" | "taper_end_share" => TAPER_END,
+        id => id,
+    }
+}
+
+pub(crate) fn shown<'a>(settings: &'a [ToolSetting], id: &str) -> Option<&'a ToolSetting> {
+    settings.iter().find(|setting| setting.id == row(id))
+}
+
+pub(crate) fn stored<'a>(id: &'a str, brush: &BrushSnapshot) -> &'a str {
+    let proportional = brush.taper.mode == TaperMode::Proportional;
+    match id {
+        TAPER_START => if proportional { "taper_start_share" } else { "taper_start_widths" },
+        TAPER_END => if proportional { "taper_end_share" } else { "taper_end_widths" },
+        id => id,
+    }
+}
+
 pub(crate) const TAPER: &str = "taper";
 pub(crate) const TAPER_COMMANDS: [crate::CommandId; 3] =
     [crate::CommandId::TaperOff, crate::CommandId::TaperFixed, crate::CommandId::TaperProportional];
@@ -353,6 +377,7 @@ pub(crate) fn value(preset: u32, brush: &BrushSnapshot, id: &str) -> Option<f32>
     if id == TAPER {
         return taper_visible(preset, brush).then_some(f32::from(brush.taper.mode as u8));
     }
+    let id = stored(id, brush);
     let mut brush = brush.clone();
     let definition = DEFINITIONS.iter().find(|d| d.id == id)?;
     definition.field(preset, &mut brush).copied()
@@ -740,7 +765,7 @@ fn taper_share() -> NumericControl {
 }
 
 pub fn shapes_taper(id: &str) -> bool {
-    matches!(id, "taper_start_widths" | "taper_end_widths" | "taper_start_share" | "taper_end_share" | "taper_pointiness")
+    matches!(row(id), TAPER_START | TAPER_END | "taper_pointiness")
 }
 
 pub fn shapes_dab(id: &str) -> bool {
@@ -771,7 +796,7 @@ pub(crate) fn controls(preset: u32, brush: &BrushSnapshot, localizer: &Localizer
             let order = rank.map_or((1, group_order(group.map_or("", MessageId::key)), placement.map_or(index, |(i, _)| i)),
                 |rank| (0, rank, 0));
             Some((order, ToolSetting { preview: false,
-                id: d.id,
+                id: row(d.id),
                 label: localizer.text(d.label),
                 label_id: d.label,
                 group_id: group.map_or("", MessageId::key),
@@ -814,6 +839,7 @@ pub(crate) fn edit_value(preset: u32, brush: &BrushSnapshot, id: &str, value: f3
         next.taper.mode = mode;
         return Ok(next);
     }
+    let id = stored(id, brush);
     let d = DEFINITIONS
         .iter()
         .find(|d| d.id == id)

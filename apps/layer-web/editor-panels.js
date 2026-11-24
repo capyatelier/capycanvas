@@ -104,6 +104,11 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
       arrange();
     };
   }
+  function holdScroll(node) {
+    const scrolled=[];
+    for(let element=node;element;element=element.parentElement)if(element.scrollTop)scrolled.push([element,element.scrollTop]);
+    return ()=>{for(const [element,top] of scrolled)element.scrollTop=top;};
+  }
   function toolSettings(root) {
     let key = "", numbers = [], actions = [], actionGroups = [], range, choices = [], sampler, gradient;
     root.disposeSettings = () => { gradient?.dispose();gradient=null; range?.dispose(); numbers.forEach(([,n])=>n.dispose()); };
@@ -133,8 +138,9 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
         }
         sampler.source.update({value:picker.layer});sampler.size.update({value:picker.sample_width});return;
       }
-      const next = JSON.stringify([owner,s.tool_settings.map(f=>[f.id,f.numeric,f.group_id]),s.tool_actions.map(a=>[a.command,a.checkable]),s.tool_extra.map(o=>o.Choice?[o.Choice.id,o.Choice.items.map(i=>[i.icon,i.action])]:o.Checklist?[o.Checklist.id,o.Checklist.items.map(i=>i.action)]:["gradient",o.Gradient.gradient.destination])],(k,v)=>k==='endpoint_labels'?undefined:typeof v==='bigint'?String(v):v);
+      const next = JSON.stringify([owner,s.tool_settings.map(f=>[f.id,compact?f.numeric:f.numeric.kind,f.group_id]),s.tool_actions.map(a=>[a.command,a.checkable]),s.tool_extra.map(o=>o.Choice?[o.Choice.id,o.Choice.items.map(i=>[i.icon,i.action])]:o.Checklist?[o.Checklist.id,o.Checklist.items.map(i=>i.action)]:["gradient",o.Gradient.gradient.destination])],(k,v)=>k==='endpoint_labels'?undefined:typeof v==='bigint'?String(v):v);
       if (next !== key) {
+        const restoreScroll=holdScroll(root);
         const previousBody=root.querySelector('.tool-settings-body'),focused=document.activeElement;
         const retainedChoice=previousBody?.contains(focused)&&focused.matches('[data-tool-action-group]')?focused:null;
         const retainedRows=new Map();
@@ -225,8 +231,9 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
           for(const child of children){if(child===before)before=before.nextSibling;else previousBody.insertBefore(child,before);}
         }
         contentChanged("tool_settings");
+        restoreScroll();
       }
-      for (const [id,node] of numbers) node.update(s.tool_settings.find(f=>f.id===id).value);
+      for (const [id,node] of numbers) {const field=s.tool_settings.find(f=>f.id===id);node.setControl(field.numeric);node.update(field.value);}
       if(range) {range.relabel(['tonal_lower','tonal_upper'].map(id=>s.tool_settings.find(f=>f.id===id)),copy.tool_controls.range_hint);range.update(['tonal_lower','tonal_upper'].map(id=>s.tool_settings.find(f=>f.id===id).value));}
       for(const [id,field] of choices)field.update(s.tool_extra.find(o=>(o.Choice??o.Checklist)?.id===id));
       if(gradient)gradient.update(s.tool_extra.find(o=>o.Gradient).Gradient);

@@ -892,7 +892,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     if matches!(&*action, UiAction::StepToolSetting { .. }) =>
                 {
                     let enabled = matches!(&*action, UiAction::StepToolSetting { id, .. }
-                        if self.state.tool_settings.iter().any(|c| c.id == *id));
+                        if crate::tool_settings::shown(&self.state.tool_settings, id).is_some());
                     let mut step = entry(definition.label.resolve(l), l.text(MessageId::COMMANDS_TOOL_SETTINGS), *action, enabled, None, (settings, platform, l));
                     step.descriptor.id = definition.id;
                     entries.push(step);
@@ -1327,7 +1327,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             UiAction::Layer { action: LayerAction::ReferenceSelection } => {
                 Some(l.text(MessageId::COMMANDS_MARK_LAYERS_AS_REFERENCES_FIRST).to_string())
             }
-            UiAction::StepToolSetting { id, .. } if !self.state.tool_settings.iter().any(|c| c.id == *id) => {
+            UiAction::StepToolSetting { id, .. } if crate::tool_settings::shown(&self.state.tool_settings, id).is_none() => {
                 Some(command_text(l, MessageId::COMMANDS_SETTING_UNAVAILABLE, &[("setting", id.to_string())]))
             }
             UiAction::Effect { .. } if self.selection_masks.target().is_some() || document.working.target.is_some_and(layer_core::SourceTarget::is_coverage) => {

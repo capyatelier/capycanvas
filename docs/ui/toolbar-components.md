@@ -134,9 +134,14 @@ Secondary categories follow a shared order: Tip, Taper, Material, Texture, Brist
 Mixing, Watercolor, Bleed, Liquify and Blending. Brush Color mixing joins the
 secondary Mixing category in Tool Options. For pens, the Taper section opens with
 the Taper type choice (Off, Fixed, Proportional), a labeled row of icon radio
-buttons, and then shows only the sliders for the chosen mode; hidden values are kept. Opacity belongs to Blending, after
-the material controls. Hosts use stable `group_id` values for category boundaries
-and schema identity, with localized `group` text only for headings. Dry media
+buttons, and then Taper start, Taper end and Pointiness. Fixed and Proportional
+share the `taper_start` and `taper_end` rows, whose range, unit and value follow
+the type; each type keeps its saved values under `taper_*_widths` or
+`taper_*_share`, which commands and saved rings still accept. Opacity belongs to
+Blending, after the material controls. Hosts use stable `group_id` values for
+category boundaries and schema identity, with localized `group` text only for
+headings. They rebuild Tool Settings only when a row's ID, group or numeric kind
+changes; a new range, unit, step or precision updates the existing row. Dry media
 therefore show Size, Strength, Texture strength, Material hardness, then
 Smoothing, Tip angle under Tip and Opacity under Blending. Contact softness is hidden and fixed in the
 engine. Material hardness controls the pressure response of pigment loading.

@@ -280,7 +280,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             ShortcutAction::Action { action } => match &**action {
                 UiAction::Invoke { command } => if navigation::command_mode(*command).is_some() { self.navigation_idle() }
                     else { self.command_flags(*command).0 || self.defers(action) },
-                UiAction::StepToolSetting { id, .. } => self.state.tool_settings.iter().any(|c| c.id == *id),
+                UiAction::StepToolSetting { id, .. } => crate::tool_settings::shown(&self.state.tool_settings, id).is_some(),
                 _ => true,
             },
             ShortcutAction::Navigate { .. } | ShortcutAction::Hold { .. } | ShortcutAction::Momentary { .. } => true,

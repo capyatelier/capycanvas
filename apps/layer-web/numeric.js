@@ -40,20 +40,24 @@ export function createNumberField({ control, label, labels: captions, resolve, e
   const spin = !ranged && !panel, buttonValue = !spin || valueOnly;
   if (panel) root.classList.add('number-panel');
   const dial = panel && !ranged ? node("div", "number-dial-face") : null;
+  const samples = () => widthSamples || [control.min, control.max].map(value => resolve({ control, value, operation: { type: "format" } }).text);
+  const widest = (list = samples()) => [...list].sort((a, b) => b.length - a.length)[0].replace(/\p{Number}/gu, "8");
+  const bound = target => { target.setAttribute("aria-valuemin", control.min * control.scale); target.setAttribute("aria-valuemax", control.max * control.scale); };
+  const measures = [];
   if (ranged) { if (panel) track.append(slider); else track.append(minus, slider, plus); root.append(track); }
   else if (dial) {
     dial.tabIndex = 0; dial.title = label;
     dial.setAttribute("role", "slider"); dial.setAttribute("aria-label", label);
-    dial.setAttribute("aria-valuemin", control.min * control.scale); dial.setAttribute("aria-valuemax", control.max * control.scale);
+    bound(dial);
     root.append(dial);
   }
   else {
     valueBox.classList.add("number-spin"); valueBox.append(minus, plus);
-    const samples=widthSamples||[control.min,control.max].map(value=>resolve({control,value,operation:{type:"format"}}).text);
-    entry.size=Math.max(3,...samples.map(text=>text.length));
+    const sampled=samples();
+    entry.size=Math.max(3,...sampled.map(text=>text.length));
     if(!inline&&!valueOnly) {
       const field=node('div','number-spin-field'),measure=node('span','number-measure');
-      measure.textContent=[...samples].sort((a,b)=>b.length-a.length)[0].replace(/\p{Number}/gu,'8');
+      measure.textContent=widest(sampled);measures.push(measure);
       measure.setAttribute('aria-hidden','true');field.append(entry,measure);valueBox.replaceChildren(field,minus,plus);
     }
   }
@@ -62,8 +66,7 @@ export function createNumberField({ control, label, labels: captions, resolve, e
     labels.remove(); minus.remove(); plus.remove();
     root.replaceChildren(track, valueBox);
     const measure = node("span", "number-measure");
-    measure.textContent = (widthSamples || [control.min, control.max].map(value => resolve({ control, value, operation: { type: "format" } }).text))
-      .sort((a, b) => b.length - a.length)[0].replace(/\p{Number}/gu, "8");
+    measure.textContent = widest(); measures.push(measure);
     valueBox.append(measure);
     if (valueOnly) { root.classList.add('number-value-only'); entry.size = 1; }
   }
@@ -269,12 +272,22 @@ export function createNumberField({ control, label, labels: captions, resolve, e
   root.valueButton = valueButton;
   root.slider = slider;
   root.format = () => {const result=resolve({control,value,operation:{type:'format'}});if(presented!=null)result.text=result.edit=presented;show(result);};
+  root.setControl = next => {
+    if (JSON.stringify(next) === JSON.stringify(control)) return;
+    control = next;
+    const sampled = samples();
+    if (spin && !(inline && valueOnly)) entry.size = Math.max(3, ...sampled.map(text => text.length));
+    for (const measure of measures) measure.textContent = widest(sampled);
+    if (spin) bound(entry);
+    if (dial) bound(dial);
+    root.format();
+  };
   root.apply = apply;
   root.cancelEditing = () => finish(true);
   root.commit = () => finish();
   root.dispose = () => {disposed=true;finishScrub(true);finishGesture('cancel');finish(true);};
   entry.hidden = buttonValue; valueButton.hidden = !buttonValue;
-  if (spin) { entry.setAttribute("role", "spinbutton"); entry.setAttribute("aria-valuemin", control.min * control.scale); entry.setAttribute("aria-valuemax", control.max * control.scale); }
+  if (spin) { entry.setAttribute("role", "spinbutton"); bound(entry); }
   root.update(value);
   root.panel = panel;
   if(panel&&ranged)captureSliderContacts(root);

@@ -231,3 +231,14 @@ test('invalid numeric draft consumes readout wheel without stepping',t=>{
   assert.equal(consumed,true);assert.equal(h.operations.at(-1).operation.type,'expression');
   assert.equal(number.entry.getAttribute('aria-invalid'),'true');
 });
+
+test('a new numeric spec updates the same field in place',t=>{
+  const h=harness(t),number=createNumberField({...h.options,control:{...h.options.control,kind:'number'}});
+  const {entry,valueButton}=number;number.update(4);
+  number.setControl({...h.options.control,kind:'number',max:0.5,scale:100,unit:'%'});
+  assert.equal(number.entry,entry);assert.equal(number.valueButton,valueButton);
+  assert.equal(Number(entry.getAttribute('aria-valuemax')),50,'the range follows the new spec');
+  assert.deepEqual([h.operations.at(-1).control.unit,h.operations.at(-1).value],['%',4],'the value is shown with the new spec');
+  const reads=h.operations.length;number.setControl({...h.options.control,kind:'number',max:0.5,scale:100,unit:'%'});
+  assert.equal(h.operations.length,reads,'an unchanged spec is not applied again');
+});

@@ -4116,7 +4116,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiAction::ResetToolSetting { id } => {
                 if id == "liquify_amount" { return self.dispatch(UiAction::SetToolSetting { id, value: 1. }); }
-                if !self.state.tool_settings.iter().any(|c| c.id == id) {
+                if tool_settings::shown(&self.state.tool_settings, &id).is_none() {
                     return Err("This setting is not used by the selected tool".into());
                 }
                 if let Some(axis) = id.strip_prefix("crop_") {
@@ -4152,6 +4152,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     region_tools::RegionTools::default().controls(&self.state.localization)
                 } else {
                     let brush = layer_core::default_brush(tools::preset(self.state.brush.preset)?);
+                    let id = tool_settings::stored(&id, self.engine.configured_brush()).to_owned();
                     let value = tool_settings::value(self.state.brush.preset, &brush, &id).ok_or("This setting has no default")?;
                     return self.dispatch(UiAction::SetToolSetting { id, value });
                 };
@@ -4162,11 +4163,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             UiAction::TransformReference { reference } => { self.set_transform_reference(reference)?; (BRUSH, false) }
             UiAction::Tonal { action } => {self.tonal_action(action)?;(BRUSH | COMMANDS,true)}
             UiAction::StepToolSetting { id, steps } => {
-                let setting = self
-                    .state
-                    .tool_settings
-                    .iter()
-                    .find(|c| c.id == id)
+                let setting = tool_settings::shown(&self.state.tool_settings, &id)
                     .ok_or("This setting is not used by the selected tool")?;
                 let value = if setting.numeric == NumericControl::brush_size() {
                     step_brush_size(setting.value, steps).ok_or(NumericError::InvalidStep)
@@ -4198,7 +4195,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     if !self.tonal_active() {return Err("Choose Tonal range first".into());}
                     self.selection_tools.options.tonal.edit(&id,value, &self.state.localization)?;self.queue_tonal(None)?;self.refresh_tools();
                     return Ok(self.changed(BRUSH | COMMANDS,true));
-                } else if !self.state.tool_settings.iter().any(|c| c.id == id) {
+                } else if tool_settings::shown(&self.state.tool_settings, &id).is_none() {
                     return Err("This setting is not used by the selected tool".into());
                 }
                 if (self.layer_interaction.tool.region().is_some() || id == "grain_depth" && matches!(self.layer_interaction.tool, LayerCanvasTool::LassoFill | LayerCanvasTool::Gradient { .. }))
@@ -6295,6 +6292,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn edit_brush(&mut self, id: &str, value: f32) -> Result<(), String> {
+        let id = tool_settings::stored(id, self.engine.configured_brush());
         let brush = tool_settings::edit(self.state.brush.preset, self.engine.configured_brush(), id, value, &self.state.localization)?;
         self.state.brush.diameter = brush.diameter;
         self.state.brush.opacity = brush.opacity;
