@@ -1811,6 +1811,7 @@ impl WgpuRasterizer {
         let cache=self.scale_display.as_ref()?;
         cache.presentable()
     }
+    pub(crate) fn display_published(&self)->bool {self.scale_display.as_ref().is_none_or(scene::scale::Cache::published)}
     fn retire_display_resources(&mut self, encoder: &mut submission::CommandEncoder, trim: bool) {
         if !trim {return;}
         let (mut scene,mut cache)=(self.scene.take(),self.scale_display.take());
@@ -4265,7 +4266,7 @@ impl CanvasRenderer for WgpuRasterizer {
     fn set_fill_preview(&mut self,preview:Option<layer_render::FillPreview>) {self.fill_preview=preview;}
     fn fill_preview_ready(&self)->Option<(u64,u64)> {
         let key=self.fill_preview.as_ref()?.key();
-        self.fill_preview_shown.as_ref().filter(|(shown,receipt)|*shown==key && receipt.complete()).map(|_|(key.0,key.1))
+        self.fill_preview_shown.as_ref().filter(|(shown,receipt)|*shown==key && receipt.complete() && self.display_published()).map(|_|(key.0,key.1))
     }
     fn set_fill_reveal(&mut self,reveal:Option<layer_render::FillReveal>) {self.fill_reveal=reveal;}
     fn request_region(

@@ -1890,6 +1890,7 @@ impl Cache {
     pub(super) fn coverage_complete(&self)->bool {
         self.cells().is_some_and(|(cells,_,_)|cells.cells.iter().all(Cell::written))
     }
+    pub(crate) fn published(&self)->bool {self.presented_matches_expected()==Some(true) && self.coverage_complete()}
     pub(crate) fn refused_bytes(&self)->u64 {
         let mut refusals:Vec<crate::residency::Blocked>=Vec::new();
         self.collect_refusals(&mut refusals);

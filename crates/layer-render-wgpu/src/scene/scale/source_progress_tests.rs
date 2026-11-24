@@ -259,7 +259,7 @@ fn fill_preview_becomes_ready_after_deferred_object_composition() {
     let frame=FramePacket {view:fine,composite_all:false,..packet(doc.scene(),extent)};
     let request=request(&r,frame).unwrap();
     let (cache,_)=Cache::select(r.scale_display.take(),&r,frame,request);
-    r.scale_display=Some(cache);r.moving_images=Default::default();
+    r.scale_display=Some(cache);r.moving_images=crate::object_image_mips::MovingImages::within(&r.scene_tiers);
     r.scene.as_mut().unwrap().object_results.clear();
     let operation=layer_core::RasterOperation {placement:layer_core::Affine::IDENTITY,
         coverage:CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(),extent,[0;2]),

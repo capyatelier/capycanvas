@@ -99,8 +99,8 @@ impl WgpuRasterizer {
     }
     fn fill_preview_outstanding(&self) -> Option<Outstanding> {
         let key = self.fill_preview.as_ref()?.key();
-        if self.fill_preview_ready().is_some() { return None; }
-        Some(if self.fill_preview_drawn() == Some(key) { Outstanding::Blocked(Input::Gpu) } else { Outstanding::Runnable })
+        if self.fill_preview_drawn() != Some(key) { return Some(Outstanding::Runnable); }
+        self.fill_preview_in_flight().then_some(Outstanding::Blocked(Input::Gpu))
     }
     pub(crate) fn fill_preview_in_flight(&self) -> bool {
         self.fill_preview_shown.as_ref().is_some_and(|(_, receipt)| receipt.pending())

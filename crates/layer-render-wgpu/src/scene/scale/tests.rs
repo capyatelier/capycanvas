@@ -100,7 +100,7 @@ pub(crate) fn source_copy_ready(r:&WgpuRasterizer,scene:SceneView<'_>,id:SourceT
 }
 
 pub(crate) fn publication_pending(r: &WgpuRasterizer) -> bool {
-    r.scale_display.as_ref().is_some_and(|cache| cache.presented_matches_expected()!=Some(true) || !cache.coverage_complete())
+    !r.display_published()
 }
 
 pub(super) fn covered_document_pages(cache:&Cache,accuracy:pages::Accuracy)->impl Iterator<Item=[u32;2]> {
