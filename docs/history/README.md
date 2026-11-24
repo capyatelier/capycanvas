@@ -52,6 +52,8 @@ Progress notes, validation reports and other work records are not committed
 
 ## Design records
 
+- [Memory follow-ups](perf_followups/memory-followups.md): memory work designed or
+  written but not shipped, with its evidence, agreed design and what is left to verify.
 - [Memory model: known issues and redesign requirements](memory-model-redesign.md):
   issues open at the release of the renderer memory model, why its design needs
   to be redone, and what the next design must guarantee.
