@@ -91,11 +91,14 @@ fn package_owners_preserve_large_offsets_readiness_failures_and_snapshot_lifetim
     let RangeState::Ready(bytes) = snapshot.poll(offset, 3).unwrap() else { panic!() };
     assert_eq!(&*bytes, [1, 2, 3]);
     *source.failure.lock().unwrap() = Some("Corrupt package block".into());
-    drop(backing);
     assert_eq!(snapshot.poll(offset, 3).unwrap_err(), "Corrupt package block");
     *source.failure.lock().unwrap() = None;
-    assert_eq!(snapshot.poll(offset, 3).unwrap_err(), "Corrupt package block");
-    assert_eq!(snapshot.poll_original_on_worker(offset, 3).unwrap_err(), "Corrupt package block");
+    assert!(matches!(snapshot.poll(offset, 3).unwrap(), RangeState::Ready(_)), "a source error fails only that read");
+    let damaged = crate::tile_io::RESOURCE_CHECKSUM_FAILED;
+    assert_eq!(backing.fail(damaged.into()), damaged);
+    drop(backing);
+    assert_eq!(snapshot.poll(offset, 3).unwrap_err(), damaged);
+    assert!(matches!(snapshot.poll_original_on_worker(offset, 3).unwrap(), RangeState::Ready(_)));
     assert!(matches!(other_open.poll(offset, 3).unwrap(), RangeState::Ready(_)));
 }
 

@@ -1,7 +1,7 @@
 use super::{ByteRange, ByteSource, ImmutableBacking, RangeState, MAX_RANGE_BYTES,
     resources::Payload, session::OpenSession};
 use crate::{PortableId, ProjectLimits};
-use crate::tile_io::{ReadCache, ReadSource, RangeReader, ReadCompletion};
+use crate::tile_io::{ReadCache, ReadSource, RangeReader, ReadCompletion, RESOURCE_CHECKSUM_FAILED};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::{BTreeMap, BTreeSet}, path::{Path, PathBuf},
@@ -32,7 +32,6 @@ mod io;
 mod metadata;
 pub use metadata::MetadataStore;
 pub async fn store_retired(io:&dyn super::store_io::FileTransport)->Result<bool,String> {io::marker(io,".retired").await}
-const RESOURCE_CHECKSUM_FAILED:&str="Recovery resource checksum failed";
 #[derive(Clone,Debug)]
 pub enum ImportFailure {Invalid(String),Unsupported(String),MemoryBudgetExceeded,Changed,Io(String)}
 impl ImportFailure {

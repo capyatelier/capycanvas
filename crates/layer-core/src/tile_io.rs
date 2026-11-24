@@ -50,8 +50,11 @@ impl RangeReader for FileReader {
     }
 }
 
+pub(crate) const RESOURCE_CHECKSUM_FAILED:&str="Recovery resource checksum failed";
+pub(crate) const MALFORMED_TILE:&str="Package tile is malformed";
+pub(crate) fn damaged(error:&str)->bool {error==RESOURCE_CHECKSUM_FAILED || error==MALFORMED_TILE}
 pub fn verify_crc(bytes:&[u8],expected:Option<u32>)->Result<(),String> {
-    if expected.is_some_and(|expected|crc32fast::hash(bytes)!=expected) {return Err("Recovery resource checksum failed".into());}
+    if expected.is_some_and(|expected|crc32fast::hash(bytes)!=expected) {return Err(RESOURCE_CHECKSUM_FAILED.into());}
     Ok(())
 }
 
@@ -284,7 +287,7 @@ impl ReadCache {
             },
             Phase::Failed(error)=>{
                 let error=error.clone();
-                if error==crate::MEMORY_BUDGET_EXCEEDED && entry.waiters.is_empty() {state.remove(&key);}
+                if !damaged(&error) && entry.waiters.is_empty() {state.remove(&key);}
                 Err(error)
             },
             Phase::Cold=>{
@@ -508,10 +511,10 @@ impl Drop for ReadWait {
         if let Some(entry)=state.entries.get_mut(&self.key) {
             entry.waiters.retain(|waiter|waiter.id!=self.id);
             let unpinned=if entry.leases==0 && entry.waiters.is_empty() && matches!(entry.phase,Phase::Ready(_)) {entry.bytes() as u64}else{0};
-            let refused=entry.waiters.is_empty() && matches!(&entry.phase,Phase::Failed(error) if error==crate::MEMORY_BUDGET_EXCEEDED);
+            let retryable=entry.waiters.is_empty() && matches!(&entry.phase,Phase::Failed(error) if !damaged(error));
             released=unpinned>0 && cache.expire_released(entry);
             state.pinned-=unpinned;state.rank(self.key);
-            if refused {state.remove(&self.key);}
+            if retryable {state.remove(&self.key);}
         }
         let drive=released || state.physical>cache.limit(state.pinned) || !state.queued.is_empty() || !state.cold.is_empty();cache.publish(&state);drop(state);if drive {cache.schedule();}
     }

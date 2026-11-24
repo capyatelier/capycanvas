@@ -62,7 +62,7 @@ impl std::fmt::Debug for ImmutableBacking {
         f.debug_struct("ImmutableBacking").field("identity", &self.identity()).field("length", &self.byte_len()).finish()
     }
 }
-struct Owner { generation:crate::PortableId,package:Mutex<super::lease::WeakPackageLease>,identity: u64, length: u64, source: Arc<dyn ByteSource>, failure: Mutex<Option<String>>, integrity_failure: Mutex<Option<String>> }
+struct Owner { generation:crate::PortableId,package:Mutex<super::lease::WeakPackageLease>,identity: u64, length: u64, source: Arc<dyn ByteSource>, integrity_failure: Mutex<Option<String>> }
 impl ImmutableBacking {
     pub fn new(source: Arc<dyn ByteSource>) -> Result<Self, &'static str> {
         Self::with_generation(source,crate::PortableId::random())
@@ -71,7 +71,7 @@ impl ImmutableBacking {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let identity = NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .map_err(|_| "Package owner identity exhausted")?;
-        Ok(Self { owner: Arc::new(Owner { generation,package:Default::default(),identity, length: source.byte_len(), source, failure: Mutex::new(None), integrity_failure: Mutex::new(None) }) })
+        Ok(Self { owner: Arc::new(Owner { generation,package:Default::default(),identity, length: source.byte_len(), source, integrity_failure: Mutex::new(None) }) })
     }
     pub(crate) fn transfer_reference(&self)->Option<super::transfer::BackingReference> {
         Some(super::transfer::BackingReference {key:self.owner.source.transfer_key()?,generation:self.owner.generation,length:self.byte_len()})
@@ -91,9 +91,7 @@ impl ImmutableBacking {
     }
     pub(crate) fn read_source(&self)->Option<crate::tile_io::ReadSource> {self.owner.source.read_source()}
     pub(crate) fn healthy(&self)->Result<(),String> {
-        for failure in [&self.owner.integrity_failure,&self.owner.failure] {
-            if let Some(error)=failure.lock().map_err(|_|"Package failure lock")?.as_ref() {return Err(error.clone());}
-        }Ok(())
+        match self.owner.integrity_failure.lock().map_err(|_|"Package failure lock")?.as_ref() {Some(error)=>Err(error.clone()),None=>Ok(())}
     }
     pub(crate) fn weak_owner(&self)->std::sync::Weak<dyn Send+Sync> {Arc::downgrade(&(self.owner.clone() as Arc<dyn Send+Sync>))}
     pub fn byte_len(&self) -> u64 { self.owner.length }
@@ -104,45 +102,27 @@ impl ImmutableBacking {
     pub fn poll(&self, offset:u64, len:usize)->Result<RangeState,String> {self.checked(offset,len,false)}
     pub async fn wait(&self,offset:u64,len:usize)->Result<ByteRange,String> {
         if len>MAX_RANGE_BYTES || offset.checked_add(len as u64).is_none_or(|end|end>self.byte_len()) {return Err("Package read exceeds immutable range".into());}
-        if let Some(error)=self.owner.integrity_failure.lock().map_err(|_|"Package failure lock")?.clone() {return Err(error);}
-        if let Some(error)=self.owner.failure.lock().map_err(|_|"Package failure lock")?.clone() {return Err(error);}
+        self.healthy()?;
         let result=self.owner.source.wait(offset,len).await.and_then(|bytes| {
             if bytes.len()!=len || bytes.retained_bytes()>MAX_RANGE_BYTES {Err("Incomplete or oversized package range".into())}else {Ok(bytes)}
         });
-        if let Some(error)=self.owner.integrity_failure.lock().map_err(|_|"Package failure lock")?.clone() {return Err(error);}
-        let mut failure=self.owner.failure.lock().map_err(|_|"Package failure lock")?;
-        if failure.is_none() && let Err(error)=&result && error!=crate::MEMORY_BUDGET_EXCEEDED {*failure=Some(error.clone());}
-        if let Some(error)=&*failure {return Err(error.clone());}result
+        self.healthy()?;result
     }
     fn checked(&self,offset:u64,len:usize,worker:bool)->Result<RangeState,String> {
-        if let Some(failure) = self.owner.integrity_failure.lock().map_err(|_| "Package failure lock")?.as_ref() {
-            return Err(failure.clone());
-        }
-        let result = self.access(offset,len,worker);
-        if let Some(failure) = self.owner.integrity_failure.lock().map_err(|_| "Package failure lock")?.as_ref() {
-            return Err(failure.clone());
-        }
-        result
+        self.healthy()?;let result=self.access(offset,len,worker);self.healthy()?;result
     }
     pub(super) fn poll_original_on_worker(&self,offset:u64,len:usize)->Result<RangeState,String> {self.access(offset,len,!cfg!(target_arch="wasm32"))}
     fn access(&self,offset:u64,len:usize,worker:bool)->Result<RangeState,String> {
         if len > MAX_RANGE_BYTES { return Err("Package read exceeds bounded range".into()); }
         let end = offset.checked_add(len as u64).ok_or("Package range overflow")?;
         if end > self.byte_len() { return Err("Package range exceeds immutable backing".into()); }
-        if let Some(failure) = self.owner.failure.lock().map_err(|_| "Package failure lock")?.as_ref() {
-            return Err(failure.clone());
-        }
-        let result = (if worker {self.owner.source.poll_on_worker(offset,len)}else{self.owner.source.poll(offset,len)}).and_then(|state| {
+        (if worker {self.owner.source.poll_on_worker(offset,len)}else{self.owner.source.poll(offset,len)}).and_then(|state| {
             if let RangeState::Ready(bytes) = &state {
                 if bytes.len() != len { return Err("Incomplete package range".into()); }
                 if bytes.retained_bytes() > MAX_RANGE_BYTES { return Err("Package range retains an oversized buffer".into()); }
             }
             Ok(state)
-        });
-        let mut failure = self.owner.failure.lock().map_err(|_| "Package failure lock")?;
-        if failure.is_none() && let Err(error) = &result && error!=crate::MEMORY_BUDGET_EXCEEDED { *failure = Some(error.clone()); }
-        if let Some(failure) = failure.as_ref() { return Err(failure.clone()); }
-        result
+        })
     }
 }
 
@@ -191,5 +171,25 @@ mod tests {
         assert!(backing.read_on_worker(0,4).is_err());
         source.0.store(true,Ordering::Release);
         assert_eq!(&*backing.read_on_worker(0,4).unwrap(),&[17,23,31,41]);
+    }
+    #[cfg(not(target_arch="wasm32"))]
+    #[test]
+    fn an_abandoned_tile_read_fails_only_that_read_and_the_next_read_of_the_drawing_succeeds() {
+        struct AbandonFirst {bytes:Arc<[u8]>,abandon:AtomicBool}
+        impl crate::tile_io::RangeReader for AbandonFirst {
+            fn read(&self,offset:u64,length:usize,_crc:Option<u32>,completion:crate::tile_io::ReadCompletion) {
+                if !self.abandon.swap(false,Ordering::AcqRel) {completion.complete(Ok(Arc::from(&self.bytes[offset as usize..offset as usize+length])));}
+            }
+        }
+        let descriptor=crate::raster::RasterPlane::Color.descriptor(Default::default());
+        let samples=vec![9;256*256*4];
+        let encoded=crate::raster::TileBlob::encode(descriptor,&samples).unwrap().memory_compressed().unwrap().unwrap();
+        let source=crate::tile_io::ReadCache::process().source(encoded.len() as u64,Arc::new(AbandonFirst {bytes:encoded.clone(),abandon:AtomicBool::new(true)}));
+        let lease=super::super::PackageLease::new(ImmutableBacking::new(Arc::new(source)).unwrap());
+        let range=lease.range(0,encoded.len() as u64,crc32fast::hash(&encoded),descriptor,false).unwrap();
+        let tile=crate::raster::TileBlob::from_package_range(crate::PortableId::random(),descriptor,range).unwrap();
+        assert_eq!(tile.decode_on_worker().unwrap_err(),"Tile read was abandoned");
+        assert!(tile.compressed.healthy().is_ok(),"an abandoned read marked the drawing damaged");
+        assert_eq!(tile.decode_on_worker().unwrap(),samples);
     }
 }
