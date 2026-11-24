@@ -58,6 +58,7 @@ impl Tier {
         if let Some(parent) = &self.parent { parent.release(bytes); }
     }
     pub(crate) fn used(&self) -> u64 { self.used.load(SeqCst) }
+    pub(crate) fn total(&self) -> &AtomicU64 { &self.used }
     pub(crate) fn begin_frame(&self) { self.frame.store(self.used(), SeqCst); }
     pub(crate) fn end_frame(&self) {
         let used = self.used();

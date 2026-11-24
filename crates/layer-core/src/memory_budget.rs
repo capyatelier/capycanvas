@@ -188,10 +188,15 @@ impl MemoryOwner {
         if published {self.0.budget.changed();}
         published
     }
-    pub fn report(&self, mut report: MemoryReport) {
+    pub fn report(&self, report: MemoryReport) { self.apply(self.0.budget.0.state.lock().unwrap(), report); }
+    pub fn report_pinned_gpu(&self, total: &AtomicU64) {
+        let state = self.0.budget.0.state.lock().unwrap();
+        let bytes = total.load(Ordering::Acquire);
+        self.apply(state, MemoryReport { gpu_bytes: bytes, pinned_gpu_bytes: bytes, ..Default::default() });
+    }
+    fn apply(&self, mut state: MutexGuard<'_, State>, mut report: MemoryReport) {
         report.ram_bytes = report.ram_bytes.max(report.pinned_ram_bytes);
         report.gpu_bytes = report.gpu_bytes.max(report.pinned_gpu_bytes);
-        let mut state = self.0.budget.0.state.lock().unwrap();
         let owner=state.owners.get_mut(&self.0.id).unwrap();
         let changed=owner.report!=report;
         owner.report = report;owner.applied=owner.pending.version.load(Ordering::Acquire);

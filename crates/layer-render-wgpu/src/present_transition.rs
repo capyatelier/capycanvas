@@ -4,18 +4,17 @@ use crate::{PipelineDevice, SdrSurfaceColor, Uploads, GpuRasterError, Deferred, 
 pub(crate) struct Charge { charge: Option<crate::residency::Charge>, memory: Option<layer_core::MemoryOwner> }
 impl Charge {
     pub(crate) fn new(bytes:u64,tier:&Arc<Tier>,memory:Option<layer_core::MemoryOwner>)->Self {
-        let charge=tier.charge(bytes);publish(memory.as_ref(),tier);Self {charge:Some(charge),memory}
+        let charge=tier.charge(bytes);report(memory.as_ref(),tier);Self {charge:Some(charge),memory}
     }
 }
-fn publish(memory:Option<&layer_core::MemoryOwner>,tier:&Tier) {
+fn report(memory:Option<&layer_core::MemoryOwner>,tier:&Tier) {
     if let Some(memory)=memory {
-        let bytes=tier.used();
-        memory.publish(layer_core::MemoryReport {gpu_bytes: bytes, pinned_gpu_bytes: bytes, ..Default::default()});
+        memory.report_pinned_gpu(tier.total());
     }
 }
 impl Drop for Charge {
     fn drop(&mut self) {
-        let charge=self.charge.take().unwrap();let tier=charge.tier().clone();drop(charge);publish(self.memory.as_ref(),&tier);
+        let charge=self.charge.take().unwrap();let tier=charge.tier().clone();drop(charge);report(self.memory.as_ref(),&tier);
     }
 }
 #[derive(Clone)]

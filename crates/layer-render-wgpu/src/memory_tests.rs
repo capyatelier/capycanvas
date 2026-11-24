@@ -26,6 +26,29 @@ fn texture_storage_counts_every_mip_and_depth() {
     assert_eq!(image.storage_bytes(), 1_049_264);
 }
 
+#[test]
+fn transient_display_bytes_stay_in_the_ledger_while_another_thread_frees_others() {
+    let budget = MemoryBudget::with_facts(MemoryFacts { override_bytes: Some(64 << 30), ..Default::default() });
+    let device = budget.register_device(layer_core::DeviceMemoryFacts { unified: true, ..Default::default() });
+    let owner = budget.register_owner(Kind::Other, MemoryClass::Pinned, Some(device));
+    let tier = Arc::new(crate::residency::Tier::default());
+    let ledger = || { budget.flush_reports(); budget.snapshot().rows[Kind::Other as usize].iter().map(|row| row.gpu_bytes).sum::<u64>() };
+    let undercounted = (0..1000).filter(|_| {
+        let (retire, retired) = std::sync::mpsc::channel::<crate::present_transition::Charge>();
+        let poll = std::thread::spawn(move || retired.into_iter().for_each(drop));
+        let kept: Vec<_> = (0..64).filter_map(|page| {
+            let charge = crate::present_transition::Charge::new(MIB, &tier, Some(owner.clone()));
+            if page % 4 == 0 { Some(charge) } else { retire.send(charge).unwrap(); None }
+        }).collect();
+        let (counted, charged) = (ledger(), tier.used());
+        drop(retire);
+        poll.join().unwrap();
+        drop(kept);
+        counted < charged
+    }).count();
+    assert_eq!((undercounted, ledger()), (0, 0), "the ledger counted fewer transient display bytes than were still charged in {undercounted} of 1000 retirements, or kept counting freed bytes");
+}
+
 pub(crate) fn renderer(color: layer_core::color::DocumentColor, facts: layer_core::DeviceMemoryFacts) -> Result<WgpuRasterizer, GpuRasterError> {
     let budget = MemoryBudget::with_facts(MemoryFacts { host_default_bytes: Some(2 << 30),
         override_bytes: Some(2 << 30), ..Default::default() });
