@@ -436,7 +436,8 @@ Runners for any host read these chain fields:
   status `timeout` (a miss in the CSV), and the next step first waits up to
   300 s for the app to settle. A document the app declines, with an error, a
   notice or a package dialog, is `refused` with the app's message; steps that
-  need it are skipped and the chain carries on with the next document.
+  need it are skipped and the chain carries on with the next document. A
+  region tap the app answers with a notice is `refused` with its text.
 
 **Brushes (Android).**
 

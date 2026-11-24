@@ -592,9 +592,11 @@ import os
         let area = try area()
         for value in step["points"].array {
             let point = pixel(ChainPlan.Point(x: value[0].number, y: value[1].number), area)
+            let notice = try editor.state["notice"]["id"].uint
             let window = try await contact(hz: ChainPlan.penHz, seconds: 1 / ChainPlan.penHz) { _, _ in [point] }
             record.contacts.append(["down_ns": window.down, "up_ns": window.up])
             try await measure(record, step["tool"].string, since: window.down, within: 120)
+            if let reason = try ChainPlan.refusal(editor.state["notice"], after: notice) { throw ChainPlan.Refused(reason: reason) }
         }
     }
     private func repeatItems(_ step: JSON, _ record: Step) async throws {

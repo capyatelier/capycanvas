@@ -581,7 +581,8 @@ $handlers=@{
   if($s.tool){Navigation-Command $tools[$s.tool]}
   $index=0
   foreach($point in $s.points){
-   $index++;Tap-Latency $e "$($s.id)-$index" (At $point[0] $point[1]) 3 $null -Changed -Stable -Surface 'canvas' -Seconds 120
+   $index++;Wait-Until {!(Notice-Text)} "$($s.id): an earlier notice stayed on the canvas" 10
+   Tap-Latency $e "$($s.id)-$index" (At $point[0] $point[1]) 3 $null -Changed -Stable -Surface 'canvas' -Seconds 120
    $notice=Notice-Text;if($notice){throw [CapyBenchRefused]::new($notice)}
   }
  }

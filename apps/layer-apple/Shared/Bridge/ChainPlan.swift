@@ -59,6 +59,7 @@ struct ChainPlan {
         ["magic_wand": "auto_select", "transform": "scale_rotate"][name] ?? name
     }
     static func triangle(_ progress: Double) -> Double { 1 - abs(2 * progress - 1) }
+    static func refusal(_ notice: JSON, after id: UInt64) -> String? { notice["id"].uint > id ? notice["text"].string : nil }
 
     struct Point: Equatable {
         var x: Double, y: Double, pressure = 1.0

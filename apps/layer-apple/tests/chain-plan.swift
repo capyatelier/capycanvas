@@ -115,6 +115,9 @@ import Foundation
         precondition(ChainPlan.unsupported(step(#"{"do": "resume"}"#), iPad: true) != nil)
         precondition(ChainPlan.unsupported(item: "menu:main", iPad: false) != nil && ChainPlan.unsupported(item: "menu:main", iPad: true) != nil)
         precondition(ChainPlan.unsupported(item: "panel:brushes", iPad: true) == nil)
-        print("PASS: chain parsing, durations, brush sizes, stroke, drag, gesture and panel paths, and Apple step mapping")
+        let refusal = step(#"{"id": 7, "text": "Too large for this device’s available memory"}"#)
+        precondition(ChainPlan.refusal(refusal, after: 6) == "Too large for this device’s available memory")
+        precondition(ChainPlan.refusal(refusal, after: 7) == nil && ChainPlan.refusal(JSON(), after: 0) == nil)
+        print("PASS: chain parsing, durations, brush sizes, stroke, drag, gesture and panel paths, Apple step mapping and tap refusals")
     }
 }
