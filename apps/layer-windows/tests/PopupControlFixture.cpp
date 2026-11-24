@@ -298,7 +298,12 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
     winrt::Windows::Foundation::IAsyncAction headerContextOrdering(){
         auto source=std::make_shared<WorkspaceData>();context.apply(source);
         A choices,section;section.Append(O({{L"label",S(L"Fixture workspace")},{L"action",O({{L"type",S(L"workspace_manager")},{L"command",O({{L"type",S(L"show_in_switcher")},{L"id",S(L"fixture-header")}})}})}}));choices.Append(section);
-        A zones,items;for(uint32_t id:{1u,2u})items.Append(O({{L"id",N(id)},{L"item",O({{L"kind",S(L"workspaces")}})}}));zones.Append(items);
+        A zones,items,roles;
+        for(uint32_t id:{1u,2u}){
+            items.Append(O({{L"id",N(id)},{L"item",O({{L"kind",S(L"workspaces")}})}}));
+            roles.Append(O({{L"id",N(id)},{L"role",S(L"control")}}));
+        }
+        zones.Append(items);
         auto header=O({{L"editing",B(true)},{L"zones",zones}});
         source->state=O({{L"theme",S(root.RequestedTheme()==ElementTheme::Light?L"light":L"dark")}});
         source->model=O({{L"header",header},{L"state",source->state},{L"windows_workspace",O({{L"switcher_options",O({{L"sections",choices}})}})}});
@@ -315,7 +320,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             if(input&&input->Selected()!=focusedItem){record(L"before-editor-focus");focusedItem=input->Selected();if(focusedItem>=1&&focusedItem<=2)editors[focusedItem-1].Focus(FocusState::Programmatic);record(L"after-editor-focus");}
         });
         for(uint32_t index=0;index<2;++index)input->Source(sources[index],O({{L"kind",S(L"item")},{L"value",N(index+1)}}),L"Workspace source");
-        input->Configure(header,true,J{});root.Children().InsertAt(0,surface);
+        input->Configure(header,true,J{},roles);root.Children().InsertAt(0,surface);
         auto cleanup=[&]{if(input)input->Cancel();uint32_t at;if(root.Children().IndexOf(surface,at))root.Children().RemoveAt(at);input.reset();};
         auto shown=[&]{auto command=workspaceElement(L"workspace-switcher-show-fixture-header");return source->popupCount==1&&visiblePopup()&&command&&command.IsLoaded()&&command.ActualWidth()>0;};
         std::exception_ptr failure;
