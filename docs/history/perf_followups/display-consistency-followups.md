@@ -68,7 +68,7 @@ Candidate `1390c5db3` against control `9529ec478`:
 | `layer-host` | 2 failures, also on the control (follow-up 13) |
 | GTK journeys | 12 journeys in light and dark: candidate 24/24, control 23/24. No candidate-only failures. |
 | Windows fixtures | 61/61 on both builds: smoke, canvas editing, Navigator, layers, idle brush, touch, Enclose Fill |
-| Tablet ABBA | One row below control in both orders: MovinkPad 11 G-Pen 512 px at 100%, 120.9 → 116.7 updates/s, GPU composition +19%, traced to the per-frame overview absorption in `878556e86`. Pro 14 at 100% was −8.9% completed but unchanged fresh. Every other row was within spread. Fixed by `f4bccd601`: the absorption now runs only when the overview is handed over. A MovinkPad 11 and Pro 14 recheck is pending. |
+| Tablet ABBA | One row below control in both orders: MovinkPad 11 G-Pen 512 px at 100%, 120.9 → 116.7 updates/s, GPU composition +19%, traced to the per-frame overview absorption in `878556e86`. Pro 14 at 100% was −8.9% completed but unchanged fresh. Every other row was within spread. Fixed by `f4bccd601`: the absorption now runs only when the overview is handed over. Recheck against `9529ec478`: MovinkPad 11 122.04 → 122.67 updates/s, GPU composition 1.791 → 1.804 ms. Pro 14 fresh updates 195.7 → 195.4 and presents 117.7 → 117.8, with completed updates noisy and ranges overlapping in both orders. |
 | Settled canvas waking its host | A periodic memory sample woke idle hosts about every 0.5 s, since `5e196eb79`. Fixed by `274fef634`, which forwards ledger wakes only when the display owes the ledger. |
 
 ## Open follow-ups
