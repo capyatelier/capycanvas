@@ -2,6 +2,25 @@
 use super::*;
 
 #[test]
+fn an_intermediate_step_whose_submission_is_retired_fails() {
+    let extent = [128; 2];
+    let document = paint_document(extent, "retired step");
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let frame = packet(document.scene(), extent);
+    crate::test_support::submit_settled(&mut r, frame);
+    let ink = dab([0.1, 0.3, 0.8, 1.]);
+    let stroke = DabBatch { stroke_end: false, ..crate::test_support::dab_batch(target(&document), crate::tests::test_style(BrushExecution::Dry), ink.bounds()) };
+    let step = FramePacket { dabs: std::slice::from_ref(&ink), dab_batches: std::slice::from_ref(&stroke), commit_rasters: false, composite_all: false, ..frame };
+    crate::test_support::submit_ready(&mut r, step).unwrap();
+    r.wait_idle().unwrap();
+    r.device.initialize_poll_owner().unwrap();
+    crate::pipeline_device::DeviceRecipes::from(&r.device).poll_binding().retire_lost(||{});
+    let submissions = r.metrics.submissions;
+    assert!(r.submit(step).is_err(), "an intermediate step that was never submitted reports success");
+    assert_eq!(r.metrics.submissions, submissions);
+}
+
+#[test]
 #[ignore = "4K multilayer hardware replay; run serially in release mode"]
 fn multilayer_4k_fill_replay_matches_incremental_submissions() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();

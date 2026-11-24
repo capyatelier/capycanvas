@@ -5208,7 +5208,8 @@ impl WgpuRasterizer {
             self.telemetry.end(encoder.diagnostics());
             self.metrics.command_passes += encoder.pass_count();
             let publication=encoder.submission();
-            self.last_submission = encoder.submit(&self.queue);
+            self.last_submission = Some(encoder.submit(&self.queue)
+                .ok_or_else(|| GpuRasterError::WaitFailed("GPU device service retired".into()))?);
             if let Some(liquify)=&mut self.liquify {liquify.publish(packet.scene,packet.dab_batches,&publication);}
             self.telemetry.submitted(&self.queue);
             if let Some(commit) = native_commit {

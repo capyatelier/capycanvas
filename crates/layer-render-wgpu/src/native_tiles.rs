@@ -109,11 +109,11 @@ impl crate::WgpuRasterizer {
         self.uploads.finish(&encoder);
         std::mem::swap(&mut self.uploads, &mut self.restore_uploads);
         self.scene = Some(scene);
-        if result.is_ok() {
-            self.last_submission = encoder.submit(&self.queue);
-            self.metrics.native_restore_submissions += 1;
-        }
-        result
+        result?;
+        self.last_submission = Some(encoder.submit(&self.queue)
+            .ok_or_else(|| GpuRasterError::WaitFailed("GPU device service retired".into()))?);
+        self.metrics.native_restore_submissions += 1;
+        Ok(())
     }
 }
 

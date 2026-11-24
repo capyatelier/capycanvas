@@ -272,6 +272,22 @@ fn a_native_restore_inside_a_frame_leaves_the_frame_uploads_submittable() {
     assert_eq!(crate::layer_tests::page_bytes(&r, &page), pixels, "the frame's upload survives a restore submitted before it");
 }
 
+#[test]
+fn a_native_restore_whose_submission_is_retired_fails() {
+    let color = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::U16 };
+    let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
+    let working = create_color_target(&r.device, [PAGE_SIZE; 2], "restore candidate").0;
+    let restored = Arc::new(blob(color, RasterPlane::Color, 5));
+    let restore = |r: &mut WgpuRasterizer| r.restore_native_tiles(&[crate::native_tiles::NativeTileRestore { blob: &restored, working: &working, space: color.space, destination: color.space }]);
+    prepare(&mut r, restore).unwrap();
+    r.wait_idle().unwrap();
+    r.device.initialize_poll_owner().unwrap();
+    crate::pipeline_device::DeviceRecipes::from(&r.device).poll_binding().retire_lost(||{});
+    let submissions = r.metrics.native_restore_submissions;
+    assert!(restore(&mut r).is_err(), "a restore that was never submitted reports success");
+    assert_eq!(r.metrics.native_restore_submissions, submissions);
+}
+
 fn finish(engine:&mut layer_engine::CanvasEngine<WgpuRasterizer>) {
     let deadline=std::time::Instant::now()+std::time::Duration::from_secs(30);
     loop {
