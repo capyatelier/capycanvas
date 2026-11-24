@@ -1198,17 +1198,6 @@
             let head = read_head(&store.path).unwrap();
             drop(store);
             let mut store = SessionStore::open(&directory.0).wait().unwrap();
-            if corruption==0 {
-                let opened = store.load(ProjectLimits::default(), &AtomicBool::new(false)).wait().unwrap().unwrap();
-                assert_eq!(store.loaded_generation(), Some(generation));
-                assert_eq!(store.generation(), Some(generation));
-                let blobs = opened.editor.retained_tiles().blobs().unwrap();
-                assert_eq!(blobs.len(), 1);
-                assert_eq!(blobs[0].decode_on_worker().unwrap_err(), "Recovery resource checksum failed");
-                assert_eq!(fs::read(store.generation_path(generation)).unwrap(), metadata);
-                assert_eq!(read_head(&store.path).unwrap(), head);
-                continue;
-            }
             if corruption==2 {
                 assert_eq!(store.load(ProjectLimits::default(),&AtomicBool::new(false)).wait().err().unwrap(),"Unsupported session artwork");
                 assert_eq!(store.loaded_generation(),None);assert_eq!(store.generation(),Some(generation));

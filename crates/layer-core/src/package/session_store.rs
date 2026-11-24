@@ -642,17 +642,22 @@ impl SessionStore {
         if io::marker(&*self._owner.io,".retired").await? { return Err("This drawing was closed and its session copy was retired".into()); }
         self.refresh_head().await?;
         let Some(head) = self.head.clone() else { return Ok(None) };
-        let mut failure = None;
+        let mut failure = None;let mut unreadable = None;
         for generation in std::iter::once(head.current).chain(head.previous) {
             check_cancelled(cancelled)?;
             match self.load_generation(&generation, limits, cancelled,budget.clone()).await {
-                Ok(session) => { self.loaded = Some(generation); return Ok(Some(session)); }
+                Ok(session) => {
+                    if readable_pages(&session.editor.retained_tiles(),cancelled).await? { self.loaded = Some(generation); return Ok(Some(session)); }
+                    unreadable.get_or_insert(generation);
+                }
                 Err(super::session::OpenFailure::Unsupported(message)) => return Err(message),
                 Err(super::session::OpenFailure::MemoryBudgetExceeded) => return Err(crate::MEMORY_BUDGET_EXCEEDED.into()),
                 Err(error) => { if failure.is_none() { failure = Some(error.message()); } }
             }
         }
-        Err(failure.unwrap_or_else(|| "Recovery checkpoint unavailable".into()))
+        let Some(generation) = unreadable else { return Err(failure.unwrap_or_else(|| "Recovery checkpoint unavailable".into())) };
+        let session = self.load_generation(&generation, limits, cancelled, budget).await?;
+        self.loaded = Some(generation); Ok(Some(session))
     }
 
     async fn generation_metadata(&self,generation:&Generation,limit:u64)->Result<Vec<u8>,String> {
@@ -1014,6 +1019,20 @@ async fn write_payload(file:&dyn super::store_io::StoreFile,offset:u64,input:&St
         let bytes=input.payload.encoded()?.bytes;
         for (index,chunk) in bytes.chunks(MAX_RANGE_BYTES).enumerate() {check_cancelled(cancelled)?;file.write_at(offset+(index*MAX_RANGE_BYTES) as u64,chunk).await?;}
     }Ok(())
+}
+
+async fn readable_pages(tiles:&crate::raster_storage::RetainedTiles,cancelled:&AtomicBool)->Result<bool,String> {
+    async fn damaged(read:Result<crate::tile_io::ReadWait,String>)->bool {
+        match read {Ok(read)=>read.await.is_err_and(|error|crate::tile_io::damaged(&error)),Err(error)=>crate::tile_io::damaged(&error)}
+    }
+    let mut reads=std::collections::VecDeque::new();
+    for tile in tiles.await_blobs().await? {
+        check_cancelled(cancelled)?;
+        if let Some(read)=tile.read_interest().transpose() {reads.push_back(read.inspect(crate::tile_io::ReadWait::start));}
+        if reads.len()>=crate::tile_io::QUEUED_READS && damaged(reads.pop_front().unwrap()).await {return Ok(false);}
+    }
+    for read in reads {if damaged(read).await {return Ok(false);}}
+    Ok(true)
 }
 
 fn check_cancelled(cancelled: &AtomicBool) -> Result<(), String> {

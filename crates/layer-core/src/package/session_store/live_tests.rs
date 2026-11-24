@@ -378,6 +378,7 @@ fn stored_tile_identity_checks_worker_payload_without_reading_the_cold_owner() {
     let mut store=reads.open(&directory.0);
     store.checkpoint(&capture,serde_json::json!({}).into(),&cancel).wait().unwrap();
     let cold=store.load(ProjectLimits::default(),&cancel).wait().unwrap().unwrap().editor.retained_tiles().blobs().unwrap().pop().unwrap();
+    let restored=reads.calls();assert_eq!(restored,1,"restore checks each stored page once");
     let identity=cold.content_identity();assert!(identity.is_some());assert!(cold.encoded_fingerprint().is_none());
     let worker=TileBlob::from_verified_resource_with_content_identity(cold.resource_id(),cold.descriptor,bytes.clone(),identity).unwrap();
     assert!(cold.same_content(&worker));assert!(cold.same_content(&worker.alias(PortableId::random())));
@@ -385,23 +386,24 @@ fn stored_tile_identity_checks_worker_payload_without_reading_the_cold_owner() {
     assert!(TileBlob::from_verified_resource_with_content_identity(cold.resource_id(),cold.descriptor,different.into(),identity).is_err());
     assert!(TileBlob::from_verified_resource_with_content_identity(cold.resource_id(),crate::color::PixelDescriptor::COVERAGE8,bytes.clone(),identity).is_err());
     let unknown=TileBlob::from_verified_resource(cold.resource_id(),cold.descriptor,bytes).unwrap();assert!(!cold.same_content(&unknown));
-    assert_eq!(cold.resident_bytes(),0);assert_eq!(reads.calls(),0);
+    assert_eq!(cold.resident_bytes(),0);assert_eq!(reads.calls(),restored);
 }
 
 #[test]
-fn restore_binds_cold_tiles_and_defers_checksum_verification_until_the_first_read() {
+fn restore_binds_cold_tiles_checks_each_page_once_and_defers_decode_until_the_first_read() {
     let directory=Directory::new();let reads=CountedReads::new();let cancel=AtomicBool::new(false);
     let editor=document_editor(blob(113));
     let capture=editor.capture_session(editor.capture(1,Default::default()).unwrap()).unwrap();
     let mut store=reads.open(&directory.0);
     store.checkpoint(&capture,serde_json::json!({}).into(),&cancel).wait().unwrap();
     let tile=store.load(ProjectLimits::default(),&cancel).wait().unwrap().unwrap().editor.retained_tiles().blobs().unwrap().pop().unwrap();
-    assert_eq!(tile.resident_bytes(),0);assert_eq!(reads.calls(),0);
+    assert_eq!(tile.resident_bytes(),0);assert_eq!(reads.calls(),1,"restore checks each stored page once");
     let location=tile.compressed.location().unwrap().unwrap();
     let mut file=OpenOptions::new().write(true).open(store.pack_path(location.range().pack.id)).unwrap();
     use std::io::{Seek,SeekFrom};let byte=location.range().pack.file.read_at(location.range().offset,1).wait().unwrap();
     file.seek(SeekFrom::Start(location.range().offset)).unwrap();file.write_all(&[byte[0]^0xff]).unwrap();file.sync_all().unwrap();
+    tile.compressed.read_source().unwrap().evict();
     assert!(tile.decode_on_worker().unwrap_err().contains("checksum"));
-    assert!(reads.calls()>0);
+    assert_eq!(reads.calls(),2);
     assert_eq!(store.load(ProjectLimits::default(),&cancel).wait().unwrap().unwrap().editor.document().composition().size,[256;2]);
 }
