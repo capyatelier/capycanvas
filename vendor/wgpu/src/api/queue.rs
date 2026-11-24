@@ -51,7 +51,7 @@ impl Queue {
 ///
 /// This type is unique to the Rust API of `wgpu`.
 /// There is no analogue in the WebGPU specification.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SubmissionIndex {
     pub(crate) index: u64,
 }

@@ -341,6 +341,8 @@ Window-free noop-backend tests check the handoffs and callback reentry with
 
 `wgpu-next-completion.patch` adds `Device::next_completion`, the oldest submission whose completion has not been processed yet. The renderer's poll owner waits for it without a timeout, so completion callbacks never wait behind later submissions. The renderer's `a_completion_callback_does_not_wait_for_later_unrelated_gpu_work` covers it.
 
+`wgpu-ordered-submission-index.patch` orders `SubmissionIndex` by queue order. The renderer's latest submission keeps the greatest index it has seen, so a submission recorded after a newer one, on another thread or around a completion callback that submits, does not replace it. Every WebGPU submission has index zero, so the last one recorded wins. The renderer's `a_submission_recorded_after_a_newer_one_does_not_replace_it` covers it.
+
 `wgpu-presentation-admission.patch` separates successful artwork submissions from
 bounded viewport and timestamp submissions. `Queue::try_present` checks the
 artwork fence without waiting and excludes concurrent submissions through the

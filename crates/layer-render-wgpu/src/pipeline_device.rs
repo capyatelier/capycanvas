@@ -237,7 +237,7 @@ impl PipelineDevice {
         #[cfg(test)] crate::test_support::PassCounts {submissions:1,..Default::default()}.record();
         #[cfg(not(target_arch="wasm32"))]
         self.poll.handle(&self.device);
-        let work=|| {let index=work();*self.latest_submission.lock().unwrap()=Default::default();index};
+        let work=|| {let index=work();self.latest_submission.lock().unwrap().record(&index,Default::default(),false);index};
         #[cfg(not(target_arch="wasm32"))]
         let submitted=self.poll.submit(work);
         #[cfg(target_arch="wasm32")]

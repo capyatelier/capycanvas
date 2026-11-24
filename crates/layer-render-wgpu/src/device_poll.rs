@@ -1,4 +1,4 @@
-use std::sync::{Arc,Mutex,OnceLock,Weak,atomic::{AtomicBool,Ordering::SeqCst},mpsc};
+use std::sync::{Arc,Condvar,Mutex,OnceLock,Weak,atomic::{AtomicBool,Ordering::SeqCst},mpsc};
 
 type Action=Box<dyn FnOnce()+Send>;
 type Notify=Arc<dyn Fn()+Send+Sync>;
@@ -174,7 +174,9 @@ fn wait_for_progress(submission_index:Option<wgpu::SubmissionIndex>,poll:impl Fn
     Ok(!matches!(poll(wgpu::PollType::Wait {submission_index,timeout:None}),Ok(wgpu::PollStatus::QueueEmpty)))
 }
 enum State {New {handle:RetirementHandle,receiver:mpsc::Receiver<Message>},Running(Owner),Retired(RetirementHandle)}
-pub(crate) struct Root {state:Mutex<State>,queue:Arc<OnceLock<wgpu::Queue>>}
+pub(crate) struct Root {state:Mutex<State>,admitted:Mutex<usize>,drained:Condvar,queue:Arc<OnceLock<wgpu::Queue>>}
+struct Admitted<'a>(&'a Root);
+impl Drop for Admitted<'_> {fn drop(&mut self) {let mut admitted=self.0.admitted.lock().unwrap();*admitted-=1;if *admitted==0 {self.0.drained.notify_all();}}}
 impl Drop for Root {
     fn drop(&mut self) {
         let state=self.state.get_mut().unwrap();
@@ -188,7 +190,7 @@ impl Drop for Root {
 #[derive(Clone)]
 pub(crate) enum Binding {Owned(Arc<Root>),Recipe(Weak<Root>)}
 impl Default for Binding {
-    fn default()->Self {let (handle,receiver)=RetirementHandle::channel();Self::Owned(Arc::new(Root {state:Mutex::new(State::New {handle,receiver}),queue:Default::default()}))}
+    fn default()->Self {let (handle,receiver)=RetirementHandle::channel();Self::Owned(Arc::new(Root {state:Mutex::new(State::New {handle,receiver}),admitted:Default::default(),drained:Default::default(),queue:Default::default()}))}
 }
 impl Binding {
     fn root(&self)->Option<Arc<Root>> {match self {Self::Owned(root)=>Some(root.clone()),Self::Recipe(root)=>root.upgrade()}}
@@ -201,9 +203,10 @@ impl Binding {
     #[cfg(test)]
     pub fn is_retired(&self)->bool {self.root().is_none_or(|root|!Self::live(&root.state.lock().unwrap()))}
     pub fn admit<T>(&self,work:impl FnOnce()->Result<T,crate::GpuRasterError>)->Result<T,crate::GpuRasterError> {
-        let root=self.root().ok_or_else(||crate::GpuRasterError::WaitFailed("GPU device service retired".into()))?;
-        let state=root.state.lock().unwrap();
-        if !Self::live(&state) {return Err(crate::GpuRasterError::WaitFailed("GPU device service retired".into()));}work()
+        let retired=||crate::GpuRasterError::WaitFailed("GPU device service retired".into());
+        let root=self.root().ok_or_else(retired)?;
+        let _admitted={let state=root.state.lock().unwrap();if !Self::live(&state) {return Err(retired());}*root.admitted.lock().unwrap()+=1;Admitted(&root)};
+        work()
     }
     pub fn handle(&self,device:&wgpu::Device)->RetirementHandle {
         let Some(root)=self.root() else {let (handle,_)=RetirementHandle::channel();handle.close();return handle;};
@@ -229,6 +232,7 @@ impl Binding {
     pub fn retire_lost(&self,before_close:impl FnOnce()) {
         let Some(root)=self.root() else {return;};
         let previous={let mut state=root.state.lock().unwrap();let handle=Self::state_handle(&state);std::mem::replace(&mut *state,State::Retired(handle))};
+        drop(root.drained.wait_while(root.admitted.lock().unwrap(),|admitted|*admitted!=0).unwrap());
         Self::state_handle(&previous).close();before_close();
         match previous {
             State::Running(mut owner)=>owner.shutdown(),
@@ -417,6 +421,27 @@ mod tests {
         let finished=unrelated_done.recv_timeout(Duration::from_secs(10)).expect("the unrelated work never completed");
         assert!(finished.duration_since(drawn)>=finished.duration_since(start)/2,
             "the drawing's completion waited for unrelated work: called after {:?}, unrelated work finished after {:?}",drawn-start,finished-start);
+    }
+    #[test]
+    fn a_completion_callback_that_submits_from_inside_a_submission_does_not_deadlock() {
+        let r=crate::WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        r.device.submit(&r.queue,[]).unwrap();r.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        let handle=r.device.retirement_handle();handle.flush().unwrap();
+        let (entered,busy)=mpsc::channel();let (release,held)=mpsc::channel::<()>();
+        handle.run(move||{let _=entered.send(());let _=held.recv_timeout(Duration::from_secs(10));});
+        busy.recv_timeout(Duration::from_secs(10)).unwrap();
+        let (factory,nested)=(r.renderer_factory(),r.renderer_factory());
+        let (resubmitted,inner)=mpsc::channel();
+        r.on_gpu_done(move||{let _=resubmitted.send((std::thread::current().id(),nested.submit([]).is_some()));});
+        let (submitted,outer)=mpsc::channel();
+        let submitting=std::thread::spawn(move||{let _=submitted.send(factory.submit([]).is_some());});
+        let submitter=submitting.thread().id();
+        let inner=inner.recv_timeout(Duration::from_secs(5));let outer=outer.recv_timeout(Duration::from_secs(1));
+        release.send(()).unwrap();
+        assert!(outer.is_ok(),"a completion callback that submits again deadlocked its submitting thread: inner={inner:?}");
+        submitting.join().unwrap();
+        assert_eq!(inner.unwrap(),(submitter,true),"the callback must run inside the outer submission and submit again");
+        assert!(outer.unwrap());
     }
     #[test]
     fn the_poll_owner_never_bounds_a_gpu_wait_with_a_timeout() {

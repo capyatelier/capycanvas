@@ -73,8 +73,11 @@ impl Submission {
     pub fn pending(&self)->bool {self.0.load(std::sync::atomic::Ordering::Acquire)<SubmissionState::Discarded as u8}
 }
 #[derive(Default)]
-pub(crate) struct LatestSubmission {completed:std::sync::Arc<std::sync::OnceLock<web_time::Instant>>,observed:bool}
+pub(crate) struct LatestSubmission {index:Option<wgpu::SubmissionIndex>,completed:std::sync::Arc<std::sync::OnceLock<web_time::Instant>>,observed:bool}
 impl LatestSubmission {
+    pub fn record(&mut self,index:&wgpu::SubmissionIndex,completed:std::sync::Arc<std::sync::OnceLock<web_time::Instant>>,observed:bool) {
+        if self.index.as_ref().is_none_or(|latest|latest<=index) {*self=Self {index:Some(index.clone()),completed,observed};}
+    }
     pub fn completed(&mut self)->(std::sync::Arc<std::sync::OnceLock<web_time::Instant>>,bool) {(self.completed.clone(),!std::mem::replace(&mut self.observed,true))}
 }
 struct PendingSubmission(Submission);
@@ -230,7 +233,7 @@ impl CommandEncoder {
             let mut chunks=self.earlier.into_iter().chain(self.current.into_inner());
             let mut index=submit_traced(queue,self.prologue.take().into_iter().chain(chunks.next()),!self.resource_work);
             for encoder in chunks {index=submit_traced(queue,[encoder],!self.resource_work);}
-            *self.latest.lock().unwrap()=LatestSubmission {completed,observed:true};
+            self.latest.lock().unwrap().record(&index,completed,true);
             index
         };
         #[cfg(not(target_arch="wasm32"))]
@@ -334,6 +337,16 @@ mod tests {
     use crate::test_support::{dab_batch, packet};
     use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
+    #[test]
+    fn a_submission_recorded_after_a_newer_one_does_not_replace_it() {
+        let r=renderer();
+        let (older,newer)=(r.queue.submit([]),r.queue.submit([]));
+        let (early,late)=(Arc::new(std::sync::OnceLock::new()),Arc::new(std::sync::OnceLock::new()));
+        let mut latest=LatestSubmission::default();
+        latest.record(&newer,late.clone(),true);latest.record(&older,early,false);
+        let (completed,observe)=latest.completed();
+        assert!(Arc::ptr_eq(&completed,&late) && !observe,"the latest submission went back to an older one recorded after it");
+    }
     #[cfg(not(target_arch="wasm32"))]
     #[test]
     fn a_submitted_receipt_is_discarded_when_its_unfired_completion_is_retired() {
