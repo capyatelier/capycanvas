@@ -676,6 +676,47 @@ fn screen_check_counts_and_marks_only_colors_the_screen_cannot_show() {
 }
 
 #[test]
+fn a_screen_count_answers_only_for_the_proof_it_counted() {
+    use layer_color::screen::Chromaticities;
+    use layer_core::color::ProofRecipe;
+    let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U16 }).unwrap();
+    frame(&mut r, &mut source(RgbSpace::DisplayP3, [0, 65535, 0, 65535]));
+    let [inside, outside] = [RgbSpace::Srgb, RgbSpace::DisplayP3].map(|space| std::sync::Arc::new(layer_color::ProofLut::build(
+        RgbSpace::DisplayP3, &ProofRecipe::new("screen proof".into(), ColorProfile::Builtin(space)), || false).unwrap()));
+    assert_eq!((inside.edge(), inside.space(), inside.dark_grid()), (outside.edge(), outside.space(), outside.dark_grid()));
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let target = texture(&r, format).create_view(&Default::default());
+    let mut presenter = ViewportPresenter::for_surface(&r, format, SdrSurfaceColor::DisplayP3).unwrap();
+    presenter.set_screen_check(&r, Some(crate::ScreenCheck {
+        from_view: Some(Chromaticities::of(RgbSpace::Srgb).from_space(RgbSpace::DisplayP3)), surface_clips: true, bounded: true, mark: false }));
+    let proof = |presenter: &mut ViewportPresenter, lut: &std::sync::Arc<layer_color::ProofLut>| {
+        presenter.set_proof(&r, Some(lut.clone()), true, false).unwrap();
+        pollster::block_on(presenter.prepare(&r)).unwrap();
+        presenter.present(&r, &target, view([256; 2]), [0.; 4]).unwrap();
+    };
+    let answer = |presenter: &mut ViewportPresenter| crate::test_support::wait_until("screen count must complete", || {
+        complete(&r);
+        match presenter.screen_check_result() {
+            Some(result) => Ok(Some(result.unwrap())),
+            None if !presenter.screen_check_busy() => Ok(None),
+            None => Err(()),
+        }
+    });
+    proof(&mut presenter, &inside);
+    crate::test_support::wait_until("screen count was not admitted", || presenter.check_screen(&r).then_some(()).ok_or(()));
+    assert_eq!(answer(&mut presenter), Some(false), "an sRGB proof fits an sRGB screen");
+    proof(&mut presenter, &outside);
+    assert!(presenter.check_screen(&r), "a replaced proof with equal options is counted again");
+    assert_eq!(answer(&mut presenter), Some(true), "a Display P3 proof of P3 green exceeds an sRGB screen");
+    proof(&mut presenter, &inside);
+    assert!(presenter.check_screen(&r));
+    proof(&mut presenter, &outside);
+    assert_eq!(answer(&mut presenter), None, "a count of the replaced proof is not its answer");
+    assert!(presenter.check_screen(&r), "the current proof is counted after a superseded count");
+    assert_eq!(answer(&mut presenter), Some(true));
+}
+
+#[test]
 fn native_paint_thumbnail_converts_the_same_color_as_export() {
     use layer_core::raster::*;
     for space in RgbSpace::ALL {

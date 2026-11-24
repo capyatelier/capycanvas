@@ -116,6 +116,7 @@ pub struct ViewportPresenter {
     gpu_local_guide: Option<std::sync::Arc<crate::local_tone::GpuToneGuide>>,
     proof_options: [u32; 4],
     proof_lut: Option<std::sync::Arc<layer_color::ProofLut>>,
+    proof_revision: u64,
     bind_group: Option<wgpu::BindGroup>,
     selection_buffer: Option<wgpu::Buffer>,
     saved_selection_buffer: Option<wgpu::TextureView>,
@@ -474,6 +475,7 @@ impl ViewportPresenter {
         self.proof_uniform = source.proof_uniform.clone();
         self.proof_options = source.proof_options;
         self.proof_lut = source.proof_lut.clone();
+        self.proof_revision += 1;
         self.bind_group = None;
     }
 
@@ -526,6 +528,7 @@ impl ViewportPresenter {
             buffer.unmap();
             self.proof_buffer = buffer;
             self.proof_lut = lut;
+            self.proof_revision += 1;
             self.bind_group = None;
         }
         let options = self.proof_lut.as_ref().map_or([0; 4], |lut| {
@@ -564,12 +567,8 @@ impl ViewportPresenter {
         if self.standalone_overview || !crate::present_screen::ScreenCheck::counts(&self.screen_options) {
             return false;
         }
-        let signature: Vec<u32> = camera[..32]
-            .iter()
-            .chain(&self.hdr_options)
-            .chain(&self.screen_options)
-            .map(|v| v.to_bits())
-            .chain(self.proof_options)
+        let signature: Vec<u32> = self.proof_key().into_iter()
+            .chain(camera[..32].iter().chain(&self.hdr_options).chain(&self.screen_options).map(|v| v.to_bits()))
             .chain([renderer.composite_revision as u32, (renderer.composite_revision >> 32) as u32])
             .collect();
         let counter = self.screen_counter.get_or_insert_with(|| {
@@ -584,7 +583,13 @@ impl ViewportPresenter {
     }
 
     pub fn screen_check_result(&mut self) -> Option<Result<bool, GpuRasterError>> {
-        self.screen_counter.as_mut()?.finish()
+        let proof = self.proof_key();
+        self.screen_counter.as_mut()?.finish(|signature| signature.starts_with(&proof))
+    }
+
+    fn proof_key(&self) -> [u32; 6] {
+        let [a, b, c, d] = self.proof_options;
+        [a, b, c, d, self.proof_revision as u32, (self.proof_revision >> 32) as u32]
     }
 
     /// Shares the renderer's optional startup cache with presentation shaders.
@@ -794,6 +799,7 @@ impl ViewportPresenter {
             proof_options: [0; 4],
             timing: None,
             proof_lut: None,
+            proof_revision: 0,
             bind_group: None,
             selection_buffer: None,
             saved_selection_buffer: None,

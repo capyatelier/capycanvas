@@ -173,8 +173,8 @@ impl ScreenCounter {
         self.pending = Some(signature);
     }
 
-    pub(crate) fn finish(&mut self) -> Option<Result<bool, GpuRasterError>> {
-        match self.state.load(Ordering::Acquire) {
+    pub(crate) fn finish(&mut self, current: impl FnOnce(&[u32]) -> bool) -> Option<Result<bool, GpuRasterError>> {
+        let (result, counted) = match self.state.load(Ordering::Acquire) {
             MAPPED => {
                 let clipped = self
                     .readback
@@ -183,17 +183,16 @@ impl ScreenCounter {
                     .map(|bytes| bytes.as_chunks::<4>().0.iter().any(|word| *word != [0; 4]))
                     .map_err(|e| GpuRasterError::Color(e.to_string()));
                 self.readback.unmap();
-                self.state.store(IDLE, Ordering::Release);
-                self.counted = self.pending.take();
-                Some(clipped)
+                (clipped, true)
             }
-            FAILED => {
-                self.state.store(IDLE, Ordering::Release);
-                self.pending = None;
-                Some(Err(GpuRasterError::Color("Screen gamut readback failed".into())))
-            }
-            _ => None,
-        }
+            FAILED => (Err(GpuRasterError::Color("Screen gamut readback failed".into())), false),
+            _ => return None,
+        };
+        self.state.store(IDLE, Ordering::Release);
+        let signature = self.pending.take();
+        let answers = signature.as_deref().is_some_and(current);
+        if counted { self.counted = signature; }
+        answers.then_some(result)
     }
 }
 
