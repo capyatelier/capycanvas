@@ -82,7 +82,8 @@ impl Sources {
                 source.raster = packet.scene.paint_source(handle).unwrap().raster.identity();
                 let watercolor = r.watercolor_style(id, packet.dab_batches);
                 source.watercolor = watercolor;
-                source.damage=Damage::from_regions(packet.dab_batches.iter().zip(batch_tiles).filter(|(batch,_)|batch.target==id).flat_map(|(_,tiles)|tiles.iter().map(Damage::tile_region)))
+                source.damage=Damage::from_regions(packet.dab_batches.iter().zip(batch_tiles).filter(|(batch,_)|batch.target==id).flat_map(|(batch,tiles)|tiles.iter()
+                    .filter(move |tile|batch.kind!=DabBatchKind::Preview || !r.liquify.as_ref().is_some_and(|liquify|liquify.preview_unchanged(id,tile.coordinate))).map(Damage::tile_region)))
                     .expand(watercolor.map_or(0,|style|style.radius()),source.extent).intersect(PixelRect::full(source.extent)).map(|region|region.translated(source.phase));
             }
             if let Some((mask, _)) = packet.scene.mask(handle).filter(|(mask, _)| mask.enabled && (visible || packet.inspect_mask == Some(handle)))

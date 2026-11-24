@@ -492,7 +492,8 @@ impl Cache {
             None=>BTreeSet::new(),
         };
         let persistent=changed.clone();
-        changed.extend(contact.predicted.iter().chain(&predicted).copied());
+        let kept=|tile:&[u32;2]|contact.predicted.contains(tile) && predicted.contains(tile) && r.liquify.as_ref().is_some_and(|liquify|liquify.preview_unchanged(target,*tile));
+        changed.extend(contact.predicted.iter().chain(&predicted).filter(|tile|!kept(tile)).copied());
         contact.diverged|=!changed.is_empty();
         let previewed=r.preview_input_tiles(target);
         let stale=contact.footprints.iter().filter(|(local,_)|changed.iter().any(|tile|!page_rect(*tile).intersect(*local).is_empty()))
@@ -500,7 +501,7 @@ impl Cache {
         let (level,extent)=(contact.plan.level,contact.plan.extent);
         let all=pages::coordinates(contact.plan.bounds,level).collect::<Vec<_>>();
         let reached=stale.iter().map(|index|pages::bounds(all[*index],level,extent)).collect();
-        let refreshed:BTreeSet<_>=changed.iter().chain(&contact.previewed).chain(&previewed).copied().collect();
+        let refreshed:BTreeSet<_>=changed.iter().chain(&contact.predicted).chain(&predicted).chain(&contact.previewed).chain(&previewed).copied().collect();
         let planes:&[layer_core::raster::RasterPlane]=if wet {&[layer_core::raster::RasterPlane::Color,layer_core::raster::RasterPlane::WatercolorWetness]}else {&[layer_core::raster::RasterPlane::Color]};
         if !contact.inputs.refresh_contact(r,packet.scene,target,planes,refreshed,&persistent,encoder) {return None;}
         for region in scene.scale_sources.entries.get(&target).into_iter().flat_map(|source|&source.damage.regions) {for tile in page_coordinates(*region) {
@@ -601,7 +602,7 @@ impl Cache {
                         let texels=now.as_ref().zip(before)
                             .filter(|((_,reads),before)|drawn.as_ref().is_some_and(|shown|shown.same(&before.submission)) && *reads==before.reads)
                             .and_then(|((now,_),before)|before.changed(now,region))
-                            .map(|changed|paint_transform::texel_rect(changed.window_local(region),side)).filter(|[_,_,width,height]|width*height!=0);
+                            .map(|changed|paint_transform::texel_rect(changed.window_local(region),side));
                         if let Some(texels)=texels {crop(&mut scene.jobs[start..],texels);}
                         if let Some((stroked,reads))=now {fresh.push((cell,stroked,reads));}
                         for write in &mut unit.window {write.witness=witness(cell);}

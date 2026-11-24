@@ -1149,6 +1149,32 @@ fn wet_and_watercolor_presets_hold_their_contact_frame_until_pen_up() {presets_h
 fn liquify_presets_hold_their_contact_frame_until_pen_up() {presets_hold_their_contact_frame_until_pen_up(BrushFamily::Liquify);}
 
 #[test]
+fn a_fit_liquify_drag_composes_only_near_its_brush_and_matches_a_twin_that_composes_every_frame() {
+    let extent=[8192,1024];let doc=document_at(extent);let target=primary_target(&doc);
+    let mut style=crate::layer_tests::preset_style(DefaultBrushPreset::LiquifyPush);
+    style.liquify=Some(Arc::new(layer_core::liquify::Context::for_source(doc.artwork.paint.get(primary_paint(&doc)).unwrap(),false)));
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,4);
+    let [mut r,mut twin]=[renderer(&doc),renderer(&doc)];
+    crate::test_support::submit_settled(&mut r,frame);crate::test_support::submit_settled(&mut twin,frame);
+    let texels=u64::from(PAGE_SIZE>>r.scale_display.as_ref().unwrap().plan.level).pow(2);
+    let push=|x:f32| {let mut dab=stroke_dab(x,512.);dab.radii=[140.;2];dab.motion=[40.,0.];dab.material[3]=1.;dab};
+    let mut contact=0;
+    for step in 0..18usize {
+        let x=300.+300.*step as f32;let time=0.01*(step+1) as f32;
+        let dabs=[push(x),push(x+45.)];
+        let counts=predicted_frame(&mut r,frame,target,&style,1,&dabs,step==0,time);
+        predicted_frame(&mut twin,FramePacket {composite_all:true,..frame},target,&style,1,&dabs,step==0,time);
+        if in_contact(&counts) {contact+=1;}
+        let error=max_error(&display_pixels(&r),&display_pixels(&twin));
+        assert!(error<1e-4,"Liquify contact frame {step} differs from a twin that composes every frame by {error}");
+        let near=page_coordinates(PixelRect::new((x as u32).saturating_sub(512),0,x as u32+557,extent[1])).count() as u64*texels+u64::from(PAGE_SIZE).pow(2);
+        assert!(step<4 || counts.composed_texels<=near,
+            "Liquify contact frame {step} composes {} texels, more than the {near} of the pages within two pages of its brush and one cell it enters",counts.composed_texels);
+    }
+    assert!(contact>=16,"the drag stays in contact: {contact} frames");
+}
+
+#[test]
 fn a_predicted_watercolor_wash_leaving_a_settled_tile_matches_a_recomposing_twin_at_every_reduced_level() {
     let extent=[2048,1024];
     let doc=layer_core::Document::new(layer_core::authored::PortableId::random(),extent[0],extent[1],layer_core::DocumentNames {paint:"Current ink".into(),paper:"Paper".into()});
