@@ -209,7 +209,7 @@ impl Lines {
         let [w,h]=self.extent;
         [vec![w,h,w.div_ceil(32),w.div_ceil(4)],window.to_vec(),core.to_vec(),self.offsets.to_vec(),options.to_vec(),paper.tile.map(f32::to_bits).to_vec(),vec![0;4],paper.axes.map(f32::to_bits).to_vec()].concat()
     }
-    fn encode(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,first:Option<&wgpu::Buffer>,second:Option<&wgpu::Buffer>,steps:Vec<Step>)->f64 {
+    fn encode(&self,input:&Input<'_>,encoder:&mut impl Record,first:Option<&wgpu::Buffer>,second:Option<&wgpu::Buffer>,steps:Vec<Step>)->f64 {
         let dispatched=steps.iter().map(|(entry,count,params)|*count as f64*nanoseconds(entry,params,1)).sum();
         let data=self.data.as_ref().unwrap();
         let Input {device,mask,paper}=input;
@@ -230,14 +230,15 @@ impl Lines {
                 wgpu::BindGroupEntry {binding:5,resource:mask.as_entire_binding()},
                 wgpu::BindGroupEntry {binding:6,resource:wgpu::BindingResource::TextureView(paper)},
             ]});
-            let mut pass=encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {label:Some("region line stages"),timestamp_writes:None});
-            for (i,(entry,count,_)) in steps.iter().enumerate() {
-                if *count==0 {continue;}
-                pass.set_pipeline(&self.pipelines[entry]);pass.set_bind_group(0,&group,&[(i as u64*stride) as u32]);
+            let dispatches:Vec<_>=steps.iter().enumerate().filter(|(_,(_,count,_))|*count!=0).map(|(i,(entry,count,_))| {
                 let groups=count.div_ceil(64) as u32;let maximum=device.limits().max_compute_workgroups_per_dimension;
                 let rows=groups.div_ceil(maximum);
-                pass.dispatch_workgroups(groups.div_ceil(rows),rows,1);
-            }
+                ((*self.pipelines[entry]).clone(),(i as u64*stride) as u32,[groups.div_ceil(rows),rows])
+            }).collect();
+            encoder.record(move|encoder| {
+                let mut pass=encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {label:Some("region line stages"),timestamp_writes:None});
+                for (pipeline,offset,[x,y]) in &dispatches {pass.set_pipeline(pipeline);pass.set_bind_group(0,&group,&[*offset]);pass.dispatch_workgroups(*x,*y,1);}
+            });
         }
         dispatched
     }
@@ -392,19 +393,20 @@ impl Lines {
         self.distance_steps(&mut steps,self.windows_in(&[around],DISTANCE_HALO),grain);
         self.encode(input,encoder,None,None,steps);
     }
-    pub fn probe_scope(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,tap:[u32;2])->mpsc::Receiver<Result<ScopeProbe,GpuRasterError>> {
+    pub fn probe_scope(&self,input:&Input<'_>,encoder:&mut impl Record,tap:[u32;2])->mpsc::Receiver<Result<ScopeProbe,GpuRasterError>> {
         let columns=self.extent[0].div_ceil(SCOPE_BLOCK);let blocks=columns as usize*self.extent[1].div_ceil(SCOPE_BLOCK) as usize;
         let scope=&self.scratch.as_ref().unwrap()[0];let bytes=((1+blocks+SNAP_AREA)*4) as u64;
-        encoder.clear_buffer(scope,0,Some(bytes));
+        encoder.clear(scope,0,Some(bytes));
         self.encode(input,encoder,None,None,vec![("scope_region",u64::from(self.offsets[0]),self.params([0;4],[0;4],[tap[0],tap[1],0,0],paper::Grain::FLAT))]);
         let readback=input.device.create_buffer(&wgpu::BufferDescriptor {label:Some("region scope"),size:bytes,usage:wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::MAP_READ,mapped_at_creation:false});
-        encoder.copy_buffer_to_buffer(scope,0,&readback,0,bytes);
+        encoder.copy(scope,0,&readback,0,bytes);
         let (tx,rx)=mpsc::channel();
-        crate::raster::map_then(input.device,Some(encoder),&readback,bytes,move|bytes|{
+        let device=input.device.clone();
+        encoder.record(move|encoder|crate::raster::map_then(&device,Some(encoder),&readback,bytes,move|bytes|{
             let words:Vec<u32>=bytes.as_chunks::<4>().0.iter().map(|word|u32::from_le_bytes(*word)).collect();
             let flagged=words[1..1+blocks].iter().enumerate().filter(|(_,flag)|**flag!=0).map(|(index,_)|[index as u32%columns,index as u32/columns]).collect();
             Ok(ScopeProbe {stale:words[0],flagged,region:words[1+blocks..].to_vec()})
-        },move|result|{let _=tx.send(result);});
+        },move|result|{let _=tx.send(result);}));
         rx
     }
     pub fn read_stale(&self,device:&PipelineDevice,encoder:&mut crate::submission::CommandEncoder)->mpsc::Receiver<Result<[u32;1],GpuRasterError>> {
@@ -462,7 +464,7 @@ impl Lines {
         self.building=Some(work);Ok((false,spent))
     }
     pub fn has_seals(&self)->bool {!self.overflow && self.ends!=0}
-    pub fn exclude(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,excluded:&[u32])->f64 {
+    pub fn exclude(&self,input:&Input<'_>,encoder:&mut impl Record,excluded:&[u32])->f64 {
         if !self.has_seals(){return 0.;}
         let mut ids=excluded.to_vec();ids.sort_unstable();ids.dedup();
         let bytes=ids.iter().flat_map(|id|id.to_ne_bytes()).collect::<Vec<_>>();
@@ -475,12 +477,12 @@ impl Lines {
         self.has_seals().then(||device.create_buffer(&wgpu::BufferDescriptor {label:Some("fill seal metadata"),
             size:u64::from(self.ends)*20,usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_SRC,mapped_at_creation:false}))
     }
-    pub fn capture_seals(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,output:&wgpu::Buffer,parents:&wgpu::Buffer,slot:u32)->f64 {
+    pub fn capture_seals(&self,input:&Input<'_>,encoder:&mut impl Record,output:&wgpu::Buffer,parents:&wgpu::Buffer,slot:u32)->f64 {
         self.encode(input,encoder,Some(output),Some(parents),vec![("apply_seals",u64::from(self.ends),
             self.params([0;4],[0;4],[0,slot,0,1],paper::Grain::FLAT))])
     }
 
-    pub fn barriers(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,close:bool,reach:u32,job:[u32;4],parents:&wgpu::Buffer)->f64 {
+    pub fn barriers(&self,input:&Input<'_>,encoder:&mut impl Record,close:bool,reach:u32,job:[u32;4],parents:&wgpu::Buffer)->f64 {
         let params=|mut steps:Vec<Step>| {
             for (_,_,params) in &mut steps {params[24..28].copy_from_slice(&job);}
             steps
@@ -509,7 +511,7 @@ impl Lines {
         steps.push(("assign_region",word_count(core),params));
         steps
     }
-    pub fn run(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,steps:Vec<Step>)->f64 {
+    pub fn run(&self,input:&Input<'_>,encoder:&mut impl Record,steps:Vec<Step>)->f64 {
         self.encode(input,encoder,None,None,steps)
     }
     pub fn grow_steps(&self,value:i32)->Vec<Step> {
@@ -522,31 +524,31 @@ impl Lines {
         steps
     }
 
-    pub fn intersect(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,stop:&wgpu::Buffer)->f64 {
+    pub fn intersect(&self,input:&Input<'_>,encoder:&mut impl Record,stop:&wgpu::Buffer)->f64 {
         self.encode(input,encoder,Some(stop),None,vec![("intersect_bits",u64::from(self.offsets[0]),self.params([0;4],[0;4],[0;4],paper::Grain::FLAT))])
     }
 
-    pub fn thin(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,coverage:&wgpu::Buffer,plane:u32)->f64 {
+    pub fn thin(&self,input:&Input<'_>,encoder:&mut impl Record,coverage:&wgpu::Buffer,plane:u32)->f64 {
         self.encode(input,encoder,Some(coverage),None,vec![("remember_thin",u64::from(self.offsets[0]),self.params([0;4],[0;4],[plane,0,0,0],paper::Grain::FLAT))])
     }
 
-    pub fn barrier_plane(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,coverage:&wgpu::Buffer,parents:&wgpu::Buffer,bucket:u32,mode:u32)->f64 {
+    pub fn barrier_plane(&self,input:&Input<'_>,encoder:&mut impl Record,coverage:&wgpu::Buffer,parents:&wgpu::Buffer,bucket:u32,mode:u32)->f64 {
         let params=self.params([0;4],[0;4],[mode,bucket,0,0],paper::Grain::FLAT);
         self.encode(input,encoder,Some(coverage),Some(parents),vec![("barrier_plane",u64::from(self.offsets[0]),params)])
     }
 
-    pub fn boundary(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,coverage:&wgpu::Buffer)->f64 {
+    pub fn boundary(&self,input:&Input<'_>,encoder:&mut impl Record,coverage:&wgpu::Buffer)->f64 {
         let dispatched=self.encode(input,encoder,Some(coverage),None,vec![
             ("reset_ends",1,self.params([0;4],[0;4],[2,0,0,0],paper::Grain::FLAT)),
             ("barrier_plane",u64::from(self.offsets[0]),self.params([0;4],[0;4],[3,0,THIN_CUTOFF,0],paper::Grain::FLAT)),
         ]);
-        encoder.copy_buffer_to_buffer(self.data.as_ref().unwrap(),u64::from(self.offsets[1]+3)*4,coverage,28,4);
+        encoder.copy(self.data.as_ref().unwrap(),u64::from(self.offsets[1]+3)*4,coverage,28,4);
         dispatched
     }
-    pub fn union_trail(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,trail:&wgpu::Buffer)->f64 {
+    pub fn union_trail(&self,input:&Input<'_>,encoder:&mut impl Record,trail:&wgpu::Buffer)->f64 {
         self.encode(input,encoder,Some(trail),None,vec![("barrier_plane",u64::from(self.offsets[0]),self.params([0;4],[0;4],[5,0,0,0],paper::Grain::FLAT))])
     }
-    pub fn next_trail(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,trail:&wgpu::Buffer,points:&[[f32;2]],limit:Option<&wgpu::Buffer>)->f64 {
+    pub fn next_trail(&self,input:&Input<'_>,encoder:&mut impl Record,trail:&wgpu::Buffer,points:&[[f32;2]],limit:Option<&wgpu::Buffer>)->f64 {
         let mut count=0u32;let mut data=Vec::new();
         for segment in points.windows(2) {
             let steps=((segment[1][0]-segment[0][0]).abs().max((segment[1][1]-segment[0][1]).abs())*2.).ceil().max(1.) as u32;
@@ -558,8 +560,8 @@ impl Lines {
         let path=input.device.create_buffer(&wgpu::BufferDescriptor {label:Some("fill input path"),size:bytes.len() as u64+limit.map_or(0,wgpu::Buffer::size),
             usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false});
         let input_path=input.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {label:Some("fill input segments"),contents:&bytes,usage:wgpu::BufferUsages::COPY_SRC});
-        encoder.copy_buffer_to_buffer(&input_path,0,&path,0,bytes.len() as u64);
-        if let Some(limit)=limit {encoder.copy_buffer_to_buffer(limit,0,&path,bytes.len() as u64,limit.size());}
+        encoder.copy(&input_path,0,&path,0,bytes.len() as u64);
+        if let Some(limit)=limit {encoder.copy(limit,0,&path,bytes.len() as u64,limit.size());}
         self.encode(input,encoder,Some(trail),Some(&path),vec![
             ("reset_ends",1,self.params([0;4],[0;4],[2,0,1,0],paper::Grain::FLAT)),
             ("barrier_plane",u64::from(count.max(1)),self.params([bytes.len() as u32/4,u32::from(limit.is_some()),0,0],[0;4],[6,count,points.len().saturating_sub(1) as u32,THIN_CUTOFF],paper::Grain::FLAT)),
@@ -577,11 +579,11 @@ impl Lines {
         self.encode(input,encoder,seed,None,vec![("check_seeds",1,self.params([0;4],[0;4],
             [u32::from(matches!(mode,layer_render::RegionColourMode::ColourOnSolid)),u32::from(seed.is_some()),0,1],paper::Grain::FLAT))]);
     }
-    pub fn snap_seed(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,parents:&wgpu::Buffer,seed:u32,position:[u32;2])->f64 {
+    pub fn snap_seed(&self,input:&Input<'_>,encoder:&mut impl Record,parents:&wgpu::Buffer,seed:u32,position:[u32;2])->f64 {
         self.encode(input,encoder,Some(parents),None,vec![("snap_seed",1,self.params([0;4],[0;4],[position[0],position[1],seed,0],paper::Grain::FLAT))])
     }
-    pub fn copy_colour(&self,encoder:&mut crate::submission::CommandEncoder,output:&wgpu::Buffer,offset:u64) {
-        encoder.copy_buffer_to_buffer(self.data.as_ref().unwrap(),u64::from(self.offsets[1]+4)*4,output,offset,4);
+    pub fn copy_colour(&self,encoder:&mut impl Record,output:&wgpu::Buffer,offset:u64) {
+        encoder.copy(self.data.as_ref().unwrap(),u64::from(self.offsets[1]+4)*4,output,offset,4);
     }
     pub fn copy_stale(&self,encoder:&mut crate::submission::CommandEncoder,output:&wgpu::Buffer,offset:u64) {
         encoder.copy_buffer_to_buffer(self.data.as_ref().unwrap(),u64::from(self.offsets[1]+2)*4,output,offset,4);

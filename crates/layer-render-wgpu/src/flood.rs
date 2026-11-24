@@ -39,25 +39,43 @@ pub(super) struct Region {
     pub gaps: Option<GapRegions>,
 }
 const WORD_PASS_NANOSECONDS: f64 = 2.;
+pub(super) trait Encode:FnOnce(&mut crate::submission::CommandEncoder)+wgpu::WasmNotSend+'static {}
+impl<T:FnOnce(&mut crate::submission::CommandEncoder)+wgpu::WasmNotSend+'static> Encode for T {}
+pub(super) trait Record {
+    fn record(&mut self,encode:impl Encode);
+    fn copy(&mut self,source:&wgpu::Buffer,from:u64,destination:&wgpu::Buffer,to:u64,size:u64) {
+        let (source,destination)=(source.clone(),destination.clone());
+        self.record(move|encoder|encoder.copy_buffer_to_buffer(&source,from,&destination,to,size));
+    }
+    fn clear(&mut self,buffer:&wgpu::Buffer,offset:u64,size:Option<u64>) {
+        let buffer=buffer.clone();
+        self.record(move|encoder|encoder.clear_buffer(&buffer,offset,size));
+    }
+}
+impl Record for crate::submission::CommandEncoder {
+    fn record(&mut self,encode:impl Encode) {encode(self);}
+}
+#[derive(Default)]
+pub(super) struct Piece(Vec<Box<dyn Encode>>);
+impl Record for Piece {
+    fn record(&mut self,encode:impl Encode) {self.0.push(Box::new(encode));}
+}
+#[derive(Default)]
 pub(super) struct Chunks {
-    device: PipelineDevice,
-    queued: std::collections::VecDeque<(crate::submission::CommandEncoder, f64)>,
+    queued: std::collections::VecDeque<(Piece, f64)>,
 }
 impl Chunks {
-    pub fn new(device: &PipelineDevice) -> Self {
-        Self {device:device.clone(),queued:Default::default()}
-    }
-    fn op(&mut self, encode: impl FnOnce(&mut crate::submission::CommandEncoder) -> f64) {
-        let mut op=crate::submission::CommandEncoder::new(&self.device,&wgpu::CommandEncoderDescriptor {label:Some("connected region")});
+    fn op(&mut self, encode: impl FnOnce(&mut Piece) -> f64) {
+        let mut op=Piece::default();
         let cost=encode(&mut op);
         if self.queued.back().is_none_or(|(_,spent)|*spent>0. && spent+cost>lines::CHUNK_NANOSECONDS) {
-            self.queued.push_back((crate::submission::CommandEncoder::new(&self.device,&wgpu::CommandEncoderDescriptor {label:Some("connected region")}),0.));
+            self.queued.push_back(Default::default());
         }
-        let (encoder,spent)=self.queued.back_mut().unwrap();
-        encoder.append_encoder(op);*spent+=cost;
+        let (piece,spent)=self.queued.back_mut().unwrap();
+        piece.0.append(&mut op.0);*spent+=cost;
     }
     pub fn next(&mut self, encoder: &mut crate::submission::CommandEncoder, pieces: u32) {
-        for (chunk,_) in self.queued.drain(..(pieces as usize).min(self.queued.len())) {encoder.append_encoder(chunk);}
+        for encode in self.queued.drain(..(pieces as usize).min(self.queued.len())).flat_map(|(piece,_)|piece.0) {encode(encoder);}
     }
     pub fn is_empty(&self) -> bool {self.queued.is_empty()}
     #[cfg(test)]
@@ -331,7 +349,7 @@ impl Flood {
             if self.trail.as_ref().is_none_or(|(id,size,_)|*id!=trail.transaction || *size!=extent) {
                 let buffer=device.create_buffer(&wgpu::BufferDescriptor {label:Some("fill crossed regions"),size:32+mask_bytes,
                     usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::COPY_SRC,mapped_at_creation:false});
-                chunks.op(|encoder|{encoder.clear_buffer(&buffer,0,None);0.});self.trail=Some((trail.transaction,extent,buffer));
+                chunks.op(|encoder|{encoder.clear(&buffer,0,None);0.});self.trail=Some((trail.transaction,extent,buffer));
             }
         }else{self.trail=None;}
         if classified.size() < mask_bytes {
@@ -363,10 +381,10 @@ impl Flood {
             label: Some("flood summary"),contents:&summary,usage:wgpu::BufferUsages::COPY_SRC,
         });
         chunks.op(|encoder| {
-            encoder.copy_buffer_to_buffer(&summary,0,&region.coverage,0,32);
-            encoder.copy_buffer_to_buffer(&summary,32,&region.coverage,region.bounds_offset,20);
-            encoder.copy_buffer_to_buffer(&summary,56,&region.coverage,region.bounds_offset+24,4);
-            if band {encoder.copy_buffer_to_buffer(&summary,32,&region.coverage,region.bounds_offset+32,20);}
+            encoder.copy(&summary,0,&region.coverage,0,32);
+            encoder.copy(&summary,32,&region.coverage,region.bounds_offset,20);
+            encoder.copy(&summary,56,&region.coverage,region.bounds_offset+24,4);
+            if band {encoder.copy(&summary,32,&region.coverage,region.bounds_offset+32,20);}
             0.
         });
         let stride = PARAMETER_BYTES.next_multiple_of(u64::from(limit.min_uniform_buffer_offset_alignment));
@@ -414,19 +432,14 @@ impl Flood {
         let dimension = limit.max_compute_workgroups_per_dimension;
         let pipelines = &self.pipelines;
         let clear=modes as usize;
-        let run = |encoder: &mut crate::submission::CommandEncoder, mode:usize, attempt:usize, at: usize, entries: &[&'static str]| -> f64 {
+        let run = |encoder: &mut Piece, mode:usize, attempt:usize, at: usize, entries: &[&'static str]| -> f64 {
             let [_, _, ww, wh] = windows[at].1;
             let mut dispatched = 0.;
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("connected region"),
-                timestamp_writes: None,
-            });
+            let mut dispatches = Vec::new();
             for entry in entries.iter().filter(|entry| enabled.contains(entry)) {
                 let binding=if *entry=="pack" {pack_group.as_ref().unwrap_or(&group)}else{&group};
-                pass.set_bind_group(0,binding,&[(stride*((mode*attempts as usize+attempt)*windows.len()+at) as u64) as u32]);
-                pass.set_pipeline(&pipelines[entry]);
                 let invocations = match *entry {
-                    "resolve_seed" | "finish_attempt" => { pass.dispatch_workgroups(1, 1, 1); continue; }
+                    "resolve_seed" | "finish_attempt" => 1,
                     "initialize" | "merge" | "mark_exterior" | "component_mask" => u64::from(ww.div_ceil(32)) * u64::from(wh),
                     "export_border" => perimeter([ww, wh]),
                     "seam_merge" => u64::from(labels.grid[0] - 1) * u64::from(h) + u64::from(labels.grid[1] - 1) * u64::from(w),
@@ -434,18 +447,29 @@ impl Flood {
                     "pack" => u64::from(ww.div_ceil(8)) * u64::from(wh),
                     _ => mask_bytes / 4,
                 };
-                if invocations > 0 { dispatch_linear(&mut pass, invocations, dimension); }
-                dispatched += invocations as f64 * WORD_PASS_NANOSECONDS * match *entry {"merge" => 448., "pack" => 24., _ => 1.};
+                dispatches.push((binding.clone(),(stride*((mode*attempts as usize+attempt)*windows.len()+at) as u64) as u32,(*pipelines[entry]).clone(),invocations));
+                dispatched += invocations as f64 * WORD_PASS_NANOSECONDS * match *entry {"merge" => 448., "pack" => 24., "resolve_seed" | "finish_attempt" => 0., _ => 1.};
             }
+            encoder.record(move|encoder| {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("connected region"),
+                    timestamp_writes: None,
+                });
+                for (binding,offset,pipeline,invocations) in &dispatches {
+                    pass.set_bind_group(0,binding,&[*offset]);
+                    pass.set_pipeline(pipeline);
+                    if *invocations > 0 { dispatch_linear(&mut pass, *invocations, dimension); }
+                }
+            });
             dispatched
         };
         let input=Input {device,mask:classified,paper};
         let lines=&self.lines;
         chunks.op(|encoder| {
             let excluded=lines.exclude(&input,encoder,fill.map_or(&[],|fill|fill.excluded_seals.as_ref()));
-            encoder.clear_buffer(store,labels.seed*4,Some(41*4));
-            if multiple {encoder.copy_buffer_to_buffer(&summary,52,store,(labels.seed+40)*4,4);}
-            encoder.clear_buffer(store,labels.flags*4,Some((labels.marks-labels.flags)*4));
+            encoder.clear(store,labels.seed*4,Some(41*4));
+            if multiple {encoder.copy(&summary,52,store,(labels.seed+40)*4,4);}
+            encoder.clear(store,labels.flags*4,Some((labels.marks-labels.flags)*4));
             excluded
         });
         let seal_metadata=if multiple {lines.seal_metadata(device)}else{None};
@@ -463,11 +487,11 @@ impl Flood {
                 if !inside(at) {
                     let side=u64::from(labels.side);
                     let slot=labels.slots+(u64::from(attempt)*u64::from(labels.grid[0]*labels.grid[1])+at as u64)*4*side;
-                    chunks.op(|encoder|{encoder.copy_buffer_to_buffer(&self.unlabeled,0,store,slot*4,16*side);0.});
+                    chunks.op(|encoder|{encoder.copy(&self.unlabeled,0,store,slot*4,16*side);0.});
                     continue;
                 }
                 chunks.op(|encoder| {
-                    encoder.clear_buffer(store,labels.marks*4,Some((labels.seed-labels.marks)*4));
+                    encoder.clear(store,labels.marks*4,Some((labels.seed-labels.marks)*4));
                     run(encoder,mode,attempt as usize,at,&["initialize","merge","mark_exterior","export_border"])
                 });
             }
@@ -484,19 +508,19 @@ impl Flood {
             }
             if attempts>1 && !enclosed && !multiple {dispatched+=lines.barrier_plane(&input,encoder,&region.coverage,store,(labels.seed+8*u64::from(attempts)) as u32,1);}
             if multiple {
-                encoder.clear_buffer(&region.coverage,32+u64::from(attempts)*mask_bytes,Some(mask_bytes));
+                encoder.clear(&region.coverage,32+u64::from(attempts)*mask_bytes,Some(mask_bytes));
                 dispatched+=lines.barrier_plane(&input,encoder,&region.coverage,store,(labels.seed+40) as u32,1);
             }
             dispatched
         });
         let reuse=attempts==1 && included.is_none();
         for attempt in 0..if enclosed {attempts as usize}else{1} {
-            if attempts>1 && enclosed && attempt+1==attempts as usize {chunks.op(|encoder|{encoder.clear_buffer(&region.coverage,32,Some(mask_bytes));0.});}
+            if attempts>1 && enclosed && attempt+1==attempts as usize {chunks.op(|encoder|{encoder.clear(&region.coverage,32,Some(mask_bytes));0.});}
             if reuse {chunks.op(|encoder|run(encoder,0,attempt,last,&["component_mask"]));}
             for at in (0..if reuse {last}else{windows.len()}).rev() {
                 if !inside(at) {chunks.op(|encoder|run(encoder,clear,0,at,&["component_mask"]));continue;}
                 chunks.op(|encoder| {
-                    encoder.clear_buffer(store,labels.marks*4,Some((labels.seed-labels.marks)*4));
+                    encoder.clear(store,labels.marks*4,Some((labels.seed-labels.marks)*4));
                     run(encoder,if attempts>1 {2}else{0},attempt,at,&["initialize","merge","mark_exterior","component_mask"])
                 });
             }
@@ -517,19 +541,19 @@ impl Flood {
         }
         if let Some((stop,clip))=stop && (clip || !band) {chunks.op(|encoder|lines.intersect(&input,encoder,stop));}
         let packed:Vec<_>=(0..windows.len()).filter(|&at|inside(at)).collect();
-        if packed.len()<windows.len() {chunks.op(|encoder|{encoder.clear_buffer(&region.coverage,32,Some(words*4));0.});}
+        if packed.len()<windows.len() {chunks.op(|encoder|{encoder.clear(&region.coverage,32,Some(words*4));0.});}
         for at in packed {chunks.op(|encoder|run(encoder,if multiple {3}else{0},0,at,&["pack"]));}
         chunks.op(|encoder| {
             let mut dispatched=0.;
             if band && fill.is_some() {lines.copy_colour(encoder,&region.coverage,region.bounds_offset+28);}
             if fill.is_some() {
-                if multiple {encoder.copy_buffer_to_buffer(store,(labels.seed+40)*4,&region.coverage,24,4);}
-                else{encoder.copy_buffer_to_buffer(&summary,52,&region.coverage,24,4);}
+                if multiple {encoder.copy(store,(labels.seed+40)*4,&region.coverage,24,4);}
+                else{encoder.copy(&summary,52,&region.coverage,24,4);}
             }
             if let Some(points)=fill.and_then(|fill|fill.trail.as_ref()).map(|trail|trail.points.as_ref())
                 && let Some((_,_,trail))=&self.trail {
                 dispatched+=lines.next_trail(&input,encoder,trail,points,selection);
-                encoder.copy_buffer_to_buffer(trail,0,&region.coverage,region.bounds_offset+24,4);
+                encoder.copy(trail,0,&region.coverage,region.bounds_offset+24,4);
             }
             dispatched
         });
@@ -541,4 +565,33 @@ impl Flood {
 fn dispatch_linear(pass: &mut wgpu::ComputePass<'_>, invocations: u64, limit: u32) {
     let groups = invocations.div_ceil(64) as u32;
     pass.dispatch_workgroups(groups.min(limit), groups.div_ceil(limit).max(1), 1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(not(target_arch="wasm32"))]
+    #[test]
+    fn each_piece_records_its_commands_and_completions_in_order_into_the_encoder_that_submits_it() {
+        let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let target=r.device.create_buffer(&wgpu::BufferDescriptor {label:None,size:16,usage:wgpu::BufferUsages::COPY_DST,mapped_at_creation:false});
+        let completed=Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut chunks=Chunks::default();
+        let before=crate::test_support::PassCounts::snapshot();
+        for op in 0..4 {
+            let completed=completed.clone();
+            chunks.op(|encoder|{encoder.clear(&target,0,None);encoder.record(move|encoder|encoder.on_submitted_work_done(move||completed.lock().unwrap().push(op)));lines::CHUNK_NANOSECONDS/2.});
+        }
+        assert_eq!((chunks.planned(),crate::test_support::PassCounts::snapshot().delta(before).command_encoders),(vec![lines::CHUNK_NANOSECONDS;2],0));
+        for piece in 0..2 {
+            let before=crate::test_support::PassCounts::snapshot();
+            let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+            chunks.next(&mut encoder,1);
+            assert_eq!(*completed.lock().unwrap(),(0..2*piece).collect::<Vec<_>>());
+            pollster::block_on(encoder.submit_and_wait(&r.device,&r.queue)).unwrap();
+            assert_eq!(crate::test_support::PassCounts::snapshot().delta(before).command_encoders,1);
+        }
+        assert_eq!(*completed.lock().unwrap(),[0,1,2,3]);
+    }
 }

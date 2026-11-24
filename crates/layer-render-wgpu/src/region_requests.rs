@@ -365,7 +365,7 @@ impl RegionRequests {
             Some(Scope::Full)=>None,
             Some(Scope::Check(_))=>unreachable!(),
             None=>{
-                let mut chunks=flood::Chunks::new(&r.device);
+                let mut chunks=flood::Chunks::default();
                 let stop=self.stop_mask.as_ref().map(|stop|(stop,request.fill_areas.is_none()));
                 let probe=self.flood.probe_scope(&r.device,&mut chunks,r.document_extent,request.position,request.tolerance,classified,&paper,stop)?;
                 chunks.next(encoder,self.pieces);
@@ -554,7 +554,7 @@ impl RegionRequests {
             r.selection_clip
                 .prepare(&r.device, &mut encoder, extent, selection)?;
         }
-        let mut flood = flood::Chunks::new(&r.device);
+        let mut flood = flood::Chunks::default();
         let input = if let layer_render::RegionSource::TransformedSelection {
             selection, map, ..
         } = &request.source
@@ -791,7 +791,7 @@ impl RegionRequests {
             downsamples,
         )?;
         let running = Running {
-            flood: flood::Chunks::new(&r.device),
+            flood: flood::Chunks::default(),
             then: Then::Refine(job),
             request_id: request.request_id,
             probe: None,

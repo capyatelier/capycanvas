@@ -387,6 +387,22 @@ fn regions_whose_coverage_exceeds_the_device_are_refused_and_the_renderer_keeps_
 }
 
 #[test]
+fn a_flood_encodes_its_pieces_into_the_one_encoder_each_submission_creates() {
+    let extent = [300, 200];
+    let alpha = (0..extent[0] * extent[1]).map(|i| if barrier([40, 40, 160, 160], i % extent[0], i / extent[0]) { 1. } else { 0. }).collect::<Vec<_>>();
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    frame(&mut r, &uniform_document(extent, &alpha), extent);
+    let mut query = request(RegionSource::Composite, rectangle([0, 0, 1, 1]), exact(), 0.);
+    (query.enclosure, query.position) = (None, [100, 100]);
+    let expected = rectangles(extent, &[[41, 41, 159, 159]]);
+    check(&receive_request(&mut r, query.clone()), &expected, extent);
+    let before = crate::test_support::PassCounts::snapshot();
+    check(&receive_request(&mut r, query), &expected, extent);
+    let counts = crate::test_support::PassCounts::snapshot().delta(before);
+    assert_eq!(counts.command_encoders, counts.submissions, "a flood created {} command encoders for {} submissions", counts.command_encoders, counts.submissions);
+}
+
+#[test]
 #[ignore = "hardware enclosure completion timing at reference canvas sizes"]
 fn enclose_fill_workstation_completion_timings() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
