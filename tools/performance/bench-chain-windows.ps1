@@ -582,6 +582,7 @@ $handlers=@{
   $index=0
   foreach($point in $s.points){
    $index++;Tap-Latency $e "$($s.id)-$index" (At $point[0] $point[1]) 3 $null -Changed -Stable -Surface 'canvas' -Seconds 120
+   $notice=Notice-Text;if($notice){throw [CapyBenchRefused]::new($notice)}
   }
  }
  scrub={param($s,$e)

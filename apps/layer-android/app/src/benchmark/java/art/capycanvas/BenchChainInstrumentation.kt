@@ -206,6 +206,8 @@ class BenchChainInstrumentation : Instrumentation() {
     private fun quiet() = !host.drawingTabs.switching && !host.documents.working
     private fun phone() = host.snapshot!!.getJSONObject("layout").objectOrNull("phone") != null
     private fun failed() = host.failure ?: host.actionError
+    private fun noticeId() = state().objectOrNull("notice")?.getLong("id") ?: 0L
+    private fun noticeAfter(id: Long) = state().objectOrNull("notice")?.takeIf { it.getLong("id") > id }?.getString("text")
 
     private fun await(label: String, timeoutMs: Long = 120_000, ready: (() -> Boolean)? = null): Long {
         var beat = SystemClock.uptimeMillis()
@@ -415,16 +417,15 @@ class BenchChainInstrumentation : Instrumentation() {
         }
         val free = freeBytes()
         val (tabs, epoch) = main { host.drawingTabs.rows.map { it.getLong("id") }.toSet() to state().getJSONObject("document_file").getLong("epoch") }
-        val notice = main { state().objectOrNull("notice")?.getLong("id") ?: 0L }
+        val notice = main { noticeId() }
         var hostError = main { state().nullableString("host_error") }
         val input = now()
         check(main { host.documents.openUris(listOf(Uri.fromFile(file))) }) { "The host did not accept $name" }
         var refusal: String? = null
         fun declined(): String? {
-            val shown = state()
-            val error = shown.nullableString("host_error")
+            val error = state().nullableString("host_error")
             if (error == null) hostError = null
-            return shown.objectOrNull("notice")?.takeIf { it.getLong("id") > notice }?.getString("text") ?: error?.takeIf { it != hostError }
+            return noticeAfter(notice) ?: error?.takeIf { it != hostError }
         }
         val ready = try { await("$name to open", 180_000) {
             val controller = host.documents
@@ -628,11 +629,16 @@ class BenchChainInstrumentation : Instrumentation() {
         for ((index, point) in step.getJSONArray("points").values().map { it as JSONArray }.withIndex()) {
             await("idle before tap")
             progress("BENCH_TAP $id ${index + 1}")
-            val before = main { if (document) revision() else state().getLong("revision") }
+            val (before, notice) = main { (if (document) revision() else state().getLong("revision")) to noticeId() }
             val a = area()
             val target = a.at(point.getDouble(0), point.getDouble(1))
             val input = tap(if (document) fillPoint(target, a) else target, true)
-            val ready = await("$tool tap") { (if (document) revision() else state().getLong("revision")) > before }
+            var refusal: String? = null
+            val ready = await("$tool tap") {
+                refusal = noticeAfter(notice)
+                refusal != null || (if (document) revision() else state().getLong("revision")) > before
+            }
+            refusal?.let { throw Refused(it) }
             latency(tool, input, ready, surface)
         }
     }
