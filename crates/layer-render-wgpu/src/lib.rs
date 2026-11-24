@@ -1424,8 +1424,7 @@ impl WgpuRasterizer {
             return Err(GpuRasterError::HardwareAdapterRequired);
         }
         let (mut device, recipes) = factory.resources(&device);
-        let memory = memory::Memory::new(&factory, device.sample_memory.clone());
-        device.sample_memory = Some(memory.sample_owner());
+        let memory = memory::Memory::new(&factory, &device.source_samples);
         device.resource_limit = memory.resource_limit();
         device.source_samples.set_limit(memory.sample_grant().min(usize::MAX as u64) as usize);
         let scene_tiers = scene::Tiers::new(memory.display_owner());
@@ -4341,7 +4340,7 @@ impl CanvasRenderer for WgpuRasterizer {
         let Some(warm) = self.warm.take() else { return false; };
         self.memory.invalidate_limits();
         self.publish_memory();
-        self.publish_samples();
+        self.publish_sample_demand();
         self.factory.memory_budget().flush_reports();
         warm == warm::Warm::of(document)
     }

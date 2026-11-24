@@ -47,7 +47,7 @@ impl WgpuRasterizer {
     /// Publishes a parked drawing's live size and whether the budget still holds it.
     pub fn keeps_warm(&self) -> bool {
         self.publish_memory();
-        self.publish_samples();
+        self.publish_sample_demand();
         self.factory.memory_budget().flush_reports();
         self.memory.retention_grant() >= self.live_display_bytes()
     }

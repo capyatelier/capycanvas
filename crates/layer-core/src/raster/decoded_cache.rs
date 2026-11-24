@@ -1,9 +1,10 @@
 //! Bounded, disposable exact samples. The compressed immutable tile remains the
 //! authority; cache keys never keep document/history backing alive.
 use super::TileBlob;
+use crate::MemoryOwner;
 use std::{
     collections::{HashMap, VecDeque},
-    sync::{Arc, Mutex, Weak},
+    sync::{Arc, Mutex, MutexGuard, OnceLock, Weak, atomic::{AtomicU64, Ordering}},
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -33,9 +34,12 @@ struct State {
     retired_bytes: usize,
     clock: u64,
     stats: DecodedTileCacheStats,
+    demand: [u64; 2],
 }
 pub struct DecodedTileCache {
     state: Mutex<State>,
+    owner: OnceLock<MemoryOwner>,
+    reported: [AtomicU64; 3],
 }
 impl DecodedTileCache {
     pub fn new(limit_bytes: usize) -> Self {
@@ -47,36 +51,44 @@ impl DecodedTileCache {
                 },
                 ..Default::default()
             }),
+            owner: OnceLock::new(),
+            reported: Default::default(),
         }
+    }
+    pub fn report_to(&self, owner: impl FnOnce() -> MemoryOwner) -> MemoryOwner { self.owner.get_or_init(owner).clone() }
+    pub fn set_demand(&self, floor: u64, demand: u64) {
+        let mut state = self.state.lock().unwrap();
+        state.demand = [floor, demand];
+        self.report(state);
+    }
+    fn report(&self, state: MutexGuard<'_, State>) {
+        let [floor, demand] = state.demand;
+        let bytes = [state.physical() as u64, (state.pinned() as u64).max(floor), demand];
+        for (reported, bytes) in self.reported.iter().zip(bytes) { reported.store(bytes, Ordering::Release); }
+        drop(state);
+        if let Some(owner) = self.owner.get() { owner.report_ram(&self.reported); }
     }
 
     pub fn set_limit(&self, limit_bytes: usize) { self.state.lock().unwrap().stats.limit_bytes = limit_bytes; }
     pub fn trim_unused(&self, max_entries: usize) -> usize {
         let mut state = self.state.lock().unwrap();
-        let mut released = Vec::new();
         state.reap(max_entries);
-        let held = state.retired_bytes;
+        let (held, mut freed) = (state.retired_bytes, 0);
         for _ in 0..max_entries {
             if state.stats.resident_bytes.saturating_add(held) <= state.stats.limit_bytes { break; }
             let Some(key) = state.entries.iter().filter(|(_,entry)|Arc::strong_count(&entry.samples)==1)
                 .min_by_key(|(_,entry)|(entry.tile.strong_count()!=0,entry.used)).map(|(&key,_)|key) else { break; };
-            released.push(state.remove(key).samples);
+            freed += state.remove(key).samples.capacity();
         }
-        drop(state);
-        released.into_iter().map(|samples| {
-            let bytes=samples.capacity();let weak=Arc::downgrade(&samples);drop(samples);
-            if weak.strong_count()==0 {bytes}else {0}
-        }).sum()
+        self.report(state);
+        freed
     }
     pub fn stats(&self) -> DecodedTileCacheStats {
         let mut state = self.state.lock().unwrap();
         state.reap(64);
-        let held = state.retired_bytes;
-        DecodedTileCacheStats {
-            entries: state.entries.len(), physical_bytes: state.stats.resident_bytes.saturating_add(held),
-            pinned_bytes: held.saturating_add(state.entries.values().filter(|entry|Arc::strong_count(&entry.samples)>1).map(|entry|entry.samples.capacity()).sum::<usize>()),
-            ..state.stats
-        }
+        let stats = DecodedTileCacheStats { entries: state.entries.len(), physical_bytes: state.physical(), pinned_bytes: state.pinned(), ..state.stats };
+        self.report(state);
+        stats
     }
 
     #[cfg(not(target_arch="wasm32"))]
@@ -109,6 +121,7 @@ impl DecodedTileCache {
         state.reap(1);
         if bytes > state.stats.limit_bytes {
             state.track(&samples);
+            self.report(state);
             return Ok(samples);
         }
         while state.stats.resident_bytes > state.stats.limit_bytes - bytes {
@@ -121,7 +134,7 @@ impl DecodedTileCache {
                 .unwrap()
                 .0;
             let entry = state.remove(oldest);
-            state.track(&entry.samples);
+            if Arc::strong_count(&entry.samples) > 1 { state.track(&entry.samples); }
         }
         state.clock = state.clock.saturating_add(1);
         let used = state.clock;
@@ -135,10 +148,15 @@ impl DecodedTileCache {
         );
         state.stats.resident_bytes += bytes;
         state.stats.peak_bytes = state.stats.peak_bytes.max(state.stats.resident_bytes);
+        self.report(state);
         Ok(samples)
     }
 }
 impl State {
+    fn physical(&self) -> usize { self.stats.resident_bytes.saturating_add(self.retired_bytes) }
+    fn pinned(&self) -> usize {
+        self.retired_bytes.saturating_add(self.entries.values().filter(|entry|Arc::strong_count(&entry.samples)>1).map(|entry|entry.samples.capacity()).sum::<usize>())
+    }
     fn track(&mut self, samples:&Arc<Vec<u8>>) {
         self.retired_bytes+=samples.capacity();self.retired.push_back((Arc::downgrade(samples),samples.capacity()));
     }

@@ -74,7 +74,7 @@ struct Lane {refused:Option<crate::residency::Blocked>,wanted:u64,asked:bool,len
 
 pub(super) struct Memory {
     display: Owner,
-    samples: Owner,
+    samples: MemoryOwner,
     raster: Owner,
     staging: Owner,
     demand: std::cell::Cell<Demand>,
@@ -132,7 +132,7 @@ fn display_floor(packet: FramePacket<'_>, presented: u64, unit: u64, precision: 
 }
 
 impl Memory {
-    pub fn new(factory: &RendererFactory, samples: Option<MemoryOwner>) -> Self {
+    pub fn new(factory: &RendererFactory, samples: &layer_core::raster::DecodedTileCache) -> Self {
         let working = WORKING_BYTES;
         let demand = Demand {floor:working,mips:0,sources:[SOURCE_WORKING_BYTES,scene::scale::SOURCE_WORKING_BYTES+working],inputs:[0;2],resources:working};
         let display = Owner::new(factory, Kind::Scene, MemoryReport { pinned_gpu_bytes: total(demand.pinned([0;5])), demand_gpu_bytes: total(demand.pinned([0;5])), optional_gpu_bytes: u64::MAX, ..Default::default() });
@@ -142,13 +142,13 @@ impl Memory {
         display.handle.set_wake(Arc::new(move || { let wake = forwarded.lock().unwrap().clone(); wake.inspect(|wake| wake()).is_some() }));
         let memory = Self {
             display,
-            samples: samples.map_or_else(|| Owner::new(factory, Kind::DecodedSamples, MemoryReport { pinned_ram_bytes: SOURCE_WORKING_BYTES, demand_ram_bytes: DECODED_SAMPLE_BYTES, ..Default::default() }),
-                |handle| { let report = handle.reported(); Owner { handle, published: std::cell::Cell::new(report) } }),
+            samples: samples.report_to(|| factory.memory_owner(Kind::DecodedSamples)),
             raster: Owner::new(factory, Kind::RasterPool, MemoryReport { pinned_gpu_bytes: working, pinned_ram_bytes: working, demand_gpu_bytes: working, demand_ram_bytes: working, ..Default::default() }),
             staging: Owner::new(factory, Kind::Staging, MemoryReport { pinned_gpu_bytes: working, demand_gpu_bytes: working, ..Default::default() }),
             demand: std::cell::Cell::new(demand), demand_key: std::cell::Cell::new(None), applied_limits: std::cell::Cell::new(None), limits_dirty: std::cell::Cell::new(true), preparation: std::cell::Cell::new(0), target: std::cell::Cell::new(total(demand.wanted(0))), refused: Default::default(), lane: Default::default(), trimmed: Default::default(), retired: Default::default(), wake, resources, overdraft: Default::default(), fruitless: Default::default(), #[cfg(not(target_arch = "wasm32"))] watch: Default::default(),
             unified: factory.unified_memory(), idle: std::sync::atomic::AtomicBool::new(true), pass_evictable: Default::default(),
         };
+        samples.set_demand(SOURCE_WORKING_BYTES, DECODED_SAMPLE_BYTES);
         memory.applied_limits.set(Some(memory.grants()));
         memory
     }
@@ -164,7 +164,7 @@ impl Memory {
     pub(crate) fn watch(&self, budget: &layer_core::MemoryBudget, edge: Arc<dyn Fn() + Send + Sync>) { *self.watch.borrow_mut() = Some(budget.watch(edge)); }
     pub(crate) fn raster_grant(&self) -> u64 { self.raster.handle.grant().gpu_bytes }
     pub(crate) fn staging_grant(&self) -> u64 { self.staging.handle.grant().gpu_bytes }
-    pub(crate) fn sample_grant(&self) -> u64 { self.samples.handle.grant().ram_bytes }
+    pub(crate) fn sample_grant(&self) -> u64 { self.samples.grant().ram_bytes }
     pub(crate) fn mip_budget(&self) -> u64 { self.demand.get().mips.min(self.display_grant()) }
     fn grants(&self) -> [u64; 4] { [self.retention_grant(), self.raster_grant(), self.sample_grant(), self.staging_grant()] }
     fn owner(&self,kind:Kind)->&Owner {
@@ -196,7 +196,6 @@ impl Memory {
     fn carry_overdraft(&self,used:u64) {
         if used>self.retention_grant() && self.lane.borrow().refused.is_none() {self.overdraft.borrow_mut().extend(self.display.handle.admit_working_through(used,None));}
     }
-    pub fn sample_owner(&self) -> MemoryOwner { self.samples.handle.clone() }
     pub(crate) fn raster_owner(&self) -> MemoryOwner { self.raster.handle.clone() }
     pub fn resource_limit(&self) -> Arc<std::sync::atomic::AtomicU64> { self.resources.clone() }
     pub fn retire(&self, device:&crate::PipelineDevice, queue: &wgpu::Queue) {
@@ -205,7 +204,7 @@ impl Memory {
             report.pinned_gpu_bytes = report.gpu_bytes;
             owner.publish(report);
         }
-        let owners = [self.display.handle.clone(), self.samples.handle.clone(), self.raster.handle.clone(), self.staging.handle.clone()];
+        let owners = [self.display.handle.clone(), self.raster.handle.clone(), self.staging.handle.clone()];
         device.on_queue_done(queue,move || drop(owners));
     }
     fn demand_region(&self, scene: SceneView<'_>, extent: [u32; 2], visible: PixelRect) {
@@ -428,7 +427,7 @@ impl WgpuRasterizer {
         self.scene_tiers.display.set_grant(self.memory.retention_ceiling());
         self.device.resource_limit.store(self.memory.display_grant(),std::sync::atomic::Ordering::Release);
         self.device.source_samples.set_limit(ram.min(usize::MAX as u64) as usize);
-        if self.device.source_samples.trim_unused(SOURCE_SLOTS)!=0 {self.publish_samples();}
+        self.device.source_samples.trim_unused(SOURCE_SLOTS);
         self.source_tiles.get_mut().admit_limits(uploads);
         let upload_bytes=self.uploads.memory_bytes()[0];let restore_bytes=self.restore_uploads.memory_bytes()[0];
         let retained_uploads=upload_bytes.saturating_add(restore_bytes);
@@ -705,11 +704,9 @@ impl WgpuRasterizer {
         self.memory.raster.publish(self.raster_memory_report());
         self.memory.staging.publish(self.staging_memory_report());
     }
-    pub(crate) fn publish_samples(&self) {
-        let samples = self.device.source_samples.stats();
-        self.memory.samples.publish(self.warm_report(MemoryReport { ram_bytes: samples.physical_bytes as u64,
-            pinned_ram_bytes: (samples.pinned_bytes as u64).max(SOURCE_WORKING_BYTES),
-            demand_ram_bytes: DECODED_SAMPLE_BYTES, ..Default::default() }, 0));
+    pub(crate) fn publish_sample_demand(&self) {
+        let [floor, demand] = if self.warm.is_some() { [0; 2] } else { [SOURCE_WORKING_BYTES, DECODED_SAMPLE_BYTES] };
+        self.device.source_samples.set_demand(floor, demand);
     }
     pub fn after_present(&mut self) {
         if !self.memory.idle.load(std::sync::atomic::Ordering::Acquire)
@@ -717,7 +714,7 @@ impl WgpuRasterizer {
         if self.restore_preparation().is_none() && !self.bake_preflight.as_ref().is_some_and(|state|state.pending()) { self.memory.preparation.set(0); }
         self.memory_pass(|r| {
             r.publish_memory();
-            r.publish_samples();
+            r.publish_sample_demand();
             r.memory.invalidate_limits();r.refresh_memory_limits();
             r.publish_memory();
         });

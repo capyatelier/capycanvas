@@ -194,6 +194,11 @@ impl MemoryOwner {
         let bytes = total.load(Ordering::Acquire);
         self.apply(state, MemoryReport { gpu_bytes: bytes, pinned_gpu_bytes: bytes, ..Default::default() });
     }
+    pub fn report_ram(&self, [ram, pinned, demand]: &[AtomicU64; 3]) {
+        let state = self.0.budget.0.state.lock().unwrap();
+        let [ram_bytes, pinned_ram_bytes, demand_ram_bytes] = [ram, pinned, demand].map(|bytes| bytes.load(Ordering::Acquire));
+        self.apply(state, MemoryReport { ram_bytes, pinned_ram_bytes, demand_ram_bytes, ..Default::default() });
+    }
     fn apply(&self, mut state: MutexGuard<'_, State>, mut report: MemoryReport) {
         report.ram_bytes = report.ram_bytes.max(report.pinned_ram_bytes);
         report.gpu_bytes = report.gpu_bytes.max(report.pinned_gpu_bytes);

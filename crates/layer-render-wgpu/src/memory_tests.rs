@@ -135,11 +135,13 @@ pub(crate) fn isolate(r: &mut WgpuRasterizer) -> MemoryBudget {
     let budget = MemoryBudget::with_facts(MemoryFacts { host_default_bytes: Some(2 << 30),
         override_bytes: Some(2 << 30), ..Default::default() });
     let device = budget.register_device(layer_core::DeviceMemoryFacts { unified: true, ..Default::default() });
-    for (owner, kind) in [(&mut r.memory.display, Kind::Scene), (&mut r.memory.samples, Kind::DecodedSamples),
-        (&mut r.memory.raster, Kind::RasterPool), (&mut r.memory.staging, Kind::Staging)] {
+    for (owner, kind) in [(&mut r.memory.display, Kind::Scene), (&mut r.memory.raster, Kind::RasterPool), (&mut r.memory.staging, Kind::Staging)] {
         owner.handle = budget.register_owner(kind, MemoryClass::Visible, Some(device));
         owner.handle.report(owner.published.get());
     }
+    r.device.source_samples = Arc::new(layer_core::raster::DecodedTileCache::new(0));
+    r.memory.samples = r.device.source_samples.report_to(|| budget.register_owner(Kind::DecodedSamples, MemoryClass::Visible, Some(device)));
+    r.device.source_samples.set_demand(SOURCE_WORKING_BYTES, DECODED_SAMPLE_BYTES);
     budget
 }
 
@@ -510,19 +512,38 @@ fn snapshot_capture_keeps_its_authored_memory_after_the_editor_closes() {
 }
 
 #[test]
-fn preparation_demand_preserves_the_shared_sample_inventory() {
+fn a_shared_sample_cache_stays_exact_in_the_ledger_while_one_renderer_decodes_and_another_trims() {
+    use layer_core::raster::TileBlob;
+    const TILE: usize = 8 << 16;
     let doc = document();
     let r = renderer(doc.composition().color, layer_core::DeviceMemoryFacts {unified: true, ..Default::default()}).unwrap();
     let candidate = r.color_candidate_staged(doc.composition().color).unwrap();
-    let owner = r.memory.samples.handle.clone();
-    owner.report(MemoryReport {ram_bytes: 64 << 20, pinned_ram_bytes: 32 << 20,
-        demand_ram_bytes: 96 << 20, ..Default::default()});
-    candidate.memory_demand(packet(doc.scene(), [512; 2]));
-    r.factory.memory_budget().flush_reports();
-    let actual = owner.reported();
-    assert_eq!(actual.ram_bytes, 64 << 20);
-    assert_eq!(actual.pinned_ram_bytes, 32 << 20);
-    assert_eq!(actual.demand_ram_bytes, 96 << 20);
+    let budget = r.factory.memory_budget().clone();
+    let descriptor = layer_core::color::DocumentColor {depth: layer_core::color::SampleDepth::U16, ..Default::default()}.paint_descriptor();
+    let tiles: Vec<_> = (0..64u8).map(|value| Arc::new(TileBlob::encode(descriptor, &vec![value; TILE]).unwrap())).collect();
+    let decoded = std::cell::RefCell::new(Vec::new());
+    let decode = |renderer: &WgpuRasterizer, tiles: &[Arc<TileBlob>]| tiles.iter().map(|tile| {
+        let samples = renderer.device.source_samples.decode_on_worker(tile).unwrap();
+        decoded.borrow_mut().push(Arc::downgrade(&samples));
+        samples
+    }).collect::<Vec<_>>();
+    let check = |step: &str| {
+        budget.flush_reports();
+        let counted = budget.snapshot().rows[Kind::DecodedSamples as usize].iter().map(|row| row.ram_bytes).sum::<u64>();
+        let live = decoded.borrow().iter().filter_map(std::sync::Weak::upgrade).map(|samples| samples.capacity() as u64).sum::<u64>();
+        assert_eq!(counted, live, "after {step} the ledger counts {counted} decoded sample bytes while {live} are alive");
+    };
+    r.device.source_samples.set_limit(48 * TILE);
+    let held = decode(&r, &tiles[..40]);
+    check("one renderer decodes");
+    drop(decode(&candidate, &tiles[40..56]));
+    check("the other renderer decodes past the limit");
+    drop(held);
+    candidate.device.source_samples.set_limit(40 * TILE);
+    candidate.device.source_samples.trim_unused(usize::MAX);
+    check("the other renderer trims");
+    drop(decode(&r, &tiles[56..]));
+    check("one renderer evicts unread samples");
 }
 
 

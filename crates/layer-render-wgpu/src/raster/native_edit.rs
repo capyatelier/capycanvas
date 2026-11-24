@@ -271,7 +271,6 @@ impl WgpuRasterizer {
     ) -> Result<Self, GpuRasterError> {
         let mut device = self.factory.pipeline_device(color);
         device.source_samples = self.device.source_samples.clone();
-        device.sample_memory = self.device.sample_memory.clone();
         Self::native_staged_on_factory(self.factory.clone(), device, color).map(|renderer| *renderer)
     }
 
