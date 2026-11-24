@@ -19,7 +19,8 @@ case "$motion_platform" in
         fi
         ;;
     web) bash apps/layer-web/build.sh ;;
-    *) echo 'Usage: workspace-motion.sh [gtk|web] [test flag]' >&2; exit 2 ;;
+    command) ;;
+    *) echo 'Usage: workspace-motion.sh [gtk|web] [test flag] | command COMMAND...' >&2; exit 2 ;;
 esac
 motion_run_dir=$(mktemp -d "${TMPDIR:-/tmp}/capy-workspace-motion.XXXXXX")
 export XDG_RUNTIME_DIR="$motion_run_dir/runtime"
@@ -74,7 +75,9 @@ if [[ ${LAYER_MOTION_SCALE:-1} != 1 ]]; then
     gdbus wait --session --timeout 10 org.gnome.Mutter.DisplayConfig
     gjs tools/performance/display-scale.js "$LAYER_MOTION_SCALE"
 fi
-if [[ "$motion_platform" == gtk ]]; then
+if [[ "$motion_platform" == command ]]; then
+    "$@" 2>&1 | tee "$motion_run_dir/test.log"
+elif [[ "$motion_platform" == gtk ]]; then
     G_DEBUG=fatal-criticals gjs apps/layer-linux/bench/native-input.js "$@" 2>&1 | tee "$motion_run_dir/test.log"
 else
     motion_port=${LAYER_WEB_PORT:-4179}

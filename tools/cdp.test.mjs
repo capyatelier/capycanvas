@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {once} from 'node:events';
-import {launchChrome, prepareWorkers} from './cdp.mjs';
+import {mkdtemp, readdir, readFile, realpath, rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {connectBrowser, launchChrome, prepareWorkers} from './cdp.mjs';
 
 test('worker observers precede module execution and close rejects event waiters', async t => {
   const server = createServer((request, response) => {
@@ -58,4 +61,35 @@ test('worker observers precede module execution and close rejects event waiters'
   const rejected = assert.rejects(waiter, /Chrome exited|CDP closed/);
   await cdp.close();cdp = undefined;
   await rejected;
+});
+
+test('a caller-owned profile outlives the browser', async () => {
+  const profile = await mkdtemp(join(await realpath(tmpdir()), 'capy-profile-test-'));
+  try {
+    const cdp = await launchChrome(['--headless=new', '--disable-gpu'], {profile, timeout: 180000});
+    await cdp.call('Browser.getVersion', {}, null);
+    await cdp.close();
+    assert.ok((await readdir(profile)).includes('Local State'));
+  } finally { await rm(profile, {recursive: true, force: true}); }
+});
+
+test('a browser connection opens pages in an isolated context', async () => {
+  const profile = await mkdtemp(join(await realpath(tmpdir()), 'capy-profile-test-'));
+  const chrome = await launchChrome(['--headless=new', '--disable-gpu', '--remote-debugging-port=0'], {profile, timeout: 180000});
+  let browser;
+  try {
+    let port;
+    for (const deadline = Date.now() + 30000; !port && Date.now() < deadline; await new Promise(resolve => setTimeout(resolve, 100)))
+      port = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8').catch(() => '')).split('\n')[0];
+    browser = await connectBrowser(`http://127.0.0.1:${port}`, {timeout: 180000});
+    const {browserContextId} = await browser.call('Target.createBrowserContext', {}, null);
+    const targetId = await browser.attachPage(browserContextId);
+    assert.equal((await browser.call('Target.getTargetInfo', {targetId}, null)).targetInfo.browserContextId, browserContextId);
+    assert.equal(await browser.evaluate('location.href'), 'about:blank');
+    await browser.call('Target.disposeBrowserContext', {browserContextId}, null);
+  } finally {
+    await browser?.close();
+    await chrome.close();
+    await rm(profile, {recursive: true, force: true});
+  }
 });

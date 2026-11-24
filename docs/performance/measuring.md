@@ -349,8 +349,40 @@ cached shaders. `--quick` runs one warm pass each and `--steps` picks steps.
 Runs land in `~/capy-bench/runs/`. `analyze RUN_DIR` prints the comparison and
 `publish RUN_DIR` appends its rows to the per-device CSVs in
 `docs/performance/results/`. The Windows PCs run the same chain over SSH with
-`bench_windows.py` (`bench-chain-windows.ps1` on the PC), and the Mac and iPad
-with `bench_apple.py`; both write the same run layout for `analyze`.
+`bench_windows.py` (`bench-chain-windows.ps1` on the PC), the Mac and iPad
+with `bench_apple.py`, and browsers with `bench_web.py`; all write the
+same run layout for `analyze`.
+
+**Web host.** `bench_web.py run` runs the chain in a browser against each
+version's Web build (`build.sh`, `web-release` profile), served on a port
+derived from the device and label so that each version keeps one origin.
+
+- Linux, under the shared GPU lock: `run --versions v1.0.15,origin/main --photo
+  PHOTO --fixtures DIR` drives Chrome, or Edge with `--browser edge`, in the
+  private 1600 × 1000, 120 Hz Mutter display of `workspace-motion.sh command`.
+- Android: reserve the tablet and add `--device NAME`. Each pass opens a fresh
+  incognito context in the tablet's Chrome over adb-forwarded DevTools, with
+  the build reached through `adb reverse`; the pass stops rather than use
+  Chrome's own profile if the context is refused. The tablet must be awake and
+  unlocked. Chrome keeps its own GPU caches, so every pass is warm. The Galaxy
+  Tab S7's Chrome 111 has no WebGPU.
+- Windows and macOS: on Linux, `bundle --versions … --out DIR`; copy DIR, the
+  photo, the fixtures and a checkout of this tool to the machine, then run
+  `run --bundles DIR --device NAME --browser chrome|edge --photo … --fixtures …`
+  there with Python 3.11 and Node 22 (psutil optional) in a normal window.
+- Safari is unsupported: WebDriver exposes no presented-frame timing.
+
+Linux and desktop passes use a fresh browser profile, and warm passes copy the
+GPU caches of that version's last cold pass. Strokes are CDP pen events with
+pressure, and gestures and UI drags are CDP touch. Canvas frames are the first
+presented display frame (`Display::FrameDisplayed`) after each WebGPU canvas
+submission; completions pair each submission's GPU completion with the newest
+pen event it consumed. Memory is the page renderer plus the GPU process: RSS on
+desktops, and PSS from `dumpsys meminfo` every 5 s on Android. GPU memory comes
+from `nvidia-smi`, the Windows GPU process counters or the Android GPU process
+Graphics row; macOS reports none. `--trace-steps STEPS` saves each pass's
+Chrome trace of those steps as `trace-STEP.json`, with any `--trace-categories`
+added; the extra categories slow those steps.
 
 **Brushes (Android).**
 

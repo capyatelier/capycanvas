@@ -56,6 +56,11 @@ function client(send, {timeout = 30000, onEvent = () => {}} = {}) {
     return result.result.value;
   };
   cdp.settle = () => cdp.evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');
+  cdp.attachPage = async browserContextId => {
+    const {targetId} = await cdp.call('Target.createTarget', {url: 'about:blank', ...(browserContextId ? {browserContextId} : {})}, null);
+    cdp.session = (await cdp.call('Target.attachToTarget', {targetId, flatten: true}, null)).sessionId;
+    return targetId;
+  };
   cdp.fail = reason => {
     for (const job of pending.values()) { clearTimeout(job.timer); job.reject(Error(reason)); }
     pending.clear();
@@ -143,14 +148,8 @@ export function prepareWorkers(cdp, install) {
   };
 }
 
-export async function connectTab(endpoint, match, options) {
-  let tab;
-  for (const deadline = Date.now() + 10000; !tab && Date.now() < deadline;) {
-    tab = (await (await fetch(`${endpoint}/json/list`, {signal: AbortSignal.timeout(10000)})).json()).find(match);
-    if (!tab) await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  if (!tab?.webSocketDebuggerUrl) throw Error(`Open the dedicated test tab at ${endpoint} first`);
-  const socket = new WebSocket(tab.webSocketDebuggerUrl);
+async function connectSocket(url, options) {
+  const socket = new WebSocket(url);
   const cdp = client(message => {
     if (socket.readyState !== WebSocket.OPEN) throw Error('CDP disconnected');
     socket.send(JSON.stringify(message));
@@ -166,9 +165,24 @@ export async function connectTab(endpoint, match, options) {
   return cdp;
 }
 
-export async function launchChrome(args, {executable = process.env.CHROME || 'google-chrome', ...options} = {}) {
-  const root = await realpath(tmpdir());
-  const profile = await mkdtemp(join(root, 'capy-chrome-'));
+export async function connectTab(endpoint, match, options) {
+  let tab;
+  for (const deadline = Date.now() + 10000; !tab && Date.now() < deadline;) {
+    tab = (await (await fetch(`${endpoint}/json/list`, {signal: AbortSignal.timeout(10000)})).json()).find(match);
+    if (!tab) await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  if (!tab?.webSocketDebuggerUrl) throw Error(`Open the dedicated test tab at ${endpoint} first`);
+  return connectSocket(tab.webSocketDebuggerUrl, options);
+}
+
+export async function connectBrowser(endpoint, options) {
+  const {webSocketDebuggerUrl} = await (await fetch(`${endpoint}/json/version`, {signal: AbortSignal.timeout(10000)})).json();
+  if (!webSocketDebuggerUrl) throw Error(`${endpoint} exposes no browser target`);
+  return connectSocket(webSocketDebuggerUrl, options);
+}
+
+export async function launchChrome(args, {executable = process.env.CHROME || 'google-chrome', profile: kept, ...options} = {}) {
+  const profile = kept ?? await mkdtemp(join(await realpath(tmpdir()), 'capy-chrome-'));
   const chrome = spawn(executable, ['--remote-debugging-pipe', `--user-data-dir=${profile}`, '--no-first-run',
     '--no-default-browser-check', '--password-store=basic', ...args, 'about:blank'],
     {stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe']});
@@ -184,11 +198,6 @@ export async function launchChrome(args, {executable = process.env.CHROME || 'go
       cdp.receive(JSON.parse(buffer.slice(0, buffer.indexOf('\0'))));
   });
   chrome.on('exit', () => cdp.fail('Chrome exited'));
-  cdp.attachPage = async () => {
-    const {targetId} = await cdp.call('Target.createTarget', {url: 'about:blank'}, null);
-    cdp.session = (await cdp.call('Target.attachToTarget', {targetId, flatten: true}, null)).sessionId;
-    return targetId;
-  };
   cdp.close = async () => {
     if (chrome.exitCode === null && chrome.signalCode === null) {
       const exited = once(chrome, 'exit');
@@ -196,7 +205,7 @@ export async function launchChrome(args, {executable = process.env.CHROME || 'go
       await exited;
     }
     for (const stream of chrome.stdio) stream?.destroy();
-    if (await realpath(profile).catch(() => null) === profile)
+    if (!kept && await realpath(profile).catch(() => null) === profile)
       await rm(profile, {recursive: true, force: true, maxRetries: 8, retryDelay: 250});
   };
   return cdp;
