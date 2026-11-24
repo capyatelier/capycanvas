@@ -1200,23 +1200,26 @@ fn crossing_a_vector_level_shows_no_surround_inside_the_document_until_it_comple
 #[test]
 fn crossing_an_object_level_shows_no_surround_inside_the_document_until_it_completes() { assert_crossing_shows_no_surround_until_it_completes(Crossed::Object); }
 
-#[test]
-fn a_crossing_presents_the_surround_through_fs_main_until_the_stand_in_entry_compiles() {
+pub(crate) fn crossing_with_stand_in() -> (WgpuRasterizer, ViewState) {
     let (extent, doc) = (CROSSING_EXTENT, crossing_document(Crossed::Vector));
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     r.shader_idle(false, false);
     let frame = |view| FramePacket { view, ..packet(doc.scene(), extent) };
     settle_at(&mut r, frame(crossing_view(0.4)));
-    let mut presenter = crate::test_support::float_presenter(&r);
-    present(&r, &mut presenter, crossing_view(0.4));
     let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
     loop {
         r.submit(FramePacket { composite_all: false, ..frame(crossing_view(0.6)) }).unwrap();
         r.wait_idle().unwrap();
-        if r.presentation_page().is_some_and(|page| page.stand_in_scale() != 0.) { break; }
+        if r.presentation_page().is_some_and(|page| page.stand_in_scale() != 0.) { return (r, crossing_view(0.6)); }
         assert!(!r.scale_display.as_ref().unwrap().complete && std::time::Instant::now() < deadline, "the crossing presents an incomplete window with a stand-in");
     }
-    let shown = surround_inside_document(&r, &mut presenter, crossing_view(0.6), extent);
+}
+
+#[test]
+fn a_crossing_presents_the_surround_through_fs_main_until_the_stand_in_entry_compiles() {
+    let (r, view) = crossing_with_stand_in();
+    let mut presenter = crate::test_support::float_presenter(&r);
+    let shown = surround_inside_document(&r, &mut presenter, view, CROSSING_EXTENT);
     assert_eq!(presenter.bound_viewport(&r).0, 0, "a cold stand-in entry leaves the frame on fs_main");
     assert!(shown > 0, "fs_main draws the surround, not the stand-in, where the window is unwritten");
 }

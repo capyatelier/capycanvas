@@ -197,3 +197,29 @@ fn content_receipt_names_the_bound_scene_not_the_current_document_or_redraw_coun
     assert_eq!(presenter.content_revision(&fixture.renderer),Some((owner,17)),"unrendered editor changes cannot advance the displayed revision");
     drop(presenter);drop(fixture);crate::finish_shader_compiler_shutdown();
 }
+
+#[test]
+fn a_stand_in_entry_that_compiles_after_a_retained_present_repaints_the_holes() {
+    let (r, view) = crate::scene::scale::tests::presentation::crossing_with_stand_in();
+    let red = [1., 0., 0., 1.];
+    let pixels = |texture: &wgpu::Texture| crate::test_support::float_pixels(&r, texture);
+    let render = |presenter: &mut ViewportPresenter, target: &wgpu::TextureView| { presenter.present(&r, target, view, red).unwrap(); };
+    let mut presenter = crate::test_support::float_presenter(&r);
+    presenter.set_target_retention(true);
+    let (texture, target) = crate::create_target(&r.device, [view.width_px, view.height_px], wgpu::TextureFormat::Rgba32Float, "retained stand-in viewport");
+    render(&mut presenter, &target);
+    assert_eq!(presenter.bound_viewport(&r).0, 0, "a cold stand-in entry leaves the frame on fs_main");
+    let plain = pixels(&texture);
+    pollster::block_on(r.compilation.prepare_all([&presenter.pipeline[1]])).unwrap();
+    assert_eq!(presenter.bound_viewport(&r).0, 1, "the compiled stand-in entry draws the next frame");
+    assert!(presenter.needs_present(&r, view, red), "the compiled stand-in entry asks for a present");
+    presenter.set_cursor(&r.device, &[layer_render::CursorSegment { from: [4., 4.], to: [12., 12.], distance: 0., marker: 2., scale: 1. }], 1.);
+    render(&mut presenter, &target);
+    let retained = pixels(&texture);
+    presenter.set_target_retention(false);
+    let (full_texture, full_target) = crate::create_target(&r.device, [view.width_px, view.height_px], wgpu::TextureFormat::Rgba32Float, "full stand-in viewport");
+    render(&mut presenter, &full_target);
+    let full = pixels(&full_texture);
+    assert!(plain != full, "the stand-in entry draws the holes differently from fs_main");
+    assert!(retained == full, "a retained present after the stand-in entry compiles matches a full present");
+}

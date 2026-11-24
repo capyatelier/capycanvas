@@ -220,7 +220,7 @@ fn identity_source_window_clips_signed_bounds_without_interpolation_padding() {
 }
 
 #[path = "presentation_tests.rs"]
-mod presentation;
+pub(crate) mod presentation;
 
 #[path = "commit_tests.rs"]
 mod commit;

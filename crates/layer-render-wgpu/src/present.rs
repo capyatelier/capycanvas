@@ -98,7 +98,7 @@ pub struct ViewportPresenter {
     recipes: std::sync::Arc<Recipes>,
     timing: Option<crate::frame_timing::GpuFrameTimer>,
     pipeline: [crate::Deferred<wgpu::RenderPipeline>; 2],
-    presented_paper: Option<bool>,
+    presented_variant: Option<(usize, bool)>,
     fill_reveal: Option<layer_render::FillReveal>,
     fill_before: Option<(u64,wgpu::TextureView)>,
     surround_pipeline: crate::Deferred<wgpu::RenderPipeline>,
@@ -755,7 +755,7 @@ impl ViewportPresenter {
             surface_memory: None,
             recipes,
             pipeline,
-            presented_paper: None,
+            presented_variant: None,
             fill_reveal: None,
             fill_before: None,
             surround_pipeline,
@@ -975,7 +975,7 @@ impl ViewportPresenter {
     }
     /// Whether the last presentation drew the paper lighting; its pipelines
     /// compile when lighting is first shown.
-    pub fn paper_lighting_drawn(&self) -> bool { self.presented_paper == Some(true) }
+    pub fn paper_lighting_drawn(&self) -> bool { self.presented_variant.is_some_and(|(_, lit)| lit) }
     /// Pixels of the last presentation that ran the artwork shader.
     pub fn shaded_area_pixels(&self) -> u64 { self.shaded_area }
 
@@ -1027,7 +1027,7 @@ impl ViewportPresenter {
             || self.presented_view != Some((view, surround_linear, self.quarter_turns, self.corner_radius))
             || self.presented_selection_overlay != renderer.selection_overlay
             || self.presented_motion != renderer.display_motion().map(|(_, values, moved, revision)| (values, moved, revision))
-            || (renderer.presentation.showing && self.presented_paper != Some(self.bound_viewport(renderer).1))
+            || (renderer.presentation.showing && { let (source, lit, _) = self.bound_viewport(renderer); self.presented_variant != Some((source, lit)) })
             || previous.revision != renderer.composite_revision && previous.revision != renderer.presentable_revision
             || previous.selection_revision != renderer.selection_paint_revision
             || previous.outline_revision != renderer.display_selection_revision
@@ -1485,7 +1485,7 @@ impl ViewportPresenter {
                 || previous.screen != self.screen_options
                 || (previous.selection_revision != renderer.selection_paint_revision
                     && previous.selection_revision.wrapping_add(1) != renderer.selection_paint_revision);
-            let full = content || (self.fill_reveal!=renderer.fill_reveal && reveal_damage.is_none()) || bindings_changed || camera_changed || self.panel_surfaces_changed || self.panels.as_ref().is_some_and(|p|p.needs_refresh()) || (selection_changed && outline.is_none()) || self.presented_paper != Some(lit);
+            let full = content || (self.fill_reveal!=renderer.fill_reveal && reveal_damage.is_none()) || bindings_changed || camera_changed || self.panel_surfaces_changed || self.panels.as_ref().is_some_and(|p|p.needs_refresh()) || (selection_changed && outline.is_none()) || self.presented_variant != Some((source, lit));
             let cursor =
                 crate::present_damage::cursor_bounds(&self.cursor_vertices, view, self.quarter_turns);
             let repaint = if full {
@@ -1757,14 +1757,14 @@ impl ViewportPresenter {
                 renderer.compilation.warm(pipeline, crate::startup::ANTICIPATED, renderer.compilation.generation());
             }
         }
-        if lit && self.presented_paper != Some(true) {
+        if lit && !self.paper_lighting_drawn() {
             for pipeline in self.paper_pipelines(renderer).iter().enumerate().filter_map(|(index, pipeline)| (index != source).then_some(pipeline)) {
                 renderer.compilation.warm(pipeline, crate::startup::ANTICIPATED, renderer.compilation.generation());
             }
         }
         self.presented_drawing = Some(renderer.presentation);
         self.presented_selection_overlay = renderer.selection_overlay;
-        self.presented_paper = Some(lit);
+        self.presented_variant = Some((source, lit));
         if !overview_only {self.fill_reveal=renderer.fill_reveal;}
         if capture_before.is_some() {self.bind_group=None;}
         self.overlays_changed = false;
