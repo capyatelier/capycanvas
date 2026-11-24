@@ -13,6 +13,7 @@ pub(crate) struct PreviewTip {
     pub preview_taper: bool,
     pub frame_lift: Option<LiftPreview>,
     last_prediction: Vec<Dab>,
+    real: Option<f32>,
 }
 
 pub(crate) struct TipInput<'a> {
@@ -54,9 +55,10 @@ impl PreviewTip {
             start,
             output,
             |tip, output| {
+                self.real = None;
                 let source = self.build_main(generator, tip, &input, start, output);
                 if let Some(held) = input.held {
-                    held.present(tip, input.brush, input.transform[0].hypot(input.transform[1]), start, output);
+                    held.present(tip, input.brush, input.transform[0].hypot(input.transform[1]), self.real.take(), start, output);
                 }
                 source
             },
@@ -108,6 +110,7 @@ impl PreviewTip {
         for point in input.pending.iter().copied() {
             tip.append_preview(point, input.brush, field, output);
         }
+        self.real = Some(tip.modeled_length());
         if has_completions(input.brush) {
             tip.flush_contact(input.brush, output);
         }

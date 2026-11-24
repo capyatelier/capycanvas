@@ -615,7 +615,7 @@ impl Default for BrushTaper {
             mode: TaperMode::Off,
             fixed_widths: [10.0, 10.0],
             proportional_shares: [0.3, 0.3],
-            pointiness: 0.75,
+            pointiness: 0.5,
         }
     }
 }

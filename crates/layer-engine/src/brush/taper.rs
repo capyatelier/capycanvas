@@ -9,8 +9,7 @@ use std::collections::{HashMap, VecDeque};
 const PROPORTIONAL_LIMIT_WIDTHS: f32 = 50.;
 const MAX_HELD_CONTACTS: usize = 16384;
 const MAX_HELD_BYTES: usize = 4 << 20;
-const MIN_HELD_PAGES: usize = 4;
-const MAX_HELD_PAGES: usize = 64;
+const MAX_HELD_PAGES: usize = 128;
 const PREVIEW_RUN: usize = 32;
 const MAX_INSERTIONS: f32 = 64.;
 const SAVED: Resolution = Resolution { share: 0.02, minimum: 0.05, preview: None };
@@ -37,11 +36,16 @@ pub(crate) struct TaperPlan {
 }
 
 #[derive(Clone, Copy, Debug)]
+struct Cap {
+    frozen: f32,
+    edge: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub(super) struct Profile {
     plan: TaperPlan,
     zones: [f32; 2],
-    reference: f32,
-    floor: f32,
+    entry: f32,
     length: f32,
     scale: f32,
 }
@@ -55,6 +59,7 @@ pub(crate) struct ContactRecord {
     pub(super) copies: u8,
     pub(super) interval: f32,
     pub(super) peak: f32,
+    pub(super) reach: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -154,20 +159,20 @@ impl TaperPlan {
     pub(crate) fn new(brush: &BrushSnapshot) -> Option<Self> {
         let lengths = brush.taper.lengths()?;
         let (index, size) = size_mapping(brush)?;
-        let plan = Self {
+        let full_width = full_width(brush, size);
+        Some(Self {
             proportional: brush.taper.mode == TaperMode::Proportional,
             lengths,
             exponent: 0.5 + 0.5 * brush.taper.pointiness,
             mapping: index,
-            full_width: full_width(brush, size),
-            pages: 0,
-        };
-        Some(Self { pages: plan.page_ceiling(), ..plan })
+            full_width,
+            pages: MAX_HELD_PAGES.max(Self::contact_pages(full_width)),
+        })
     }
 
-    fn page_ceiling(&self) -> usize {
+    fn contact_pages(width: f32) -> usize {
         let tile = layer_core::raster::TILE_SIZE as f32;
-        let radius = 0.5 * self.full_width;
+        let radius = 0.5 * width;
         let swept = Dab {
             center: Point { x: 0., y: 0. },
             radii: [radius; 2],
@@ -183,52 +188,49 @@ impl TaperPlan {
             previous_contact: [0.; 4],
         }
         .bounds();
-        let footprint = swept.max.x - swept.min.x;
-        let span = (footprint / tile).ceil() as usize + 1;
-        let crossings = (std::f32::consts::SQRT_2 * (self.held_path() + footprint) / tile).ceil() as usize;
-        span.saturating_mul(span.saturating_add(crossings)).min(MAX_HELD_PAGES).max(MIN_HELD_PAGES.max(span * span))
+        let span = ((swept.max.x - swept.min.x) / tile).ceil() as usize + 1;
+        span * span
     }
 
-    fn extent(&self, end: usize, length: f32) -> f32 {
-        if self.proportional {
-            (self.lengths[end] * length).min(PROPORTIONAL_LIMIT_WIDTHS * self.full_width)
+    fn zones(&self, length: f32, cap: Option<Cap>) -> [f32; 2] {
+        let grown = cap.map_or(length, |cap| length.min(cap.frozen));
+        let [start, end] = [0, 1].map(|end| {
+            if self.proportional {
+                (self.lengths[end] * grown).min(PROPORTIONAL_LIMIT_WIDTHS * self.full_width)
+            } else {
+                self.lengths[end] * self.full_width
+            }
+        });
+        [start, cap.map_or(end, |cap| end.min(length - cap.edge))]
+    }
+
+    fn edge(&self, length: f32, cap: Option<Cap>) -> f32 {
+        length - self.zones(length, cap)[1]
+    }
+
+    fn profile_from(&self, real: f32, visible: f32, cap: Option<Cap>, entry: f32) -> Profile {
+        let zones = self.zones(real, cap);
+        let scale = if self.proportional {
+            1.
+        } else if self.lengths[1] > 0. {
+            (real / zones[1]).min(1.)
         } else {
-            self.lengths[end] * self.full_width
-        }
+            (cap.map_or(real, |cap| real.min(cap.frozen)) / zones[0]).min(1.)
+        };
+        Profile { plan: *self, zones, entry, length: visible, scale }
     }
 
-    fn edge(&self, length: f32) -> f32 {
-        length - self.extent(1, length)
-    }
-
-    fn profile_from(&self, length: f32, reference: f32, entry: f32) -> Profile {
-        let zones = [self.extent(0, length), self.extent(1, length)];
-        let zone = if zones[1] > 0. { zones[1] } else { zones[0] };
-        let scale = if self.proportional { 1. } else { (length / zone).min(1.) };
-        Profile { plan: *self, zones, reference, floor: reference.min(entry), length, scale }
-    }
-
-    fn held_path(&self) -> f32 {
-        let [start, end] = self.lengths.map(|length| length.max(0.));
-        if self.proportional {
-            let limit = PROPORTIONAL_LIMIT_WIDTHS * self.full_width;
-            let hold = if start > 0. { limit / start } else { 0. };
-            hold.max(if end > 0. { limit } else { 0. })
-        } else {
-            self.full_width * if end > 0. { end } else { start }
-        }
-    }
-
-    fn settled(&self, last: Option<&ContactRecord>, length: f32) -> bool {
+    fn settled(&self, last: Option<&ContactRecord>, length: f32, cap: Option<Cap>) -> bool {
         let Some(last) = last else {
             return true;
         };
-        let start = if self.proportional {
-            self.lengths[0] <= 0. || self.lengths[0] * length >= PROPORTIONAL_LIMIT_WIDTHS * self.full_width
-        } else {
-            self.lengths[1] > 0. || length >= self.extent(0, length)
-        };
-        let end = self.lengths[1] <= 0. || last.pose.stroke_distance <= length - self.extent(1, length);
+        let start = cap.is_some()
+            || if self.proportional {
+                self.lengths[0] <= 0. || self.lengths[0] * length >= PROPORTIONAL_LIMIT_WIDTHS * self.full_width
+            } else {
+                self.lengths[1] > 0. || length >= self.lengths[0] * self.full_width
+            };
+        let end = self.lengths[1] <= 0. || last.pose.stroke_distance <= self.edge(length, cap);
         start && end
     }
 
@@ -242,6 +244,15 @@ impl TaperPlan {
 }
 
 impl Profile {
+    fn edge(&self) -> f32 {
+        self.length - self.zones[1]
+    }
+
+    fn reach_after(&self, before: &ContactRecord, pressure: f32) -> f32 {
+        let reach = if before.pose.stroke_distance > self.edge() { before.reach } else { self.entry };
+        reach.max(pressure)
+    }
+
     fn distance(&self, zone: usize, progress: f32) -> f32 {
         let along = 1. - (1. - progress) / self.scale;
         if zone == 0 { along * self.zones[0] } else { self.length - along * self.zones[1] }
@@ -252,9 +263,9 @@ impl Profile {
         1. - self.scale * (1. - along)
     }
 
-    pub(super) fn transfer(&self, distance: f32, peak: f32) -> Option<Transfer> {
+    pub(super) fn transfer(&self, distance: f32, peak: f32, reach: f32) -> Option<Transfer> {
         let starting = self.plan.transfer(self.progress(0, distance), peak, 0.);
-        let ending = self.plan.transfer(self.progress(1, distance), self.reference, self.floor);
+        let ending = self.plan.transfer(self.progress(1, distance), reach, reach.min(self.entry));
         match (starting, ending) {
             (Some(starting), Some(ending)) if ending.progress < starting.progress => Some(ending),
             (starting, ending) => starting.or(ending),
@@ -324,14 +335,46 @@ pub(crate) enum Release {
 }
 
 #[derive(Clone, Debug, Default)]
+struct Maxima(Vec<VecDeque<f32>>);
+
+impl Maxima {
+    fn push(&mut self, value: f32) {
+        let len = self.0.first().map_or(0, VecDeque::len) + 1;
+        let mut level = 0;
+        while 1 << level <= len {
+            let span = 1 << level;
+            let next = match level {
+                0 => value,
+                _ => self.0[level - 1][len - span].max(self.0[level - 1][len - span / 2]),
+            };
+            if self.0.len() == level {
+                self.0.push(VecDeque::new());
+            }
+            self.0[level].push_back(next);
+            level += 1;
+        }
+    }
+
+    fn drain(&mut self, count: usize) {
+        for level in &mut self.0 {
+            level.drain(..count.min(level.len()));
+        }
+    }
+
+    fn max(&self, from: usize, to: usize) -> f32 {
+        let level = (usize::BITS - 1 - (to + 1 - from).leading_zeros()) as usize;
+        self.0[level][from].max(self.0[level][to + 1 - (1 << level)])
+    }
+}
+
+#[derive(Clone, Debug, Default)]
 struct Outline {
     staged: u64,
     kept: VecDeque<u64>,
     anchor: Option<Dab>,
     run: Vec<Dab>,
     multiple: usize,
-    peaks: VecDeque<(f32, f32)>,
-    last: Option<f32>,
+    intervals: Maxima,
 }
 
 impl Outline {
@@ -358,66 +401,91 @@ impl Outline {
         self.run.push(dab);
     }
 
-    fn seal(&mut self, record: &ContactRecord) {
-        if let Some(previous) = self.last {
-            self.peak(previous, record.interval);
-        }
-        self.peak(record.pose.stroke_distance, record.pose.point.pressure);
-        self.last = Some(record.pose.stroke_distance);
-    }
-
-    fn peak(&mut self, key: f32, value: f32) {
-        while self.peaks.back().is_some_and(|(_, peak)| *peak <= value) {
-            self.peaks.pop_back();
-        }
-        self.peaks.push_back((key, value));
-    }
-
     fn drain(&mut self, drained: impl Iterator<Item = ContactRecord>, remaining: usize) {
-        let mut last = None;
+        let mut count = 0;
         for record in drained {
             self.multiple -= usize::from(record.copies != 1);
-            last = Some(record.pose.stroke_distance);
+            count += 1;
         }
+        self.intervals.drain(count);
         let base = self.staged - remaining as u64;
         while self.kept.front().is_some_and(|sequence| *sequence < base) {
             self.kept.pop_front();
-        }
-        if let Some(last) = last {
-            while self.peaks.front().is_some_and(|(key, _)| *key <= last) {
-                self.peaks.pop_front();
-            }
         }
     }
 }
 
 #[derive(Clone, Debug, Default)]
-struct Pages(HashMap<[i32; 2], u32>);
+struct Window {
+    records: VecDeque<(f32, usize)>,
+    tiles: VecDeque<[i32; 4]>,
+    pages: HashMap<[i32; 2], u32>,
+    cap: Option<Cap>,
+}
 
-impl Pages {
-    fn keys(dab: &Dab) -> impl Iterator<Item = [i32; 2]> {
+impl Window {
+    fn tiles(dab: &Dab) -> [i32; 4] {
         let tile = layer_core::raster::TILE_SIZE as f32;
         let bounds = dab.bounds();
-        let span = |min: f32, max: f32| if bounds.is_empty() { 1..=0 } else { (min / tile).floor() as i32..=(max / tile).floor() as i32 };
-        let columns = span(bounds.min.x, bounds.max.x);
-        span(bounds.min.y, bounds.max.y).flat_map(move |y| columns.clone().map(move |x| [x, y]))
-    }
-
-    fn add(&mut self, dab: &Dab) {
-        for key in Self::keys(dab) {
-            *self.0.entry(key).or_insert(0) += 1;
+        if bounds.is_empty() {
+            return [0, 0, -1, -1];
         }
+        [bounds.min.x, bounds.min.y, bounds.max.x, bounds.max.y].map(|edge| (edge / tile).floor() as i32)
     }
 
-    fn remove(&mut self, dab: &Dab) {
-        for key in Self::keys(dab) {
-            if let Some(count) = self.0.get_mut(&key) {
+    fn cover(&mut self, [x0, y0, x1, y1]: [i32; 4], added: bool) {
+        for key in (y0..=y1).flat_map(|y| (x0..=x1).map(move |x| [x, y])) {
+            let count = self.pages.entry(key).or_insert(0);
+            if added {
+                *count += 1;
+            } else {
                 *count -= 1;
                 if *count == 0 {
-                    self.0.remove(&key);
+                    self.pages.remove(&key);
                 }
             }
         }
+    }
+
+    fn push<'a>(&mut self, plan: &TaperPlan, record: &ContactRecord, dabs: impl IntoIterator<Item = &'a Dab>) {
+        let mut count = 0;
+        for dab in dabs {
+            let tiles = Self::tiles(dab);
+            self.cover(tiles, true);
+            self.tiles.push_back(tiles);
+            count += 1;
+        }
+        self.records.push_back((record.pose.stroke_distance, count));
+        while self.records.len() > 1
+            && (self.records.len() > MAX_HELD_CONTACTS
+                || self.records.len() * std::mem::size_of::<ContactRecord>() + self.tiles.len() * std::mem::size_of::<Dab>() > MAX_HELD_BYTES
+                || self.pages.len() > plan.pages)
+        {
+            let (_, dabs) = self.records.pop_front().unwrap_or_default();
+            for _ in 0..dabs {
+                if let Some(tiles) = self.tiles.pop_front() {
+                    self.cover(tiles, false);
+                }
+            }
+            let edge = self.records.front().map_or(record.pose.stroke_distance, |(distance, _)| *distance);
+            self.cap = Some(Cap { frozen: self.cap.map_or(record.pose.stroke_distance, |cap| cap.frozen), edge });
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct Reach {
+    counted: usize,
+    sealed: usize,
+    base: f32,
+    tail: Vec<f32>,
+}
+
+impl Reach {
+    fn at(&self, intervals: &Maxima, index: usize) -> f32 {
+        let held = (index >= self.counted && self.counted < self.sealed).then(|| intervals.max(self.counted, index.min(self.sealed - 1)));
+        let tail = index.checked_sub(self.sealed).and_then(|offset| self.tail.get(offset)).copied();
+        self.base.max(held.unwrap_or(0.)).max(tail.unwrap_or(0.))
     }
 }
 
@@ -480,9 +548,8 @@ pub(crate) struct HeldStroke {
     dabs: VecDeque<Dab>,
     open: HeldSlice,
     previous: Option<(ContactRecord, Dab)>,
-    forced: bool,
     outline: Outline,
-    pages: Pages,
+    window: Window,
     scratch: Scratch,
 }
 
@@ -503,10 +570,6 @@ impl HeldStroke {
         self.released
     }
 
-    pub(crate) fn forced(&self) -> bool {
-        self.forced
-    }
-
     pub(crate) fn restart(&mut self) {
         *self = Self::with_cuts(&self.cuts);
     }
@@ -521,24 +584,33 @@ impl HeldStroke {
         self.open.end = self.open.end.max(end);
         let mut dab = before;
         for record in self.records.range(first..) {
+            let copies = usize::from(record.copies);
             if let Some(&first_copy) = self.dabs.get(dab) {
                 self.outline.push(record, first_copy);
             }
-            dab += usize::from(record.copies);
-        }
-        for dab in self.dabs.range(before..) {
-            self.pages.add(dab);
+            if let Some(plan) = &generator.taper {
+                self.window.push(plan, record, self.dabs.range(dab.min(self.dabs.len())..(dab + copies).min(self.dabs.len())));
+            }
+            dab += copies;
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn pages(&self) -> usize {
-        self.pages.0.len()
+    pub(super) fn holding(plan: &TaperPlan, records: Vec<ContactRecord>, dabs: &[Dab]) -> Self {
+        let mut held = Self::default();
+        let mut dab = 0;
+        for record in &records {
+            let copies = usize::from(record.copies);
+            held.outline.intervals.push(record.interval);
+            held.window.push(plan, record, dabs.get(dab..dab + copies).unwrap_or_default());
+            dab += copies;
+        }
+        held.records = records.into();
+        held
     }
 
     #[cfg(test)]
-    pub(crate) fn held_dabs(&self) -> impl Iterator<Item = &Dab> {
-        self.dabs.iter()
+    pub(crate) fn capped(&self) -> bool {
+        self.window.cap.is_some()
     }
 
     pub(crate) fn at_cut(&self, end: u32) -> bool {
@@ -559,7 +631,7 @@ impl HeldStroke {
         }
         let first = self.records.len() - self.open.records;
         for record in self.records.range(first..) {
-            self.outline.seal(record);
+            self.outline.intervals.push(record.interval);
         }
         self.sealed += 1;
         self.sealed_end = end;
@@ -571,31 +643,39 @@ impl HeldStroke {
         Chain { held: &self.records, sealed: self.records.len() - self.open.records, tail, previous: self.previous.map(|(record, _)| record) }
     }
 
-    pub(super) fn profile(&self, plan: &TaperPlan, tail: &[ContactRecord], length: f32, terminal: f32) -> Profile {
+    pub(super) fn profile(&self, plan: &TaperPlan, tail: &[ContactRecord], real: f32, visible: f32) -> (Profile, Reach) {
         let chain = self.chain(tail);
-        let edge = plan.edge(length);
-        let mut reference = terminal;
-        if let Some((_, peak)) = self.outline.peaks.get(self.outline.peaks.partition_point(|(key, _)| *key < edge)) {
-            reference = reference.max(*peak);
-        }
-        for index in chain.sealed..chain.len() {
-            let current = chain.get(index);
-            if current.pose.stroke_distance >= edge {
-                reference = reference.max(current.pose.point.pressure);
-            }
-            if chain.before(index).is_some_and(|before| before.pose.stroke_distance >= edge) {
-                reference = reference.max(current.interval);
-            }
-        }
+        let edge = visible - plan.zones(real, self.window.cap)[1];
         let inner = chain.after(edge);
-        let mut entry = f32::INFINITY;
-        if let Some(from) = chain.before(inner).filter(|_| inner < chain.len()) {
+        let before = chain.before(inner);
+        let entry = before.filter(|_| inner < chain.len()).map(|from| {
             let (from, to) = (from.pose, chain.get(inner).pose);
             let t = (edge - from.stroke_distance) / (to.stroke_distance - from.stroke_distance);
-            entry = from.point.pressure + (to.point.pressure - from.point.pressure) * t;
-            reference = reference.max(entry);
-        }
-        plan.profile_from(length, reference, entry)
+            from.point.pressure + (to.point.pressure - from.point.pressure) * t
+        });
+        let counted = if before.is_some_and(|before| before.pose.stroke_distance >= edge) { inner } else { inner + 1 };
+        let base = (inner < chain.len()).then(|| chain.get(inner).pose.point.pressure).unwrap_or(0.).max(entry.unwrap_or(0.));
+        let mut running = 0f32;
+        let tail = (chain.sealed..chain.len())
+            .map(|index| {
+                if index >= counted {
+                    running = running.max(chain.get(index).interval);
+                }
+                running
+            })
+            .collect();
+        let reach = Reach { counted, sealed: chain.sealed, base, tail };
+        (plan.profile_from(real, visible, self.window.cap, entry.unwrap_or(f32::INFINITY)), reach)
+    }
+
+    fn reached(&self, reach: &Reach, chain: &Chain, index: usize) -> ContactRecord {
+        ContactRecord { reach: reach.at(&self.outline.intervals, index), ..chain.get(index) }
+    }
+
+    pub(super) fn profiled(&self, plan: &TaperPlan, length: f32) -> (Profile, Vec<ContactRecord>) {
+        let (profile, reach) = self.profile(plan, &[], length, length);
+        let chain = self.chain(&[]);
+        (profile, (0..chain.len()).map(|index| self.reached(&reach, &chain, index)).collect())
     }
 
     pub(crate) fn release(
@@ -608,9 +688,8 @@ impl HeldStroke {
         let Some(plan) = generator.taper else {
             return;
         };
-        let (length, terminal) = (generator.modeled_length(), generator.terminal_peak());
-        let held = self.records.len() - self.open.records;
-        let profile = self.profile(&plan, &[], length, terminal);
+        let length = generator.modeled_length();
+        let (profile, reach) = self.profile(&plan, &[], length, length);
         let (mut records_done, mut dabs_done, mut count, mut group_end, mut recorded) = (0, 0, 0, None, 0);
         let Scratch { records: owned, dabs: input, shaped, group } = &mut self.scratch;
         group.clear();
@@ -619,27 +698,18 @@ impl HeldStroke {
             let settled = match release {
                 Release::All => true,
                 Release::First(target) => count < target,
-                Release::Settled => plan.settled(last, length),
+                Release::Settled => plan.settled(last, length, self.window.cap),
             };
-            let over = !settled && release == Release::Settled && {
-                let remaining = held - records_done;
-                remaining > MAX_HELD_CONTACTS
-                    || remaining * std::mem::size_of::<ContactRecord>()
-                        + (self.dabs.len() - dabs_done) * std::mem::size_of::<Dab>()
-                        > MAX_HELD_BYTES
-                    || self.pages.0.len() > plan.pages
-            };
-            if !settled && !over {
+            if !settled {
                 break;
             }
-            self.forced |= !settled;
             owned.clear();
-            owned.extend(self.records.range(records_done..records_done + slice.records));
+            owned.extend((records_done..records_done + slice.records).map(|index| ContactRecord {
+                reach: reach.at(&self.outline.intervals, index),
+                ..self.records[index]
+            }));
             input.clear();
             input.extend(self.dabs.range(dabs_done..dabs_done + slice.dabs));
-            for dab in input.iter() {
-                self.pages.remove(dab);
-            }
             shaped.clear();
             generator.shape(brush, &profile, owned, self.previous, input, false, SAVED, shaped);
             self.previous = owned.last().copied().zip(shaped.last().copied()).or(self.previous);
@@ -667,7 +737,7 @@ impl HeldStroke {
         self.released += recorded;
     }
 
-    pub(crate) fn present(&self, tip: &mut DabGenerator, brush: &BrushSnapshot, scale: f32, start: usize, output: &mut Vec<Dab>) {
+    pub(crate) fn present(&self, tip: &mut DabGenerator, brush: &BrushSnapshot, scale: f32, real: Option<f32>, start: usize, output: &mut Vec<Dab>) {
         let (Some(plan), Some((_, mapping))) = (tip.taper, size_mapping(brush)) else {
             return;
         };
@@ -691,7 +761,8 @@ impl HeldStroke {
         };
         let first = |index: usize| firsts.get(index).copied().unwrap_or(index);
         let dab = |at: usize| if at < sealed_dabs { self.dabs[at] } else { output[start + at - sealed_dabs] };
-        let profile = self.profile(&plan, &tail, tip.modeled_length(), tip.terminal_peak());
+        let visible = tip.modeled_length();
+        let (profile, reach) = self.profile(&plan, &tail, real.unwrap_or(visible), visible);
         let base = self.outline.staged - self.records.len() as u64;
         let mut kept: Vec<usize> = self.outline.kept.iter().map(|sequence| (sequence - base) as usize).filter(|index| *index < held).collect();
         kept.extend([0, held.saturating_sub(1)].into_iter().filter(|_| held > 0));
@@ -710,9 +781,9 @@ impl HeldStroke {
             let estimates: Vec<_> = kept
                 .iter()
                 .map(|&index| {
-                    let (current, original) = (chain.get(index), dab(first(index)));
+                    let (current, original) = (self.reached(&reach, &chain, index), dab(first(index)));
                     let jitter = size_jitter(brush, random_variant(current.copy_seed));
-                    let transfer = profile.transfer(current.pose.stroke_distance, current.peak);
+                    let transfer = profile.transfer(current.pose.stroke_distance, current.peak, current.reach);
                     transfer.map_or(original, |transfer| estimated(brush, mapping, &original, jitter, current.pose, Some(transfer)))
                 })
                 .collect();
@@ -721,7 +792,7 @@ impl HeldStroke {
         let resolution = Resolution { share: 0.04, minimum: 0.5 / scale.max(f32::EPSILON), preview: Some(scale.max(f32::EPSILON)) };
         let contacts = |indices: &[usize]| -> (Vec<_>, Vec<_>) {
             let dabs = indices.iter().flat_map(|&index| (first(index)..first(index) + usize::from(chain.get(index).copies)).map(dab));
-            (indices.iter().map(|&index| chain.get(index)).collect(), dabs.collect())
+            (indices.iter().map(|&index| self.reached(&reach, &chain, index)).collect(), dabs.collect())
         };
         let split = kept.partition_point(|index| *index < held);
         let ((held_records, held_dabs), (tail_records, tail_dabs)) = (contacts(&kept[..split]), contacts(&kept[split..]));
@@ -814,23 +885,17 @@ impl DabGenerator {
         self.taper.is_some()
     }
 
-    fn modeled_length(&self) -> f32 {
+    pub(crate) fn modeled_length(&self) -> f32 {
         self.last.map_or(0., |last| last.stroke_distance)
-    }
-
-    fn terminal_peak(&self) -> f32 {
-        self.last.map_or(self.interval_peak, |last| self.interval_peak.max(last.point.pressure))
     }
 
     pub(crate) fn shape_final(&mut self, brush: &BrushSnapshot, dabs: &mut Vec<Dab>, start: usize) -> bool {
         let Some(plan) = self.taper else {
             return false;
         };
-        let records = std::mem::take(&mut self.records);
-        let length = self.modeled_length();
-        let profile = HeldStroke::default().profile(&plan, &records, length, self.terminal_peak());
+        let (profile, records) = HeldStroke::holding(&plan, std::mem::take(&mut self.records), &dabs[start..]).profiled(&plan, self.modeled_length());
         let mut shaped = Vec::new();
-        if !records.iter().any(|record| profile.transfer(record.pose.stroke_distance, record.peak).is_some())
+        if !records.iter().any(|record| profile.transfer(record.pose.stroke_distance, record.peak, record.reach).is_some())
             || !self.shape(brush, &profile, &records, None, &dabs[start..], false, SAVED, &mut shaped)
         {
             return false;
@@ -865,7 +930,7 @@ impl DabGenerator {
         };
         let mut input = input.iter();
         for record in records {
-            let evaluated = profile.transfer(record.pose.stroke_distance, record.peak).map(|transfer| {
+            let evaluated = profile.transfer(record.pose.stroke_distance, record.peak, record.reach).map(|transfer| {
                 self.evaluate_variant(&mut Evaluation::default(), record.pose, brush, record.variant, record.index, Some(transfer))
             });
             let mut seed = record.copy_seed;
@@ -877,9 +942,13 @@ impl DabGenerator {
                 }
                 if copy == 0 && let Some((before, last)) = previous {
                     let (from, to) = (before.pose.stroke_distance, record.pose.stroke_distance);
+                    let transfer_at = |pose: DynamicPoint| {
+                        let pressure = pose.point.pressure;
+                        profile.transfer(pose.stroke_distance, before.peak.max(pressure), profile.reach_after(&before, pressure))
+                    };
                     let width_at = |t: f32| {
                         let pose = between(before.pose, record.pose, t);
-                        let transfer = profile.transfer(pose.stroke_distance, before.peak.max(pose.point.pressure));
+                        let transfer = transfer_at(pose);
                         self.evaluate_variant(&mut Evaluation::default(), pose, brush, record.variant, record.index, transfer).dab.radii[0] * 2.
                     };
                     let widths = [last.radii[0] * 2., dab.radii[0] * 2.];
@@ -890,7 +959,7 @@ impl DabGenerator {
                             let jitter = size_jitter(brush, random_variant(record.copy_seed));
                             let candidate = |t: f32| {
                                 let pose = between(before.pose, record.pose, t);
-                                let transfer = profile.transfer(pose.stroke_distance, before.peak.max(pose.point.pressure));
+                                let transfer = transfer_at(pose);
                                 let centre = Point { x: last.center.x + (dab.center.x - last.center.x) * t, y: last.center.y + (dab.center.y - last.center.y) * t };
                                 Dab { center: centre, ..estimated(brush, mapping, &dab, jitter, pose, transfer) }
                             };
@@ -902,7 +971,7 @@ impl DabGenerator {
                     };
                     for t in inserted {
                         let pose = between(before.pose, record.pose, t);
-                        let transfer = profile.transfer(pose.stroke_distance, before.peak.max(pose.point.pressure));
+                        let transfer = transfer_at(pose);
                         let evaluated = self.evaluate_variant(&mut Evaluation::default(), pose, brush, record.variant, record.index, transfer);
                         let mut inserted = self.copy_contact(&evaluated, brush, random_variant(record.copy_seed));
                         if anchored {

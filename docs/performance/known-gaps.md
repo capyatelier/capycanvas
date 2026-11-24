@@ -15,10 +15,11 @@
   ([low tier](low-tier.md#brush-taper)). Freezing the end's far part or restoring
   less than whole pages would reduce it.
 
-- **Very wide tapered pens stall at lift.** A 1024 px G-Pen with a 10-width end
-  holds more than the 64-page allowance, so it saves early and replays the stroke
-  at lift: on the TCL, lift p99 214 → 495 ms. Replaying only the end region would
-  remove the stall.
+- **Very wide tapered pens shorten their end.** A 1024 px G-Pen with a 10-width
+  end needs more than the 128-page held allowance, so its end shrinks to the
+  contacts that fit ([tapers](../internals/brushes.md#tapers)). The early save and
+  lift replay behind the TCL's lift p99 of 214 → 495 ms are gone; lift has not been
+  re-measured.
 
 - **Wet, watercolor, Smudge and blending brushes fall behind the pen at 512 px.**
   - A frame consumes input only until its material contacts reach 512 page

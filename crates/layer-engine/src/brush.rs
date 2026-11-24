@@ -1313,6 +1313,7 @@ impl DabGenerator {
                 copies: count,
                 interval,
                 peak: self.prefix_peak,
+                reach: 0.,
             });
             self.interval_peak = 0.;
         }

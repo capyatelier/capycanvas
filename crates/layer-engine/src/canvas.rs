@@ -2255,7 +2255,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     } else {
                         self.append_real_dab(None, true);
                     }
-                    self.lift_taper();
+                    self.release_taper(Release::All);
                     let tail = self.dab_generator.momentum(&self.active_stroke.as_ref().unwrap().brush);
                     if !tail.is_empty() {
                         self.active_stroke.as_mut().unwrap().momentum = Some((tail, 0));
@@ -2285,7 +2285,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     self.finalized_real_points = 0;
                     return Ok(());
                 }
-                let replay = active.taper.as_ref().is_some_and(HeldStroke::forced) || active.replay_after_contact;
+                let replay = active.replay_after_contact;
                 let alpha_locked = active.style.alpha_locked;
                 let mut stroke = Stroke::new(
                     active.id,
@@ -2431,16 +2431,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         taper.release(&self.dab_generator, &active.brush, release, |slice| {
             push_slice(dabs, batches, slice, id, target, style, started);
         });
-    }
-
-    fn lift_taper(&mut self) {
-        let forced = self.active_stroke.as_mut().and_then(|active| active.taper.as_mut()).is_some_and(|taper| {
-            taper.seal();
-            taper.forced()
-        });
-        if !forced {
-            self.release_taper(Release::All);
-        }
     }
 
     fn advance_momentum(&mut self, elapsed_micros: u32) {
@@ -6818,12 +6808,13 @@ mod tests {
         engine: &mut CanvasEngine<RecordingRenderer>,
         input: &mut InputProducer<PenEvent>,
         events: &[PenEvent],
+        every: usize,
         mut during: impl FnMut(&mut CanvasEngine<RecordingRenderer>, usize),
     ) -> Vec<(StrokeId, bool, bool, u32)> {
         let first = engine.backend.persistent_batches.len();
         for (i, sample) in events.iter().enumerate() {
             input.push(*sample).unwrap();
-            if i % 4 == 3 || i + 1 == events.len() {
+            if i % every == every - 1 || i + 1 == events.len() {
                 engine.render_frame_at(sample.timestamp_ns).unwrap();
                 during(engine, i);
             }
@@ -6857,7 +6848,7 @@ mod tests {
         for feedback in [false, true] {
             let taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: [2., 3.], ..Default::default() };
             let (mut input, mut engine) = tapered_engine(taper, feedback);
-            let live = draw_tapered(&mut engine, &mut input, &circle(240), |_, _| {});
+            let live = draw_tapered(&mut engine, &mut input, &circle(240), 4, |_, _| {});
             assert!(live.len() > 10, "slices are saved separately: {live:?}");
             assert!(!engine.completed_stroke.as_ref().unwrap().taper_cuts.is_empty());
             let width = |dab: &layer_render::Dab| dab.radii[0] * 2.;
@@ -6884,7 +6875,7 @@ mod tests {
         for feedback in [false, true] {
             let (mut input, mut engine) = wide_fixed_engine(feedback);
             let mut spans = Vec::new();
-            let live = draw_tapered(&mut engine, &mut input, &events, |engine, _| {
+            let live = draw_tapered(&mut engine, &mut input, &events, 4, |engine, _| {
                 if engine.active_stroke.is_some() {
                     let accepted = if feedback { engine.finalized_real_points } else { engine.builder.real_points().len() };
                     let released = engine.backend.persistent.last().map_or(0., |dab| dab.contact[2] * 100.);
@@ -6905,7 +6896,7 @@ mod tests {
     fn a_stroke_shorter_than_both_zones_lifts_into_its_overlap() {
         let events = pen_stroke(1, 300, 1_000_000_000, |i| ([100. + 2. * i as f32, 384.], 1.));
         let (mut input, mut engine) = wide_fixed_engine(false);
-        let live = draw_tapered(&mut engine, &mut input, &events, |engine, _| {
+        let live = draw_tapered(&mut engine, &mut input, &events, 4, |engine, _| {
             assert!(engine.active_stroke.is_none() || engine.backend.persistent.is_empty(), "the whole stroke is in its end zone");
         });
         let widest = engine.backend.persistent.iter().map(|dab| dab.radii[0] * 2.).fold(0., f32::max);
@@ -6923,20 +6914,20 @@ mod tests {
     }
 
     #[test]
-    fn a_wide_fixed_taper_on_a_slow_circle_is_never_saved_early() {
+    fn a_wide_fixed_taper_on_a_slow_circle_keeps_its_whole_end() {
         let taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: [2., 3.], ..Default::default() };
         let (mut input, mut engine) = tapered_engine(taper, true);
         engine.set_brush(BrushSnapshot { diameter: 100., ..engine.configured_brush().clone() }).unwrap();
-        let mut early = false;
-        let live = draw_tapered(&mut engine, &mut input, &benchmark_circle(1, 1250, 1_000_000_000), |engine, _| {
-            early |= engine.active_stroke.as_ref().and_then(|active| active.taper.as_ref()).is_some_and(HeldStroke::forced);
+        let mut capped = false;
+        let live = draw_tapered(&mut engine, &mut input, &benchmark_circle(1, 1250, 1_000_000_000), 4, |engine, _| {
+            capped |= engine.active_stroke.as_ref().and_then(|active| active.taper.as_ref()).is_some_and(HeldStroke::capped);
         });
-        assert!(!early, "the held stroke stays under its ceilings");
+        assert!(!capped, "the held stroke stays under its allowance");
         assert_matches_replay(&mut engine, &live);
     }
 
     #[test]
-    fn a_wide_brush_around_the_benchmark_photo_is_never_saved_early() {
+    fn a_wide_brush_around_the_benchmark_photo_keeps_its_whole_end() {
         let (mut input, mut engine) = engine("taper", 4248, 2832);
         let mut brush = default_brush(DefaultBrushPreset::GPen);
         brush.diameter = 256.;
@@ -6949,11 +6940,11 @@ mod tests {
             let angle = 2.5 * std::f32::consts::PI * t;
             ([1998.6 + 759.5 * angle.cos(), 1294.8 + 759.5 * angle.sin()], 0.7 + 0.3 * (30. * t).sin())
         });
-        let mut early = false;
-        draw_tapered(&mut engine, &mut input, &events, |engine, _| {
-            early |= engine.active_stroke.as_ref().and_then(|active| active.taper.as_ref()).is_some_and(HeldStroke::forced);
+        let mut capped = false;
+        draw_tapered(&mut engine, &mut input, &events, 4, |engine, _| {
+            capped |= engine.active_stroke.as_ref().and_then(|active| active.taper.as_ref()).is_some_and(HeldStroke::capped);
         });
-        assert!(!early, "the held end of a 256 px stroke stays under its page ceiling");
+        assert!(!capped, "the held end of a 256 px stroke stays under its page allowance");
     }
 
     #[test]
@@ -6965,11 +6956,11 @@ mod tests {
         engine.set_brush(brush).unwrap();
         for stroke in 0..5u64 {
             let events = benchmark_circle(1 + stroke * 1000, 600, 1_000_000_000 + stroke * 10_000_000_000);
-            let mut forced = false;
-            let live = draw_tapered(&mut engine, &mut input, &events, |engine, _| {
-                forced |= engine.active_stroke.as_ref().and_then(|active| active.taper.as_ref()).is_some_and(HeldStroke::forced);
+            let mut capped = false;
+            let live = draw_tapered(&mut engine, &mut input, &events, 4, |engine, _| {
+                capped |= engine.active_stroke.as_ref().and_then(|active| active.taper.as_ref()).is_some_and(HeldStroke::capped);
             });
-            assert!(!forced, "stroke {stroke} was saved early");
+            assert!(!capped, "stroke {stroke} reached its allowance");
             assert_eq!(live.iter().filter(|batch| batch.1).count(), 1, "stroke {stroke} repaired");
         }
     }
@@ -6986,7 +6977,7 @@ mod tests {
             ] {
                 let taper = layer_core::BrushTaper { mode, fixed_widths: [2., 0.], proportional_shares: [0.5, 0.], ..Default::default() };
                 let (mut input, mut engine) = tapered_engine(taper, feedback);
-                let live = draw_tapered(&mut engine, &mut input, &events, |_, _| {});
+                let live = draw_tapered(&mut engine, &mut input, &events, 4, |_, _| {});
                 assert_matches_replay(&mut engine, &live);
             }
         }
@@ -7001,42 +6992,120 @@ mod tests {
                 Some(j) => ([400. + 0.1 * j as f32, 384.], 0.85 - 0.8 * j as f32 / fade as f32),
             });
             let (mut input, mut engine) = tapered_engine(taper, false);
-            let live = draw_tapered(&mut engine, &mut input, &events, |_, _| {});
+            let live = draw_tapered(&mut engine, &mut input, &events, 4, |_, _| {});
+            assert_matches_replay(&mut engine, &live);
+        }
+    }
+
+    fn draw_uncapped_or_capped(
+        engine: &mut CanvasEngine<RecordingRenderer>,
+        input: &mut InputProducer<PenEvent>,
+        events: &[PenEvent],
+        every: usize,
+    ) -> (Vec<(StrokeId, bool, bool, u32)>, Vec<layer_render::Dab>, bool) {
+        engine.render_frame_at(events[0].timestamp_ns - 4_000_000).unwrap();
+        engine.backend.saw_reset = false;
+        let (mut saved, mut capped) = (Vec::new(), false);
+        let live = draw_tapered(engine, input, events, every, |engine, i| {
+            capped |= engine.active_stroke.as_ref().and_then(|active| active.taper.as_ref()).is_some_and(HeldStroke::capped);
+            if i + 1 < events.len() && i + 1 + every >= events.len() {
+                saved = engine.backend.persistent.clone();
+            }
+        });
+        assert!(!engine.backend.saw_reset, "the stroke is never repaired");
+        assert!(engine.backend.persistent.starts_with(&saved), "what was saved while drawing is what the stroke keeps");
+        (live, saved, capped)
+    }
+
+    #[test]
+    fn long_slow_proportional_lines_keep_what_they_save_while_drawing() {
+        let taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Proportional, ..Default::default() };
+        let events = pen_stroke(1, 25_000, 1_000_000_000, |i| ([100. + 0.1 * i as f32, 1024. + 200. * (i as f32 * 1e-4).sin()], if i % 2 == 0 { 0.55 } else { 0.65 }));
+        for diameter in [18., 30., 60.] {
+            let (mut input, mut engine) = engine("taper", 4096, 4096);
+            let mut brush = default_brush(DefaultBrushPreset::GPen);
+            (brush.diameter, brush.stabilization.strength, brush.taper) = (diameter, 0., taper);
+            engine.set_brush(brush).unwrap();
+            engine.set_instant_feedback(InstantFeedbackConfig { enabled: true, use_platform_prediction: false, ..Default::default() }).unwrap();
+            let (live, saved, _) = draw_uncapped_or_capped(&mut engine, &mut input, &events, 128);
+            let length = engine.completed_stroke.as_ref().unwrap().points.windows(2)
+                .map(|pair| (pair[1].position.x - pair[0].position.x).hypot(pair[1].position.y - pair[0].position.y)).sum::<f32>();
+            let reached = saved.iter().map(|dab| dab.contact[2] * diameter).fold(0., f32::max);
+            assert!(reached >= 0.5 * length, "{diameter} px: the start was saved while drawing, up to {reached} of {length}");
             assert_matches_replay(&mut engine, &live);
         }
     }
 
     #[test]
-    fn a_held_region_over_its_ceiling_saves_early_and_repairs_at_lift() {
-        let taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Proportional, proportional_shares: [0.5, 0.5], ..Default::default() };
-        let (mut input, mut engine) = tapered_engine(taper, false);
-        engine.set_brush(BrushSnapshot { diameter: 512., ..engine.configured_brush().clone() }).unwrap();
-        let events = pen_stroke(1, 2000, 1_000_000_000, |i| ([4. * i as f32, 512.], if i % 2 == 0 { 0.7 } else { 0.85 }));
-        let mut forced = false;
-        let live = draw_tapered(&mut engine, &mut input, &events, |engine, _| {
-            let Some(held) = engine.active_stroke.as_ref().and_then(|active| active.taper.as_ref()) else {
-                return;
-            };
-            forced |= held.forced();
-            let tile = layer_core::raster::TILE_SIZE as f32;
-            let mut pages: Vec<_> = held
-                .held_dabs()
-                .map(|dab| dab.bounds())
-                .filter(|bounds| !bounds.is_empty())
-                .flat_map(|bounds| {
-                    let rows = (bounds.min.y / tile).floor() as i32..=(bounds.max.y / tile).floor() as i32;
-                    let columns = (bounds.min.x / tile).floor() as i32..=(bounds.max.x / tile).floor() as i32;
-                    rows.flat_map(move |y| columns.clone().map(move |x| (x, y)))
-                })
-                .collect();
-            pages.sort_unstable();
-            pages.dedup();
-            assert_eq!(held.pages(), pages.len(), "the held page count follows its dabs");
+    fn a_fixed_end_longer_than_the_allowance_is_capped_without_a_repair() {
+        let (mut input, mut engine) = engine("taper", 4096, 4096);
+        let mut brush = default_brush(DefaultBrushPreset::GPen);
+        (brush.diameter, brush.stabilization.strength) = (1024., 0.);
+        brush.taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, ..Default::default() };
+        engine.set_brush(brush).unwrap();
+        let events = pen_stroke(1, 3000, 1_000_000_000, |i| {
+            let angle = i as f32 / 750.;
+            ([2048. + 1500. * angle.cos(), 2048. + 1500. * angle.sin()], 0.6 + 0.3 * (i as f32 * 0.01).sin())
         });
-        assert!(forced, "the held region reached its ceiling");
-        assert!(engine.backend.saw_reset, "the forced stroke repairs at lift");
-        assert!(live.iter().filter(|batch| batch.1).count() > 1, "the repair replaced the early saves");
+        let (live, saved, capped) = draw_uncapped_or_capped(&mut engine, &mut input, &events, 4);
+        assert!(capped && !saved.is_empty(), "a 1024 px end of 10 widths holds more than its allowance");
+        let tip = engine.backend.persistent.last().unwrap();
+        assert!(tip.radii[0] * 2. <= 0.15 * 1024., "the capped end still comes to a point: {}", tip.radii[0] * 2.);
         assert_matches_replay(&mut engine, &live);
+    }
+
+    #[test]
+    fn a_predicted_tip_leaves_the_held_proportional_start_as_it_saves() {
+        let taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Proportional, ..Default::default() };
+        for diameter in [18., 60.] {
+            let (mut input, mut engine) = engine("taper", 4096, 1024);
+            let mut brush = default_brush(DefaultBrushPreset::GPen);
+            (brush.diameter, brush.stabilization.strength, brush.taper) = (diameter, 0., taper);
+            engine.set_brush(brush).unwrap();
+            engine.set_instant_feedback(InstantFeedbackConfig { enabled: true, use_platform_prediction: false, ..Default::default() }).unwrap();
+            let events = pen_stroke(1, 401, 1_000_000_000, |i| ([256. + 5. * i.min(400) as f32, 384.], 1.));
+            let mut shown = Vec::new();
+            draw_tapered(&mut engine, &mut input, &events, 1, |engine, i| {
+                if i + 2 == events.len() {
+                    shown = engine.backend.preview.clone();
+                }
+            });
+            let saved = &engine.backend.persistent;
+            let start = |dab: &&layer_render::Dab| dab.center.x < 256. + 1200.;
+            let matched: Vec<_> = shown.iter().filter(start).filter_map(|dab| saved.iter().find(|kept| kept.center == dab.center).map(|kept| (dab, kept))).collect();
+            assert!(matched.len() > 4, "{diameter} px: the preview draws held contacts");
+            for (dab, kept) in matched {
+                assert_eq!(dab.radii, kept.radii, "{diameter} px at {}: the preview shapes the held start as the saved stroke", dab.center.x);
+            }
+        }
+    }
+
+    #[test]
+    fn a_held_proportional_line_over_its_allowance_freezes_its_zones_without_a_repair() {
+        let taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Proportional, proportional_shares: [0.5, 0.5], ..Default::default() };
+        for feedback in [false, true] {
+            let (mut input, mut engine) = tapered_engine(taper, feedback);
+            engine.set_brush(BrushSnapshot { diameter: 512., ..engine.configured_brush().clone() }).unwrap();
+            let events = pen_stroke(1, 2000, 1_000_000_000, |i| ([4. * i as f32, 512.], if i % 2 == 0 { 0.7 } else { 0.85 }));
+            let (live, saved, capped) = draw_uncapped_or_capped(&mut engine, &mut input, &events, 4);
+            assert!(capped && !saved.is_empty(), "feedback {feedback}: the held line reached its allowance and saved its start");
+            assert_matches_replay(&mut engine, &live);
+        }
+    }
+
+    #[test]
+    fn an_end_press_saves_the_light_contacts_before_it_unchanged() {
+        let taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: [2., 10.], ..Default::default() };
+        for feedback in [false, true] {
+            let draw = |press: bool| {
+                let events = pen_stroke(1, 240, 1_000_000_000, |i| ([100. + 2. * i as f32, 384.], if press && (229..=232).contains(&i) { 1. } else { 0.3 }));
+                let (mut input, mut engine) = tapered_engine(taper, feedback);
+                let live = draw_tapered(&mut engine, &mut input, &events, 4, |_, _| {});
+                assert_matches_replay(&mut engine, &live);
+                engine.backend.persistent.iter().filter(|dab| dab.center.x < 538.).copied().collect::<Vec<_>>()
+            };
+            assert_eq!(draw(true), draw(false), "feedback {feedback}: a press near the lift leaves the light end before it alone");
+        }
     }
 
     #[test]
@@ -7050,7 +7119,7 @@ mod tests {
         correction.flags = SampleFlags::CORRECTION;
         correction.pressure = 0.95;
         events.insert(150, correction);
-        let live = draw_tapered(&mut engine, &mut input, &events, |_, _| {});
+        let live = draw_tapered(&mut engine, &mut input, &events, 4, |_, _| {});
         assert!(engine.backend.saw_reset, "the correction rebuilt the stroke");
         assert_matches_replay(&mut engine, &live);
         assert_eq!(engine.completed_stroke.as_ref().unwrap().points[50].pressure, 0.95);
@@ -7088,7 +7157,7 @@ mod tests {
     fn a_held_stroke_is_saved_in_one_batch_at_lift() {
         let taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Proportional, proportional_shares: [0.3, 0.3], ..Default::default() };
         let (mut input, mut engine) = tapered_engine(taper, true);
-        let live = draw_tapered(&mut engine, &mut input, &circle(400), |_, _| {});
+        let live = draw_tapered(&mut engine, &mut input, &circle(400), 4, |_, _| {});
         assert_eq!(live.len(), 1, "{live:?}");
         assert_eq!(*engine.completed_stroke.as_ref().unwrap().taper_cuts, [400]);
         assert_matches_replay(&mut engine, &live);
@@ -7127,10 +7196,10 @@ mod tests {
     fn a_scene_rebuild_keeps_the_slice_cuts() {
         let taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: [2., 3.], ..Default::default() };
         let (mut input, mut engine) = tapered_engine(taper, true);
-        draw_tapered(&mut engine, &mut input, &circle(240), |_, _| {});
+        draw_tapered(&mut engine, &mut input, &circle(240), 4, |_, _| {});
         let cuts = engine.completed_stroke.as_ref().unwrap().taper_cuts.clone();
         let (mut input, mut engine) = tapered_engine(taper, true);
-        let live = draw_tapered(&mut engine, &mut input, &circle(240), |engine, i| {
+        let live = draw_tapered(&mut engine, &mut input, &circle(240), 4, |engine, i| {
             if i == 119 {
                 engine.rebuild_all = true;
             }

@@ -165,7 +165,7 @@ fn a_stroke_shorter_than_its_end_stays_blunt_and_a_near_tap_stays_a_dot() {
     let widths = [0., 0.5, 2., 9., 45., 90., 180.].map(widest);
     assert!(widths[0] > 0.999 && widths[1] > 0.99, "{widths:?}");
     assert!(widths.windows(2).all(|pair| pair[1] <= pair[0] + 1e-3), "{widths:?}");
-    let blunt = 0.99 * super::taper::shaped(1., 1., 1., 0.5, 0.875) + 0.01;
+    let blunt = 0.99 * super::taper::shaped(1., 1., 1., 0.5, 0.75) + 0.01;
     assert!(widths.iter().all(|width| *width >= blunt - 0.01), "{widths:?} against {blunt}");
     assert!(widest(360.) > 0.999 && widest(270.) > widths[6], "longer strokes widen again");
 }
@@ -184,7 +184,7 @@ fn a_tap_stays_a_full_dot() {
 }
 
 #[test]
-fn the_start_follows_its_prefix_peak_and_the_end_its_zone_peak() {
+fn the_start_follows_its_prefix_peak_and_the_end_its_running_peak() {
     let brush = pen(taper(TaperMode::Proportional, [0.3, 0.3]));
     let plan = TaperPlan::new(&brush).unwrap();
     let pose = |d: f32, pressure: f32| DynamicPoint {
@@ -197,13 +197,42 @@ fn the_start_follows_its_prefix_peak_and_the_end_its_zone_peak() {
         .into_iter()
         .scan(0f32, |peak, (d, pressure, interval)| {
             *peak = peak.max(interval);
-            Some(ContactRecord { pose: pose(d, pressure), variant: 0, index: 0, copy_seed: 0, copies: 1, interval, peak: *peak })
+            Some(ContactRecord { pose: pose(d, pressure), variant: 0, index: 0, copy_seed: 0, copies: 1, interval, peak: *peak, reach: 0. })
         })
         .collect();
-    let profile = HeldStroke::default().profile(&plan, &records, 10., 0.35);
-    let pressures: Vec<_> =
-        records.iter().map(|record| profile.transfer(record.pose.stroke_distance, record.peak).map(|transfer| transfer.pressure)).collect();
-    assert_eq!(pressures, [Some(0.2), Some(0.9), Some(0.9), Some(0.7), Some(0.7), Some(0.7)]);
+    let (profile, records) = HeldStroke::holding(&plan, records, &[]).profiled(&plan, 10.);
+    let pressures: Vec<_> = records
+        .iter()
+        .map(|record| profile.transfer(record.pose.stroke_distance, record.peak, record.reach).map(|transfer| transfer.pressure))
+        .collect();
+    assert_eq!(pressures, [Some(0.2), Some(0.9), Some(0.9), Some(0.6), Some(0.7), Some(0.7)]);
+}
+
+#[test]
+fn an_end_press_raises_only_the_contacts_from_the_press_to_the_tip() {
+    let brush = pen(taper(TaperMode::Fixed, [10., 10.]));
+    let press = |after: fn(f32) -> f32| line(400., move |t| match 400. * t {
+        x if x < 380. => 0.3,
+        x if x <= 384. => 1.,
+        x => after(x),
+    });
+    let along = |dabs: &[Dab]| -> Vec<(f32, f32)> { dabs.iter().map(|dab| (dab.contact[2] * 18., width(dab))).collect() };
+    let light = draw(&brush, line(400., |_| 0.3));
+    let pressed = along(&draw(&brush, press(|_| 1.)));
+    let at = |distance: f32| {
+        let index = pressed.partition_point(|(d, _)| *d < distance).clamp(1, pressed.len() - 1);
+        let ((d0, w0), (d1, w1)) = (pressed[index - 1], pressed[index]);
+        w0 + (w1 - w0) * ((distance - d0) / (d1 - d0).max(f32::EPSILON)).clamp(0., 1.)
+    };
+    let before = |dabs: &[Dab]| dabs.iter().filter(|dab| dab.center.x < 360.).copied().collect::<Vec<_>>();
+    for (label, after) in [("a light end", (|_| 0.3) as fn(f32) -> f32), ("a fade", |x| 1. - 0.95 * (x - 384.) / 16.)] {
+        let dabs = draw(&brush, press(after));
+        assert_eq!(before(&dabs), before(&light), "{label}: contacts before the press keep their own width");
+        for (distance, width) in along(&dabs).into_iter().filter(|(distance, _)| *distance >= 384.) {
+            let expected = at(distance);
+            assert!((width - expected).abs() <= 0.04 * expected + 0.1, "{label} at {distance}: {width} against the press height {expected}");
+        }
+    }
 }
 
 #[test]
@@ -577,7 +606,7 @@ fn preview_against_release(brush: &BrushSnapshot) -> (f32, usize, usize) {
     release.stage(&mut last, output.iter().copied(), count + 2);
     release.seal();
     release.release(&last, brush, Release::All, |slice| released.extend_from_slice(slice));
-    held.present(&mut tip, brush, 1., 0, &mut output);
+    held.present(&mut tip, brush, 1., None, 0, &mut output);
     let along = |dabs: &[Dab]| -> Vec<(f32, f32)> { dabs.iter().map(|dab| (dab.contact[2] * diameter, width(dab))).collect() };
     let (preview, release) = (along(&output), along(&released));
     let swept = |pair: &[(f32, f32)], distance: f32| {
@@ -607,11 +636,11 @@ fn preview_against_release(brush: &BrushSnapshot) -> (f32, usize, usize) {
 
 #[test]
 fn the_preview_outline_follows_the_saved_shape_without_evaluating_dropped_contacts() {
-    let mut jittered = fixed_pen(18., 0.75);
+    let mut jittered = fixed_pen(18., 0.5);
     jittered.shape.size_jitter = 0.1;
-    let mut copies = fixed_pen(18., 0.75);
+    let mut copies = fixed_pen(18., 0.5);
     (copies.shape.count, copies.path.jitter_across) = (2, 0.2);
-    let pens = [18., 100.].into_iter().flat_map(|diameter| [0., 0.75, 1.].map(|pointiness| fixed_pen(diameter, pointiness)));
+    let pens = [18., 100.].into_iter().flat_map(|diameter| [0., 0.5, 0.75, 1.].map(|pointiness| fixed_pen(diameter, pointiness)));
     for brush in pens.chain([jittered, copies]) {
         let (worst, drawn, simplified) = preview_against_release(&brush);
         let label = format!("{} px at {} with jitter {} and {} copies", brush.diameter, brush.taper.pointiness, brush.shape.size_jitter, brush.shape.count);
@@ -621,14 +650,27 @@ fn the_preview_outline_follows_the_saved_shape_without_evaluating_dropped_contac
 }
 
 #[test]
+fn the_proportional_preview_outline_follows_the_saved_shape() {
+    for diameter in [18., 60.] {
+        for pointiness in [0., 0.5, 1.] {
+            let mut brush = fixed_pen(diameter, pointiness);
+            brush.taper.mode = TaperMode::Proportional;
+            let (worst, drawn, simplified) = preview_against_release(&brush);
+            assert!(worst <= 1., "{diameter} px at {pointiness}: outline off by {worst} of its tolerance");
+            assert!(drawn <= 2 * simplified, "{diameter} px at {pointiness}: {drawn} preview dabs for {simplified} kept");
+        }
+    }
+}
+
+#[test]
 fn the_preview_does_not_grow_with_the_held_length() {
     let drawn = [18., 100.].map(|diameter| {
-        let brush = fixed_pen(diameter, 0.75);
+        let brush = fixed_pen(diameter, 0.5);
         let (generator, held, _) = held_preview(&brush, 2.5 * diameter);
         let mut tip = generator.preview();
         let mut output = Vec::new();
         tip.flush_contact(&brush, &mut output);
-        held.present(&mut tip, &brush, 1., 0, &mut output);
+        held.present(&mut tip, &brush, 1., None, 0, &mut output);
         output.len()
     });
     let held = [18f32, 100.].map(|diameter| (10. * diameter / 2.) as usize);

@@ -108,9 +108,10 @@ the Taper section, after Tip:
   shorter than its end length, or than its start length when it has no end, fades
   its taper in with its length, so a tap stays a full dot and short lines stay
   blunt.
-- The start grows towards the highest pressure drawn so far, and the end towards
-  the highest pressure inside it, so a light touch-down or a fading lift does not
-  shorten either.
+- The start grows towards the highest pressure drawn so far, and each point of
+  the end towards the highest pressure between the end's start and that point, so
+  a light touch-down or a fading lift does not shorten either, and a press near
+  the lift widens only the end from the press on.
 - Pointiness shapes the end: 0 is a round, blunt bullet, 0.5 a soft point and 1 a
   sharp point with straight sides. The outline is `(1 − (1 − u)²)^(0.5 + 0.5 ×
   pointiness)` of the end's reference, with `u` the distance from the tip in end
@@ -143,11 +144,14 @@ random keep every tapered contact, because the contacts added before each one
 share its random values.
 
 Each frame's accepted input is one slice. Slices are saved in order, in one batch
-per pass, once no later input can change them. If the held region passes 16,384
-contacts, 4 MiB or its page allowance, its oldest slices are saved early, and the
-stroke is replayed once at lift. The page allowance counts the pages a held path
-of that length can cross, measured with the same dab bounds as the held pages,
-capped at 64 but never below the pages one full-width contact covers. Replays and
+per pass, once no later input can change them. Held work has one allowance, the
+constants at the top of `brush::taper`: 16,384 contacts, 4 MiB and 128 pages (or
+the pages one full-width contact covers, if more), with dab bounds deciding the
+pages. Once the newest contacts no longer fit it, the zones stop growing there: a
+Proportional line keeps the start and end lengths it had, a Fixed start without an
+end keeps its fade, and an end shrinks to the contacts that fit. The point depends
+only on the contacts, so live drawing, the preview, rebuilds, corrections and
+replays all reach it, and nothing is saved early or replayed at lift. Replays and
 late corrections regenerate the stroke from its real samples and recorded release
 batch ends (`Stroke::taper_cuts`), so every path produces the same pixels. Masks
 taper once, at release. Vector lines fit the shaped widths.
