@@ -1225,7 +1225,7 @@ impl ViewportPresenter {
             }
         }
         let result=self.encode_content_frame(renderer,encoder,target,view,surround_linear,overview_only);
-        self.uploads.finish(encoder);
+        self.uploads.finish_raw(encoder);
         result
     }
 

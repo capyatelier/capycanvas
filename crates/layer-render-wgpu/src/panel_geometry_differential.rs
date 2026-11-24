@@ -168,7 +168,7 @@ fn mesh_pixels(r: &WgpuRasterizer,white: &wgpu::RenderPipeline,surface: &PanelSu
             depth_stencil_attachment:None,timestamp_writes:None,occlusion_query_set:None,multiview_mask:None});
         blur.draw(&mut pass,crate::pixel_rect::PixelRect::new(0,0,size[0],size[1]));
     }
-    uploads.finish(&encoder);r.queue().submit([encoder.finish()]);
+    uploads.finish_raw(&encoder);r.queue().submit([encoder.finish()]);
     crate::layer_tests::page_bytes(r,&target)
 }
 

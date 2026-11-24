@@ -76,9 +76,7 @@ pub(crate) struct FramePace {
 }
 impl FramePace {
     pub fn start(&mut self, device: &crate::PipelineDevice, queue: &wgpu::Queue) {
-        let earlier = Arc::new(OnceLock::new());
-        let done = earlier.clone();
-        device.on_queue_done(queue, move || { let _ = done.set(Instant::now()); });
+        let earlier = device.latest_completion(queue);
         self.grant = None;
         self.begun = Some((Instant::now(), earlier));
     }
@@ -89,12 +87,12 @@ impl FramePace {
         self.grant = Some(grant);
         grant.taps
     }
-    pub fn submitted(&mut self, device: &crate::PipelineDevice, queue: &wgpu::Queue, submitted: Instant) {
+    pub fn submitted(&mut self, encoder: &crate::submission::CommandEncoder, submitted: Instant) {
         let (Some(grant), Some((begun, earlier))) = (self.grant.take(), self.begun.clone()) else { return };
         let cpu_ms = milliseconds(submitted.saturating_duration_since(begun));
         let (chunks, interval_ms) = (self.chunks.clone(), self.interval_ms(grant.kind));
         chunks.lock().unwrap().submit(grant);
-        device.on_queue_done(queue, move || {
+        encoder.on_submitted_work_done(move || {
             let gpu_ms = busy_ms(earlier.get().copied(), submitted, Instant::now());
             chunks.lock().unwrap().complete(grant, [cpu_ms, gpu_ms], interval_ms);
         });

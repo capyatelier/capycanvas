@@ -72,6 +72,11 @@ impl Submission {
     pub fn complete(&self)->bool {self.0.load(std::sync::atomic::Ordering::Acquire)==SubmissionState::Complete as u8}
     pub fn pending(&self)->bool {self.0.load(std::sync::atomic::Ordering::Acquire)<SubmissionState::Discarded as u8}
 }
+#[derive(Default)]
+pub(crate) struct LatestSubmission {completed:std::sync::Arc<std::sync::OnceLock<web_time::Instant>>,observed:bool}
+impl LatestSubmission {
+    pub fn completed(&mut self)->(std::sync::Arc<std::sync::OnceLock<web_time::Instant>>,bool) {(self.completed.clone(),!std::mem::replace(&mut self.observed,true))}
+}
 struct PendingSubmission(Submission);
 impl Drop for PendingSubmission {
     fn drop(&mut self) {
@@ -91,7 +96,8 @@ pub(crate) struct CommandEncoder {
     passes: usize,
     total_passes: u64,
     resource_work: bool,
-    held: std::cell::RefCell<Vec<Box<dyn Send>>>,
+    completions: std::cell::RefCell<Vec<Box<dyn FnOnce()+Send>>>,
+    latest: std::sync::Arc<std::sync::Mutex<LatestSubmission>>,
     #[cfg(not(target_arch="wasm32"))]
     poll: crate::device_poll::Binding,
 }
@@ -117,7 +123,8 @@ impl CommandEncoder {
             passes: 0,
             total_passes: 0,
             resource_work: false,
-            held: Default::default(),
+            completions: Default::default(),
+            latest: device.latest_submission.clone(),
         }
     }
     pub fn submission(&mut self)->Submission {
@@ -204,9 +211,17 @@ impl CommandEncoder {
     /// Finish staging uploads before calling this. Their completion callbacks
     /// belong to the final encoder, after every earlier chunk on this queue.
     pub fn submit(mut self, queue: &wgpu::Queue) -> Option<wgpu::SubmissionIndex> {
+        #[cfg(test)] crate::test_support::PassCounts {completion_callbacks:1,submissions:1,..Default::default()}.record();
         self.compute=None;
         let pending=self.submission.take();let receipt=pending.as_ref().map(|pending|pending.0.clone());
-        self.on_submitted_work_done(move|| {if let Some(pending)=pending {pending.0.0.store(SubmissionState::Complete as u8,std::sync::atomic::Ordering::Release);}});
+        let completions=self.completions.take();
+        let completed=std::sync::Arc::new(std::sync::OnceLock::new());let stamp=completed.clone();
+        let complete=move|| {let _=stamp.set(web_time::Instant::now());for completion in completions {completion();} if let Some(pending)=pending {pending.0.0.store(SubmissionState::Complete as u8,std::sync::atomic::Ordering::Release);}};
+        #[cfg(not(target_arch="wasm32"))]
+        let complete=self.poll.callback(&self.device,move|()|complete());
+        #[cfg(target_arch="wasm32")]
+        let complete=crate::pipeline_device::waking_completion(move|()|complete());
+        self.current().on_submitted_work_done(move||complete(()));
         #[cfg(not(target_arch="wasm32"))]
         let poll=self.poll.clone();
         #[cfg(not(target_arch="wasm32"))]
@@ -215,6 +230,7 @@ impl CommandEncoder {
             let mut chunks=self.earlier.into_iter().chain(self.current.into_inner());
             let mut index=submit_traced(queue,self.prologue.take().into_iter().chain(chunks.next()),!self.resource_work);
             for encoder in chunks {index=submit_traced(queue,[encoder],!self.resource_work);}
+            *self.latest.lock().unwrap()=LatestSubmission {completed,observed:true};
             index
         };
         #[cfg(not(target_arch="wasm32"))]
@@ -226,17 +242,20 @@ impl CommandEncoder {
         poll.request(&device);
         index
     }
-    pub fn on_submitted_work_done(&self,callback:impl FnOnce()+Send+'static) {
-        #[cfg(test)] crate::test_support::PassCounts {completion_callbacks:1,..Default::default()}.record();
-        let held=self.held.take();let callback=move|| {drop(held);callback();};
+    pub async fn submit_and_wait(self,device:&crate::PipelineDevice,queue:&wgpu::Queue)->Result<(),String> {
         #[cfg(not(target_arch="wasm32"))]
-        let callback=self.poll.callback(&self.device,move|()|callback());
-        #[cfg(not(target_arch="wasm32"))]
-        self.current().on_submitted_work_done(move||callback(()));
+        let (done,completed)=std::sync::mpsc::channel();
         #[cfg(target_arch="wasm32")]
-        self.current().on_submitted_work_done(callback);
+        let (done,completed)=futures_channel::oneshot::channel();
+        self.on_submitted_work_done(move|| {let _=done.send(Ok(()));});
+        self.submit(queue);
+        #[cfg(not(target_arch="wasm32"))]
+        {crate::raster::wait_mapping(device,&completed)}
+        #[cfg(target_arch="wasm32")]
+        {let _=device;completed.await.map_err(|error|error.to_string())?}
     }
-    pub fn hold(&self,value:impl Send+'static) {self.held.borrow_mut().push(Box::new(value));}
+    pub fn on_submitted_work_done(&self,callback:impl FnOnce()+Send+'static) {self.completions.borrow_mut().push(Box::new(callback));}
+    pub fn hold(&self,value:impl Send+'static) {self.on_submitted_work_done(move||drop(value));}
     pub fn append_encoder(&mut self,mut other:Self) {
         assert!(other.submission.is_none());
         self.compute=None;other.compute=None;
@@ -244,7 +263,7 @@ impl CommandEncoder {
         self.earlier.extend(other.prologue.take());
         self.earlier.append(&mut other.earlier);
         self.earlier.extend(other.current.take());
-        self.held.get_mut().append(other.held.get_mut());
+        self.completions.get_mut().append(other.completions.get_mut());
         self.passes=0;self.total_passes+=other.total_passes;self.resource_work|=other.resource_work;
     }
     pub fn retire(&self,value:impl Send+'static) {
@@ -359,6 +378,40 @@ mod tests {
         assert!(completion.is_ok(),"GPU completion required another host poll: {completion:?}");
         assert!(!receipt.pending());
         assert!(receipt.submitted());
+    }
+    #[test]
+    fn a_stroke_at_fit_over_a_photo_its_settle_and_a_capture_register_at_most_one_completion_per_submission() {
+        fn counted(run:impl FnOnce())->crate::test_support::PassCounts {let before=crate::test_support::PassCounts::snapshot();run();crate::test_support::PassCounts::snapshot().delta(before)}
+        let extent=[4096,2048];
+        let photo=layer_core::color::source::rgba8_source(extent,|x,y|[(x/7) as u8,(y/5) as u8,((x^y)%199) as u8,255]);
+        let mut doc=layer_color::photo_project(Arc::unwrap_or_clone(photo),Default::default(),"Photo".into(),layer_core::color::SampleDepth::U8).unwrap();
+        let (ink,target)=crate::test_support::add_paint(&mut doc.artwork,"Ink",extent);
+        let stack=doc.artwork.compositions.get(doc.artwork.root).unwrap().result;
+        let entries=&mut doc.artwork.stacks.get_mut(stack).unwrap().entries;entries.retain(|entry|*entry!=ink);entries.insert(0,ink);
+        let mut doc=layer_core::Document::from_artwork(doc.artwork).unwrap();
+        doc.working.occurrence=Some(ink);doc.working.target=Some(target);
+        let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        layer_render::CanvasRenderer::set_working_layer(&mut r,Some(ink));
+        let mut frame=packet(doc.scene(),extent);frame.composite_all=false;
+        frame.view=crate::test_support::view([800,400]);frame.view.document_to_surface=[0.19,0.,0.,0.19,11.,6.];
+        crate::test_support::submit_settled(&mut r,frame);
+        crate::test_support::evict_sources(&mut r);
+        let style=crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::GPen);
+        let stroke=counted(|| for step in 0..8 {
+            let mut dab=crate::tests::test_dab([600.+400.*step as f32,1000.],[0.8,0.2,0.1,1.],1.);dab.radii=[120.;2];
+            let batch=layer_render::DabBatch {stroke_start:step==0,stroke_end:step==7,..dab_batch(target,style.clone(),dab.bounds())};
+            crate::test_support::submit_ready(&mut r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),time_seconds:0.01*(step+1) as f32,..frame}).unwrap();
+        });
+        let settle=counted(||crate::test_support::submit_settled(&mut r,frame));
+        let mut snapshot=None;
+        let capture=counted(|| {
+            let mut capture=r.snapshot_gpu().capture_scene(doc.snapshot(),layer_core::SceneScope::All,Default::default()).unwrap();
+            capture.read_region([0,0,1024,1024]).unwrap();snapshot=Some(capture);
+        });
+        let phases=[("stroke",stroke),("settle",settle),("capture",capture)].map(|(phase,counts)|(phase,counts.completion_callbacks,counts.submissions));
+        assert!(phases.iter().all(|(_,callbacks,submissions)|*submissions!=0 && callbacks<=submissions),
+            "each phase registers at most one GPU completion callback per submission (phase, callbacks, submissions): {phases:?}");
+        drop(snapshot);
     }
     #[test]
     fn bare_submit_and_destroy_do_not_wait_on_the_poll_owner() {

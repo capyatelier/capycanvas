@@ -277,7 +277,8 @@ fn publication_stays_within_frame_grants_and_held_refinement_yields_to_new_artwo
             assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
             assert_eq!(r.metrics.composited_pixels, area, "a published view has no refinement left");
             let completed = r.background_ready.clone();
-            r.hold_background(false);
+            let held = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+            r.hold_background(false, &held);
             completed.store(true, std::sync::atomic::Ordering::Release);
             assert!(!r.background_ready.load(std::sync::atomic::Ordering::Acquire),
                 "an earlier completion cannot release the latest background work");

@@ -54,7 +54,7 @@ impl SnapshotRenderer {
     }
     pub(super) async fn build_tone_guide_async(&mut self, output: scene::Output)
         -> Result<Arc<crate::local_tone::GpuToneGuide>, String> {
-        use crate::local_tone::{Builder, range_async, wait_async};
+        use crate::local_tone::{Builder, range_async};
         let reserved = Builder::allocation_bound(self.extent)?;
         let mut lease = self.reserve_analysis(output, reserved)?;
         Builder::prepare_pipelines(&self.renderer.device).await?;
@@ -81,8 +81,7 @@ impl SnapshotRenderer {
             let retained = lease.split(guide.byte_len());
             Arc::get_mut(&mut guide).unwrap().analysis_lease = Some(retained);
         }
-        encoder.submit(&queue);
-        wait_async(&device, &queue).await?;
+        encoder.submit_and_wait(&device, &queue).await?;
         self.check_cancelled().map_err(|e| e.to_string())?;
         Ok(guide)
     }

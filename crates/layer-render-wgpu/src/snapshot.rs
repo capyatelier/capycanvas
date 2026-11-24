@@ -551,8 +551,7 @@ impl SnapshotRenderer {
                     },
                     Err(error) if error.is_preparation_pending()=> {
                         r.uploads.finish(&encoder);
-                        encoder.submit(&r.queue);
-                        crate::local_tone::wait_async(&r.device,&r.queue).await.map_err(GpuRasterError::Color)?;
+                        encoder.submit_and_wait(&r.device,&r.queue).await.map_err(GpuRasterError::Color)?;
                         Err(error)
                     },
                     Err(error)=>Err(error),
@@ -750,9 +749,8 @@ impl SnapshotRenderer {
                         control.check()?;consume(r,view,region,encoder)
                     }).await;
                     r.scene=Some(scene);result?;
-                    r.uploads.finish(&encoder);encoder.submit(&r.queue);
-                    control.observe_allocations(&r.device);
-                    crate::local_tone::wait_async(&r.device,&r.queue).await.map_err(GpuRasterError::Color)
+                    r.uploads.finish(&encoder);control.observe_allocations(&r.device);
+                    encoder.submit_and_wait(&r.device,&r.queue).await.map_err(GpuRasterError::Color)
                 }.await;
                 match work {
                     Err(GpuRasterError::CaptureBudget {..}) if region[2].max(region[3])>16=> {

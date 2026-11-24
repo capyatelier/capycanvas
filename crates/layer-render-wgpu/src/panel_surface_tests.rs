@@ -633,7 +633,7 @@ fn gpu_panel_shape_cache_keeps_reprojection_and_recovers_discarded_geometry() {
         let mut encoder=device.create_command_encoder(&Default::default());
         let mut uploads=crate::Uploads::new(&renderer.device,4096);
         panels.prepare(&renderer.device,&mut uploads,&mut encoder,Some((&blur,affine)),SIZE,0).unwrap();
-        uploads.finish(&encoder);
+        uploads.finish_raw(&encoder);
         encoder
     };
     let mut scene=surface(104.);

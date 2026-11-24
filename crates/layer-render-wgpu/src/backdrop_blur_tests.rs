@@ -171,7 +171,7 @@ fn region_list_changes_repaint_only_added_and_removed_glass() {
         let mut repaint = Vec::new();
         let mut uploads = crate::Uploads::new(&r.device, 4096);
         blur.encode(&r, &mut encoder, &mut uploads, [512, 256], 0, layer_core::Affine::IDENTITY, false, Some(&[]), |_| {}, None, &mut repaint).unwrap();
-        uploads.finish(&encoder);
+        uploads.finish_raw(&encoder);
         r.queue().submit([encoder.finish()]);
         repaint
     };
@@ -203,7 +203,7 @@ fn zero_strength_regions_keep_blur_demand_without_composite_draws() {
     let mut uploads=crate::Uploads::new(&r.device,4096);
     let mut repaint=Vec::new();
     blur.encode(&r,&mut encoder,&mut uploads,[256,128],0,layer_core::Affine::IDENTITY,false,None,|_|{},None,&mut repaint).unwrap();
-    uploads.finish(&encoder);
+    uploads.finish_raw(&encoder);
     r.queue().submit([encoder.finish()]);
     assert!(blur.cached().is_some() && blur.frames()[0]==1,"panel consumers retain a prepared backdrop");
     assert_eq!(blur.edges,0,"zero-alpha composites must not shade a bounding rectangle");

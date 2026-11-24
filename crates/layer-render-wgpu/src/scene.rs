@@ -2174,10 +2174,9 @@ impl Scene {
             self.exact_object_results=objects;
             let idle=result? == 0 && !encoder.has_work();
             r.uploads.finish(&encoder);
-            encoder.submit(&r.queue);
-            if idle && r.image_decode_waiting() { r.await_image_decode().await?; continue; }
+            if idle && r.image_decode_waiting() { encoder.submit(&r.queue); r.await_image_decode().await?; continue; }
             r.metrics.object_drain_submissions += 1;
-            r.await_capture_submission(idle).await?;
+            r.submit_capture(encoder,idle).await?;
         }
         if r.snapshot_cancelled.as_ref().is_some_and(|cancelled|cancelled.load(std::sync::atomic::Ordering::Relaxed)) {
             return Err(GpuRasterError::Color("Snapshot capture cancelled".into()));
@@ -2210,8 +2209,7 @@ impl Scene {
             }
             let idle=!encoder.has_work();
             r.uploads.finish(encoder);
-            std::mem::replace(encoder,crate::submission::CommandEncoder::new(&r.device,&Default::default())).submit(&r.queue);
-            r.await_capture_submission(idle).await?;
+            r.submit_capture(std::mem::replace(encoder,crate::submission::CommandEncoder::new(&r.device,&Default::default())),idle).await?;
             if result.is_err() && !self.prepare_capture_work_async(r).await? {return result;}
         }
         }.await;
@@ -2249,8 +2247,7 @@ impl Scene {
                 tiles+=1;
                 if !preview && tiles%tiles_per_submission==0 {
                     r.uploads.finish(encoder);
-                    std::mem::replace(encoder, crate::submission::CommandEncoder::new(&r.device, &Default::default())).submit(&r.queue);
-                    crate::local_tone::wait_async(&r.device, &r.queue).await.map_err(GpuRasterError::Color)?;
+                    std::mem::replace(encoder, crate::submission::CommandEncoder::new(&r.device, &Default::default())).submit_and_wait(&r.device, &r.queue).await.map_err(GpuRasterError::Color)?;
                 }
             }
             self.release_exact_objects(encoder);

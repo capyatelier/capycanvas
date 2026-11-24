@@ -509,7 +509,12 @@ pages therefore records about three passes instead of five per page
 records each pass and its barriers into about two command buffers, and Android
 destroys a command pool that held more than 128 once its work completes
 ([vendored wgpu](../../vendor/README.md)), so smaller chunks keep reusing their
-pools and the driver memory behind them.
+pools and the driver memory behind them. Each submission registers one GPU
+completion callback, which on the Web is one browser promise. Cache writes,
+retirements, holds, upload charges, frame pacing and capture waits join the
+encoder's completion (`on_submitted_work_done`, `hold`, `retire`,
+`submit_and_wait`) instead of registering their own
+(`a_stroke_at_fit_over_a_photo_its_settle_and_a_capture_register_at_most_one_completion_per_submission`).
 
 A frame's coverage batches upload into one reusable buffer from the encoder's
 prologue, as do new geometry, so consecutive vector dispatches share one compute

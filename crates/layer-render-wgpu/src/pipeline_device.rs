@@ -38,6 +38,7 @@ pub(crate) struct DeviceRecipes {
     pub sample_pipeline: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::snapshot::sample::SamplePipeline>>>,
     pub native_publication: std::sync::Arc<std::sync::Mutex<Vec<std::sync::Arc<super::raster::native_edit::Recipes>>>>,
     pub native_transfers: std::sync::Arc<std::sync::Mutex<super::native_tiles::transfer::Tables>>,
+    latest_submission: std::sync::Arc<std::sync::Mutex<crate::submission::LatestSubmission>>,
 }
 #[cfg(not(target_arch="wasm32"))]
 impl DeviceRecipes {
@@ -59,6 +60,7 @@ impl From<&PipelineDevice> for DeviceRecipes {
             sample_pipeline: device.sample_pipeline.clone(),
             native_publication: device.native_publication.clone(),
             native_transfers: device.native_transfers.clone(),
+            latest_submission: device.latest_submission.clone(),
         }
     }
 }
@@ -88,6 +90,7 @@ pub(crate) struct PipelineDevice {
     pub effect_resources: std::sync::Arc<std::sync::Mutex<super::effects::resources::Cache>>,
     pub native_publication: std::sync::Arc<std::sync::Mutex<Vec<std::sync::Arc<super::raster::native_edit::Recipes>>>>,
     pub native_transfers: std::sync::Arc<std::sync::Mutex<super::native_tiles::transfer::Tables>>,
+    pub(crate) latest_submission: std::sync::Arc<std::sync::Mutex<crate::submission::LatestSubmission>>,
 }
 impl From<wgpu::Device> for PipelineDevice {
     fn from(device: wgpu::Device) -> Self {
@@ -118,6 +121,7 @@ impl From<wgpu::Device> for PipelineDevice {
             source_samples: std::sync::Arc::new(layer_core::raster::DecodedTileCache::new(
                 0,
             )),
+            latest_submission: Default::default(),
         }
     }
 }
@@ -142,6 +146,7 @@ impl PipelineDevice {
         self.sample_pipeline = recipes.sample_pipeline.clone();
         self.native_publication = recipes.native_publication.clone();
         self.native_transfers = recipes.native_transfers.clone();
+        self.latest_submission = recipes.latest_submission.clone();
         self
     }
     pub fn with_recipes(&self, recipes: &Self) -> Self {
@@ -188,21 +193,24 @@ impl PipelineDevice {
         self.poll.request(&self.device);
     }
     pub(crate) fn on_queue_done(&self,queue:&wgpu::Queue,callback:impl FnOnce()+Send+'static) {
+        #[cfg(test)] crate::test_support::PassCounts {completion_callbacks:1,..Default::default()}.record();
         let callback=self.callback(move|()|callback());
         queue.on_submitted_work_done(move||callback(()));self.request_poll();
     }
+    pub(crate) fn latest_completion(&self,queue:&wgpu::Queue)->std::sync::Arc<std::sync::OnceLock<web_time::Instant>> {
+        let (completed,observe)=self.latest_submission.lock().unwrap().completed();
+        if observe {let stamp=completed.clone();self.on_queue_done(queue,move|| {let _=stamp.set(web_time::Instant::now());});}
+        completed
+    }
     pub(crate) fn on_encoder_done(&self,encoder:&wgpu::CommandEncoder,callback:impl FnOnce()+Send+'static) {
+        #[cfg(test)] crate::test_support::PassCounts {completion_callbacks:1,..Default::default()}.record();
         let callback=self.callback(move|()|callback());encoder.on_submitted_work_done(move||callback(()));
     }
     pub(crate) fn callback<A:Send+'static>(&self,callback:impl FnOnce(A)+Send+'static)->impl FnOnce(A)+Send+'static {
         #[cfg(not(target_arch="wasm32"))]
         {self.poll.callback(&self.device,callback)}
         #[cfg(target_arch="wasm32")]
-        {move|argument| {
-            callback(argument);
-            let wakes=COMPLETION.with_borrow_mut(|(count,wakes)| {*count+=1;std::mem::take(wakes)});
-            for wake in wakes {wake();}
-        }}
+        {waking_completion(callback)}
     }
     pub(crate) fn completions(&self)->u64 {
         #[cfg(not(target_arch="wasm32"))]
@@ -226,8 +234,10 @@ impl PipelineDevice {
         self.queue_submit(||queue.submit_for_present(commands))
     }
     fn queue_submit(&self,work:impl FnOnce()->wgpu::SubmissionIndex)->Option<wgpu::SubmissionIndex> {
+        #[cfg(test)] crate::test_support::PassCounts {submissions:1,..Default::default()}.record();
         #[cfg(not(target_arch="wasm32"))]
         self.poll.handle(&self.device);
+        let work=|| {let index=work();*self.latest_submission.lock().unwrap()=Default::default();index};
         #[cfg(not(target_arch="wasm32"))]
         let submitted=self.poll.submit(work);
         #[cfg(target_arch="wasm32")]
@@ -326,6 +336,14 @@ impl PipelineDevice {
             return pipeline;
         }
         self.device.create_compute_pipeline(descriptor)
+    }
+}
+#[cfg(target_arch="wasm32")]
+pub(crate) fn waking_completion<A:Send+'static>(callback:impl FnOnce(A)+Send+'static)->impl FnOnce(A)+Send+'static {
+    move|argument| {
+        callback(argument);
+        let wakes=COMPLETION.with_borrow_mut(|(count,wakes)| {*count+=1;std::mem::take(wakes)});
+        for wake in wakes {wake();}
     }
 }
 pub(crate) fn float_sampling_wgsl(filterable: bool) -> &'static str {

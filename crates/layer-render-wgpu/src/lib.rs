@@ -338,20 +338,23 @@ impl Uploads {
         );
         Ok(())
     }
-    fn finish(&mut self, encoder: &wgpu::CommandEncoder) {
+    fn finish(&mut self, encoder: &submission::CommandEncoder) {
+        if let Some(flight) = self.close(encoder) { encoder.hold(flight); }
+    }
+    fn finish_raw(&mut self, encoder: &wgpu::CommandEncoder) {
+        if let Some(flight) = self.close(encoder) { self.device.on_encoder_done(encoder,move || drop(flight)); }
+    }
+    fn close(&mut self, encoder: &wgpu::CommandEncoder) -> Option<residency::Charge> {
         self.belt.finish_and_recall_on_submit(encoder);
         let bytes = std::mem::take(&mut self.written);
-        if bytes != 0 {
-            let flight = self.outstanding.charge(bytes);
-            self.device.on_encoder_done(encoder,move || drop(flight));
-        }
+        (bytes != 0).then(|| self.outstanding.charge(bytes))
     }
 }
 
 impl WgpuRasterizer {
-    async fn await_capture_submission(&mut self,idle:bool)->Result<(),GpuRasterError> {
-        if cfg!(target_arch="wasm32") && !idle && self.uploads.memory_bytes()[1]<=16*1024*1024 {return Ok(());}
-        crate::local_tone::wait_async(&self.device,&self.queue).await.map_err(GpuRasterError::Color)
+    async fn submit_capture(&mut self,encoder:submission::CommandEncoder,idle:bool)->Result<(),GpuRasterError> {
+        if cfg!(target_arch="wasm32") && !idle && self.uploads.memory_bytes()[1]<=16*1024*1024 {encoder.submit(&self.queue);return Ok(());}
+        encoder.submit_and_wait(&self.device,&self.queue).await.map_err(GpuRasterError::Color)
     }
 }
 
@@ -4003,11 +4006,10 @@ impl WgpuRasterizer {
             result => result.map(|()|changed),
         }
     }
-    fn hold_background(&mut self, refinement: bool) {
+    fn hold_background(&mut self, refinement: bool, encoder: &submission::CommandEncoder) {
         self.background_refinement = refinement;
         self.background_ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let ready = CompletionFlag(self.background_ready.clone());
-        self.device.on_queue_done(&self.queue,move || drop(ready));
+        encoder.hold(CompletionFlag(self.background_ready.clone()));
     }
 }
 impl CanvasRenderer for WgpuRasterizer {
@@ -4173,9 +4175,9 @@ impl CanvasRenderer for WgpuRasterizer {
             self.apply_frame_grants(&mut encoder);
             self.uploads.finish(&encoder);
             self.metrics.command_passes += encoder.pass_count();
+            self.hold_background(false,&encoder);
             self.last_submission = encoder.submit(&self.queue);
             self.telemetry.submitted(&self.queue);
-            self.hold_background(false);
             self.settling = Some(pending);
         } else {
             let mut packet = pending.frame.packet(self.document_extent);
@@ -5177,9 +5179,9 @@ impl WgpuRasterizer {
             self.telemetry.phase_end(0, encoder.diagnostics());
             self.telemetry.end(encoder.diagnostics());
             self.metrics.command_passes += encoder.pass_count();
+            self.hold_background(false,&encoder);
             self.last_submission = encoder.submit(&self.queue);
             self.telemetry.submitted(&self.queue);
-            self.hold_background(false);
             self.metrics.submissions = self.metrics.submissions.saturating_add(1);
             self.submitted_context=Some(context);
             return Ok(());
@@ -5215,6 +5217,7 @@ impl WgpuRasterizer {
             self.telemetry.end(encoder.diagnostics());
             self.metrics.command_passes += encoder.pass_count();
             let publication=encoder.submission();
+            self.hold_background(false,&encoder);
             self.last_submission = Some(encoder.submit(&self.queue)
                 .ok_or_else(|| GpuRasterError::WaitFailed("GPU device service retired".into()))?);
             if let Some(liquify)=&mut self.liquify {liquify.publish(packet.scene,packet.dab_batches,&publication);}
@@ -5222,7 +5225,6 @@ impl WgpuRasterizer {
             if let Some(commit) = native_commit {
                 self.finish_native_rasters(commit, false)?;
             }
-            self.hold_background(false);
             self.metrics.submissions = self.metrics.submissions.saturating_add(1);
             self.refresh_storage_metrics();
             if let Some(started) = started {
@@ -5541,19 +5543,17 @@ impl WgpuRasterizer {
         #[cfg(test)]
         if std::mem::take(&mut self.test.discard_frame) {drop(encoder);return Ok(());}
         self.background_frame = settled;
+        if refined { self.hold_background(true,&encoder); }
         let publication=encoder.submission();
         let submitting = web_time::Instant::now();
+        self.frame_pace.submitted(&encoder, submitting);
         let submission = encoder.submit(&self.queue)
             .ok_or_else(|| GpuRasterError::WaitFailed("GPU device service retired".into()))?;
-        self.frame_pace.submitted(&self.device, &self.queue, submitting);
         #[cfg(test)]
         { self.test.frame_work = work.counts(); }
         if let Some(liquify)=&mut self.liquify {liquify.publish(packet.scene,packet.dab_batches,&publication);}
         self.telemetry.submitted(&self.queue);
         self.last_submission = Some(submission.clone());
-        if refined {
-            self.hold_background(true);
-        }
         if let Some(commit) = native_commit {
             self.finish_native_rasters(commit, true)?;
         }

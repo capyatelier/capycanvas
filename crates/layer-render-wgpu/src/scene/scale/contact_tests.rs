@@ -748,7 +748,7 @@ fn a_contact_frame_after_the_first_releases_its_holds_with_one_callback_per_subm
     let contact:Vec<_>=counts.iter().enumerate().filter(|(_,counts)|in_contact(counts)).map(|(step,_)|step).collect();
     assert!(contact.len()>=3,"the stroke stays in contact: {contact:?}");
     for step in contact.iter().skip(1) {
-        assert!(counts[*step].completion_callbacks<=4,"contact frame {step} adds no completion callback per held page or input: {:?}",counts[*step]);
+        assert!(counts[*step].completion_callbacks<=counts[*step].submissions,"contact frame {step} adds no completion callback per held page or input: {:?}",counts[*step]);
     }
 }
 

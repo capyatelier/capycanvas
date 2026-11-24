@@ -47,7 +47,7 @@ fn held_capture_blends_and_releases_its_device_charge_after_completion() {
                 depth_stencil_attachment:None,timestamp_writes:None,occlusion_query_set:None,multiview_mask:None});
             draw.draw(&recipes,&mut pass,0);
         }
-        held.retain_until_complete(device,&encoder);uploads.finish(&encoder);renderer.queue.submit([encoder.finish()]);
+        held.retain_until_complete(device,&encoder);uploads.finish_raw(&encoder);renderer.queue.submit([encoder.finish()]);
         let pixels=crate::layer_tests::page_bytes(&renderer,&texture);
         assert!(pixels.chunks_exact(4).all(|pixel|pixel.iter().zip(expected).all(|(actual,expected)|(*actual as i32-expected).abs()<=1)));
     }

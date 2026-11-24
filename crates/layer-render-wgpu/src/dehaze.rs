@@ -83,7 +83,7 @@ impl Builder {
             check()?;let mut p=dims(self.extent);p.aux=[axis,0,self.document[0],self.document[1]];p.values=[self.origin[0],self.origin[1],0.,0.];
             self.encode(&mut encoder,entry,p,[Some(&self.scratch[1]),Some(input),Some(&self.air)],output,groups(self.extent));
         }
-        encoder.submit(queue);crate::local_tone::wait_async(&self.device,queue).await?;
+        encoder.submit_and_wait(&self.device,queue).await?;
         check()?;Ok(self.guide)
     }
 }
