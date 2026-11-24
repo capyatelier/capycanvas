@@ -39,11 +39,12 @@ impl Owner {
 }
 
 #[derive(Clone)]
-pub(crate) struct RasterTiers {pub(crate) raster:Arc<crate::residency::Tier>,pub(crate) paint:Arc<crate::residency::Tier>,pub(crate) admitted:Arc<crate::residency::Tier>}
+pub(crate) struct RasterTiers {pub(crate) raster:Arc<crate::residency::Tier>,pub(crate) paint:Arc<crate::residency::Tier>,pub(crate) admitted:Arc<crate::residency::Tier>,pub(crate) retouch:Arc<crate::residency::Tier>}
 impl RasterTiers {
     pub(crate) fn new(ledger:MemoryOwner)->Self {
         let raster=crate::residency::Tier::limited_by(ledger);
-        Self {paint:crate::residency::Tier::within(&raster),admitted:crate::residency::Tier::within(&raster),raster}
+        let paint=crate::residency::Tier::within(&raster);
+        Self {retouch:crate::residency::Tier::within(&paint),paint,admitted:crate::residency::Tier::within(&raster),raster}
     }
 }
 
@@ -630,7 +631,7 @@ impl WgpuRasterizer {
     fn uncharged_bytes(&self)->u64 {
         self.portable_blend.byte_len()+self.material_records.storage_bytes()+self.transport_records.storage_bytes()
             +self.dry_display_inputs.len() as u64*dry_material::DisplayInputs::storage_bytes()
-            +self.thumbnails.storage_bytes()+self.retouch.as_ref().map_or(0,|retouch|retouch.storage_bytes())
+            +self.thumbnails.storage_bytes()+self.retouch.as_ref().map_or(0,|retouch|retouch.uncharged_bytes())
             +self.native_edit.as_ref().map_or(0,|native|native.storage_bytes())
             +self.filter_previews.as_ref().map_or(0,|previews|previews.storage_bytes())
     }

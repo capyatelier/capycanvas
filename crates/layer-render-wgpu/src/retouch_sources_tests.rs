@@ -16,7 +16,13 @@ mod clone;
 #[path = "heal_tests.rs"]
 mod heal;
 
-impl RetouchSources { pub(crate) fn cached_pages(&self) -> usize { self.cache.pages.len() } }
+impl RetouchSources {
+    pub(crate) fn cached_pages(&self) -> usize { self.cache.pages.len() }
+    fn page_bytes(&self) -> u64 {
+        self.pool.iter().chain(self.cache.slots.iter().map(|s| &s.page)).map(|p| p.pixels.storage_bytes()).sum()
+    }
+    fn storage_bytes(&self) -> u64 { self.page_bytes() + self.uncharged_bytes() }
+}
 
 const SIZE: [u32; 2] = [768, 512];
 const TARGET: SourceTarget = SourceTarget::Paint(PaintHandle::from_index(0));
@@ -965,4 +971,34 @@ fn retiring_a_clone_stroke_returns_its_grown_pool_to_the_resting_size() {
     assert_eq!(retouch.free.len(), POOL_PAGES);
     stroke(&mut engine, &mut input, 1000, [80., 90.], [700., 400.]);
     assert!(pool(&engine) >= POOL_PAGES, "the next stroke draws from the resting pool");
+}
+
+#[test]
+fn a_clone_stroke_over_more_pages_than_its_room_keeps_its_retouch_pages_charged_and_admitted() {
+    let (mut input, mut engine) = engine(document([1536, 1536]), false);
+    engine.set_retouch(Some(RetouchSource::Editing));
+    flush(&mut engine);
+    let tier = engine.backend().raster_tiers.retouch.clone();
+    let page = u64::from(PAGE_SIZE).pow(2) * u64::from(engine.backend().device.working_format().block_copy_size(None).unwrap());
+    assert_eq!(tier.used(), POOL_PAGES as u64 * page, "the resting pool is charged");
+    let room = tier.used() + 4 * page;
+    tier.update_limit(room);
+    let admitted = |engine: &CanvasEngine<WgpuRasterizer>| {
+        assert_eq!(tier.used(), engine.backend().retouch.as_ref().unwrap().page_bytes(), "every retouch page is charged");
+        assert!(tier.used() <= room, "retouch pages stay within their admitted room: {} > {room}", tier.used());
+    };
+    let mut sequence = 1;
+    draw(&mut engine, &mut input, pen(sequence, PenPhase::Down, [40., 40.], SampleFlags::PRIMARY));
+    for (row, y) in [40., 300., 560., 820., 1080.].into_iter().enumerate() {
+        let [from, to] = if row % 2 == 0 { [40., 1500.] } else { [1500., 40.] };
+        for step in 0..=12 {
+            sequence += 1;
+            draw(&mut engine, &mut input, pen(sequence, PenPhase::Move, [from + (to - from) * step as f32 / 12., y], SampleFlags::PRIMARY));
+            admitted(&engine);
+        }
+    }
+    draw(&mut engine, &mut input, pen(sequence + 1, PenPhase::Up, [40., 1080.], SampleFlags::PRIMARY));
+    flush(&mut engine);
+    admitted(&engine);
+    assert!(counts(&engine).misses > 0, "a stroke-start page without room is a miss the stroke replays");
 }

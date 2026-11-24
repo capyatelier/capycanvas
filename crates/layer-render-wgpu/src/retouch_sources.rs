@@ -20,7 +20,7 @@ const PREFETCH_RING: i64 = 2;
 /// A gather's first pixel, padded to 16 bytes, then its mapping.
 const PARAMETER_BYTES: u64 = 80;
 
-struct PageStorage { texture:wgpu::Texture, view:wgpu::TextureView }
+struct PageStorage { texture:wgpu::Texture, view:wgpu::TextureView, _charge:residency::Charge }
 impl resident::Storage for PageStorage {fn storage_bytes(&self)->u64 {texture_bytes(&self.texture)}}
 impl resident::TextureStorage for PageStorage {
     fn texture(&self)->&wgpu::Texture {&self.texture}
@@ -30,9 +30,13 @@ struct Page {
     pixels:resident::Resident<PageStorage>,
 }
 impl Page {
-    fn new(r:&WgpuRasterizer,label:&'static str)->Self {
+    fn admit(r:&WgpuRasterizer,class:residency::Class)->Result<residency::Reservation,residency::Blocked> {
+        r.raster_tiers.retouch.admit(class,u64::from(PAGE_SIZE).pow(2)*u64::from(r.device.working_format().block_copy_size(None).unwrap()))
+    }
+    fn new(r:&WgpuRasterizer,held:residency::Reservation,label:&'static str)->Self {
         let (texture,view)=create_color_target(&r.device,[PAGE_SIZE;2],label);
-        Self {pixels:resident::Resident::unwritten(PageStorage {texture,view})}
+        let _charge=held.charge(texture_bytes(&texture));
+        Self {pixels:resident::Resident::unwritten(PageStorage {texture,view,_charge})}
     }
     fn read(&self,expected:&layer_core::raster::ContentVersion,consumer:Option<&submission::Submission>)->Result<resident::Read<'_,PageStorage>,GpuRasterError> {
         self.pixels.read(expected,consumer)
@@ -213,14 +217,18 @@ impl ReferenceCache {
     fn claim(&mut self, r: &WgpuRasterizer, coordinate: [u32; 2]) -> Result<usize, GpuRasterError> {
         self.clock += 1;
         let free = self.slots.iter().position(|s| s.coordinate.is_none() && !s.bound);
+        let oldest = (0..self.slots.len()).filter(|&i| !self.slots[i].bound).min_by_key(|i| self.slots[*i].used);
         let index = match free {
             Some(index) => index,
-            None if self.slots.len() < REFERENCE_PAGES => {
-                self.slots.push(Slot { page: Page::new(r, "retouch reference page"), coordinate: None, used: 0, bound: false });
-                self.slots.len() - 1
-            }
-            None => (0..self.slots.len()).filter(|&i| !self.slots[i].bound).min_by_key(|i| self.slots[*i].used)
-                .ok_or(GpuRasterError::Invariant("every reference page awaits its draw"))?,
+            None if self.slots.len() < REFERENCE_PAGES => match (Page::admit(r, residency::Class::Visible), oldest) {
+                (Err(_), Some(index)) => index,
+                (held, _) => {
+                    let page = Page::new(r, held.unwrap_or_else(residency::Blocked::overcommit), "retouch reference page");
+                    self.slots.push(Slot { page, coordinate: None, used: 0, bound: false });
+                    self.slots.len() - 1
+                }
+            },
+            None => oldest.ok_or(GpuRasterError::Invariant("every reference page awaits its draw"))?,
         };
         if let Some(evicted) = self.slots[index].coordinate.replace(coordinate) {
             self.pages.remove(&evicted);
@@ -390,17 +398,15 @@ impl RetouchSources {
         self.pending || self.missed.is_some()
     }
 
-    pub fn storage_bytes(&self) -> u64 {
-        self.pool.iter().chain(self.cache.slots.iter().map(|s| &s.page)).map(|p| p.pixels.storage_bytes()).sum::<u64>()
-            + self.capture.storage_bytes()
-            + self.heal.storage_bytes()
-            + PARAMETER_BYTES
+    pub fn uncharged_bytes(&self) -> u64 {
+        self.capture.storage_bytes() + self.heal.storage_bytes() + PARAMETER_BYTES
     }
 
-    fn pool_page(&mut self, r: &WgpuRasterizer) -> usize {
-        self.free.pop().unwrap_or_else(|| {
-            self.pool.push(Page::new(r, "retouch stroke-start page"));
-            self.pool.len() - 1
+    fn pool_page(&mut self, r: &WgpuRasterizer) -> Option<usize> {
+        self.free.pop().or_else(|| {
+            let held = Page::admit(r, residency::Class::Authored).ok()?;
+            self.pool.push(Page::new(r, held, "retouch stroke-start page"));
+            Some(self.pool.len() - 1)
         })
     }
 
@@ -478,7 +484,7 @@ impl RetouchSources {
         let copy=if page.is_some_and(|page|!page.primary_needs_clear || original) {
             let expected=self.stroke.as_ref().unwrap().versions.tile(layer_core::raster::RasterPlane::Color,coordinate);
             let Some(input)=r.read_layer_color(layer,coordinate,&expected,Some(&encoder.submission())) else {self.miss();return;};
-            let slot=self.pool_page(r);
+            let Some(slot)=self.pool_page(r) else {self.miss();return;};
             let Ok((texture,_,encoding))=self.pool[slot].destination(input.version().clone(),input.complete(),&encoder.submission()) else {self.miss();return;};
             let source=&input.value().texture;
             encoder.copy_texture_to_texture(source.as_image_copy(),texture.as_image_copy(),source.size());
@@ -913,8 +919,8 @@ impl WgpuRasterizer {
         retouch.pending = prepared.retouch.source == layer_core::RetouchSource::References
             && !prepared.retouch.references.is_empty();
         retouch.prepared = Some(prepared.clone());
-        while retouch.pool.len() < POOL_PAGES {
-            retouch.pool.push(Page::new(self, "retouch stroke-start page"));
+        while retouch.pool.len() < POOL_PAGES && let Ok(held) = Page::admit(self, residency::Class::Visible) {
+            retouch.pool.push(Page::new(self, held, "retouch stroke-start page"));
             retouch.free.push(retouch.pool.len() - 1);
         }
         let (render, compute) = retouch.pipelines();
