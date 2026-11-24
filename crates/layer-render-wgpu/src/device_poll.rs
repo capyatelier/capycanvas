@@ -68,10 +68,11 @@ impl RetirementHandle {
     }
     fn release(&self) {
         let closed=self.closed();
-        let woken={let mut waiters=self.0.waiters.lock().unwrap();
-            let woken=waiters.iter().filter(|(blocked,_)|closed || blocked.fits()).map(|(_,wake)|wake.clone()).collect::<Vec<_>>();
+        let waiting=self.0.waiters.lock().unwrap().clone();
+        let woken=waiting.into_iter().filter(|(blocked,_)|closed || blocked.fits()).map(|(_,wake)|wake).collect::<Vec<_>>();
+        {let mut waiters=self.0.waiters.lock().unwrap();
             waiters.retain(|(_,wake)|!woken.iter().any(|woken|Arc::ptr_eq(woken,wake)));
-            self.0.armed.store(!waiters.is_empty(),SeqCst);woken};
+            self.0.armed.store(!waiters.is_empty(),SeqCst);}
         for (index,wake) in woken.iter().enumerate() {if !woken[..index].iter().any(|earlier|Arc::ptr_eq(earlier,wake)) {wake();}}
     }
     pub fn signal_release(&self) {
@@ -98,13 +99,19 @@ impl RetirementHandle {
     pub(crate) fn refuses(&self,blocked:&crate::residency::Blocked,wake:&Notify)->bool {
         let edge=blocked.bind(self);
         debug_assert!(edge.same(self),"a tier signals only the poll owner it first waited on");
-        let mut waiters=edge.0.waiters.lock().unwrap();edge.0.armed.store(true,SeqCst);
-        let refused=!blocked.fits();
-        if refused && !edge.closed() {match waiters.iter_mut().find(|(waiting,old)|Arc::ptr_eq(old,wake) && waiting.same_wait(blocked)) {
-            Some((waiting,_))=>if blocked.supersedes(waiting) {*waiting=blocked.clone();},
-            None=>waiters.push((blocked.clone(),wake.clone())),
-        }}
-        refused
+        let registered={let mut waiters=edge.0.waiters.lock().unwrap();edge.0.armed.store(true,SeqCst);
+            if edge.closed() {None}else {match waiters.iter_mut().find(|(waiting,old)|Arc::ptr_eq(old,wake) && waiting.same_wait(blocked)) {
+                Some((waiting,_))=>blocked.supersedes(waiting).then(||Some(std::mem::replace(waiting,blocked.clone()))),
+                None=>{waiters.push((blocked.clone(),wake.clone()));Some(None)},
+            }}};
+        if !blocked.fits() {return true;}
+        if let Some(previous)=registered {
+            let mut waiters=edge.0.waiters.lock().unwrap();
+            if let Some(index)=waiters.iter().position(|(waiting,old)|Arc::ptr_eq(old,wake) && waiting.same(blocked)) {
+                match previous {Some(previous)=>waiters[index].0=previous,None=>{waiters.remove(index);}}
+            }
+        }
+        false
     }
     fn callback<A:Send+'static,F:FnOnce(A)+Send+'static>(&self,callback:Option<F>)->impl FnOnce(A)+Send+'static+use<A,F> {
         let ticket=Arc::new(Ticket {value:Mutex::new(callback)});
@@ -885,6 +892,30 @@ mod tests {
         active.store(false,Ordering::Release);handle.wake();owner.shutdown();
         assert!(released.is_ok(),"Retirement freed capacity without waking its waiter: freed_before_cleanup={freed}, wake={released:?}");
         assert!(freed);
+    }
+    #[test]
+    fn a_ledger_callback_inside_a_capacity_check_can_refuse_on_the_same_mailbox_and_its_release_still_wakes() {
+        use crate::residency::{Class,Drain,Tier};
+        let mut owner=owner(||Ok(false));let handle=owner.handle.clone();
+        let budget=layer_core::MemoryBudget::new();
+        let ledger=budget.register_owner(layer_core::MemoryOwnerKind::Other,layer_core::MemoryClass::Pinned,None);
+        let full=Tier::limited_by(ledger.clone());full.set_limit(0,0);
+        let draining=Arc::new(Tier::default());let held=Arc::new(Mutex::new(Some(draining.charge(1))));
+        let armed=Arc::new(AtomicBool::new(false));let (nested,refused)=mpsc::channel();
+        let _watch={let (armed,held,full,handle)=(armed.clone(),held.clone(),full.clone(),handle.clone());
+            budget.watch(Arc::new(move|| if armed.swap(false,SeqCst) {
+                drop(held.lock().unwrap().take());
+                full.admit(Class::Visible,1).err().unwrap().wake_on_release(&handle,Arc::new(||{}));
+                let _=nested.send(());
+            }))};
+        ledger.publish(layer_core::MemoryReport {gpu_bytes:1,..Default::default()});armed.store(true,SeqCst);
+        let blocked=full.admit(Class::Visible,1).err().unwrap().draining(Drain::new(vec![draining.clone()]));
+        let (woken,wake)=mpsc::channel();let waiting=handle.clone();
+        let _refusing=std::thread::spawn(move||blocked.wake_on_release(&waiting,Arc::new(move||{let _=woken.send(());})));
+        let nested=refused.recv_timeout(Duration::from_secs(2));let woken=wake.recv_timeout(Duration::from_secs(2));
+        assert!(nested.is_ok(),"a refusal registered from a ledger callback inside the outer capacity check deadlocked");
+        assert!(woken.is_ok(),"a release made by the outer capacity check's ledger flush never woke its waiter");
+        owner.shutdown();
     }
     #[test]
     fn an_inline_callback_panic_closes_and_abandons_before_join_but_retains_the_driver() {
