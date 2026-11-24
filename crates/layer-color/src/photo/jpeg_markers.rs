@@ -84,6 +84,17 @@ pub(super) fn scan(bytes: &[u8]) -> Result<(usize, Vec<Segment<'_>>), String> {
     }
 }
 
+pub(super) fn gain_map(marker: u8, segment: &[u8]) -> bool {
+    marker == 0xe2 && segment.starts_with(b"urn:iso:std:iso:ts:21496:-1")
+        || marker == 0xe1
+            && [
+                b"http://ns.adobe.com/hdr-gain-map/1.0/".as_slice(),
+                b"http://ns.google.com/photos/1.0/gainmap/",
+            ]
+            .iter()
+            .any(|signature| segment.windows(signature.len()).any(|w| w == *signature))
+}
+
 pub(super) fn read_source(bytes: &[u8]) -> Result<Metadata, String> {
     let (_, segments) = scan(bytes)?;
     let mut chunks = BTreeMap::new();
@@ -159,15 +170,7 @@ pub(super) fn read_source(bytes: &[u8]) -> Result<Metadata, String> {
                 }
                 result.resolution = Some(resolution);
             }
-        } else if marker == 0xe2 && segment.starts_with(b"urn:iso:std:iso:ts:21496:-1")
-            || marker == 0xe1
-                && [
-                    b"http://ns.adobe.com/hdr-gain-map/1.0/".as_slice(),
-                    b"http://ns.google.com/photos/1.0/gainmap/",
-                ]
-                .iter()
-                .any(|signature| segment.windows(signature.len()).any(|w| w == *signature))
-        {
+        } else if gain_map(marker, segment) {
             result.gain_map = true;
         } else if marker == 0xe2 && segment.starts_with(b"MPF\0") {
             mpf_error = super::jpeg_mpf::validate_previews(segment).err();

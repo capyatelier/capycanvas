@@ -253,7 +253,7 @@ mod tests {
         let extent = [16, 16];
         let cancel = AtomicBool::new(false);
         for format in [GainMapFormat::Jpeg, GainMapFormat::Avif] {
-            let memory = PhotoMemoryBudget { source_bytes: 0, decode_bytes: 0, encode_bytes: 0 };
+            let memory = PhotoMemoryBudget { import_bytes: 0, encode_bytes: 0 };
             let guide = test_guide(extent, |_, row| { row.fill([2., 0.5, 0.25, 1.]); Ok(()) });
             let mut reads = 0;
             let result = write_gainmap_rows(

@@ -341,3 +341,45 @@ fn export_budget_rejects_before_requesting_rows_or_writing_output() {
             .contains("codec memory budget")
     );
 }
+
+fn subsampled_jpeg(extent: [u32; 2]) -> Vec<u8> {
+    let pixels: Vec<u8> = (0..extent[1])
+        .flat_map(|y| (0..extent[0]).flat_map(move |x| [(x / 8) as u8, (y / 8) as u8, ((x + y) / 16) as u8]))
+        .collect();
+    libjpeg_turbo_rs::Encoder::new(&pixels, extent[0] as usize, extent[1] as usize, libjpeg_turbo_rs::PixelFormat::Rgb)
+        .quality(90)
+        .subsampling(libjpeg_turbo_rs::Subsampling::S420)
+        .encode()
+        .unwrap()
+}
+
+#[test]
+fn import_total_admits_a_jpeg_whose_true_working_set_fits_the_headroom() {
+    let extent = [2048, 2048];
+    let headroom = 40 << 20;
+    let bytes = subsampled_jpeg(extent);
+    let source = read_photo(
+        Cursor::new(&bytes),
+        DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(headroom)),
+    )
+    .unwrap();
+    assert_eq!(source.extent, extent);
+    let pixels = extent[0] as usize * extent[1] as usize;
+    let working = bytes.len() + pixels * 3 / 2 + pixels * 3 + source.resident_bytes();
+    assert!(working as u64 <= headroom, "{working}");
+}
+
+#[test]
+fn jpeg_whose_true_working_set_exceeds_the_headroom_is_refused_before_decoding() {
+    let extent = [2048, 2048];
+    let headroom = 16 << 20;
+    let bytes = subsampled_jpeg(extent);
+    let pixels = extent[0] as usize * extent[1] as usize;
+    assert!((bytes.len() + pixels * 3 / 2 + pixels * 3) as u64 > headroom);
+    let error = read_photo(
+        Cursor::new(&bytes),
+        DecodeLimits::from_memory_budget(PhotoMemoryBudget::from_limit(headroom)),
+    )
+    .unwrap_err();
+    assert!(error.contains("codec memory budget"), "{error}");
+}

@@ -38,8 +38,9 @@ The shared policy uses **remaining memory**, not device model or OS categories:
 
 | Operation | Fraction of available memory |
 | --- | ---: |
-| Retained source data during import | 1/8 |
-| Decoder working set | 1/3 |
+| SDR JPEG import: input, codec buffers and source together | 1 |
+| Other decoders, gain-map JPEG included: each codec buffer | 1/3 |
+| Other decoders, gain-map JPEG included: retained source | 1/8 |
 | JPEG encoder working set | 1/2 |
 
 Native defaults refresh available memory for each operation. Physical iOS queries
@@ -53,7 +54,7 @@ Lossless WebP row output takes the budget's `encode_bytes` directly.
 
 Browsers have no reliable cross-browser query for remaining process memory.
 When no measurement is available, the fallback assumes 512 MiB of headroom:
-64 MiB source, approximately 171 MiB decode, 256 MiB encode. This fallback applies to any
+512 MiB import, 256 MiB encode. This fallback applies to any
 unmeasurable host, rather than categorizing all mobile devices as small.
 Reported device RAM or a JS heap limit must not be passed as free WASM memory.
 
@@ -82,11 +83,18 @@ let encode = JpegEncodeOptions::from_memory_budget(95, budget);
 // write_jpeg_rows(writer, extent, interpretation, resolution, encode, rows)
 ```
 
-JPEG preflight accounts for retained input capacity and the backend's estimated
-pixel/coefficient storage before allocating decoded pixels. Encoding estimates
-eight times the raw pixel buffer plus scratch and retained metadata. These are admission estimates,
-not allocator-enforced caps or reservations against concurrent jobs. The
-`MAX_EXTENT` dimension limit and address-space overflow checks also remain in force.
+SDR JPEG preflight charges the input capacity, three copies of its APPn payloads
+and the source row band, then gives the backend's pixel/coefficient estimate what
+remains. The source tiles get what is left beside the decoded image buffer.
+Encoding estimates eight times the raw pixel buffer plus scratch and retained metadata. These are admission estimates,
+not allocator-enforced caps. Before decoding, the app reads the JPEG header and
+reserves the decode's need in the memory ledger: input, marker copies, scratch,
+row band and the larger of the codec estimate and the worst-case source tiles.
+The decoder gets the same number as its limit. Other formats reserve the sum of
+their per-buffer limits. A concurrent import sees the reduced headroom; the
+reservation shrinks to the decoded source, or a decoder process's is released,
+when the decode finishes. The `MAX_EXTENT` dimension limit and address-space
+overflow checks also remain in force.
 
 The policy leaves headroom for the editor, GPU, other apps and allocation
 overhead. It does not certify every 100 MP editing session: one 100 MP RGBA f32

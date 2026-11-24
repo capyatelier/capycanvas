@@ -23,7 +23,7 @@ mod confined {
 
     pub(crate) fn read(input: &mut dyn Input, limits: DecodeLimits, cancelled: &AtomicBool) -> Result<DecodedPhoto, String> {
         let helper = helper()?;
-        layer_host::photo_reader::decode(input, limits, cancelled, |job| run(&helper, &arguments(limits).join(" "), [&job.input, &job.output, &job.errors], cancelled))
+        layer_host::photo_reader::decode(input, limits, cancelled, |job| run(&helper, &arguments(job.limits).join(" "), [&job.input, &job.output, &job.errors], cancelled))
     }
 
     struct Sid(PSID);

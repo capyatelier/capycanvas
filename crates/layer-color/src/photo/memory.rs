@@ -1,10 +1,9 @@
-//! Temporary source, decode and encode working-set limits for photo operations.
+//! Import and encode working-set limits for photo operations.
 
 /// Concrete operation allowance supplied by the caller.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PhotoMemoryBudget {
-    pub source_bytes: usize,
-    pub decode_bytes: usize,
+    pub import_bytes: usize,
     pub encode_bytes: usize,
 }
 
@@ -16,8 +15,7 @@ impl PhotoMemoryBudget {
     pub fn from_limit(bytes: u64) -> Self {
         let bytes = bytes.min(isize::MAX as u64) as usize;
         Self {
-            source_bytes: bytes / 8,
-            decode_bytes: bytes / 3,
+            import_bytes: bytes,
             encode_bytes: bytes / 2,
         }
     }
@@ -74,10 +72,8 @@ mod tests {
         for available in [0, 1, 1024, 128 << 20, 512 << 20, 4 << 30, 8 << 30, u64::MAX] {
             let b = PhotoMemoryBudget::from_limit(available);
             let usable = available.min(isize::MAX as u64) as usize;
-            assert_eq!(b.source_bytes, usable / 8);
-            assert_eq!(b.decode_bytes, usable / 3);
+            assert_eq!(b.import_bytes, usable);
             assert_eq!(b.encode_bytes, usable / 2);
-            assert!(b.source_bytes + b.decode_bytes <= usable / 2);
         }
     }
 }

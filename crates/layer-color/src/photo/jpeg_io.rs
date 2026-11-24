@@ -5,7 +5,7 @@ use libjpeg_turbo_rs::PixelFormat;
 pub const JPEG_MAX_DIMENSION: u32 = 65535;
 
 pub(super) fn read_jpeg_with_cancel(
-    input: impl Read,
+    input: impl Read + Seek,
     limits: DecodeLimits,
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<(SourceImage, layer_core::PhotoMetadata), String> {
@@ -13,9 +13,9 @@ pub(super) fn read_jpeg_with_cancel(
     let mut metadata = super::jpeg_markers::read_source(&bytes)?;
     let photo = std::mem::take(&mut metadata.photo);
     let source = if metadata.gain_map {
-        super::gainmap::read_jpeg(&bytes, bytes.capacity(), limits, cancelled)?
+        super::gainmap::read_jpeg(&bytes, bytes.capacity(), limits.per_buffer(), cancelled)?
     } else {
-        let mut decoder = jpeg_codec::decoder(&bytes, bytes.capacity(), limits)?;
+        let (mut decoder, budget) = jpeg_codec::decoder(&bytes, bytes.capacity(), limits)?;
         let extent = [
             u32::from(decoder.header().width),
             u32::from(decoder.header().height),
@@ -26,13 +26,22 @@ pub(super) fn read_jpeg_with_cancel(
         }
         let (channels, format) = jpeg_codec::channels(&decoder, metadata.adobe_transform)?;
         decoder.set_output_format(format);
-        decoder
+        let row_bytes = extent[0] as usize * channels.count();
+        let budget = budget
+            .checked_sub(row_bytes * layer_core::raster::TILE_SIZE as usize)
+            .ok_or(jpeg_codec::MEMORY_ERROR)?;
+        decoder.set_max_memory(budget);
+        let output = decoder
             .output_buffer_size()
             .map_err(|e| format!("{}: {e}", jpeg_codec::MEMORY_ERROR))?;
         let interpretation = interpretation(channels, SampleDepth::U8, metadata.profile)?;
-        let mut builder = SourceBuilder::new(extent, interpretation, limits.source_bytes)?;
+        let mut builder = SourceBuilder::new(
+            extent,
+            interpretation,
+            limits.source_bytes.min(budget.saturating_sub(output)),
+        )?;
         let image = decoder.decode_image().map_err(err)?;
-        let mut row = vec![0; extent[0] as usize * channels.count()];
+        let mut row = vec![0; row_bytes];
         for samples in image.data.chunks_exact(row.len()) {
             row.copy_from_slice(samples);
             if channels == SourceChannels::Cmyk {
@@ -46,11 +55,12 @@ pub(super) fn read_jpeg_with_cancel(
         }
         builder.finish()?
     };
+    let held = bytes.capacity().saturating_add(source.resident_bytes());
     let source = super::orientation::normalize(
         source,
         metadata.resolution,
         metadata.orientation.unwrap_or(1),
-        limits.source_bytes,
+        limits.source_bytes.min(limits.codec_bytes.saturating_sub(held)),
     )?;
     Ok((source, photo))
 }

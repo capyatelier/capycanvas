@@ -203,7 +203,7 @@ pub fn read_import(
     photo_limits: layer_color::photo::DecodeLimits,
     cancelled: &AtomicBool,
 ) -> Result<ImportOutcome, String> {
-    read_import_with_decoder(input,intent,policy,name,project_limits,photo_limits,cancelled,layer_color::photo::read_photo_detailed_with_cancel)
+    read_import_with_decoder(input,intent,policy,name,project_limits,photo_limits,cancelled,read_photo_reserved)
 }
 #[expect(clippy::too_many_arguments,reason="The decoder supplies transport while import policy stays shared")]
 pub fn read_import_with_decoder<R:Read+Seek>(
@@ -223,7 +223,10 @@ pub fn read_import_backing(
     cancelled: &AtomicBool,
 ) -> Result<ImportOutcome, String> {
     let reader=layer_core::package::transport::BackingReader::new(&backing,cancelled);
-    read_import_input(ImportInput {reader,backing:Some(backing.clone())},intent,policy,name,project_limits,photo_limits,cancelled,layer_color::photo::read_photo_detailed_with_cancel)
+    read_import_input(ImportInput {reader,backing:Some(backing.clone())},intent,policy,name,project_limits,photo_limits,cancelled,read_photo_reserved)
+}
+fn read_photo_reserved<R:Read+Seek>(input:BufReader<R>,limits:layer_color::photo::DecodeLimits,cancelled:&AtomicBool)->Result<layer_color::photo::DecodedPhoto,String> {
+    layer_color::photo::read_photo_reserved(input,limits,cancelled,&layer_core::MemoryBudget::process())
 }
 struct ImportInput<R> {reader:R,backing:Option<layer_core::package::ImmutableBacking>}
 #[expect(clippy::too_many_arguments,reason="The decoder supplies transport while import policy stays shared")]
@@ -390,8 +393,7 @@ impl ImageImportBatch {
     pub fn with_writer(mut self,writer:AssetWriter)->Self {self.writer=Some(writer);self}
     pub fn writer(&self)->Option<&AssetWriter> {self.writer.as_ref()}
     pub async fn prepare_decode(&mut self)->Result<(),String> {
-        let peak=(self.limits.source_bytes as u64).saturating_add(self.limits.codec_bytes as u64);
-        if self.write.is_some() && self.budget.import_headroom_bytes()<peak {self.write_prepared().await?;}
+        if self.write.is_some() && self.budget.import_headroom_bytes()<self.limits.codec_bytes as u64 {self.write_prepared().await?;}
         Ok(())
     }
     pub async fn write_prepared(&mut self)->Result<(),String> {
@@ -475,7 +477,8 @@ impl ImageImportBatch {
         result
     }
     pub fn read(&mut self,input:impl Read+Seek,name:&str,cancelled:&AtomicBool)->Result<(),String> {
-        self.read_with_decoder(input,name,cancelled,layer_color::photo::read_photo_detailed_with_cancel)
+        let budget=self.budget.clone();
+        self.read_with_decoder(input,name,cancelled,move |input,limits,cancelled| layer_color::photo::read_photo_reserved(input,limits,cancelled,&budget))
     }
     pub fn read_with_decoder<R:Read+Seek>(
         &mut self,input:R,name:&str,cancelled:&AtomicBool,
@@ -490,7 +493,8 @@ impl ImageImportBatch {
         name: &str,
         cancelled: &AtomicBool,
     ) -> Result<(), String> {
-        self.read_candidate_with_decoder(input,name,cancelled,layer_color::photo::read_photo_detailed_with_cancel)
+        let budget=self.budget.clone();
+        self.read_candidate_with_decoder(input,name,cancelled,move |input,limits,cancelled| layer_color::photo::read_photo_reserved(input,limits,cancelled,&budget))
     }
     pub fn read_candidate_with_decoder<R:Read+Seek>(
         &mut self,input:R,name:&str,cancelled:&AtomicBool,
@@ -500,9 +504,9 @@ impl ImageImportBatch {
         self.check(false)?;
         #[cfg(not(target_arch="wasm32"))]
         let limits={
-            let available=layer_color::photo::PhotoMemoryBudget::from_limit(self.budget.import_headroom_bytes());
-            layer_color::photo::DecodeLimits {source_bytes:self.limits.source_bytes.min(available.source_bytes),
-                codec_bytes:self.limits.codec_bytes.min(available.decode_bytes),dimension:self.limits.dimension}
+            let available=layer_color::photo::PhotoMemoryBudget::from_limit(self.budget.import_headroom_bytes()).import_bytes;
+            layer_color::photo::DecodeLimits {source_bytes:self.limits.source_bytes.min(available),
+                codec_bytes:self.limits.codec_bytes.min(available),dimension:self.limits.dimension}
         };
         #[cfg(target_arch="wasm32")]
         let limits=self.limits;
@@ -574,6 +578,50 @@ mod tests {
         assert_eq!(budget.snapshot().reserved_bytes,bytes);
     }
 
+    fn headroom_during_read(encoded:&[u8])->(u64,u64) {
+        struct Observing<'a> {input:std::io::Cursor<&'a [u8]>,budget:&'a layer_core::MemoryBudget,seen:&'a std::sync::atomic::AtomicU64}
+        impl Read for Observing<'_> {
+            fn read(&mut self,buffer:&mut [u8])->std::io::Result<usize> {
+                self.seen.fetch_min(self.budget.import_headroom_bytes(),std::sync::atomic::Ordering::Relaxed);
+                self.input.read(buffer)
+            }
+        }
+        impl Seek for Observing<'_> {
+            fn seek(&mut self,position:std::io::SeekFrom)->std::io::Result<u64> {self.input.seek(position)}
+        }
+        let budget=layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {override_bytes:Some(1<<30),..Default::default()});
+        let headroom=budget.import_headroom_bytes();
+        let limits=layer_color::photo::DecodeLimits::from_memory_budget(layer_color::photo::PhotoMemoryBudget::from_limit(headroom));
+        let seen=std::sync::atomic::AtomicU64::new(u64::MAX);
+        let mut images=ImageImportBatch::with_budget(Default::default(),RgbSpace::Srgb,limits,budget.clone());
+        images.read_candidate(Observing {input:std::io::Cursor::new(encoded),budget:&budget,seen:&seen},"First",&AtomicBool::new(false)).unwrap();
+        assert!(budget.import_headroom_bytes()>seen.load(std::sync::atomic::Ordering::Relaxed));
+        (headroom,seen.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    #[cfg(any(unix,windows))]
+    #[test]
+    fn a_decode_holds_its_allowance_so_a_concurrent_import_sees_less_headroom() {
+        let mut png=Vec::new();
+        layer_color::photo::write_png(&mut png,&source()).unwrap();
+        let (headroom,during)=headroom_during_read(&png);
+        assert!(during+headroom/3+headroom/8<=headroom,"{during} of {headroom}");
+    }
+
+    #[cfg(any(unix,windows))]
+    #[test]
+    fn a_small_jpeg_decode_reserves_its_computed_need_not_the_headroom() {
+        let interpretation=SourceInterpretation {channels:SourceChannels::Rgb,depth:SampleDepth::U8,profile:Default::default(),profile_assumed:false};
+        let mut jpeg=Vec::new();
+        layer_color::photo::write_jpeg_rows(&mut jpeg,[512,384],&interpretation,&Default::default(),
+            layer_color::photo::JpegEncodeOptions {quality:90,codec_bytes:64<<20},|y,row| {row.fill(y as u8);Ok(())}).unwrap();
+        let (headroom,during)=headroom_during_read(&jpeg);
+        let reserved=headroom-during;
+        let pixels=512*384;
+        assert!(reserved>=(jpeg.len()+pixels*6+(2<<20)) as u64,"{reserved}");
+        assert!(reserved<=(jpeg.len()+pixels*6+(4<<20)) as u64,"{reserved}");
+    }
+
     #[cfg(any(unix,windows))]
     #[test]
     fn unbound_native_import_refuses_residency_above_ram_and_bounds_the_next_decode() {
@@ -594,7 +642,7 @@ mod tests {
                 assert_eq!(budget.snapshot().reserved_bytes,bytes);
                 let remaining=budget.import_headroom_bytes();assert_eq!(remaining,64);
                 let result=images.read_candidate_with_decoder(std::io::Cursor::new([]),"Next",&AtomicBool::new(false),|_,limits,_| {
-                    assert!((limits.source_bytes+limits.codec_bytes) as u64<=remaining);
+                    assert!(limits.source_bytes.max(limits.codec_bytes) as u64<=remaining);
                     Err(layer_core::MEMORY_BUDGET_EXCEEDED.into())
                 });
                 assert_eq!(result.unwrap_err(),layer_core::MEMORY_BUDGET_EXCEEDED);

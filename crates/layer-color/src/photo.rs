@@ -146,8 +146,8 @@ pub struct DecodeLimits {
 impl DecodeLimits {
     pub fn from_memory_budget(budget: PhotoMemoryBudget) -> Self {
         Self {
-            source_bytes: budget.source_bytes,
-            codec_bytes: budget.decode_bytes,
+            source_bytes: budget.import_bytes,
+            codec_bytes: budget.import_bytes,
             dimension: layer_core::MAX_EXTENT,
         }
     }
@@ -155,6 +155,13 @@ impl DecodeLimits {
 impl DecodeLimits {
     fn extent(self, extent: [u32; 2]) -> Result<(), String> {
         validate_extent(extent, self.dimension)
+    }
+    fn per_buffer(self) -> Self {
+        Self {
+            source_bytes: self.source_bytes.min(self.codec_bytes / 8),
+            codec_bytes: self.codec_bytes / 3,
+            ..self
+        }
     }
 }
 fn validate_extent(extent: [u32; 2], dimension: u32) -> Result<(), String> {
@@ -188,6 +195,40 @@ pub fn read_photo_detailed_with_cancel(
     check_cancel(cancelled)?;
     Ok(photo)
 }
+pub fn admit_decode(
+    input: &mut (impl BufRead + Seek),
+    limits: DecodeLimits,
+    budget: &layer_core::MemoryBudget,
+) -> Result<(DecodeLimits, layer_core::MemoryReservation), String> {
+    let origin = input.stream_position().map_err(err)?;
+    let jpeg = input.fill_buf().map_err(err)?.starts_with(&[0xff, 0xd8]);
+    let need = if jpeg { jpeg_codec::plain_need(input) } else { Ok(None) };
+    input.seek(std::io::SeekFrom::Start(origin)).map_err(err)?;
+    let (limits, bytes) = match need? {
+        Some(need) if need > limits.codec_bytes => {
+            return Err(format!("{}: estimated decode memory {need} exceeds limit {}", jpeg_codec::MEMORY_ERROR, limits.codec_bytes));
+        }
+        Some(need) => (DecodeLimits { codec_bytes: need, source_bytes: limits.source_bytes.min(need), ..limits }, need),
+        None => {
+            let shared = limits.per_buffer();
+            (limits, shared.codec_bytes.saturating_add(shared.source_bytes))
+        }
+    };
+    let reservation = budget.admit_import(bytes as u64).ok_or(layer_core::MEMORY_BUDGET_EXCEEDED)?;
+    Ok((limits, reservation))
+}
+pub fn read_photo_reserved(
+    mut input: impl BufRead + Seek,
+    limits: DecodeLimits,
+    cancelled: &std::sync::atomic::AtomicBool,
+    budget: &layer_core::MemoryBudget,
+) -> Result<DecodedPhoto, String> {
+    let (limits, working) = admit_decode(&mut input, limits, budget)?;
+    let mut photo = read_photo_detailed_with_cancel(input, limits, cancelled)?;
+    working.resize(layer_core::color::source::resident_source_bytes([&photo.source]) as u64);
+    photo.reservation = Some(working);
+    Ok(photo)
+}
 fn read_photo_impl(
     mut input: impl BufRead + Seek,
     limits: DecodeLimits,
@@ -197,25 +238,26 @@ fn read_photo_impl(
     let mut signature = [0; 8];
     input.read_exact(&mut signature).map_err(err)?;
     input.seek(std::io::SeekFrom::Start(origin)).map_err(err)?;
+    let shared = limits.per_buffer();
     let (source, metadata) = if signature == *b"\x89PNG\r\n\x1a\n" {
-        png_io::read_with_cancel(input, limits, cancelled)
+        png_io::read_with_cancel(input, shared, cancelled)
     } else if signature[..4] == [0x76, 0x2f, 0x31, 0x01] {
-        exr_io::read_exr(input, limits, cancelled).map(|source| (source, Default::default()))
+        exr_io::read_exr(input, shared, cancelled).map(|source| (source, Default::default()))
     } else if signature[..2] == [0xff, 0xd8] {
         jpeg_io::read_jpeg_with_cancel(input, limits, cancelled)
     } else if matches!(
         &signature[..4],
         b"II\x2a\x00" | b"MM\x00\x2a" | b"II\x2b\x00" | b"MM\x00\x2b"
     ) {
-        tiff_io::read_tiff(input, limits)
+        tiff_io::read_tiff(input, shared)
     } else if &signature[..4] == b"RIFF" {
-        return webp_io::read(input, limits);
+        return webp_io::read(input, shared);
     } else if matches!(&signature[..6], b"GIF87a" | b"GIF89a") {
-        return gif_io::read(input, limits);
+        return gif_io::read(input, shared);
     } else if &signature[..2] == b"BM" || bmp_io::dib_signature(&signature) {
-        bmp_io::read(input, limits).map(|source| (source, Default::default()))
+        bmp_io::read(input, shared).map(|source| (source, Default::default()))
     } else if &signature[4..8] == b"ftyp" {
-        return avif_io::read(input, limits, cancelled);
+        return avif_io::read(input, shared, cancelled);
     } else {
         Err(format!("Supported photo formats: {}", format_names()))
     }?;

@@ -6,43 +6,80 @@ use libjpeg_turbo_rs::{ColorSpace, Decoder, Encoder, PixelFormat, Subsampling};
 pub(super) const MEMORY_ERROR: &str = "JPEG exceeds the codec memory budget; use a smaller image";
 const SCRATCH_BYTES: usize = 2 * 1024 * 1024;
 
-pub(super) fn read_bounded(mut input: impl Read, budget: usize) -> Result<Vec<u8>, String> {
+pub(super) fn read_bounded(mut input: impl Read + Seek, budget: usize) -> Result<Vec<u8>, String> {
+    let length = remaining(&mut input)?;
+    let length = usize::try_from(length).ok().filter(|n| *n <= budget).ok_or(MEMORY_ERROR)?;
     let mut bytes = Vec::new();
-    let mut buffer = [0u8; 65536];
+    bytes.try_reserve_exact(length).map_err(|_| MEMORY_ERROR)?;
+    bytes.resize(length, 0);
+    input.read_exact(&mut bytes).map_err(err)?;
+    Ok(bytes)
+}
+
+fn remaining(input: &mut impl Seek) -> Result<u64, String> {
+    let origin = input.stream_position().map_err(err)?;
+    let end = input.seek(std::io::SeekFrom::End(0)).map_err(err)?;
+    input.seek(std::io::SeekFrom::Start(origin)).map_err(err)?;
+    Ok(end.saturating_sub(origin))
+}
+
+pub(super) fn plain_need(input: &mut (impl Read + Seek)) -> Result<Option<usize>, String> {
+    let length = remaining(input)?;
+    let mut byte = [0u8; 2];
+    input.read_exact(&mut byte).map_err(err)?;
+    let mut metadata = 0u64;
     loop {
-        let count = match input.read(&mut buffer) {
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            result => result.map_err(err)?,
-        };
-        if count == 0 {
-            return Ok(bytes);
+        input.read_exact(&mut byte[..1]).map_err(err)?;
+        if byte[0] != 0xff {
+            return Err("Invalid JPEG marker".into());
         }
-        let needed = bytes
-            .len()
-            .checked_add(count)
-            .filter(|n| *n <= budget)
-            .ok_or(MEMORY_ERROR)?;
-        if needed > bytes.capacity() {
-            let capacity = needed.max(bytes.capacity().saturating_mul(2)).min(budget);
-            bytes
-                .try_reserve_exact(capacity - bytes.len())
-                .map_err(|_| MEMORY_ERROR)?;
+        while byte[0] == 0xff {
+            input.read_exact(&mut byte[..1]).map_err(err)?;
         }
-        bytes.extend_from_slice(&buffer[..count]);
+        let code = byte[0];
+        if matches!(code, 0x01 | 0xd0..=0xd7) {
+            continue;
+        }
+        input.read_exact(&mut byte).map_err(err)?;
+        let size = u16::from_be_bytes(byte).checked_sub(2).ok_or("Invalid JPEG marker")? as usize;
+        let mut segment = vec![0; size];
+        input.read_exact(&mut segment).map_err(err)?;
+        match code {
+            0xe0..=0xef if super::jpeg_markers::gain_map(code, &segment) => return Ok(None),
+            0xe0..=0xef => metadata += size as u64,
+            0xc0..=0xcf if !matches!(code, 0xc4 | 0xc8 | 0xcc) => {
+                let [_, height, height_low, width, width_low, components] =
+                    segment.get(..6).ok_or("Invalid JPEG frame")?.try_into().unwrap();
+                let [width, height] = [[width, width_low], [height, height_low]].map(|v| u64::from(u16::from_be_bytes(v)));
+                let (pixels, components) = (width * height, u64::from(components));
+                let channels = match components { 1 => SourceChannels::Gray, 4 => SourceChannels::Cmyk, _ => SourceChannels::Rgb };
+                let output = channels.count() as u64;
+                let estimate = pixels * (output + components)
+                    + if matches!(code, 0xc2 | 0xca) { pixels * 2 * components + pixels * components / 64 } else { 0 };
+                let interpretation = SourceInterpretation { channels, depth: SampleDepth::U8, profile: ColorProfile::default(), profile_assumed: true };
+                let tile = layer_core::raster::TILE_SIZE as u64;
+                let tiles = width.div_ceil(tile) * height.div_ceil(tile)
+                    * layer_core::raster::TileBlob::max_compressed_len(interpretation.descriptor()).ok_or(MEMORY_ERROR)? as u64;
+                let decoding = estimate.max(pixels * output + tiles).max(2 * tiles);
+                let need = length + 3 * metadata + SCRATCH_BYTES as u64 + width * output * tile + decoding;
+                return usize::try_from(need).map(Some).map_err(|_| MEMORY_ERROR.into());
+            }
+            0xd9 | 0xda => return Err("Invalid JPEG frame".into()),
+            _ => {}
+        }
     }
 }
 
 pub(super) fn decoder(
     bytes: &[u8],
-    input_capacity: usize,
+    held: usize,
     limits: DecodeLimits,
-) -> Result<Decoder<'_>, String> {
-    // Marker parsing retains selected metadata and coefficient/table snapshots.
+) -> Result<(Decoder<'_>, usize), String> {
+    let metadata: usize = super::jpeg_markers::scan(bytes)?.1.iter().map(|segment| segment.bytes.len()).sum();
     let budget = limits
         .codec_bytes
         .checked_sub(
-            input_capacity
-                .saturating_mul(4)
+            held.saturating_add(metadata.saturating_mul(3))
                 .saturating_add(SCRATCH_BYTES),
         )
         .ok_or(MEMORY_ERROR)?;
@@ -59,7 +96,7 @@ pub(super) fn decoder(
     .map_err(err)?;
     decoder.set_stop_on_warning(true);
     decoder.set_dct_method(libjpeg_turbo_rs::DctMethod::IsLow);
-    Ok(decoder)
+    Ok((decoder, budget))
 }
 
 pub(super) fn channels(

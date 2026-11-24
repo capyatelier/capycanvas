@@ -35,7 +35,7 @@ fn rust_avif_export_reconstructs_compressed_base_and_preserves_alpha() {
         ] {
             let (bytes, stats) = encode(
                 GainMapRender { extent, space: RgbSpace::Srgb, rendition: Default::default(), guide: &test_guide(extent, rows), matte: None, clip: false },
-                GainMapEncodeOptions { quality, memory: PhotoMemoryBudget { source_bytes: 128 * 1024 * 1024, decode_bytes: 128 * 1024 * 1024, encode_bytes: 128 * 1024 * 1024 } },
+                GainMapEncodeOptions { quality, memory: PhotoMemoryBudget { import_bytes: 128 * 1024 * 1024, encode_bytes: 128 * 1024 * 1024 } },
                 &crate::photo::DeliveryMetadata::resolution(Some(layer_core::ImageResolution::ppi(300))),
                 &cancel,
                 rows,
@@ -91,7 +91,7 @@ fn rust_avif_export_checks_admission_cancellation_and_pixel_errors() {
     let attempt = |budget, read| {
         encode(
             GainMapRender { extent: [23, 17], space: RgbSpace::Srgb, rendition: Default::default(), guide: &guide, matte: None, clip: false },
-            GainMapEncodeOptions { quality: 90, memory: PhotoMemoryBudget { source_bytes: budget, decode_bytes: budget, encode_bytes: budget } },
+            GainMapEncodeOptions { quality: 90, memory: PhotoMemoryBudget { import_bytes: budget, encode_bytes: budget } },
             &Default::default(),
             &cancel,
             read,
@@ -113,7 +113,7 @@ fn rust_avif_export_checks_admission_cancellation_and_pixel_errors() {
     assert!(
         encode(
             GainMapRender { extent: [8, 8], space: RgbSpace::Srgb, rendition: Default::default(), guide: &test_guide([8, 8], rows), matte: None, clip: false },
-            GainMapEncodeOptions { quality: 90, memory: PhotoMemoryBudget { source_bytes: 128 * 1024 * 1024, decode_bytes: 128 * 1024 * 1024, encode_bytes: 128 * 1024 * 1024 } },
+            GainMapEncodeOptions { quality: 90, memory: PhotoMemoryBudget { import_bytes: 128 * 1024 * 1024, encode_bytes: 128 * 1024 * 1024 } },
             &Default::default(),
             &cancel,
             bad,

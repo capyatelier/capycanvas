@@ -12,8 +12,7 @@ pub(crate) fn decode(input:impl Read,limits:DecodeLimits,cancelled:&AtomicBool,h
     let deadline=Instant::now()+timeout;
     layer_host::photo_reader::decode(input,limits,cancelled,|job| {
         let input=File::open(format!("/proc/self/fd/{}",job.input.as_raw_fd())).map_err(|e|e.to_string())?;
-        let allowance=limits.source_bytes.saturating_add(limits.codec_bytes);
-        let mut child=Job(Command::new(helper).env_clear().args(arguments(limits)).args([allowance.to_string(),std::process::id().to_string()])
+        let mut child=Job(Command::new(helper).env_clear().args(arguments(job.limits)).args([limits.codec_bytes.to_string(),std::process::id().to_string()])
             .stdin(input).stdout(job.output.try_clone().map_err(|e|e.to_string())?).stderr(job.errors.try_clone().map_err(|e|e.to_string())?)
             .spawn().map_err(|e|format!("Photo decoder is unavailable: {e}"))?);
         loop {

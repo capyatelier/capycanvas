@@ -9,7 +9,7 @@ impl<T: Read + Seek> Input for T {}
 pub type Decoder = fn(&mut dyn Input, DecodeLimits, &AtomicBool) -> Result<DecodedPhoto, String>;
 
 pub fn local(input: &mut dyn Input, limits: DecodeLimits, cancelled: &AtomicBool) -> Result<DecodedPhoto, String> {
-    layer_color::photo::read_photo_detailed_with_cancel(BufReader::new(input), limits, cancelled)
+    layer_color::photo::read_photo_reserved(BufReader::new(input), limits, cancelled, &layer_core::MemoryBudget::process())
 }
 
 pub struct PhotoJob { pub input: File, pub output: File, pub errors: File, pub limits: DecodeLimits }
@@ -57,7 +57,10 @@ pub fn decode(mut input: impl Read, limits: DecodeLimits, cancelled: &AtomicBool
         job.input.write_all(&buffer[..count]).map_err(|e| e.to_string())?;
     }
     job.input.rewind().map_err(|e| e.to_string())?;
+    let (limits, working) = layer_color::photo::admit_decode(&mut BufReader::new(&job.input), limits, &layer_core::MemoryBudget::process())?;
+    job.limits = limits;
     let succeeded = run(&job)?;
+    drop(working);
     active(cancelled)?;
     if !succeeded {
         job.errors.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;

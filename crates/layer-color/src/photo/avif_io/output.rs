@@ -243,7 +243,7 @@ fn preview_rendition(
     budget: PhotoMemoryBudget,
     cancel: &AtomicBool,
 ) -> Result<([u32; 2], Vec<[f32; 4]>), String> {
-    let mut limits = DecodeLimits::from_memory_budget(budget);
+    let mut limits = DecodeLimits::from_memory_budget(budget).per_buffer();
     // Both AreaPreview's f64 accumulation and its finished f32 output can
     // coexist, as can the previously generated rendition and encoded file.
     let scratch = u64::from(bounds[0]) * u64::from(bounds[1]) * 64 + 4 * 1024 * 1024;

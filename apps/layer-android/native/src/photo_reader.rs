@@ -25,8 +25,8 @@ pub(crate) fn read(input: &mut dyn Input, limits: DecodeLimits, cancelled: &Atom
         let mut env = vm.attach_current_thread().map_err(|e| e.to_string())?;
         let [input, output, errors] = [&job.input, &job.output, &job.errors].map(|file| JValue::Int(file.as_raw_fd()));
         let class: &JClass = class.as_obj().into();
-        env.call_static_method(class, "decode", "(IIIJJI)Z", &[input, output, errors, JValue::Long(limits.source_bytes as jlong),
-            JValue::Long(limits.codec_bytes as jlong), JValue::Int(limits.dimension as jint)]).and_then(|value| value.z())
+        env.call_static_method(class, "decode", "(IIIJJI)Z", &[input, output, errors, JValue::Long(job.limits.source_bytes as jlong),
+            JValue::Long(job.limits.codec_bytes as jlong), JValue::Int(job.limits.dimension as jint)]).and_then(|value| value.z())
             .map_err(|e| { let _ = env.exception_clear(); format!("Photo decoder is unavailable: {e}") })
     })
 }

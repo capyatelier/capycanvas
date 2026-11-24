@@ -23,7 +23,7 @@ fn decode(
     cancel: &AtomicBool,
 ) -> Result<Image, String> {
     check_cancel(cancel)?;
-    let mut decoder = jpeg_codec::decoder(bytes, retained, limits)?;
+    let (mut decoder, _) = jpeg_codec::decoder(bytes, retained, limits)?;
     if decoder.header().precision != 8
         || !matches!(
             decoder.jpeg_color_space(),
@@ -148,12 +148,12 @@ impl Pair {
     ) -> Result<Self, String> {
         check_cancel(cancel)?;
         let images = super::jpeg_container::parse(bytes)?;
-        let header = jpeg_codec::decoder(images.base, retained, limits)?;
+        let (header, _) = jpeg_codec::decoder(images.base, retained, limits)?;
         let extent = [header.header().width as u32, header.header().height as u32];
         limits.extent(extent)?;
         admit(extent, retained, limits.codec_bytes)?;
         drop(header);
-        let header = jpeg_codec::decoder(images.gain, retained, limits)?;
+        let (header, _) = jpeg_codec::decoder(images.gain, retained, limits)?;
         let gain_extent = [header.header().width as u32, header.header().height as u32];
         limits.extent(gain_extent)?;
         if gain_extent[0] > extent[0] || gain_extent[1] > extent[1] {
@@ -269,7 +269,7 @@ pub(super) fn preview(
         GainMapRender { clip: true, ..render }, options, &Default::default(), cancel, read,
     )?;
     let extent = render.extent;
-    let mut limits = DecodeLimits::from_memory_budget(options.memory);
+    let mut limits = DecodeLimits::from_memory_budget(options.memory).per_buffer();
     // Both rendition accumulators and their finished outputs coexist with the
     // decoded pair. Reserve their bounded storage before admitting that pair.
     let scratch = u64::from(bounds[0]) * u64::from(bounds[1]) * 128 + 4 * 1024 * 1024;
