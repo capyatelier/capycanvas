@@ -1426,7 +1426,8 @@ fn the_first_contact_frame_after_a_switch_folds_no_layers_and_declares_only_cell
 
 #[test]
 fn the_dab_after_a_switch_and_a_reaction_gap_is_composed_on_its_first_frame() {
-    let Switched {counts,contact,shown,..}=first_dab_after_a_switch_and_a_reaction_gap();
+    let Switched {counts,decodes,contact,shown,..}=first_dab_after_a_switch_and_a_reaction_gap();
+    assert_eq!(decodes,0,"the pen-down after the gap decodes again {decodes} tiles the view read before it: {counts:?}");
     assert!(contact && shown,"the first frame after the gap composes the dab's cell into the view and begins its contact: shown {shown}, contact {contact}, {counts:?}");
 }
 

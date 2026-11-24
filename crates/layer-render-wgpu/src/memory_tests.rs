@@ -1991,6 +1991,85 @@ fn a_settled_reduced_view_keeps_no_decoded_layer_tiles_after_its_units_commit() 
     assert!(decoded<=r.scene_tiers.display.floor(),"{} MiB of decoded layer tiles stay above the view floor after their units committed",decoded>>20);
 }
 
+#[test]
+fn a_pen_down_after_idle_frames_composes_its_cell_from_the_tiles_the_visible_cells_decoded() {
+    struct Row {layers:u8,tiles:u32,photo:Option<[u32;2]>,surface:[u32;2],from:Option<[f32;6]>,shown:[f32;6],at:[f32;2]}
+    let actual=[1.,0.,0.,1.,-1024.,-1024.];
+    let fit=|tiles:u32|{let scale=768./(PAGE_SIZE*tiles) as f32;[scale,0.,0.,scale,128.,0.]};
+    let raster=|layers,tiles,from,shown,at|Row {layers,tiles,photo:None,surface:[1024,768],from,shown,at};
+    let dab=[1500.,1400.];
+    let photo=1600./2832.;
+    let rows=[raster(1,8,None,actual,dab),raster(2,8,None,actual,dab),raster(1,12,None,actual,dab),raster(4,8,None,actual,dab),
+        raster(1,8,None,[0.5,0.,0.,0.5,0.,-128.],dab),raster(1,8,None,fit(8),dab),raster(2,8,Some([1.,0.,0.,1.,0.,0.]),actual,dab),raster(1,31,None,fit(31),[3968.,3968.]),
+        Row {layers:1,tiles:0,photo:Some([4248,2832]),surface:[2560,1600],from:None,shown:[photo,0.,0.,photo,(2560.-4248.*photo)/2.,0.],at:[2124.,1416.]}];
+    let (mut table,mut failed)=(Vec::new(),false);
+    for Row {layers,tiles,photo,surface,from,shown,at} in rows {
+        let doc=photo.map_or_else(||layered_raster_document(layers,tiles),|extent| {
+            let mut doc=layer_core::Document::new(layer_core::PortableId::random(),extent[0],extent[1],layer_core::DocumentNames {paint:"Photo".into(),paper:"Paper".into()});
+            let layer_core::SourceTarget::Paint(paint)=doc.working.target.unwrap() else {unreachable!()};
+            doc.artwork.paint.get_mut(paint).unwrap().base=Some(layer_core::authored::PaintBase::new(layer_core::color::source::rgba8_source(extent,|x,y|
+                [(x/7) as u8,(y/5) as u8,((x+y)/3) as u8,255]).into()));
+            doc
+        });
+        let mut r=renderer(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(8<<30),..Default::default()}).unwrap();
+        let name=format!("Layer {}",layers-1);
+        let layer=if photo.is_some() {doc.working.occurrence.unwrap()}
+            else {doc.scene().order().iter().copied().find(|handle|doc.scene().occurrence(*handle).unwrap().name.as_ref()==name).unwrap()};
+        layer_render::CanvasRenderer::set_working_layer(&mut r,Some(layer));
+        let mut frame=packet(doc.scene(),doc.composition().size);frame.composite_all=false;
+        [frame.view.width_px,frame.view.height_px]=surface;
+        if let Some(from)=from {frame.view.document_to_surface=from;settle_observing(&mut r,frame,|_|{});}
+        frame.view.document_to_surface=shown;
+        settle_observing(&mut r,frame,|_|{});
+        for _ in 0..4 {crate::test_support::submit_ready(&mut r,frame).unwrap();complete(&r);}
+        let (decoded,released)={let sources=r.source_tiles.borrow();(sources.misses,sources.evictions)};
+        let (protected,floor,limit)=(r.release_unused_decodes(),r.scene_tiers.display.floor(),r.scene_tiers.display.limit());
+        let [held,wanted,warm]=scene::sources::tests::pen_down_coverage(&r);
+        let dab=crate::tests::test_dab(at,[0.9,0.1,0.3,1.],0.8);
+        let batch=dab_batch(doc.scene().source_target(layer).unwrap(),crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::GPen),dab.bounds());
+        crate::test_support::submit_ready(&mut r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame}).unwrap();
+        let level=r.scale_display.as_ref().unwrap().plan.level;
+        let cell=at.map(|value|value as u32/(PAGE_SIZE<<level));
+        let composed=r.metrics.frame_composited_pages.contains(&(level,cell));
+        let decodes=r.source_tiles.borrow().misses-decoded;
+        failed|=decodes!=0 || level==0 && !composed || protected>limit.max(floor) || wanted>9 || warm>9*scene::sources::NORMALIZED_PAGE_BYTES;
+        table.push(format!("{layers} layers of {tiles}² tiles, photo {photo:?}, surface {surface:?} at {shown:?} after {from:?}: released {released}, protected {} of floor {} and display limit {} KiB, \
+            working tiles held {held} of {wanted} ({} KiB), pen-down at {at:?} decodes {decodes}, cell {cell:?} at level {level} composed {composed}",
+            protected>>10,floor>>10,limit>>10,warm>>10));
+    }
+    assert!(!failed,"a pen-down after idle frames must compose its cell from tiles the view already decoded, keeping at most the 3×3 working tiles around the pointer within the display limit:\n{}",table.join("\n"));
+}
+
+#[test]
+fn a_settled_view_whose_working_tiles_exceed_the_room_stops_asking_for_frames() {
+    let doc=layered_raster_document(2,16);
+    let named=|doc:&layer_core::Document,name:&str|doc.scene().order().iter().copied().find(|handle|doc.scene().occurrence(*handle).unwrap().name.as_ref()==name).unwrap();
+    let mut artwork=doc.artwork.clone();
+    artwork.occurrences.get_mut(named(&doc,"Layer 1")).unwrap().visible=false;
+    let doc=layer_core::Document::from_artwork(artwork).unwrap();
+    let mut r=renderer(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(1<<30),..Default::default()}).unwrap();
+    let mut frame=packet(doc.scene(),doc.composition().size);frame.composite_all=false;
+    frame.view.width_px=1024;frame.view.height_px=768;
+    let scale=768./(PAGE_SIZE*16) as f32;frame.view.document_to_surface=[scale,0.,0.,scale,128.,0.];
+    settle_observing(&mut r,frame,|_|{});
+    let display=r.scene_tiers.display.clone();
+    let room=2*scene::sources::NORMALIZED_PAGE_BYTES;
+    let _held=display.charge(r.source_tiles.borrow().idle_room(display.limit(),display.used()).saturating_sub(room));
+    layer_render::CanvasRenderer::set_working_layer(&mut r,Some(named(&doc,"Layer 1")));
+    let mut frames=0;
+    loop {
+        crate::test_support::submit_ready(&mut r,frame).unwrap();complete(&r);r.wait_idle().unwrap();crate::test_support::settle_decodes(&mut r);frames+=1;
+        if r.next_frame()!=layer_render::FrameDemand::Work {break;}
+        assert!(frames<8,"the settled view still asks for frames after {frames}: {:?}",r.outstanding_terms());
+    }
+    for _ in 0..4 {
+        r.wait_idle().unwrap();crate::test_support::settle_decodes(&mut r);r.poll_pending(frame.view).unwrap();
+        assert_ne!(r.next_frame(),layer_render::FrameDemand::Work,"an idle settled view asks for a frame: {:?}",r.outstanding_terms());
+    }
+    let [held,wanted,bytes]=scene::sources::tests::pen_down_coverage(&r);
+    assert!(held<wanted && bytes<=room,"the room of {} KiB holds {held} of {wanted} working tiles under the view, {} KiB",room>>10,bytes>>10);
+}
+
 fn settle_observing(r:&mut WgpuRasterizer,frame:FramePacket<'_>,mut observe:impl FnMut(&WgpuRasterizer)) {
     let deadline=std::time::Instant::now()+std::time::Duration::from_secs(120);
     let mut submitted=false;
@@ -2158,7 +2237,7 @@ fn opacity_edits_on_the_working_layer_read_only_that_layer_after_the_first() {
     settle_observing(&mut r,reduced_32_layer_view(&doc),|_|{});
     let mut artwork=doc.artwork.clone();
     for (opacity,bound) in [(0.5,2*8*16),(0.25,16)] {
-        r.source_tiles.borrow().release_unused(0);r.source_tiles.borrow_mut().retire_evicted();
+        r.source_tiles.borrow().release_unused(0,0,|_|Default::default());r.source_tiles.borrow_mut().retire_evicted();
         artwork.occurrences.get_mut(layer).unwrap().opacity=opacity;
         let changed=layer_core::Document::from_artwork(artwork.clone()).unwrap();
         let before=r.source_tiles.borrow().misses;

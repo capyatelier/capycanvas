@@ -453,12 +453,17 @@ impl WgpuRasterizer {
     fn retire_victims(&mut self,scene:Option<&mut scene::Scene>,encoder:&mut submission::CommandEncoder)->bool {
         let floor=self.scene_tiers.display.floor();
         self.memory.retired.set(Some([self.scene_tiers.display.heap().epoch(),floor]));
+        if self.warm.is_some() {self.source_tiles.borrow().release_ready();} else {self.release_unused_decodes();}
         let sources=self.source_tiles.get_mut();
-        if self.warm.is_some() {sources.release_ready();} else {sources.release_unused(floor);}
         let decoded=sources.retire_evicted();sources.flush_retired(encoder);
         let retired=decoded+self.moving_images.retire_evicted(encoder)+scene.map_or(0,|scene|scene.retire_victims(encoder))!=0;
         if retired {encoder.retain_resources();}
         retired
+    }
+    pub(crate) fn release_unused_decodes(&self)->u64 {
+        let display=&self.scene_tiers.display;
+        let tiles=self.source_tiles.borrow();
+        tiles.release_unused(display.floor(),tiles.idle_room(display.limit(),display.used()),|view|self.view_keys(view))
     }
     pub(crate) fn retire_capture_victims(&mut self,scene:&mut scene::Scene)->bool {
         let mut encoder=submission::CommandEncoder::new(&self.device,&Default::default());
@@ -473,6 +478,7 @@ impl WgpuRasterizer {
         if self.restore_preparation()==Some(crate::frame_demand::Outstanding::Blocked(crate::frame_demand::Input::Residency))
             && let Some(scene)=&self.scene {scene.advance_demand_epoch();}
         self.frame_room(packet);
+        if packet.dabs.is_empty() && packet.dab_batches.is_empty() && self.pen_down_warm_due() {self.warm_pen_down();}
         self.scene_tiers.display.begin_frame();
     }
     pub(crate) fn frame_room(&mut self, packet: FramePacket<'_>) {
@@ -491,6 +497,8 @@ impl WgpuRasterizer {
     fn set_display_room(&mut self, packet: FramePacket<'_>) {
         #[cfg(test)] crate::test_support::PassCounts {display_rooms:1,..Default::default()}.record();
         self.memory_demand(packet);
+        let view=scene::sources::ViewTiles::of(packet,self.pivot,self.scale_display.as_ref().and_then(scene::scale::Cache::pointer));
+        self.source_tiles.get_mut().show(view);
         self.memory.refused.set(self.scale_display.as_ref().map_or(0,scene::scale::Cache::refused_bytes));
         let presented=self.composition_memory(self.scene.as_deref())[1];
         self.scene_tiers.display.set_floor(display_floor(packet,presented,self.memory.unit(),self.display_precision(packet.scene)));

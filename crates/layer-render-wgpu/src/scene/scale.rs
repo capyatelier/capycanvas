@@ -637,6 +637,7 @@ fn coarse_level(plan: display_mips::Plan) -> u32 {
 
 
 impl Cache {
+    pub(crate) fn pointer(&self)->Option<[f32;2]> {self.pointer}
     pub fn select(
         previous: Option<Self>,
         r: &WgpuRasterizer,

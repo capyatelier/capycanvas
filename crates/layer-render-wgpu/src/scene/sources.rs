@@ -1004,6 +1004,75 @@ fn plan_paint_base(r: &WgpuRasterizer, base: &layer_core::authored::PaintBase, c
     Ok(Some(Read {key,tile,pending,assembly:Some(assembly)}))
 }
 
+#[derive(Default)]
+pub(crate) struct ViewTiles {bounds:PixelRect,centre:[i64;2],screen:usize,composed:Vec<ViewLayer>,working:Option<ViewLayer>}
+type ViewLayer=(SourceTarget,Option<layer_core::authored::PaintBase>);
+impl ViewTiles {
+    fn place(&self)->(PixelRect,Option<SourceTarget>) {(self.bounds,self.working.as_ref().map(|(target,_)|*target))}
+    fn pen_down(&self)->impl Iterator<Item=[u32;2]> {
+        let [x,y]=self.centre.map(|value|(value.max(0)/i64::from(2*PAGE_SIZE)) as u32);
+        let around=PixelRect::new(x.saturating_sub(1)*PAGE_SIZE,y.saturating_sub(1)*PAGE_SIZE,(x+2)*PAGE_SIZE,(y+2)*PAGE_SIZE).intersect(self.bounds);
+        let mut near=page_coordinates(around).collect::<Vec<_>>();
+        near.sort_by_key(|coordinate|coordinate.map(|value|i64::from(value*PAGE_SIZE*2+PAGE_SIZE)).iter().zip(self.centre).map(|(at,centre)|(at-centre).pow(2)).sum::<i64>());
+        near.into_iter().take(self.screen)
+    }
+    pub(crate) fn of(packet:crate::FramePacket<'_>,working:Option<layer_core::OccurrenceHandle>,pointer:Option<[f32;2]>)->Self {
+        let scene=packet.scene;
+        let layer=|handle|scene.source_target(handle).filter(|target|matches!(target,SourceTarget::Paint(_))).map(|target|(target,scene.paint_base(target).cloned()));
+        let native=crate::display_mips::view_level(packet.view.document_to_surface,crate::display_mips::MAX_LEVEL)==Some(0);
+        let bounds=crate::display_mips::view_bounds(packet.view,packet.document_extent,0).unwrap_or(PixelRect::EMPTY);
+        let screen=[packet.view.width_px,packet.view.height_px].map(|side|side.div_ceil(PAGE_SIZE) as usize+1);
+        Self {
+            bounds,screen:screen[0]*screen[1],
+            centre:pointer.map_or([bounds.min_x()+bounds.max_x(),bounds.min_y()+bounds.max_y()].map(i64::from),|pointer|pointer.map(|value|(value*2.) as i64)),
+            composed:if native {scene.order().iter().copied().filter(|handle|scene.visible(*handle)).filter_map(layer).collect()}else {Vec::new()},
+            working:working.and_then(layer),
+        }
+    }
+}
+#[derive(Default)]
+pub(crate) struct ViewKeys {visible:Vec<Key>,working:Vec<Key>}
+impl WgpuRasterizer {
+    fn view_input(&self,(target,base):&ViewLayer,coordinate:[u32;2])->Option<(Key,Inputs)> {
+        let space=self.document_color().space;let mut input=Inputs::default();
+        match self.native_color_tile(*target,coordinate) {
+            Ok(Some(blob))=>{let key=Key::raster(&blob,space,space);input.raster_for(blob,space,space,SourceUse::Native);Some((key,input))},
+            Ok(None)=>base.as_ref().filter(|base|source_access::paint_base_contains(base,coordinate)).map(|base|{input.base(base,coordinate,space);(Key::base(base,coordinate),input)}),
+            Err(_)=>None,
+        }
+    }
+    pub(crate) fn view_keys(&self,view:&ViewTiles)->ViewKeys {
+        let keys=|layer,coordinates:Vec<[u32;2]>|coordinates.into_iter().filter_map(move|coordinate|self.view_input(layer,coordinate)).map(|(key,_)|key);
+        ViewKeys {
+            visible:view.composed.iter().flat_map(|layer|keys(layer,page_coordinates(view.bounds).collect())).collect(),
+            working:view.working.iter().flat_map(|layer|keys(layer,view.pen_down().collect())).collect(),
+        }
+    }
+    pub(crate) fn pen_down_warm_due(&self)->bool {
+        self.presentable_revision==self.composite_revision && self.source_tiles.borrow().warm_due()
+            && self.scale_display.as_ref().is_some_and(|cache|cache.outstanding(self).is_none())
+    }
+    pub(crate) fn warm_pen_down(&mut self) {
+        let display=self.scene_tiers.display.clone();
+        let mut warm=Vec::new();
+        {
+            let tiles=self.source_tiles.borrow();
+            if !tiles.steady || tiles.warmed {return;}
+            let Some(layer)=&tiles.view.working else {return;};
+            let mut room=display.headroom(crate::residency::Class::Prefetch);
+            for (key,input) in tiles.view.pen_down().filter_map(|coordinate|self.view_input(layer,coordinate)) {
+                if tiles.keyed(&key).is_some_and(|slot|slot.valid.load(Ordering::Acquire)) {continue;}
+                let bytes=input.additional_bytes(&tiles);
+                if bytes>room {break;}
+                room-=bytes;warm.push(input);
+            }
+        }
+        self.source_tiles.get_mut().warmed=true;
+        for input in warm {
+            if input.request(self,crate::residency::Class::Prefetch).is_err() || !self.decode_queue_has_room() {break;}
+        }
+    }
+}
 struct Read {key:Key,tile:RawTile,pending:Vec<Arc<PendingTile>>,assembly:Option<Arc<PaintBaseAssembly>>}
 impl Read {
     fn source(&self)->source_access::SourceRead {
@@ -1244,6 +1313,9 @@ pub(crate) struct DecodedTiles {
     views:std::collections::HashMap<wgpu::TextureView,usize>,
     keys:std::collections::HashMap<Key,usize>,
     clock: u64,
+    view: ViewTiles,
+    steady: bool,
+    warmed: bool,
     decoders: VecDeque<(Weak<SourceImage>, layer_color::WorkingDecoder)>,
     pixels: Vec<[f32; 4]>,
     inputs: Vec<EncodedInput>,
@@ -1283,6 +1355,16 @@ impl DecodedTiles {
     fn stamp(&self,view:&wgpu::TextureView,class:crate::residency::Class) {
         if let Some(index)=self.views.get(view) {self.slots[*index].lease.stamp(class);}
     }
+    pub(crate) fn show(&mut self,view:ViewTiles) {
+        self.steady=view.place()==self.view.place();
+        self.warmed&=self.steady;
+        self.view=view;
+    }
+    fn warm_due(&self)->bool {!self.warmed && self.view.working.is_some()}
+    pub(crate) fn idle_room(&self,limit:u64,used:u64)->u64 {
+        let idle=self.slots.iter().filter(|slot|slot.ready() && !slot.leased()).map(Slot::bytes).sum::<u64>();
+        limit.saturating_sub(used.saturating_sub(idle))
+    }
     pub(crate) fn consumed<'a>(&self,views:impl Iterator<Item=&'a wgpu::TextureView>) {
         for view in views {
             if let Some(index)=self.views.get(view) {self.slots[*index].lease.release_demand();}
@@ -1304,7 +1386,7 @@ impl DecodedTiles {
     pub fn within(display: &Arc<crate::residency::Tier>, destination: RgbSpace) -> Self {
         let decoded=crate::residency::Tier::within(display);
         Self {
-            destination, slots: Vec::new(), arrays: Vec::new(), views: Default::default(), keys: Default::default(), clock: 0, decoders: VecDeque::new(), pixels: Vec::new(),
+            destination, slots: Vec::new(), arrays: Vec::new(), views: Default::default(), keys: Default::default(), clock: 0, view: ViewTiles::default(), steady: false, warmed: false, decoders: VecDeque::new(), pixels: Vec::new(),
             inputs: Vec::new(), transfer: Default::default(), input_bytes: decoded.charge(0), table_bytes: decoded.charge(0), evicted: Default::default(), passes: Default::default(),
             in_flight: Default::default(), leased: Default::default(), hits: 0, misses: 0, evictions: 0,
             retired_bytes: crate::residency::Tier::within(&decoded), retiring_bytes: None, completing: Arc::default(), decoded, retirement: None, retiring: Vec::new(),
@@ -1314,7 +1396,7 @@ impl DecodedTiles {
         self.in_flight.set_limit(upload_bytes, upload_bytes / 2);
     }
     pub fn upload_limit(&self) -> u64 { self.in_flight.limit() }
-    pub(crate) fn release_unused(&self, keep: u64) {
+    pub(crate) fn release_unused(&self, keep: u64, room: u64, view: impl FnOnce(&ViewTiles) -> ViewKeys) -> u64 {
         let epoch = self.decoded.heap().epoch();
         let unused = |slot: &&Slot| slot.used.load(Ordering::Relaxed).saturating_add(1) < epoch && slot.ready() && !slot.leased();
         let begin = || {
@@ -1323,14 +1405,28 @@ impl DecodedTiles {
             move |slot: &Slot| if slot.layer.array.pass.swap(pass + 1, Ordering::Relaxed) >= pass { 0 } else { crate::texture_bytes(&slot.layer.array.texture) }
         };
         let cost = begin();
-        if self.slots.iter().filter(unused).map(&cost).sum::<u64>() <= keep { return; }
+        let held = self.slots.iter().filter(unused).map(&cost).sum::<u64>();
+        if held <= keep { return held; }
+        let ViewKeys { visible, working } = view(&self.view);
+        let mut ranks = std::collections::HashMap::new();
+        for (index, key) in working.iter().enumerate().rev() { ranks.insert(key, (1u8, index)); }
+        for key in &visible { ranks.insert(key, (0, 0)); }
+        let rank = |slot: &Slot| slot.key.as_ref().and_then(|key| ranks.get(key)).copied();
         let mut unused = self.slots.iter().filter(unused).collect::<Vec<_>>();
-        unused.sort_by_key(|slot| std::cmp::Reverse(slot.used.load(Ordering::Relaxed)));
+        unused.sort_by_key(|slot| (rank(slot).unwrap_or((2, 0)), std::cmp::Reverse(slot.used.load(Ordering::Relaxed))));
+        let (cost, mut protected, mut charged, mut keep) = (begin(), 0u64, 0u64, keep);
+        for (slot, (role, _)) in unused.iter().map_while(|slot| Some((*slot, rank(slot)?))) {
+            charged = charged.saturating_add(slot.bytes());
+            if role == 1 && charged > room { break; }
+            protected = protected.saturating_add(cost(slot));
+            keep = keep.max(protected);
+        }
         let (cost, mut kept) = (begin(), 0u64);
         for slot in unused {
             kept = kept.saturating_add(cost(slot));
             if kept > keep { slot.lease.evict(); }
         }
+        keep
     }
     pub(crate) fn release_ready(&self) {
         for slot in self.slots.iter().filter(|slot| slot.ready() && !slot.leased()) { slot.lease.evict(); }

@@ -1,6 +1,13 @@
 use super::*;
 use crate::test_support::{submit_encoded, wait_until};
 use layer_core::color::source::{SourceBuilder, SourceInterpretation};
+
+pub(crate) fn pen_down_coverage(r: &WgpuRasterizer) -> [u64; 3] {
+    let tiles = r.source_tiles.borrow();
+    let wanted = r.view_keys(&tiles.view).working;
+    let held = wanted.iter().filter_map(|key| tiles.keyed(key).filter(|slot| slot.valid.load(Ordering::Acquire))).map(Slot::bytes).collect::<Vec<_>>();
+    [held.len() as u64, wanted.len() as u64, held.iter().sum()]
+}
 impl Inputs {
     pub(in crate::scene) fn take_reads(&self)->(usize,usize) {
         READS.with(|reads| {let reads=std::mem::take(&mut *reads.borrow_mut());
