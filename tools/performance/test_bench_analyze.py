@@ -156,6 +156,55 @@ class AnalyzeTests(unittest.TestCase):
         self.assertEqual(statuses, {("fps", "a"): "miss", ("fps", "b"): "unsupported",
                                     ("gap_p99_ms", "a"): "met", ("gap_p99_ms", "b"): "unsupported"})
 
+    def test_one_version_is_judged_on_the_tier_targets_alone(self):
+        passes = {"main": [{"steps": motion_pass([10] * 100)["steps"] + latency_pass("save", 0, 900)["steps"],
+                            "frames": motion_pass([10] * 100)["frames"]}]}
+        with tempfile.TemporaryDirectory() as directory:
+            run = write_run(Path(directory) / "run", passes, "tcl")
+            summary = analyze_run(run)
+            table = format_table(summary)
+            [path] = publish(run, Path(directory) / "repo")
+            rows = {(row["step"], row["metric"]): row for row in csv.DictReader(path.read_text().splitlines())}
+        self.assertEqual(self.metric(summary, "nav.pan", "fps", "main", "tcl")["status"], "met")
+        self.assertNotIn("flag", self.metric(summary, "nav.pan", "fps", "main", "tcl"))
+        self.assertEqual([(rows[key]["target"], rows[key]["status"], rows[key]["flag"]) for key in [("nav.pan", "fps"), ("save", "latency_ms")]],
+                         [("57.0", "met", ""), ("", "n/a", "")])
+        self.assertEqual(table.splitlines()[1].split(), ["step", "metric", "main", "target", "status"])
+
+    def test_refused_and_timed_out_steps_keep_their_measures_and_publish_as_refused_and_miss(self):
+        memory = [{"t_ns": 1000 * MS, "os_available_kib": 400_000, "app_rss_kib": 300}]
+        steps = [dict(step("open.panorama"), status="refused", reason="Artwork exceeds the tile count limit"),
+                 dict(step("pano.wand"), status="timeout", reason="Timed out waiting for auto_select tap after 120 s"),
+                 dict(step("pano.fill"), status="error", reason="Input injection was refused")]
+        with tempfile.TemporaryDirectory() as directory:
+            run = write_run(Path(directory) / "run", {"main": [{"steps": steps, "memory": memory}]})
+            summary = analyze_run(run)
+            table = format_table(summary)
+            [path] = publish(run, Path(directory) / "repo")
+            rows = [(row["step"], row["metric"], row["status"]) for row in csv.DictReader(path.read_text().splitlines())]
+        refused = summary["devices"]["pc"]["steps"]["open.panorama"]
+        self.assertEqual(refused["problems"]["main"], {"status": "refused", "reason": "Artwork exceeds the tile count limit"})
+        self.assertEqual(refused["metrics"]["os_available_min_kib"]["versions"]["main"]["value"], 400_000)
+        self.assertEqual(rows, [("open.panorama", "os_available_min_kib", "refused"), ("open.panorama", "app_rss_max_kib", "refused"),
+                                ("pano.wand", "os_available_min_kib", "miss"), ("pano.wand", "app_rss_max_kib", "miss"),
+                                ("pano.fill", "", "error")])
+        self.assertIn("open.panorama main: refused: Artwork exceeds the tile count limit", table)
+        self.assertIn("timeout", table)
+
+    def test_saved_size_disk_use_and_composite_difference(self):
+        before = {"w": 2, "h": 1, "rgb": "000000ffffff"}
+        saved = step("save.layers", extra={"saved_bytes": 59_000_000, "disk_free_bytes": [10_000_000_000, 9_900_000_000]})
+        steps = [saved, step("reopen.layers", extra={"composite_before": before, "composite_after": dict(before, rgb="000004fffff6")}),
+                 step("reopen.other", extra={"composite_before": before, "composite_after": dict(before, rgb="0000ffffffff")})]
+        summary = self.analyze({"main": [{"steps": steps}]})
+        self.assertEqual(self.metric(summary, "save.layers", "saved_bytes", "main")["value"], 59_000_000)
+        self.assertEqual(self.metric(summary, "save.layers", "disk_use_bytes", "main")["value"], 100_000_000)
+        self.assertEqual([self.metric(summary, step_id, "composite_diff", "main")["value"] for step_id in ("reopen.layers", "reopen.other")], [9, 255])
+        self.assertEqual([self.metric(summary, step_id, "composite_diff", "main")["status"] for step_id in ("reopen.layers", "reopen.other")], ["miss", "miss"])
+        close = step("reopen.close", extra={"composite_before": before, "composite_after": dict(before, rgb="000008fffff8")})
+        self.assertEqual(self.metric(self.analyze({"main": [{"steps": [close]}]}), "reopen.close", "composite_diff", "main")["status"], "met")
+        self.assertEqual(summary["devices"]["pc"]["steps"]["save.layers"]["metrics"]["saved_bytes"]["target"], None)
+
 
 class PublishTests(unittest.TestCase):
     def test_csv_header_rows_and_deterministic_ci(self):

@@ -166,6 +166,8 @@ class CommandTest(unittest.TestCase):
         cold = bench.invocation('r1', 'surfacelaptop', 'v1.0.15', "C:\\o'neil\\CapyCanvas.exe", 1, True, self.fixtures, ['draw.pencil', 'undo'])
         self.assertIn("-Executable 'C:\\o''neil\\CapyCanvas.exe'", cold)
         self.assertIn(f"-Chain '{ROOT}\\runs\\r1\\chain.json' -Pass 1 -Cold -Device 'surfacelaptop' -Version 'v1.0.15'", cold)
+        self.assertIn(f"-Documents @{{'photo'='{ROOT}\\fixtures\\a\\photo.jpg';'heavy'='{ROOT}\\fixtures\\b\\heavy.capy';"
+                      f"'vector'='{ROOT}\\fixtures\\c\\vector.capy'}}", cold)
         self.assertIn(f"-OutputDirectory '{ROOT}\\versions\\v1.0.15' -Steps 'draw.pencil,undo'", cold)
         self.assertIn(f"& '{ROOT}\\runs\\r1\\src\\tools\\performance\\bench-chain-windows.ps1'", cold)
         self.assertIn(f"$log='{ROOT}\\runs\\r1\\v1.0.15-pass-1'", cold)
@@ -192,10 +194,12 @@ class RunTest(unittest.TestCase):
         folder = tempfile.TemporaryDirectory(prefix='capy-bench-windows-test-')
         self.addCleanup(folder.cleanup)
         self.folder = Path(folder.name)
-        self.inputs = {name: self.folder / name for name in ('chain.json', 'photo.jpg', 'heavy.capy', 'vector.capy')}
+        self.inputs = {name: self.folder / name for name in ('chain.json', 'photo.jpg', 'heavy.capy', 'vector.capy', 'giga-square.jpg', 'giga-panorama.png',
+                                                             'giga-layers.capy')}
         for name, path in self.inputs.items():
             path.write_text(name)
-        self.calls, self.tasks = [], []
+        self.inputs['chain.json'].write_text((bench.REPO / 'tools/performance/bench-chain.json').read_text())
+        self.calls, self.tasks, self.free = [], [], 1 << 40
 
     def remote_shell(self, command, timeout=600):
         self.calls.append(command)
@@ -208,6 +212,8 @@ class RunTest(unittest.TestCase):
                 target.write_text('log')
             return ''
         script = decoded(command)
+        if 'AvailableFreeSpace' in script:
+            return str(self.free)
         if 'Get-FileHash' in script:
             name = re.search(r"Test-Path -LiteralPath '([^']*)'", script)[1].rsplit('\\', 1)[1]
             return hashlib.sha256(self.inputs[name].read_bytes()).hexdigest().upper()
@@ -223,8 +229,8 @@ class RunTest(unittest.TestCase):
         with patch.object(Path, 'home', return_value=self.folder), patch.object(bench, 'run', self.remote_shell), patch.object(bench.time, 'sleep'), \
                 contextlib.redirect_stdout(io.StringIO()):
             code = bench.main(['--exe', 'v1.0.15=C:\\a\\CapyCanvas.exe', '--exe', 'g0123456789=C:\\b\\CapyCanvas.exe', '--devices', 'surfacelaptop',
-                               '--photo', str(self.inputs['photo.jpg']), '--heavy', str(self.inputs['heavy.capy']),
-                               '--vector', str(self.inputs['vector.capy']), '--chain', str(self.inputs['chain.json']), '--run-id', 'r1'])
+                               '--photo', str(self.inputs['photo.jpg']), '--fixtures', str(self.folder),
+                               '--chain', str(self.inputs['chain.json']), '--run-id', 'r1'])
         self.assertEqual(code, 0)
         self.assertEqual([path.rsplit('\\', 1)[1] for path in self.tasks],
                          ['v1.0.15-pass-1.ps1', 'g0123456789-pass-1.ps1', 'g0123456789-pass-2.ps1', 'v1.0.15-pass-2.ps1'])
@@ -240,12 +246,37 @@ class RunTest(unittest.TestCase):
             self.assertTrue((out / p['directory'] / 'runner.log').is_file())
 
     def test_unknown_devices_and_missing_files_stop_before_any_command(self):
-        common = ['--exe', 'v=C:\\a\\CapyCanvas.exe', '--photo', str(self.inputs['photo.jpg']), '--heavy', str(self.inputs['heavy.capy']),
-                  '--vector', str(self.inputs['vector.capy'])]
-        for extra in (['--devices', 'desktop', '--chain', str(self.inputs['chain.json'])], ['--devices', 'surfacepro', '--chain', str(self.folder / 'none.json')]):
+        common = ['--exe', 'v=C:\\a\\CapyCanvas.exe', '--photo', str(self.inputs['photo.jpg']), '--fixtures', str(self.folder)]
+        for extra in (['--devices', 'desktop', '--chain', str(self.inputs['chain.json'])], ['--devices', 'surfacepro', '--chain', str(self.folder / 'none.json')],
+                      ['--devices', 'surfacepro', '--chain', str(self.inputs['chain.json']), '--fixtures', str(self.folder / 'none')]):
             with self.subTest(extra=extra), patch.object(bench, 'run', self.remote_shell), patch('sys.stderr'), self.assertRaises(SystemExit):
                 bench.main(common + extra)
         self.assertEqual(self.calls, [])
+
+    def gigapixel(self):
+        return bench.main(['--exe', 'g0123456789=C:\\b\\CapyCanvas.exe', '--devices', 'surfacelaptop', '--fixtures', str(self.folder),
+                           '--chain', str(bench.REPO / 'tools/performance/bench-gigapixel.json'), '--run-id', 'g1'])
+
+    def test_gigapixel_chain_runs_one_cold_pass_of_one_version_with_its_documents(self):
+        with patch.object(Path, 'home', return_value=self.folder), patch.object(bench, 'run', self.remote_shell), patch.object(bench.time, 'sleep'), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(self.gigapixel(), 0)
+        self.assertEqual([path.rsplit('\\', 1)[1] for path in self.tasks], ['g0123456789-pass-1.ps1'])
+        self.assertIn('about 20 min', output.getvalue())
+        device = json.loads((self.folder / 'capy-bench/runs/g1/run.json').read_text())['devices']['surfacelaptop']
+        self.assertEqual(device['order'], [{'version': 'g0123456789', 'pass': 1, 'cold': True}])
+        self.assertEqual(device['free_disk_kib'], {'before': 1 << 30, 'after': 1 << 30})
+        probed = [re.search(r"Test-Path -LiteralPath '([^']*)'", decoded(call))[1].rsplit('\\', 1)[1]
+                  for call in self.calls if call[0] == 'ssh' and 'Get-FileHash' in decoded(call)]
+        self.assertEqual(probed, ['giga-square.jpg', 'giga-panorama.png', 'giga-layers.capy'])
+
+    def test_gigapixel_chain_refuses_a_pc_without_room(self):
+        self.free = 9 << 30
+        with patch.object(Path, 'home', return_value=self.folder), patch.object(bench, 'run', self.remote_shell), patch.object(bench.time, 'sleep'), \
+                contextlib.redirect_stdout(io.StringIO()), patch('sys.stderr', new_callable=io.StringIO) as errors:
+            self.assertEqual(self.gigapixel(), 1)
+        self.assertIn('surfacelaptop has 9.0 GiB free but this chain needs 10.0 GiB', errors.getvalue())
+        self.assertEqual(self.tasks, [])
 
 
 if __name__ == '__main__':

@@ -37,6 +37,31 @@ def split(text):
     return list(dict.fromkeys(item.strip() for item in text.split(",") if item.strip()))
 
 
+def document_files(chain, steps, photo, fixtures):
+    from bench_fixtures import file_name
+    names = dict.fromkeys(step["document"] for step in chain["steps"] if step["do"] == "open" and (steps is None or step["id"] in steps))
+    files, missing = {}, []
+    for name in names:
+        fixture = chain["documents"][name].get("fixture")
+        if fixture:
+            path, source = fixtures and Path(fixtures) / file_name(fixture), f"--fixtures DIR with {file_name(fixture)}"
+        else:
+            path, source = photo and Path(photo), "--photo"
+        if not path or not path.is_file():
+            missing.append(f"{name} ({path or source})")
+        files[name] = path
+    if missing:
+        raise ValueError("Missing documents: " + ", ".join(missing))
+    return files
+
+
+def check_free_disk(device, free_bytes, files, chain, copies=1):
+    need = copies * sum(Path(path).stat().st_size for path in files) + chain.get("free_disk_gib", 0) * (1 << 30)
+    if free_bytes < need:
+        raise SystemExit(f"{device} has {free_bytes / (1 << 30):.1f} GiB free but this chain needs {need / (1 << 30):.1f} GiB "
+                         f"({copies}x the documents and {chain.get('free_disk_gib', 0)} GiB for the app); free some space first")
+
+
 def build(args):
     import bench_builds
     for version in split(args.versions):
@@ -56,30 +81,32 @@ def run(args, parser):
         parser.error("--passes must be at least 1")
     if any(bench_android.DEVICES[device]["adaptive"] for device in devices) and not args.adaptive_script:
         parser.error("movinkpad11 needs --adaptive-script to switch on its 90 Hz Adaptive policy")
-    chain = json.loads(CHAIN.read_text())
+    chain = json.loads(args.chain.read_text())
     try:
         steps = step_closure(chain["steps"], split(args.steps)) if args.steps else None
     except ValueError as error:
         parser.error(str(error))
     builds = {build["label"]: build for build in map(bench_builds.build, split(args.versions))}
-    order = pass_order(list(builds), args.passes or (1 if args.quick else 2), args.quick)
+    order = pass_order(list(builds), args.passes or (1 if args.quick else chain.get("passes", 2)), args.quick)
     now = time.localtime()
     run_dir = RUNS / time.strftime("%Y%m%d-%H%M%S", now)
     adaptive = dict(script=str(args.adaptive_script), aapt=str(args.aapt)) if args.adaptive_script else None
-    directories = [bench_android.plan(device, run_dir, CHAIN, builds.values(), order, steps, adaptive) for device in devices]
+    directories = [bench_android.plan(device, run_dir, args.chain, builds.values(), order, steps, adaptive) for device in devices]
     record = {"date": time.strftime("%Y-%m-%d", now), "run_id": run_dir.name, "versions": list(builds),
               "builds": {label: {"commit": build["commit"], "apk_sha256": build["sha256"], "app_id": build["app_id"]} for label, build in builds.items()},
               "devices": {device: {key: bench_android.DEVICES[device][key] for key in ("tier", "refresh_hz")} for device in devices},
-              "chain_sha256": bench_builds.sha256(CHAIN)}
+              "chain": str(args.chain), "chain_sha256": bench_builds.sha256(args.chain)}
     (run_dir / "run.json").write_text(json.dumps(record, indent=2) + "\n")
-    print(f"{run_dir}: {len(order)} passes on each of {len(devices)} devices, about {len(order) * PASS_MINUTES} min", flush=True)
+    print(f"{run_dir}: {len(order)} passes on each of {len(devices)} devices, about {len(order) * chain.get('pass_minutes', PASS_MINUTES)} min", flush=True)
     started = time.monotonic()
     codes = bench_android.run_devices(directories, args.processor)
     print(f"finished in {(time.monotonic() - started) / 60:.1f} min; " +
           ", ".join(f"{device} {'ok' if code == 0 else 'failed'}" for device, code in codes.items()), flush=True)
     for directory in directories:
-        display = json.loads((directory / "session.json").read_text()).get("display", {})
-        record["devices"][directory.name].update(display_before=display.get("before"), display_restored=display.get("after"))
+        session = json.loads((directory / "session.json").read_text())
+        display = session.get("display", {})
+        record["devices"][directory.name].update(display_before=display.get("before"), display_restored=display.get("after"),
+                                                 free_disk_kib=session.get("free_disk_kib"))
     (run_dir / "run.json").write_text(json.dumps(record, indent=2) + "\n")
     analyze(argparse.Namespace(run_dir=run_dir))
     return int(any(codes.values()))
@@ -99,7 +126,7 @@ def publish(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(required=True, metavar="command")
-    versions = dict(required=True, help="comma-separated tags or git refs, first is the baseline (v1.0.15,origin/main)")
+    versions = dict(required=True, help="comma-separated tags or git refs, first is the baseline (v1.0.15,origin/main); one version is judged on the tier targets alone")
     command = commands.add_parser("build", help="build and cache each version's benchmark APK")
     command.add_argument("--versions", **versions)
     command.add_argument("--dry-run", action="store_true", help="print the commands without running them")
@@ -107,9 +134,10 @@ def main():
     command = commands.add_parser("run", help="run the chain on devices in palindrome pass order, then analyze")
     command.add_argument("--versions", **versions)
     command.add_argument("--devices", required=True, help="comma-separated devices.py names (movinkpad14,sm_n970u1)")
+    command.add_argument("--chain", type=Path, default=CHAIN, help="chain file (default bench-chain.json; bench-gigapixel.json is the gigapixel chain)")
     command.add_argument("--quick", action="store_true", help="one warm pass per version, no cold pass")
     command.add_argument("--steps", help="run only these steps, with the launch and open steps they need")
-    command.add_argument("--passes", type=int, help="passes per version (default 2, or 1 with --quick)")
+    command.add_argument("--passes", type=int, help="passes per version (default: the chain's passes, else 2; 1 with --quick)")
     command.add_argument("--processor", default=os.environ.get("CAPY_TRACE_PROCESSOR"),
                          help="Perfetto trace_processor_shell (default: $CAPY_TRACE_PROCESSOR)")
     command.add_argument("--adaptive-script", type=Path, help="Adaptive refresh helper for movinkpad11 (see android_adaptive.py)")

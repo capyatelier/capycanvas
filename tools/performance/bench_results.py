@@ -6,12 +6,13 @@ import random
 from pathlib import Path
 
 from android_brush_metrics import quantile
-from bench_analyze import analyze_run, statistic
+from bench_analyze import analyze_run, outcome, statistic
 
 HEADER = ("date", "run_id", "device", "tier", "host", "step", "version", "commit", "build", "metric", "unit",
           "evidence", "n", "median", "ci_low", "ci_high", "noise", "target", "status", "flag")
 RESAMPLES = 1000
 SEED = 1015
+STATUS = {"skipped": "unsupported", "refused": "refused", "timeout": "miss"}
 
 
 def bootstrap(kind, samples):
@@ -31,19 +32,19 @@ def rows(summary, device, data):
             for version in summary["versions"]:
                 result = metric["versions"].get(version)
                 problem = step["problems"].get(version, {}).get("status")
-                if result is None and problem not in ("skipped", "error"):
+                if result is None and problem is None:
                     continue
                 build = data["builds"].get(version, {})
                 row = dict(date=summary["date"], run_id=summary["run_id"], device=device, tier=data["tier"],
                            host=build.get("host"), step=step_id, version=version, commit=build.get("commit"),
                            build=build.get("build") or build.get("app_id"), metric=name)
                 if result is None:
-                    yield dict(row, n=0, status="unsupported" if problem == "skipped" else "error")
+                    yield dict(row, n=0, status=STATUS.get(problem, "error"))
                     continue
                 low, high = bootstrap(metric["kind"], result["samples"])
                 yield dict(row, unit=metric["unit"], evidence=result["evidence"], n=result["n"], median=cell(result["value"]),
                            ci_low=cell(low), ci_high=cell(high), noise=cell(metric["noise"]), target=cell(metric["target"]),
-                           status=result["status"], flag=result.get("flag"))
+                           status=STATUS.get(outcome(step, version, result), result["status"]), flag=result.get("flag"))
 
 
 def publish(run_dir: Path, repo_root: Path) -> list[Path]:

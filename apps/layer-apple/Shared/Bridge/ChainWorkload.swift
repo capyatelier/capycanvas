@@ -42,6 +42,8 @@ import os
     private var canvas: [UInt64]?
     private var refreshHz = 60.0
     private var nextContact: UInt64 = 1 << 32
+    private var drain = false
+    private var saved: String?
 
     static var saveURL: URL { FileManager.default.temporaryDirectory.appendingPathComponent("capy-bench-save.capy") }
     static var dialogs: ProjectFiles.Dialogs {
@@ -102,17 +104,27 @@ import os
         do {
             if launched == nil { launched = try await launch() }
             if let reason = ChainPlan.unsupported(step, iPad: iPad) { throw Skip(reason: reason) }
+            if let missing = steps.needs[step["id"].string]?.first(where: { tabs[$0] == nil }) { throw Skip(reason: "\(missing) did not open") }
             guard Double(FrameTrace.now() - created) < plan.seconds * 1e9 else {
                 throw HostFailure(message: "The pass ran past CAPY_WORKLOAD_SECONDS (\(Int(plan.seconds)) s)")
             }
+            if drain { _ = try await settled(within: 300) }
             try await execute(step, steps, record)
         } catch let skip as Skip {
             record.status = "skipped"; record.reason = skip.reason
+        } catch let refusal as ChainPlan.Refused {
+            record.status = "refused"; record.reason = refusal.reason
+            store?.failure = nil
+        } catch let timeout as ChainPlan.Timeout {
+            record.status = "timeout"; record.reason = timeout.reason
+            if launched == nil { stopped = timeout.reason }
+            store?.failure = nil
         } catch {
             record.status = "failed"; record.reason = error.localizedDescription
             if launched == nil || error is ChainPlan.RenderingTimeout { stopped = error.localizedDescription }
             store?.failure = nil
         }
+        drain = record.status == "timeout"
         if record.end == 0 { record.end = FrameTrace.now() }
         record.extra["document_revision"] = [revision, store?.state["document_file"]["revision"].uint ?? 0]
         NSLog("Capy chain %@ %@ %@", record.id, record.status, record.reason ?? "")
@@ -124,7 +136,7 @@ import os
             guard let launched, let input = launched.input else { throw HostFailure(message: "The process start time is unavailable") }
             record.begin = input; record.end = launched.ready
             record.latency.append(["name": "launch", "input_ns": input, "ready_ns": launched.ready, "surface": "canvas"])
-        case "open": try await open(step["document"].string, steps, record)
+        case "open": try await open(step, steps, record)
         case "stroke": try await stroke(step, steps, record)
         case "gesture": try await gesture(step, steps, record)
         case "drag": try await drag(step, steps, record)
@@ -147,7 +159,7 @@ import os
         }
     }
     private func wait(_ what: String, seconds: Double = 60, _ condition: () async -> Bool) async throws {
-        guard try await poll(seconds, condition) else { throw HostFailure(message: "Timed out after \(Int(seconds)) s waiting for \(what)") }
+        guard try await poll(seconds, condition) else { throw ChainPlan.Timeout(reason: "Timed out after \(Int(seconds)) s waiting for \(what)") }
     }
     private func pending() async -> Bool {
         guard let native = store?.native else { return true }
@@ -161,9 +173,36 @@ import os
         guard let time = try await settled(within: 60) else { throw ChainPlan.RenderingTimeout() }
         return time
     }
-    private func measure(_ record: Step, _ name: String, since input: UInt64) async throws {
-        let ready = try await settle()
+    private func measure(_ record: Step, _ name: String, since input: UInt64, within bound: Double? = nil) async throws {
+        let ready: UInt64
+        if let bound {
+            guard let time = try await settled(within: bound) else {
+                throw ChainPlan.Timeout(reason: "Rendering was still pending \(Int(bound)) s after \(name)")
+            }
+            ready = time
+        } else { ready = try await settle() }
         record.latency.append(["name": name, "input_ns": input, "ready_ns": ready, "surface": record.surface])
+    }
+    private static func freeBytes() -> Int64? {
+        (try? URL(fileURLWithPath: NSHomeDirectory()).resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
+            .volumeAvailableCapacityForImportantUsage
+    }
+    private func place(_ step: JSON) async throws {
+        let anchor = step["anchor"].array.map(\.number)
+        if step["zoom"].string == "fit" { try await invoke("fit_canvas") }
+        else if !step["zoom"].isNull {
+            if anchor.count == 2 { try await invoke("fit_canvas") }
+            try await edit(["type": "set_zoom", "zoom": step["zoom"].number])
+        }
+        if anchor.count == 2 {
+            let active = try editor.state["tabs"].array.first { $0["active"].bool } ?? JSON()
+            let width = active["width"].number, height = active["height"].number
+            for phase in ["down", "up"] {
+                try await edit(["type": "navigator", "phase": phase, "position": [4 + anchor[0] * width, 4 + anchor[1] * height],
+                    "viewport": [width + 8, height + 8]])
+            }
+        }
+        try await settle()
     }
     private func edit(_ value: [String: Any]) async throws { try await editor.workloadEdit(value) }
     private func invoke(_ command: String) async throws {
@@ -252,10 +291,23 @@ import os
         return now - UInt64(age * 1e9)
     }
 
-    private func open(_ name: String, _ steps: ChainPlan, _ record: Step) async throws {
-        let store = try editor, files = store.projectFiles
-        guard let url = chain.document(name) else { throw Skip(reason: "CAPY_WORKLOAD_\(name.uppercased()) names no \(name) document") }
+    private func open(_ step: JSON, _ steps: ChainPlan, _ record: Step) async throws {
+        let store = try editor, files = store.projectFiles, name = step["document"].string, reopen = step["reopen"].bool
+        let url: URL
+        if reopen {
+            guard let id = tabs[name] else { throw Skip(reason: "\(name) is not open") }
+            guard saved == name else { throw Skip(reason: "\(name) was not the last drawing saved in this pass") }
+            guard store.drawingTabs.rows.count > 1 else { throw Skip(reason: "closing the only open drawing closes the window, so \(name) cannot reopen") }
+            if store.snapshot["document_tabs"]["selected"].uint != id { try await switchTab(name); try await settle() }
+            try await closeTab(id); try await settle()
+            tabs[name] = nil
+            url = Self.saveURL
+        } else {
+            guard let document = chain.document(name) else { throw Skip(reason: "CAPY_WORKLOAD_\(name.uppercased()) names no \(name) document") }
+            url = document
+        }
         guard FileManager.default.fileExists(atPath: url.path) else { throw HostFailure(message: "The \(name) document is missing at \(url.path)") }
+        let free = Self.freeBytes()
         let epoch = store.state["document_file"]["epoch"].uint, tab = store.snapshot["document_tabs"]["selected"].uint
         let input = FrameTrace.now()
         files.openURL(url)
@@ -263,17 +315,22 @@ import os
             files.error != nil || files.pendingProfile != nil || files.packageSummary != nil || (!files.busy
                 && (store.state["document_file"]["epoch"].uint != epoch || store.snapshot["document_tabs"]["selected"].uint != tab))
         }
-        if let error = files.error { files.error = nil; throw HostFailure(message: error) }
+        if let error = files.error { files.error = nil; throw ChainPlan.Refused(reason: error) }
         if files.pendingProfile != nil { files.cancel(); throw HostFailure(message: "Opening \(name) asks for a color profile choice") }
-        if files.packageSummary != nil { files.closePackage(); throw HostFailure(message: "The \(name) file opened as a package summary") }
-        if steps.documents[name]["kind"].string == "photo" {
+        if let summary = files.packageSummary {
+            files.closePackage()
+            let detail = [summary["status"].string, summary["reason"].string].filter { !$0.isEmpty }.joined(separator: ": ")
+            throw ChainPlan.Refused(reason: "The \(name) file opened as a package summary" + (detail.isEmpty ? "" : ": " + detail))
+        }
+        if !reopen && steps.documents[name]["kind"].string == "photo" {
             guard let layer = store.state["layer_tools"]["editing_layer"]["id"].optionalUInt else {
                 throw HostFailure(message: "The imported photo has no editable layer")
             }
             try await edit(["type": "layer", "action": ["op": "rename", "id": layer, "name": "Photo"]])
             try await invoke("add_layer"); try await settle()
         }
-        try await measure(record, "open." + name, since: input)
+        try await measure(record, "open." + name, since: input, within: 180)
+        if let free, let after = Self.freeBytes() { record.extra["disk_free_bytes"] = [free, after] }
         let selected = store.snapshot["document_tabs"]["selected"].uint
         tabs[name] = selected
         paintLayers[selected] = store.state["layer_tools"]["editing_layer"]["id"].optionalUInt
@@ -289,8 +346,7 @@ import os
         guard store.state["brush"]["preset"].uint == preset else { throw HostFailure(message: "Brush preset \(preset) is unavailable") }
         let active = store.state["tabs"].array.first { $0["active"].bool } ?? JSON()
         try await edit(["type": "set_brush_size", "value": ChainPlan.brushSize(step["size"], pixels: active["width"].number * active["height"].number)])
-        if step["zoom"].string == "fit" { try await invoke("fit_canvas") }
-        else if !step["zoom"].isNull { try await edit(["type": "set_zoom", "zoom": step["zoom"].number]) }
+        try await place(step)
         if ["clone", "heal", "spot_heal"].contains(store.state["brush"]["tool"].string) {
             let reference = store.command("use_reference_below")["enabled"].bool
             record.extra["reference_below"] = reference
@@ -316,7 +372,8 @@ import os
         if record.settled == nil { record.extra["catch_up_capped"] = true; try await settle() }
     }
     private func gesture(_ step: JSON, _ steps: ChainPlan, _ record: Step) async throws {
-        let store = try editor, kind = step["gesture"].string, area = try area()
+        try await place(step)
+        let store = try editor, kind = step["gesture"].string, area = try area(), pinch = step["scale"].isNull ? 2.5 : step["scale"].number
         let seconds = steps.seconds(step, refreshHz: refreshHz), quick = step["release"].string == "quick"
         let camera = store.cameraRevision
         #if os(macOS)
@@ -325,7 +382,7 @@ import os
         var last = ChainPlan.gesture(kind, progress: 0)
         let window = try await paced(count, hz: ChainPlan.touchHz) { range, _ in
             for index in range {
-                let pose = ChainPlan.gesture(kind, progress: Double(index) / ChainPlan.touchHz / seconds)
+                let pose = ChainPlan.gesture(kind, progress: Double(index) / ChainPlan.touchHz / seconds, scale: pinch)
                 let x = Float(area[0] + area[2] * (0.5 + pose.pan)), y = Float(area[1] + area[3] / 2)
                 if kind == "pan" {
                     store.native?.scroll(x: x, y: y, dx: Float((last.pan - pose.pan) * area[2] / scale), dy: 0,
@@ -340,7 +397,7 @@ import os
         record.extra["apple_input"] = kind == "pan" ? "trackpad scroll" : "trackpad gesture"
         #else
         let window = try await contact(tool: 3, fingers: 2, hz: ChainPlan.touchHz, seconds: seconds + (quick ? 0.1 : 0)) { t, _ in
-            ChainPlan.fingers(ChainPlan.gesture(kind, progress: t / seconds), area: area)
+            ChainPlan.fingers(ChainPlan.gesture(kind, progress: t / seconds, scale: pinch), area: area)
         }
         record.extra["apple_input"] = "touch"
         #endif
@@ -529,6 +586,7 @@ import os
         return (window.down, up)
     }
     private func tap(_ step: JSON, _ record: Step) async throws {
+        try await place(step)
         try await invoke(ChainPlan.command(step["tool"].string))
         try await settle()
         let area = try area()
@@ -536,7 +594,7 @@ import os
             let point = pixel(ChainPlan.Point(x: value[0].number, y: value[1].number), area)
             let window = try await contact(hz: ChainPlan.penHz, seconds: 1 / ChainPlan.penHz) { _, _ in [point] }
             record.contacts.append(["down_ns": window.down, "up_ns": window.up])
-            try await measure(record, step["tool"].string, since: window.down)
+            try await measure(record, step["tool"].string, since: window.down, within: 120)
         }
     }
     private func repeatItems(_ step: JSON, _ record: Step) async throws {
@@ -604,6 +662,7 @@ import os
             try await settle()
         }
         let ramp = step["layer_opacity"].array.map(\.number)
+        if ramp.count == 2, !step["layer"].isNull { try await selectLayer(step["layer"].string); try await settle() }
         let window = try await paced(count, hz: refreshHz) { range, _ in
             for index in range {
                 let progress = Double(index) / Double(count)
@@ -626,15 +685,17 @@ import os
         if store.snapshot["document_tabs"]["selected"].uint != id { try await switchTab(name); try await settle() }
         let url = Self.saveURL
         try? FileManager.default.removeItem(at: url)
-        defer { try? FileManager.default.removeItem(at: url) }
-        let input = FrameTrace.now()
+        saved = nil
+        let free = Self.freeBytes(), input = FrameTrace.now()
         try await invoke("save_document_as")
-        try await wait("the save to finish") {
+        try await wait("the save to finish", seconds: 180) {
             !files.busy && !store.state["requests"].array.contains { $0["kind"]["type"].string == "document" }
         }
         if let error = files.error { throw HostFailure(message: error) }
-        try await measure(record, "save", since: input)
-        record.extra["bytes"] = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.uint64Value ?? 0
+        try await measure(record, "save", since: input, within: 180)
+        record.extra["saved_bytes"] = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.uint64Value ?? 0
+        if let free, let after = Self.freeBytes() { record.extra["disk_free_bytes"] = [free, after] }
+        saved = name
     }
     private func resume(_ record: Step) async throws {
         #if os(macOS)
@@ -719,6 +780,7 @@ import os
             try JSONSerialization.data(withJSONObject: pass, options: [.prettyPrinted, .sortedKeys])
                 .write(to: chain.output.appendingPathComponent("pass.json"), options: .atomic)
         } catch { NSLog("Capy chain could not write its pass files: %@", error.localizedDescription) }
+        try? FileManager.default.removeItem(at: Self.saveURL)
         NSLog("Capy chain pass %ld finished: %@", chain.pass, failure ?? "ok")
         if failure == nil, launched != nil, let drawing = store?.drawingTabs.rows.last?["id"].uint { try? await closeTab(drawing) }
         #if os(macOS)

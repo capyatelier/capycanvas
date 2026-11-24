@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize bench chain passes per device and flag differences from the first listed version."""
+"""Summarize bench chain passes per device, judge them on the tier targets and flag differences from the first listed version."""
 import argparse
 import bisect
 import itertools
@@ -14,11 +14,13 @@ from android_brush_metrics import quantile
 TRIM_NS = 100_000_000
 PRESENTED_WITHIN_NS = 2_000_000_000
 LOW_MEMORY_KIB = 1 << 20
+COMPOSITE_LEVELS = 8
+OUTCOMES = ("refused", "timeout")
 TIER_RATES = {"low": 60, "mid": 90, "high": 120, "top": 120}
 TIERS = {"tcl": ("low", 60.0), "movinkpad11": ("mid", 90.0), "xppen": ("mid", 90.0), "sm_t878u": ("high", 120.0), "movinkpad14": ("top", 120.0), "sm_n970u1": ("low", 60.0)}
 MEMORY = (("os_available_min_kib", "os_available_kib", min), ("app_rss_max_kib", "app_rss_kib", max),
           ("gpu_max_kib", "gpu_kib", max))
-UNITS = {"fps": "fps", "s": "1/s", "ms": "ms", "kib": "KiB", "bytes": "bytes"}
+UNITS = {"fps": "fps", "s": "1/s", "ms": "ms", "kib": "KiB", "bytes": "bytes", "diff": "levels"}
 
 
 def statistic(kind, samples):
@@ -57,6 +59,13 @@ def response(record, shown, shown_evidence):
     return (record["ready_ns"] - record["input_ns"]) / 1e6, "completed"
 
 
+def composite_diff(before, after):
+    if not before or not after or (before["w"], before["h"]) != (after["w"], after["h"]):
+        return None
+    a, b = bytes.fromhex(before["rgb"]), bytes.fromhex(after["rgb"])
+    return max(abs(x - y) for x, y in zip(a, b)) if a and len(a) == len(b) else None
+
+
 def step_metrics(step, frames, memory, first_use, shown_evidence="presented"):
     surface = step.get("surface") or "canvas"
     windows = step.get("motion") or []
@@ -91,6 +100,12 @@ def step_metrics(step, frames, memory, first_use, shown_evidence="presented"):
     add("latency_ms", "median", [value for value, _ in records], evidence_of(evidence for _, evidence in records))
     add("settle_ms", "median", [(record["settled_ns"] - record["input_ns"]) / 1e6 for record in step.get("latency") or []
                                 if record.get("settled_ns") is not None and record["settled_ns"] != record.get("ready_ns")], "completed")
+    extra = step.get("extra") or {}
+    add("saved_bytes", "median", [] if extra.get("saved_bytes") is None else [extra["saved_bytes"]], "completed")
+    free = extra.get("disk_free_bytes") or []
+    add("disk_use_bytes", "median", [free[0] - free[1]] if len(free) == 2 and None not in free else [], "sampled")
+    diff = composite_diff(extra.get("composite_before"), extra.get("composite_after"))
+    add("composite_diff", "median", [] if diff is None else [diff], "completed")
     rows = [row for row in memory if step["begin_ns"] <= row["t_ns"] <= step["end_ns"]]
     for name, field, pick in MEMORY:
         values = [row[field] for row in rows if row.get(field) is not None]
@@ -107,12 +122,13 @@ def read_pass(directory):
     memory = read_jsonl(directory / "memory.jsonl")
     steps = {}
     for step in info.get("steps", []):
-        if step.get("status") != "ok":
-            steps[step["id"]] = {"status": step.get("status"), "reason": step.get("reason"), "metrics": {}}
+        status = step.get("status")
+        if status not in ("ok", *OUTCOMES):
+            steps[step["id"]] = {"status": status, "reason": step.get("reason"), "metrics": {}}
             continue
         cold = "cold_" if info.get("cold") and (step["id"] == "launch" or step["id"].startswith("open.")) else ""
         metrics = step_metrics(step, frames, memory, info.get("pass") == 1, info.get("frames_evidence", "presented"))
-        steps[step["id"]] = {"status": "ok", "metrics": {cold + name: metric for name, metric in metrics.items()}}
+        steps[step["id"]] = {"status": status, "reason": step.get("reason"), "metrics": {cold + name: metric for name, metric in metrics.items()}}
     end = {name: {"kind": "median", "samples": [value], "evidence": "sampled"}
            for name, value in (info.get("memory_end") or {}).items() if value is not None}
     if end:
@@ -140,6 +156,8 @@ def rule(step_id, name, base, few, rate, period):
         return False, 100, None, max(.15 * base, 20)
     if metric == "os_available_min_kib":
         return True, LOW_MEMORY_KIB, None, math.inf
+    if metric == "composite_diff":
+        return False, COMPOSITE_LEVELS, COMPOSITE_LEVELS, COMPOSITE_LEVELS
     return False, None, None, .1 * base
 
 
@@ -231,11 +249,18 @@ def fmt(value, spec=".1f"):
     return "-" if value is None else format(value, spec)
 
 
+def outcome(step, version, result):
+    problem = step["problems"].get(version, {}).get("status")
+    return problem if problem in OUTCOMES or result is None else result["status"]
+
+
 def format_table(summary: dict) -> str:
     versions = summary["versions"]
+    compared = len(versions) > 1
     blocks = []
     for device, data in summary["devices"].items():
-        rows = [["step", "metric", *versions, "Δ%", "flag"]]
+        rows = [["step", "metric", *versions, "target", "status", *(["Δ%", "flag"] if compared else [])]]
+        notes = []
         for step_id, step in data["steps"].items():
             for name, metric in (step["metrics"] or {"-": {"versions": {}}}).items():
                 results = metric["versions"]
@@ -243,11 +268,15 @@ def format_table(summary: dict) -> str:
                 rows.append([step_id, name,
                              *(fmt(results[version]["value"]) if version in results
                                else step["problems"].get(version, {}).get("status", "-") for version in versions),
-                             "/".join(fmt(result.get("delta_pct"), "+.1f") for result in others),
-                             "/".join(result.get("flag") or "-" for result in others)])
+                             fmt(metric.get("target"), "g"),
+                             "/".join(outcome(step, version, results.get(version)) or "-" for version in versions),
+                             *(["/".join(fmt(result.get("delta_pct"), "+.1f") for result in others),
+                                "/".join(result.get("flag") or "-" for result in others)] if compared else [])])
+            notes += [f"  {step_id} {version}: {problem['status']}: {problem['reason']}" for version, problem in step["problems"].items()]
         widths = [max(len(row[column]) for row in rows) for column in range(len(rows[0]))]
         blocks.append(f"{device}: {data['tier']} tier, {data['target_hz']} fps target, {data['refresh_hz']:g} Hz display\n"
-                      + "\n".join("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip() for row in rows))
+                      + "\n".join("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip() for row in rows)
+                      + "".join("\n" + note for note in notes))
     return "\n\n".join(blocks)
 
 

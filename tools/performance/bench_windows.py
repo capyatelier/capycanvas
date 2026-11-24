@@ -7,7 +7,13 @@ Pass directories land in ~/capy-bench/runs/<run_id>/<device>/<version>/pass-<n>/
   tools/performance/bench_windows.py --devices surfacelaptop \\
     --exe 'v1.0.15=C:\\Users\\hogba\\builds\\v1.0.15\\CapyCanvas.exe' \\
     --exe 'g0123456789=C:\\Users\\hogba\\builds\\g0123456789\\CapyCanvas.exe' \\
-    --photo PHOTO.jpg --heavy heavy.capy --vector vector.capy
+    --photo PHOTO.jpg --fixtures ~/capy-bench/fixtures/WxH
+
+The gigapixel chain runs one version, one cold pass by default:
+  tools/performance/bench_windows.py --devices surfacelaptop --chain tools/performance/bench-gigapixel.json \\
+    --exe 'g0123456789=C:\\Users\\hogba\\builds\\g0123456789\\CapyCanvas.exe' \\
+    --fixtures /mnt/localssd/capy-bench/fixtures/gigapixel
+Documents with a fixture come from --fixtures, the others from --photo.
 """
 import argparse
 import base64
@@ -22,7 +28,7 @@ import threading
 import time
 from pathlib import Path
 
-from bench import pass_order, step_closure
+from bench import check_free_disk, document_files, pass_order, step_closure
 
 REPO = Path(__file__).resolve().parents[2]
 HOSTS = ('surfacelaptop', 'surfacepro', 'p43s')
@@ -72,7 +78,7 @@ def invocation(run_id, device, label, executable, pass_number, cold, fixtures, s
     arguments = ' '.join([
         '-Executable', quote(executable), '-Chain', quote(remote('runs', run_id, 'chain.json')), '-Pass', str(pass_number),
         *(['-Cold'] if cold else []), '-Device', quote(device), '-Version', quote(label),
-        '-Photo', quote(fixtures['photo']), '-Heavy', quote(fixtures['heavy']), '-Vector', quote(fixtures['vector']),
+        '-Documents', '@{' + ';'.join(f'{quote(name)}={quote(path)}' for name, path in fixtures.items()) + '}',
         '-OutputDirectory', quote(remote('versions', label)), *(['-Steps', quote(','.join(steps))] if steps else [])])
     return '\n'.join([
         "$ErrorActionPreference='Stop'", f'$log={quote(log)}', "Start-Transcript -LiteralPath ($log+'.log')|Out-Null", '$code=1',
@@ -167,6 +173,9 @@ def run_device(args, device, executables, fixtures, record, lock, out):
     run_id, order, state = record['run_id'], palindrome(list(executables), args.passes, args.quick), record['devices'][device]
     missing = ';'.join(f'if(!(Test-Path -LiteralPath {quote(path)})){{throw "Missing executable for {label}: {path}"}}' for label, path in executables.items())
     powershell(device, missing)
+    free = f'[IO.DriveInfo]::new({quote(HOME)}).AvailableFreeSpace'
+    state['free_disk_kib'] = {'before': int(powershell(device, free)) // 1024}
+    check_free_disk(device, state['free_disk_kib']['before'] * 1024, fixtures.values(), args.chain_data)
     placed = {name: upload_fixture(device, Path(path).expanduser()) for name, path in fixtures.items()}
     upload_run(device, run_id, args.chain, {f'{label}-pass-{number}.ps1': invocation(run_id, device, label, executables[label], number, cold, placed, args.steps)
                                             for label, number, cold in order})
@@ -196,6 +205,9 @@ def run_device(args, device, executables, fixtures, record, lock, out):
             write_record(out, record)
         print(f'{device}: {label} pass {number} exited {code} after {time.monotonic() - started:.0f} s; log {local / "runner.log"}' + (f'; {error}' if error else ''), flush=True)
     powershell(device, remove_script(remote('runs', run_id)))
+    with lock:
+        state['free_disk_kib']['after'] = int(powershell(device, free)) // 1024
+        write_record(out, record)
 
 
 def write_record(out, record):
@@ -206,11 +218,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--exe', action='append', required=True, help='LABEL=C:\\path\\CapyCanvas.exe on every selected PC; repeat per version')
     parser.add_argument('--devices', required=True, help=f'comma-separated SSH hosts from {", ".join(HOSTS)}')
-    parser.add_argument('--photo', required=True)
-    parser.add_argument('--heavy', required=True)
-    parser.add_argument('--vector', required=True)
-    parser.add_argument('--chain', type=Path, default=REPO / 'tools/performance/bench-chain.json')
-    parser.add_argument('--passes', type=int, default=2)
+    parser.add_argument('--photo', help='tier JPEG for chain documents without a fixture (open.photo)')
+    parser.add_argument('--fixtures', help="directory with the chain's fixture files (heavy.capy and vector.capy for the tier canvas)")
+    parser.add_argument('--chain', type=Path, default=REPO / 'tools/performance/bench-chain.json', help='chain file (bench-gigapixel.json is the gigapixel chain)')
+    parser.add_argument('--passes', type=int, help="passes per version (default: the chain's passes, else 2)")
     parser.add_argument('--quick', action='store_true', help='one warm pass per version')
     parser.add_argument('--steps', type=lambda text: [step for step in text.split(',') if step], default=[])
     parser.add_argument('--run-id', default=datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))
@@ -221,15 +232,16 @@ def main(argv=None):
         executables = parse_executables(args.exe)
     except ValueError as error:
         parser.error(str(error))
-    fixtures = {'photo': args.photo, 'heavy': args.heavy, 'vector': args.vector}
-    for path in [args.chain, *map(Path, fixtures.values())]:
-        if not path.expanduser().is_file():
-            parser.error(f'missing file: {path}')
-    if args.steps:
-        try:
-            args.steps = step_closure(json.loads(args.chain.read_text())['steps'], args.steps)
-        except ValueError as error:
-            parser.error(str(error))
+    if not args.chain.is_file():
+        parser.error(f'missing file: {args.chain}')
+    args.chain_data = json.loads(args.chain.read_text())
+    args.passes = args.passes or args.chain_data.get('passes', 2)
+    try:
+        if args.steps:
+            args.steps = step_closure(args.chain_data['steps'], args.steps)
+        fixtures = {name: str(path) for name, path in document_files(args.chain_data, args.steps or None, args.photo, args.fixtures).items()}
+    except ValueError as error:
+        parser.error(str(error))
     devices = [device for device in args.devices.split(',') if device]
     if not devices or set(devices) - set(HOSTS):
         parser.error(f'--devices must name hosts from {", ".join(HOSTS)}')
@@ -244,7 +256,7 @@ def main(argv=None):
                   'order': [{'version': label, 'pass': number, 'cold': cold} for label, number, cold in order], 'passes': [], 'error': None}
                   for device in devices}}}
     write_record(out, record)
-    print(f'Run {args.run_id}: {len(order)} passes per device on {", ".join(devices)}, about {len(order) * PASS_MINUTES} min; output {out}', flush=True)
+    print(f'Run {args.run_id}: {len(order)} passes per device on {", ".join(devices)}, about {len(order) * args.chain_data.get("pass_minutes", PASS_MINUTES)} min; output {out}', flush=True)
     started, lock = time.monotonic(), threading.Lock()
     with concurrent.futures.ThreadPoolExecutor(len(devices)) as pool:
         jobs = {pool.submit(run_device, args, device, executables, fixtures, record, lock, out): device for device in devices}

@@ -11,7 +11,7 @@ from pathlib import Path
 import bench_apple
 
 
-CHAIN = {"schema": 1, "motion_frames": 150, "steps": [
+CHAIN = {"schema": 1, "motion_frames": 150, "documents": {"photo": {"kind": "photo"}, "heavy": {"kind": "capy", "fixture": "heavy"}}, "steps": [
     {"id": "launch", "do": "launch"}, {"id": "open.photo", "do": "open", "document": "photo"},
     {"id": "draw.pencil", "do": "stroke"}, {"id": "undo", "do": "repeat"},
     {"id": "open.heavy", "do": "open", "document": "heavy"}, {"id": "heavy.draw", "do": "stroke"}]}
@@ -96,6 +96,44 @@ class RunChecks(unittest.TestCase):
 
     def test_run_reports_error_steps(self):
         self.check_run("main", status="error")
+
+    def test_gigapixel_chain_stages_its_fixtures_and_runs_one_cold_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            fixtures = home / "gigapixel"
+            fixtures.mkdir()
+            for name in ("giga-square.jpg", "giga-panorama.png", "giga-layers.capy"):
+                (fixtures / name).write_bytes(name.encode())
+            app = home / "main.app/Contents"
+            app.mkdir(parents=True)
+            with open(app / "Info.plist", "wb") as file:
+                plistlib.dump({"CFBundleIdentifier": "art.capycanvas.bench.main"}, file)
+            launches = []
+
+            def launch(app, env):
+                data = bench_apple.container(home, bench_apple.bundle_id(app))
+                (data / env["CAPY_WORKLOAD_OUTPUT"]).mkdir(parents=True)
+                launches.append(env)
+                if "prime" not in env["CAPY_WORKLOAD_OUTPUT"]:
+                    self.assertEqual(sorted(path.name for path in (data / bench_apple.STAGE).iterdir() if path.is_file()),
+                                     ["chain.json", "layers.capy", "panorama.png", "square.jpg"])
+                (data / env["CAPY_WORKLOAD_OUTPUT"] / "pass.json").write_text(json.dumps({"pid": 0, "steps": []}))
+
+            chain = Path(bench_apple.TOOLS / "bench-gigapixel.json")
+            args = bench_apple.parse(["--device", "macmini", "--fixtures", str(fixtures), "--chain", str(chain),
+                                      "--bundle", f"main={app.parent}", "--run-id", "g1"])
+            disk = Mock(return_value=Mock(free=20 << 30))
+            with patch("bench_apple.shutil.disk_usage", disk), contextlib.redirect_stdout(io.StringIO()):
+                report = bench_apple.run(args, launch=launch, home=home, process_alive=lambda _: False, sleep=lambda _: None,
+                                         commit=lambda version: "c")
+            passes = [env for env in launches if "CAPY_WORKLOAD_PASS" in env]
+            self.assertEqual([(env["CAPY_WORKLOAD_PASS"], env["CAPY_WORKLOAD_COLD"]) for env in passes], [("1", "1")])
+            self.assertEqual([passes[0][f"CAPY_WORKLOAD_{name}"] for name in ("SQUARE", "PANORAMA", "LAYERS", "SECONDS")],
+                             [f"{bench_apple.STAGE}/square.jpg", f"{bench_apple.STAGE}/panorama.png", f"{bench_apple.STAGE}/layers.capy", "1800"])
+            self.assertEqual(report["free_disk_kib"], {"before": 20 << 20, "after": 20 << 20})
+            disk.return_value = Mock(free=9 << 30)
+            with patch("bench_apple.shutil.disk_usage", disk), self.assertRaisesRegex(SystemExit, "macmini has 9.0 GiB free"):
+                bench_apple.run(args, launch=launch, home=home, process_alive=lambda _: False, sleep=lambda _: None, commit=lambda version: "c")
 
     def check_run(self, main, status="failed"):
         with tempfile.TemporaryDirectory() as directory:

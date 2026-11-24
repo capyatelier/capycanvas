@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "motion_frames": 150,
+  "passes": 1,
+  "pass_minutes": 20,
+  "free_disk_gib": 10,
+  "documents": {
+    "square": {"kind": "photo", "fixture": "giga-square"},
+    "panorama": {"kind": "photo", "fixture": "giga-panorama"},
+    "layers": {"kind": "capy", "fixture": "giga-layers"}
+  },
+  "steps": [
+    {"id": "launch", "do": "launch"},
+    {"id": "open.square", "do": "open", "document": "square"},
+    {"id": "square.pan-fit", "do": "gesture", "gesture": "pan", "zoom": "fit"},
+    {"id": "square.zoom-corner", "do": "gesture", "gesture": "pinch", "zoom": 1.0, "anchor": [0.998, 0.998], "scale": 0.4},
+    {"id": "square.draw-corner", "do": "stroke", "preset": 1, "size": 100, "zoom": 1.0, "anchor": [0.998, 0.998], "contacts": 1, "path": "ellipse"},
+    {"id": "square.draw-fit", "do": "stroke", "preset": 4, "size": 1024, "zoom": "fit", "contacts": 1, "path": "ellipse", "catch_up_cap_ms": 30000},
+    {"id": "square.undo", "do": "repeat", "count": 1, "commands": ["undo", "redo"], "surface": "canvas"},
+    {"id": "square.wand", "do": "tap", "tool": "magic_wand", "target": "canvas", "zoom": "fit", "points": [[0.5, 0.5]], "surface": "canvas"},
+    {"id": "square.fill", "do": "tap", "tool": "fill", "target": "canvas", "zoom": "fit", "points": [[0.5, 0.5]], "surface": "canvas"},
+    {"id": "square.save", "do": "save", "document": "square"},
+    {"id": "square.reopen", "do": "open", "document": "square", "reopen": true},
+    {"id": "open.panorama", "do": "open", "document": "panorama"},
+    {"id": "pano.pan-fit", "do": "gesture", "gesture": "pan", "zoom": "fit"},
+    {"id": "pano.zoom-edge", "do": "gesture", "gesture": "pinch", "zoom": 1.0, "anchor": [0.985, 0.5], "scale": 0.4},
+    {"id": "pano.pan-edge", "do": "gesture", "gesture": "pan", "zoom": 1.0, "anchor": [0.985, 0.5]},
+    {"id": "pano.draw-edge", "do": "stroke", "preset": 1, "size": 100, "zoom": 1.0, "anchor": [0.985, 0.5], "contacts": 1, "path": "ellipse"},
+    {"id": "pano.draw-fit", "do": "stroke", "preset": 4, "size": 1024, "zoom": "fit", "contacts": 1, "path": "ellipse", "catch_up_cap_ms": 30000},
+    {"id": "pano.undo", "do": "repeat", "count": 1, "commands": ["undo", "redo"], "surface": "canvas"},
+    {"id": "pano.wand", "do": "tap", "tool": "magic_wand", "target": "canvas", "zoom": "fit", "points": [[0.5, 0.5]], "surface": "canvas"},
+    {"id": "pano.fill", "do": "tap", "tool": "fill", "target": "canvas", "zoom": "fit", "points": [[0.5, 0.5]], "surface": "canvas"},
+    {"id": "open.layers", "do": "open", "document": "layers"},
+    {"id": "layers.pinch-fit", "do": "gesture", "gesture": "pinch", "zoom": "fit"},
+    {"id": "layers.draw-masked", "do": "stroke", "preset": 1, "size": 100, "zoom": "fit", "contacts": 1, "path": "ellipse", "layer": "Masked"},
+    {"id": "layers.opacity", "do": "scrub", "layer": "Group", "layer_opacity": [1.0, 0.2]},
+    {"id": "switch.tab", "do": "repeat", "count": 2, "tabs": ["panorama", "layers"], "surface": "canvas"},
+    {"id": "save.layers", "do": "save", "document": "layers"},
+    {"id": "reopen.layers", "do": "open", "document": "layers", "reopen": true},
+    {"id": "close", "do": "close"}
+  ]
+}

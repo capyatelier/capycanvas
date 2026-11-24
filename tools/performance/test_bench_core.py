@@ -1,7 +1,10 @@
+import contextlib
 import hashlib
+import io
 import json
 from pathlib import Path
 import subprocess
+import sys
 from types import SimpleNamespace
 import tempfile
 import unittest
@@ -10,9 +13,12 @@ from unittest.mock import patch
 import bench
 import bench_android
 import bench_builds
+import bench_fixtures
 import bench_perfetto
 
 CHAIN = json.loads(bench.CHAIN.read_text())
+GIGAPIXEL_CHAIN = bench.CHAIN.with_name("bench-gigapixel.json")
+GIGAPIXEL = json.loads(GIGAPIXEL_CHAIN.read_text())
 
 
 def order(entries):
@@ -53,6 +59,69 @@ class StepClosureTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "draw.nothing"):
             self.closure("draw.nothing")
 
+    def test_gigapixel_steps_need_their_own_document(self):
+        self.assertEqual(bench.step_closure(GIGAPIXEL["steps"], ["pano.fill", "layers.opacity"]),
+                         ["launch", "open.panorama", "pano.fill", "open.layers", "layers.opacity"])
+        self.assertEqual(bench.step_closure(GIGAPIXEL["steps"], ["switch.tab"]), ["launch", "open.panorama", "open.layers", "switch.tab"])
+
+
+class GigapixelChainTest(unittest.TestCase):
+    def test_chain_opens_both_gigapixel_fixtures_once_and_reopens_the_saved_layers(self):
+        opens = [(step["id"], step["document"], step.get("reopen", False)) for step in GIGAPIXEL["steps"] if step["do"] == "open"]
+        self.assertEqual(opens, [("open.square", "square", False), ("square.reopen", "square", True), ("open.panorama", "panorama", False),
+                                 ("open.layers", "layers", False), ("reopen.layers", "layers", True)])
+        self.assertEqual(GIGAPIXEL["steps"][1]["id"], "open.square")
+        self.assertEqual({document["fixture"] for document in GIGAPIXEL["documents"].values()}, set(bench_fixtures.GIGAPIXEL))
+        self.assertEqual(GIGAPIXEL["passes"], 1)
+        anchored = [step["id"] for step in GIGAPIXEL["steps"] if step.get("anchor")]
+        self.assertEqual(anchored, ["square.zoom-corner", "square.draw-corner", "pano.zoom-edge", "pano.pan-edge", "pano.draw-edge"])
+
+    def test_one_version_runs_one_cold_pass_and_records_the_chain(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runs, plans = Path(directory), []
+
+            def plan(device, run_dir, chain, builds, order, steps, adaptive):
+                plans.append((chain, order, steps))
+                (run_dir / device).mkdir(parents=True)
+                (run_dir / device / "session.json").write_text(json.dumps({"free_disk_kib": {"before": 2, "after": 1}}))
+                return run_dir / device
+
+            build = dict(label="gabc", commit="c" * 40, sha256="s", app_id="art.capycanvas.bench.gabc")
+            argv = ["bench.py", "run", "--versions", "origin/main", "--devices", "tcl", "--chain", str(GIGAPIXEL_CHAIN), "--processor", sys.executable]
+            with patch.object(bench, "RUNS", runs), patch.object(bench, "analyze"), patch.object(bench_builds, "build", return_value=build), \
+                    patch.object(bench_android, "plan", side_effect=plan), patch.object(bench_android, "run_devices", return_value={"tcl": 0}), \
+                    patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()) as output, self.assertRaises(SystemExit) as exit:
+                bench.main()
+            [record] = [json.loads(path.read_text()) for path in runs.glob("*/run.json")]
+        self.assertEqual(exit.exception.code, 0)
+        self.assertEqual(plans, [(GIGAPIXEL_CHAIN, [{"version": "gabc", "pass": 1, "cold": True}], None)])
+        self.assertEqual((record["versions"], record["chain"]), (["gabc"], str(GIGAPIXEL_CHAIN)))
+        self.assertEqual(record["chain_sha256"], hashlib.sha256(GIGAPIXEL_CHAIN.read_bytes()).hexdigest())
+        self.assertEqual(record["devices"]["tcl"]["free_disk_kib"], {"before": 2, "after": 1})
+        self.assertIn("1 passes on each of 1 devices, about 20 min", output.getvalue())
+
+    def test_documents_come_from_fixtures_or_the_photo(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("giga-square.jpg", "giga-panorama.png", "giga-layers.capy", "photo.jpg"):
+                (root / name).write_bytes(name.encode())
+            self.assertEqual(bench.document_files(GIGAPIXEL, None, None, root),
+                             {"square": root / "giga-square.jpg", "panorama": root / "giga-panorama.png", "layers": root / "giga-layers.capy"})
+            self.assertEqual(bench.document_files(CHAIN, ["launch", "open.photo"], root / "photo.jpg", None), {"photo": root / "photo.jpg"})
+            with self.assertRaisesRegex(ValueError, r"heavy \(--fixtures DIR with heavy.capy\), vector"):
+                bench.document_files(CHAIN, None, root / "photo.jpg", None)
+            with self.assertRaisesRegex(ValueError, r"photo \(--photo\)"):
+                bench.document_files(CHAIN, None, None, root)
+
+    def test_free_disk_must_hold_the_documents_and_the_chain_reserve(self):
+        with tempfile.TemporaryDirectory() as directory:
+            document = Path(directory) / "giga-layers.capy"
+            document.write_bytes(b"x" * 1024)
+            need = 2 * 1024 + 10 * (1 << 30)
+            bench.check_free_disk("tcl", need, [document], GIGAPIXEL, copies=2)
+            with self.assertRaisesRegex(SystemExit, "tcl has 10.0 GiB free but this chain needs 10.0 GiB"):
+                bench.check_free_disk("tcl", need - 1, [document], GIGAPIXEL, copies=2)
+
 
 class VersionTest(unittest.TestCase):
     def test_tag_keeps_its_name_and_ref_uses_short_commit(self):
@@ -88,6 +157,23 @@ class DeviceTest(unittest.TestCase):
         self.assertEqual(bench_android.display_commands(factory), ([], []))
         self.assertEqual(bench_android.display_commands(dict(factory, font_scale="1.0")), ([], []))
 
+    def test_gigapixel_fixtures_stage_once_under_size_independent_names(self):
+        spec = bench_android.DEVICES["tcl"]
+        files = {"giga-square": Path("/f/giga-square.jpg"), "giga-panorama": Path("/f/giga-panorama.png"), "giga-layers": Path("/f/giga-layers.capy"),
+                 "heavy": Path("/f/heavy.capy")}
+        with patch.object(bench_fixtures, "fixture", side_effect=lambda name, width, height: files[name]):
+            gigapixel = bench_android.documents(GIGAPIXEL, None, spec)
+            heavy = bench_android.documents(CHAIN, ["launch", "open.heavy"], spec)
+        self.assertEqual({name: document["remote"] for name, document in gigapixel.items()},
+                         {"square": "/data/local/tmp/capy-bench-giga-square.jpg", "panorama": "/data/local/tmp/capy-bench-giga-panorama.png",
+                          "layers": "/data/local/tmp/capy-bench-giga-layers.capy"})
+        self.assertEqual(heavy, {"heavy": dict(local="/f/heavy.capy", remote="/data/local/tmp/capy-bench-heavy-4248x2832.capy")})
+
+    def test_free_space_comes_from_the_data_partition(self):
+        adb = FakeAdb({("shell", "df", "-k", "/data/local/tmp"): "Filesystem 1K-blocks Used Available Use% Mounted on\n"
+                       "/dev/block/dm-48 113584532 41234512 72221220  37% /data\n"})
+        self.assertEqual(bench_android.free_kib(adb), 72221220)
+
     def test_instrumentation_arguments(self):
         record = dict(device="movinkpad11", refresh_hz=90, steps=["launch", "open.photo"],
                       versions={"v1.0.15": dict(app_id="art.capycanvas.bench.v1_0_15", commit="1eb7d6d16975cb08f72da1df3fc6fb5d8b08f519")},
@@ -118,7 +204,7 @@ class PassProgressTest(unittest.TestCase):
         entry = {"version": "A", "pass": 1, "cold": False}
         record = {"adaptive": None, "steps": ["launch"], "device": "tcl", "documents": {},
                   "versions": {"A": {"app_id": "art.capycanvas.bench.a", "commit": "a"}}}
-        for status in ("ok", "error"):
+        for status in ("ok", "error", "refused", "timeout"):
             with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
                 adb = FakeAdb({("logcat", "-d", "-v", "threadtime"): "device log"})
                 adb.prefix = ["adb", "-s", "test"]
@@ -133,7 +219,7 @@ class PassProgressTest(unittest.TestCase):
                     result = bench_android.run_pass(adb, record, entry, Path(tmp))
                 self.assertTrue(result["ok"])
                 logcat = Path(tmp) / "A/pass-1/logcat.txt"
-                if status == "error":
+                if status != "ok":
                     self.assertEqual(logcat.read_text(), "device log")
                 else:
                     self.assertFalse(logcat.exists())

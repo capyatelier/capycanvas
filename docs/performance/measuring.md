@@ -399,6 +399,45 @@ exclusively; `--shared-lock` is for smoke runs that do not qualify timing.
 `--tier` picks the photo and fixtures (default top); `--viewport` and `--scale`
 set the private monitor. Launch latency starts at application setup, not exec.
 
+#### Gigapixel chain
+
+[`bench-gigapixel.json`](../../tools/performance/bench-gigapixel.json) checks
+1 GP documents on main alone: pass it with `--chain` to `bench.py run`,
+`bench_apple.py` or `bench_windows.py` and name one version. It runs one cold
+pass of about 20 minutes (`passes` and `pass_minutes` in the chain; `--passes 2`
+adds a warm one), and a single version is judged only on the tier targets: fps,
+update rate, gaps and pen-down meet or miss, while latency, settle, memory,
+`saved_bytes` and `disk_use_bytes` are reported. The pass opens three photos
+and drawings in turn: `giga-square.jpg` (32,768², exactly the 16,384-tile
+limit), `giga-panorama.png` (65,536 × 16,384; JPEG stops at 65,535 px) and
+`giga-layers.capy` (32,768² with four kinds of layer). `bench_fixtures.py
+gigapixel` writes them to `/mnt/localssd/capy-bench/fixtures/gigapixel/` from
+its own v1.0.15 tree with `bench-patches/v1.0.15-gigapixel-fixtures.patch`,
+because the layers file exceeds the tile limit, and encodes the square with
+Pillow. Hosts stage each fixture once by hash and refuse a device with less
+free disk than the documents plus `free_disk_gib`.
+
+Runners for any host read these chain fields:
+
+- `zoom` (`fit` or a scale) and `anchor` `[x, y]` on `stroke`, `gesture` and
+  `tap`: Fit, set the zoom, then centre the view on that fraction of the
+  drawing with a Navigator press, before the motion starts.
+- `scale` on a `pinch` gesture: the peak finger spread (default 2.5).
+- `layer` on a `layer_opacity` scrub: the layer to select first.
+- `reopen: true` on `open`: capture the composite at Fit, close the document
+  saved earlier in the pass, open that saved file, and capture again. Saving
+  an imported photo picks a scratch file in app storage. A
+  capture is `{"w", "h", "rgb"}`, a 32-pixel-wide downscale of the work area
+  as RGB hex, in `extra.composite_before` and `extra.composite_after`; the
+  analyzer reports `composite_diff` and meets it at 8 levels or less.
+- Saves record `extra.saved_bytes`; opens and saves record
+  `extra.disk_free_bytes` `[before, after]`.
+- Opens and saves wait 180 s and region taps 120 s. A wait that runs out is
+  status `timeout` (a miss in the CSV), and the next step first waits up to
+  300 s for the app to settle. A document the app declines, with an error, a
+  notice or a package dialog, is `refused` with the app's message; steps that
+  need it are skipped and the chain carries on with the next document.
+
 **Brushes (Android).**
 
 - Reserve the tier's tablet and run device commands through

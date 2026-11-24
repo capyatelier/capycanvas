@@ -1,0 +1,13 @@
+diff --git a/crates/layer-core/src/project.rs b/crates/layer-core/src/project.rs
+index 29497a753..274d419c7 100644
+--- a/crates/layer-core/src/project.rs
++++ b/crates/layer-core/src/project.rs
+@@ -74,7 +74,7 @@ impl Default for ProjectLimits {
+             metadata_bytes: 64 * 1024 * 1024,
+             asset_bytes: 512 * 1024 * 1024,
+             raster_bytes: 1024 * 1024 * 1024,
+-            tiles: 16384,
++            tiles: usize::MAX,
+             dimension: crate::MAX_EXTENT,
+             layers: 4096,
+         }

@@ -5,9 +5,7 @@ param(
  [switch]$Cold,
  [Parameter(Mandatory)][string]$Device,
  [Parameter(Mandatory)][string]$Version,
- [Parameter(Mandatory)][string]$Photo,
- [Parameter(Mandatory)][string]$Heavy,
- [Parameter(Mandatory)][string]$Vector,
+ [Parameter(Mandatory)][hashtable]$Documents,
  [Parameter(Mandatory)][string]$OutputDirectory,
  [string[]]$Steps,
  [string]$PresentMon=(Join-Path $env:USERPROFILE '.local/tools/presentmon/2.5.1/PresentMon-2.5.1-x64.exe')
@@ -18,7 +16,6 @@ $scripts=Join-Path $PSScriptRoot '../../apps/layer-windows/scripts'
 . (Join-Path $PSScriptRoot 'WindowsCanvasMotion.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'WindowsPenMotion.cs')
 Add-Type -Path (Join-Path $scripts 'RowPointerDriver.cs')
-Add-Type -AssemblyName System.Drawing
 if(!('CapyBenchScreen' -as [type])){Add-Type -TypeDefinition @'
 using System;using System.Diagnostics;using System.IO;using System.Runtime.InteropServices;using System.Text;using System.Threading;
 public static class CapyBenchScreen {
@@ -32,23 +29,33 @@ public static class CapyBenchScreen {
  [DllImport("gdi32.dll")] static extern int SetStretchBltMode(IntPtr dc,int mode);
  [DllImport("gdi32.dll")] static extern bool StretchBlt(IntPtr target,int x,int y,int width,int height,IntPtr source,int sx,int sy,int sw,int sh,uint operation);
  [DllImport("gdi32.dll")] static extern int GetDIBits(IntPtr dc,IntPtr bitmap,uint start,uint lines,byte[] bits,byte[] info,uint usage);
- public static ulong Hash(int x,int y,int width,int height) {
+ static byte[] Capture(int x,int y,int width,int height,int w,int h,int mode) {
   if(width<1||height<1)throw new ArgumentOutOfRangeException("width");
-  int w=Math.Min(width,384),h=Math.Max(1,height*w/width);
   IntPtr screen=GetDC(IntPtr.Zero),memory=CreateCompatibleDC(screen),bitmap=CreateCompatibleBitmap(screen,w,h),old=SelectObject(memory,bitmap);
   try {
-   SetStretchBltMode(memory,3);
+   SetStretchBltMode(memory,mode);
    if(!StretchBlt(memory,0,0,w,h,screen,x,y,width,height,0x00CC0020))throw new Exception("Screen capture of the canvas failed");
    SelectObject(memory,old);
    var info=new byte[64];BitConverter.GetBytes(40).CopyTo(info,0);BitConverter.GetBytes(w).CopyTo(info,4);BitConverter.GetBytes(-h).CopyTo(info,8);
    BitConverter.GetBytes((short)1).CopyTo(info,12);BitConverter.GetBytes((short)32).CopyTo(info,14);
    var bits=new byte[w*h*4];
    if(GetDIBits(memory,bitmap,0,(uint)h,bits,info,0)!=h)throw new Exception("Screen capture readback failed");
-   ulong hash=14695981039346656037UL;foreach(var b in bits)hash=(hash^b)*1099511628211UL;
-   return hash;
+   return bits;
   } finally {SelectObject(memory,old);DeleteObject(bitmap);DeleteDC(memory);ReleaseDC(IntPtr.Zero,screen);}
  }
+ public static ulong Hash(int x,int y,int width,int height) {
+  int w=Math.Min(width,384);
+  ulong hash=14695981039346656037UL;foreach(var b in Capture(x,y,width,height,w,Math.Max(1,height*w/Math.Max(1,width)),3))hash=(hash^b)*1099511628211UL;
+  return hash;
+ }
+ public static string Signature(int x,int y,int width,int height,out int rows) {
+  rows=Math.Max(1,height*32/Math.Max(1,width));
+  var bits=Capture(x,y,width,height,32,rows,4);var text=new StringBuilder(bits.Length/4*6);
+  for(int i=0;i<bits.Length;i+=4)text.Append(bits[i+2].ToString("x2")).Append(bits[i+1].ToString("x2")).Append(bits[i].ToString("x2"));
+  return text.ToString();
+ }
 }
+public sealed class CapyBenchRefused:Exception {public CapyBenchRefused(string reason):base(reason){}}
 public sealed class CapyBenchMemory:IDisposable {
  [DllImport("pdh.dll",CharSet=CharSet.Unicode)] static extern uint PdhOpenQuery(string source,IntPtr user,out IntPtr query);
  [DllImport("pdh.dll",CharSet=CharSet.Unicode)] static extern uint PdhAddEnglishCounter(IntPtr query,string path,IntPtr user,out IntPtr counter);
@@ -99,7 +106,7 @@ public sealed class CapyBenchMemory:IDisposable {
 [CapyWindowApi]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
 $CapyWaitSeconds=30
 $Executable=(Resolve-Path -LiteralPath $Executable).Path;$Chain=(Resolve-Path -LiteralPath $Chain).Path
-$Photo=(Resolve-Path -LiteralPath $Photo).Path;$Heavy=(Resolve-Path -LiteralPath $Heavy).Path;$Vector=(Resolve-Path -LiteralPath $Vector).Path
+foreach($name in @($Documents.Keys)){$Documents[$name]=(Resolve-Path -LiteralPath $Documents[$name]).Path}
 $OutputDirectory=[IO.Path]::GetFullPath($OutputDirectory)
 $passDirectory=Join-Path $OutputDirectory "pass-$Pass";$storage=Join-Path $OutputDirectory 'storage';$trace=Join-Path $passDirectory 'trace'
 if(Test-Path -LiteralPath $passDirectory){throw "Pass directory already exists; move it away first: $passDirectory"}
@@ -115,9 +122,24 @@ $displays=(& (Join-Path $scripts 'probe-displays.ps1'))|ConvertFrom-Json
 $primary=@($displays|Where-Object {$_.primary})
 if($primary.Count -ne 1 -or [double]$primary[0].refreshHz -lt 30){throw "Display probe found no single primary display with a refresh rate: $($displays|ConvertTo-Json -Compress)"}
 $refreshHz=[double]$primary[0].refreshHz
-$photoStream=[IO.File]::OpenRead($Photo)
-try{$image=[Drawing.Image]::FromStream($photoStream,$false,$false);$canvasSize=@($image.Width,$image.Height);$image.Dispose()}finally{$photoStream.Dispose()}
-$pixels=[long]$canvasSize[0]*$canvasSize[1]
+function Image-Size([string]$Path){
+ $stream=[IO.File]::OpenRead($Path)
+ try{
+  $head=[byte[]]::new(24);$null=$stream.Read($head,0,24)
+  if([BitConverter]::ToUInt64($head,0) -eq 0x0A1A0A0D474E5089){return @([Net.IPAddress]::NetworkToHostOrder([BitConverter]::ToInt32($head,16)),[Net.IPAddress]::NetworkToHostOrder([BitConverter]::ToInt32($head,20)))}
+  if($head[0] -ne 0xFF -or $head[1] -ne 0xD8){throw "Only PNG and JPEG photos have a Windows size reader: $Path"}
+  $stream.Position=2;$marker=[byte[]]::new(9)
+  while($stream.Read($marker,0,4) -eq 4 -and $marker[0] -eq 0xFF){
+   if($marker[1] -in 0xC0,0xC1,0xC2,0xC3,0xC5,0xC6,0xC7,0xC9,0xCA,0xCB,0xCD,0xCE,0xCF){$null=$stream.Read($marker,4,5);return @((([int]$marker[7] -shl 8)+$marker[8]),(([int]$marker[5] -shl 8)+$marker[6]))}
+   $stream.Position+=([int]$marker[2] -shl 8)+$marker[3]-2
+  }
+  throw "No JPEG frame header in $Path"
+ }finally{$stream.Dispose()}
+}
+$photoDocument=@($chainData.documents.PSObject.Properties|Where-Object {$_.Value.kind -eq 'photo' -and $Documents.ContainsKey($_.Name)}|ForEach-Object Name)[0]
+$sizes=@{};foreach($name in @($chainData.documents.PSObject.Properties|Where-Object {$_.Value.kind -eq 'photo' -and $Documents.ContainsKey($_.Name)}|ForEach-Object Name)){$sizes[$name]=Image-Size $Documents[$name]}
+$canvasSize=if($photoDocument){$sizes[$photoDocument]}
+$pixels=if($canvasSize){[long]$canvasSize[0]*$canvasSize[1]}else{0}
 $guaranteeSize=if($pixels -lt 20000000){1024}elseif($pixels -lt 40000000){1536}else{2048}
 if($Cold -and (Test-Path -LiteralPath $storage)){Remove-Item -LiteralPath $storage -Recurse -Force}
 foreach($folder in $trace,(Join-Path $passDirectory 'input'),(Join-Path $storage 'config')){[IO.Directory]::CreateDirectory($folder)|Out-Null}
@@ -133,6 +155,7 @@ $brushTools=@{
 $tools=@{lasso='Lasso selection';magic_wand='Auto select';fill='Fill';move='Operation'}
 $workspaceIds=@{photo='builtin:workspace:photographer'}
 $review=$null;$root=$null;$window=$null;$drawing=$null;$probe=$null;$surfaceInfo=$null;$windowId=$null;$sampler=$null;$presentMonProcess=$null;$area=$null;$canvasRect=$null;$inputs=0
+$openDocuments=@{};$saved=@{};$active=$null
 $checks=[ordered]@{start=$null;end=$null};$memoryEnd=$null;$failure=$null;$framesNote=$null
 $entries=[Collections.Generic.List[object]]::new();$strokeIds=@($chainData.steps|Where-Object {$_.'do' -eq 'stroke'}|ForEach-Object {$_.id})
 $qpcFrequency=[Diagnostics.Stopwatch]::Frequency
@@ -142,12 +165,11 @@ function Rect-List($Rect){@([int]$Rect.X,[int]$Rect.Y,[int]$Rect.Width,[int]$Rec
 function Center($Element){$b=$Element.Current.BoundingRectangle;@([int]($b.X+$b.Width/2),[int]($b.Y+$b.Height/2))}
 function Dip{[CapyWindowApi]::GetDpiForWindow($window)/96.0}
 function Document-Path([string]$Name){
- $document=$chainData.documents.$Name
- if($document.kind -eq 'photo'){return $Photo}
- if($document.fixture -eq 'heavy'){return $Heavy}
- if($document.fixture -eq 'vector'){return $Vector}
- throw "No Windows file for chain document '$Name'"
+ if($saved.ContainsKey($Name)){return $saved[$Name]}
+ if(!$Documents.ContainsKey($Name)){throw "No Windows file for chain document '$Name'"}
+ $Documents[$Name]
 }
+function Free-Bytes{[IO.DriveInfo]::new($storage).AvailableFreeSpace}
 function Motion-Ms($Step){
  if($Step.duration_ms){return [double]$Step.duration_ms}
  $frames=if($Step.frames){$Step.frames}else{$chainData.motion_frames}
@@ -195,7 +217,7 @@ function Observe([scriptblock]$Ready,[string]$Message,[double]$Seconds=30,[switc
   Start-Sleep -Milliseconds 5
  }while($oWatch.Elapsed.TotalSeconds -lt $Seconds)
  if($Quiet){return $null}
- throw "$Message (waited $Seconds s)"
+ throw [TimeoutException]::new("$Message (waited $Seconds s)")
 }
 function Wait-Idle{$null=Observe {Canvas-Ready} 'The canvas did not settle before the next input' 60 -Stable}
 function Chord([uint16[]]$Modifiers,[uint16]$Key){Navigation-Focus;[CapyRowPointer]::Chord([uint32]$review.Id,$Modifiers,$Key)}
@@ -249,11 +271,11 @@ function Key-Latency($Entry,[string]$Name,[uint16[]]$Modifiers,[uint16]$Key,[scr
  $at=Now;[CapyRowPointer]::Chord([uint32]$review.Id,$Modifiers,$Key)
  Latency $Entry $Name $at (Observe $Ready "$Name did not complete" 60 -Stable:$Stable -Changed $(if($Changed){$before})) $Surface
 }
-function Tap-Latency($Entry,[string]$Name,[int[]]$Point,[uint32]$Kind,[scriptblock]$Ready,[switch]$Changed,[switch]$Stable,[string]$Surface){
+function Tap-Latency($Entry,[string]$Name,[int[]]$Point,[uint32]$Kind,[scriptblock]$Ready,[switch]$Changed,[switch]$Stable,[string]$Surface,[double]$Seconds=60){
  Wait-Idle;[CapyWindowApi]::SetForegroundWindow($window)|Out-Null;$before=Screen-Hash
  $tap=Inject $Kind 1 (@($Point)*6) $(if($Kind -eq 3){@(1024)*6}) $Name
  $at=if($Kind -eq 3){$tap.down_ns}else{$tap.up_ns}
- Latency $Entry $Name $at (Observe $Ready "$Name did not complete" 60 -Stable:$Stable -Changed $(if($Changed){$before})) $Surface
+ Latency $Entry $Name $at (Observe $Ready "$Name did not complete" $Seconds -Stable:$Stable -Changed $(if($Changed){$before})) $Surface
 }
 function Search-Latency($Entry,[string]$Name,[string]$Label,[scriptblock]$Ready,[string]$Surface){
  Wait-Idle;$at=Ns (Navigation-Command $Label -Enter)
@@ -317,7 +339,7 @@ function Layers-List{
 }
 function Layer-Rows($List=(Find 'layer-list' -Visible)){if($List){@($List.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)|Where-Object {$_.Current.AutomationId -match '^layer-row-\d+$'}).Count}}
 function Select-Layer([string]$Label){
- if($Label -eq 'Photo'){$Label=[IO.Path]::GetFileNameWithoutExtension((Document-Path 'photo'))}
+ if($Label -eq 'Photo'){$Label=[IO.Path]::GetFileNameWithoutExtension((Document-Path $photoDocument))}
  $list=Layers-List
  $row=Control ($Label+' layer row') -Name -Within $list
  $id=$row.Current.AutomationId -replace '^layer-row-','';$scroll=$null
@@ -341,6 +363,33 @@ function Close-App{
  [CapyWindowApi]::PostMessage($window,0x10,[UIntPtr]::Zero,[IntPtr]::Zero)|Out-Null
  Wait-Until {$review.HasExited -or (Discard)} 'The app did not exit after Close and Discard Changes' 60 -Closing
 }
+function Navigator-Overview{
+ if(!(Find 'navigator-overview' -Visible)){
+  $anchor=@('panel-tab-navigator','column-icon-navigator'|ForEach-Object {Find $_ -Visible}|Where-Object {$_})[0]
+  if(!$anchor){return}
+  Invoke-Id $anchor.Current.AutomationId
+ }
+ Control 'navigator-overview' -Arranged
+}
+function Place($Step){
+ $anchor=@($Step.anchor)
+ if($null -ne $Step.zoom -and "$($Step.zoom)" -ne 'fit' -and [double]$Step.zoom -ne 1){return "Zoom $($Step.zoom) has no Windows shortcut; only fit and 1.0 do"}
+ if($anchor.Count -eq 2 -and !($active -and $sizes.ContainsKey($active))){return "The Windows runner reads drawing sizes only from photo files, so it cannot anchor on $active"}
+ if("$($Step.zoom)" -eq 'fit' -or $anchor.Count -eq 2){Chord @(0x11) 0x30;Wait-Idle}
+ if($null -ne $Step.zoom -and "$($Step.zoom)" -ne 'fit'){Chord @(0x11) 0x31;Wait-Idle}
+ if($anchor.Count -eq 2){
+  $overview=Navigator-Overview;$toggled=!$overview
+  if($toggled){Navigation-Command 'Navigator panel';$overview=Control 'navigator-overview' -Arranged}
+  $b=$overview.Current.BoundingRectangle;$size=$sizes[$active];$fit=[Math]::Min(($b.Width-8*(Dip))/$size[0],($b.Height-8*(Dip))/$size[1])
+  $point=@([int]($b.X+($b.Width-$size[0]*$fit)/2+[double]$anchor[0]*$size[0]*$fit),[int]($b.Y+($b.Height-$size[1]*$fit)/2+[double]$anchor[1]*$size[1]*$fit))
+  $null=Inject 2 1 (@($point)*6) $null 'navigator-anchor';Wait-Idle
+  if($toggled){Navigation-Command 'Navigator panel';Wait-Until {!(Find 'navigator-overview' -Visible)} 'The Navigator panel did not close after anchoring'}
+  Wait-Idle
+ }
+}
+function Canvas-Signature{$r=(Canvas-Area -Refresh).rect;$rows=0;$rgb=[CapyBenchScreen]::Signature([int]$r.X,[int]$r.Y,[int]$r.Width,[int]$r.Height,[ref]$rows);[ordered]@{w=32;h=$rows;rgb=$rgb}}
+function Notice-Text{$notice=Find 'canvas-notice-text' -Visible;if($notice){$notice.Current.Name}}
+function Status-Error{$status=Find 'canvas-status' -Visible;if($status -and $status.Current.Name -like '*exceeds the codec memory budget*'){$status.Current.Name}}
 function Triangle([int]$K,[int]$N){1-[Math]::Abs(2.0*$K/[Math]::Max(1,$N-1)-1)}
 function Frames($Step,[int]$Hz){[Math]::Max(2,[int]((Motion-Ms $Step)*$Hz/1000))}
 function Stroke-Path($Step,[int]$Contact){
@@ -355,13 +404,14 @@ function Stroke-Path($Step,[int]$Contact){
  @{path=$path.ToArray();pressure=$pressure.ToArray()}
 }
 function Gesture-Path($Step){
+ $scale=if($null -ne $Step.scale){[double]$Step.scale}else{2.5}
  $r=(Canvas-Area).rect;$cx=$r.X+$r.Width/2;$cy=$r.Y+$r.Height/2;$n=Frames $Step 240;$path=[Collections.Generic.List[int]]::new()
  $place={param($d,$a,$x)foreach($v in @(($x-$d*[Math]::Cos($a)),($cy-$d*[Math]::Sin($a)),($x+$d*[Math]::Cos($a)),($cy+$d*[Math]::Sin($a)))){$path.Add([int]$v)}}
  foreach($k in 0..($n-1)){
   $s=Triangle $k $n
   switch($Step.gesture){
    'pan'{& $place (.1*$r.Width) 0 ($cx-.15*$r.Width+.3*$r.Width*$s)}
-   'pinch'{& $place (.08*$r.Width*(1+1.5*$s)) 0 $cx}
+   'pinch'{& $place (.08*$r.Width*(1+($scale-1)*$s)) 0 $cx}
    'rotate'{& $place (.15*[Math]::Min($r.Width,$r.Height)) ([Math]::PI/3*$s) $cx}
   }
  }
@@ -407,12 +457,30 @@ $handlers=@{
   Wait-Idle
  }
  open={param($s,$e)
+  if($s.reopen){
+   if(!$saved.ContainsKey($s.document)){Skip $e "$($s.document) was not saved in this pass";return}
+   if(@(Tabs).Count -lt 2){Skip $e "Closing the only open drawing ends the app, so $($s.document) cannot reopen";return}
+   if($root.Current.Name -notlike "*$([IO.Path]::GetFileNameWithoutExtension($saved[$s.document]))*"){throw "Reopen: $($s.document) is not the active drawing ('$($root.Current.Name)')"}
+   Chord @(0x11) 0x30;Wait-Idle;$e.extra.composite_before=Canvas-Signature
+   $open=@(Tabs).Count;Chord @(0x11) 0x57
+   Wait-Until {@(Tabs).Count -lt $open -or (Discard)} "Reopen: Close did not close $($s.document)" 60
+   $openDocuments.Remove($s.document);Wait-Idle
+  }
   $path=Document-Path $s.document;$stem=[IO.Path]::GetFileNameWithoutExtension($path)
-  Wait-Idle;$at=Now;$forward=Start-App @($path)
+  Wait-Idle;$notice=Notice-Text;$statusError=Status-Error;$free=Free-Bytes;$at=Now;$forward=Start-App @($path)
   if(!$forward.WaitForExit(30000)){throw "Open: the file activation of $path did not hand off to the running app"}
   if($forward.ExitCode -ne 0){throw "Open: the file activation of $path exited with $($forward.ExitCode)"}
-  Latency $e "open.$($s.document)" $at (Observe {$root.Current.Name -like "*$stem*" -and (Canvas-Ready)} "Open: $path did not become the ready drawing" 120 -Stable) 'canvas'
-  if($chainData.documents.($s.document).kind -eq 'photo'){
+  $ready={
+   $package=Find 'package-view' -Visible
+   if($package){$reason=$package.Current.Name;[CapyRowPointer]::Key([uint32]$review.Id,0x1b);throw [CapyBenchRefused]::new("Opening $($s.document) showed a package dialog: $reason")}
+   $now=Notice-Text;if($now -and $now -ne $notice){throw [CapyBenchRefused]::new($now)}
+   $now=Status-Error;if($now -and $now -ne $statusError){throw [CapyBenchRefused]::new($now)}
+   $root.Current.Name -like "*$stem*" -and (Canvas-Ready)
+  }
+  Latency $e "open.$($s.document)" $at (Observe $ready "Open: $path did not become the ready drawing" 180 -Stable) 'canvas'
+  $e.extra.disk_free_bytes=@($free,(Free-Bytes));$openDocuments[$s.document]=$true;$script:active=$s.document
+  if($s.reopen){Chord @(0x11) 0x30;Wait-Idle;$e.extra.composite_after=Canvas-Signature}
+  elseif($chainData.documents.($s.document).kind -eq 'photo'){
    $rows=Layer-Rows (Layers-List)
    Chord @(0x11,0x10) 0x4E
    Wait-Until {(Layer-Rows) -eq $rows+1} 'Open: New layer did not add a layer row to the photo'
@@ -421,11 +489,9 @@ $handlers=@{
  }
  stroke={param($s,$e)
   $label=$presets[[int]$s.preset];if(!$label){Skip $e "Preset $($s.preset) has no English preset name in the Windows runner";return}
-  $zoom=if($s.zoom -eq 'fit'){0x30}elseif([double]$s.zoom -eq 1){0x31}
-  if(!$zoom){Skip $e "Zoom $($s.zoom) has no Windows shortcut; only fit and 1.0 do";return}
   Select-Preset $label
   $size=if($s.size -eq 'guarantee'){$guaranteeSize}else{[int]$s.size};Set-BrushSize $size
-  Chord @(0x11) $zoom;Wait-Idle
+  $reason=Place $s;if($reason){Skip $e $reason;return}
   if($s.layer){Select-Layer $s.layer}
   Wait-Idle;Navigation-Focus
   $e.extra.priming=Pen (@(At .5 .5)*20) "$($s.id)-priming"
@@ -440,6 +506,7 @@ $handlers=@{
  }
  gesture={param($s,$e)
   if($s.gesture -notin 'pan','pinch','rotate'){Skip $e "Gesture '$($s.gesture)' has no Windows path";return}
+  $reason=Place $s;if($reason){Skip $e $reason;return}
   Wait-Idle;Navigation-Focus
   Contact $e (Inject 2 2 (Gesture-Path $s) $null $s.id)
   if($s.release -eq 'quick'){Settle $e 3000}
@@ -510,15 +577,17 @@ $handlers=@{
  tap={param($s,$e)
   if($s.tool -and !$tools[$s.tool]){Skip $e "Tool '$($s.tool)' has no Windows command label";return}
   if($s.target -ne 'canvas'){Skip $e "Tap target '$($s.target)' has no Windows mapping";return}
+  $reason=Place $s;if($reason){Skip $e $reason;return}
   if($s.tool){Navigation-Command $tools[$s.tool]}
   $index=0
   foreach($point in $s.points){
-   $index++;Tap-Latency $e "$($s.id)-$index" (At $point[0] $point[1]) 3 $null -Changed -Stable -Surface 'canvas'
+   $index++;Tap-Latency $e "$($s.id)-$index" (At $point[0] $point[1]) 3 $null -Changed -Stable -Surface 'canvas' -Seconds 120
   }
  }
  scrub={param($s,$e)
   $n=Frames $s 240
   if($s.layer_opacity){
+   if($s.layer){Select-Layer $s.layer}
    $null=Layers-List
    $slider=Control 'layer-opacity-slider' -Arranged;$range=$slider.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).Current;$b=$slider.Current.BoundingRectangle
    $x={param($v)[int]($b.X+4+($b.Width-8)*($v-$range.Minimum)/[Math]::Max(1e-9,$range.Maximum-$range.Minimum))}
@@ -563,6 +632,7 @@ $handlers=@{
      $stem=[IO.Path]::GetFileNameWithoutExtension((Document-Path $item));$tab=@(Tabs|Where-Object {$_.Current.Name -like "*$stem*"})
      if($tab.Count -ne 1){throw "Repeat: no single drawing tab named like '$stem'"}
      Tap-Latency $e "tab:$item" (Center $tab[0]) 2 {$root.Current.Name -like "*$stem*" -and (Canvas-Ready)} -Changed -Stable -Surface $s.surface
+     $script:active=$item
      continue
     }
     switch($item){
@@ -594,10 +664,11 @@ $handlers=@{
   if($root.Current.Name -notlike "*$stem*"){throw "Save: $($s.document) is not the active drawing ('$($root.Current.Name)')"}
   $target=Join-Path $storage "bench-save/$($s.document)-$Pass.capy";[IO.Directory]::CreateDirectory((Split-Path -Parent $target))|Out-Null
   if(Test-Path -LiteralPath $target){Remove-Item -LiteralPath $target}
-  Wait-Idle;Chord @(0x11,0x10) 0x53;Submit-SavePath $target;$at=Now
+  Wait-Idle;$free=Free-Bytes;Chord @(0x11,0x10) 0x53;Submit-SavePath $target;$at=Now
   $title=[IO.Path]::GetFileName($target)+' '+[char]0x00b7+' Capy Canvas'
-  Latency $e 'save' $at (Observe {$root.Current.Name -eq $title -and (Test-Path -LiteralPath $target) -and (Canvas-Ready)} 'Save: the drawing did not save to its scratch path' 120) 'window'
+  Latency $e 'save' $at (Observe {$root.Current.Name -eq $title -and (Test-Path -LiteralPath $target) -and (Canvas-Ready)} 'Save: the drawing did not save to its scratch path' 180) 'window'
   Wait-Until {!(Find 'Save As' -Name)} 'Save: the Save As dialog did not close'
+  $saved[$s.document]=$target;$e.extra.saved_bytes=(Get-Item -LiteralPath $target).Length;$e.extra.disk_free_bytes=@($free,(Free-Bytes))
  }
  resume={param($s,$e)
   Wait-Idle;$rect=$canvasRect;$pattern=$root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)
@@ -624,16 +695,18 @@ function Start-PresentMon{
  Start-Sleep -Seconds 1
  if($presentMonProcess.HasExited){$script:presentMonProcess=$null;$script:framesNote='PresentMon exited at start (see presentmon-error.log), so frames come from DXGI frame statistics'}
 }
-function Run-Step($Step){
+function Run-Step($Step,[string[]]$Needs,[switch]$Drain){
  $script:area=$null
+ if($Drain){$null=Observe {Canvas-Ready} 'The canvas did not settle after a timed-out step' 300 -Stable -Quiet}
  $surface=if($Step.surface){$Step.surface}elseif($Step.'do' -in 'resume','save','close' -or ($Step.'do' -eq 'drag' -and $Step.target -notmatch '^(canvas|object:)')){'window'}else{'canvas'}
  $e=[ordered]@{id=$Step.id;status='ok';reason=$null;input='real';begin_ns=(Now);end_ns=$null;surface=$surface;motion=@();contacts=@();completions=@();settled_ns=$null;latency=@();extra=[ordered]@{}}
  try{
   if($Step.'do' -ne 'launch' -and (!$review -or $review.HasExited)){throw "The app is not running (exit code $(if($review){$review.ExitCode}))"}
-  $handler=$handlers[[string]$Step.'do']
-  if($handler){& $handler $Step $e}else{Skip $e "No Windows mapping for '$($Step.'do')' steps"}
+  $handler=$handlers[[string]$Step.'do'];$missing=@($Needs|Where-Object {$_ -and !$openDocuments.ContainsKey($_)})[0]
+  if($missing){Skip $e "$missing did not open"}elseif($handler){& $handler $Step $e}else{Skip $e "No Windows mapping for '$($Step.'do')' steps"}
  }catch{
-  $e.status='error';$e.reason="$($Step.id): $($_.Exception.Message)";$e.extra.trace=$_.ScriptStackTrace
+  $e.status=if($_.Exception -is [TimeoutException]){'timeout'}elseif($_.Exception -is [CapyBenchRefused]){'refused'}else{'error'}
+  $e.reason=if($e.status -eq 'refused'){$_.Exception.Message}else{"$($Step.id): $($_.Exception.Message)"};$e.extra.trace=$_.ScriptStackTrace
  }
  $e.end_ns=Now
  Write-Host ('{0,-22} {1,-8} {2}' -f $Step.id,$e.status,$e.reason)
@@ -662,11 +735,15 @@ function Last-Frame([long[]]$Frames,[long]$After,[long]$Until){
  if($i -ge 0 -and $Frames[$i] -gt $After){$Frames[$i]}
 }
 try{
+ $recent=$null
  foreach($step in $chainData.steps){
+  if($step.'do' -eq 'open'){$recent=$step.document}
   if($selected -and !$selected.ContainsKey($step.id)){continue}
+  $needs=if($step.'do' -eq 'open'){@()}else{@(@($step.tabs)+@($step.document)+@($(if($step.'do' -notin 'launch','resume','close'){$recent}))|Where-Object {$_})}
   if(!$checks.start -and $step.'do' -notin 'launch','open' -and $review -and !$review.HasExited){$checks.start=Check-Geometry}
   if($step.'do' -eq 'close'){$checks.end=try{Check-Geometry}catch{[ordered]@{ok=$false;error=$_.Exception.Message}};$memoryEnd=$sampler.Last}
-  $entries.Add((Run-Step $step))
+  $last=if($entries.Count){$entries[$entries.Count-1]}
+  $entries.Add((Run-Step $step $needs -Drain:($last -and $last.status -eq 'timeout')))
  }
 }catch{$failure=($_|Out-String)+$_.ScriptStackTrace;Write-Host $failure}
 finally{

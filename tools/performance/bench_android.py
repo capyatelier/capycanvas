@@ -13,6 +13,7 @@ import time
 import uuid
 import bench_fixtures
 from android_adaptive import cleanup_steps, enable_adaptive, restore_adaptive
+from bench import check_free_disk
 from bench_builds import SCRATCH, sha256
 import bench_perfetto
 
@@ -64,11 +65,13 @@ def documents(chain, steps, spec):
         if step["do"] != "open" or steps is not None and step["id"] not in steps:
             continue
         document = chain["documents"][step["document"]]
-        if document["kind"] == "photo":
+        fixture = document.get("fixture")
+        if fixture is None:
             result[step["document"]] = dict(local=str(tier_photo(spec["tier"])), remote=spec["photo"])
         else:
-            local = bench_fixtures.ensure_fixtures(width, height)[document["fixture"]]
-            result[step["document"]] = dict(local=str(local), remote=f"/data/local/tmp/capy-bench-{document['fixture']}-{width}x{height}.capy")
+            local = bench_fixtures.fixture(fixture, width, height)
+            size = "" if fixture in bench_fixtures.GIGAPIXEL else f"-{width}x{height}"
+            result[step["document"]] = dict(local=str(local), remote=f"/data/local/tmp/capy-bench-{fixture}{size}{local.suffix}")
     return result
 
 
@@ -137,6 +140,10 @@ def display_commands(state):
         factory.append(["settings", "put", "system", "font_scale", "1.0"])
         restore.append(["settings", "put", "system", "font_scale", state["font_scale"]])
     return factory, restore
+
+
+def free_kib(adb):
+    return int(adb("shell", "df", "-k", "/data/local/tmp").split()[-3])
 
 
 def thermal_status(adb):
@@ -230,7 +237,7 @@ def run_pass(adb, record, entry, directory):
         result.update(error=error, blocked_step=blocked)
         print(f"pass {n} of {entry['version']} stopped at {blocked}: {error}", flush=True)
     result.update(returncode=process.returncode, ok=error is None, seconds=round(time.monotonic() - started))
-    if not result["ok"] or "error" in step_status.values():
+    if not result["ok"] or {"error", "refused", "timeout"} & set(step_status.values()):
         (output / "logcat.txt").write_text(adb("logcat", "-d", "-v", "threadtime", check=False))
     return result
 
@@ -263,7 +270,10 @@ def session(directory, adb):
             adb("shell", *command)
         record["display"]["after"] = display_state(adb)
 
-    with cleanup_steps(restore_display, save):
+    record["free_disk_kib"] = dict(before=free_kib(adb))
+    check_free_disk(record["device"], record["free_disk_kib"]["before"] * 1024, [d["local"] for d in record["documents"].values()],
+                    json.loads(Path(record["chain"]).read_text()), copies=2)
+    with cleanup_steps(restore_display, lambda: record["free_disk_kib"].update(after=free_kib(adb)), save):
         for command in factory:
             adb("shell", *command)
         record["display"]["measured"] = display_state(adb)

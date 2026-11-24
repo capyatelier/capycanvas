@@ -4,11 +4,13 @@ import android.accessibilityservice.AccessibilityService
 import android.app.Activity
 import android.app.Instrumentation
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.RectF
 import android.net.Uri
 import android.os.Bundle
 import android.os.Debug
 import android.os.ParcelFileDescriptor
+import android.os.StatFs
 import android.os.SystemClock
 import android.view.Choreographer
 import android.view.InputDevice
@@ -36,6 +38,8 @@ import kotlin.math.*
 
 class BenchChainInstrumentation : Instrumentation() {
     private class Skipped(reason: String) : Exception(reason)
+    private class Refused(reason: String) : Exception(reason)
+    private class Timeout(reason: String) : Exception(reason)
     private class Opened(val tab: Long, val paint: Long, val photo: Long?)
     private class Area(val x: Double, val y: Double, val w: Double, val h: Double) {
         fun at(fx: Double, fy: Double) = doubleArrayOf(x + w * fx, y + h * fy)
@@ -57,6 +61,7 @@ class BenchChainInstrumentation : Instrumentation() {
     private var active: String? = null
     private val documents = mutableMapOf<String, Opened>()
     private val staged = mutableMapOf<String, Result<File>>()
+    private val saved = mutableMapOf<String, File>()
 
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
@@ -106,6 +111,7 @@ class BenchChainInstrumentation : Instrumentation() {
             .put("memory_end", memoryEnd).toString())
         var opened: String? = null
         var stuck: String? = null
+        var drain = false
         for (step in chain.getJSONArray("steps").objects()) {
             if (step.getString("do") == "open") opened = step.getString("document")
             val id = step.getString("id")
@@ -127,18 +133,24 @@ class BenchChainInstrumentation : Instrumentation() {
                 if (kind != "open") needs.firstOrNull { it !in documents }?.let { throw Skipped("$it did not open") }
                 if (kind != "launch") {
                     check(alive) { "The app is not running" }
-                    await("idle before $id", 60_000) { quiet() }
+                    await("idle before $id", if (drain) 300_000 else 60_000) { quiet() }
                 }
                 record.put("begin_ns", now())
                 perform(step)
             } catch (skip: Skipped) {
                 record.put("status", "skipped").put("reason", skip.message)
+            } catch (refusal: Refused) {
+                record.put("status", "refused").put("reason", refusal.message)
+                runCatching { main { host.clearActionError() } }
+            } catch (timeout: Timeout) {
+                record.put("status", "timeout").put("reason", timeout.message)
             } catch (error: Throwable) {
                 record.put("status", "error").put("reason", error.message ?: error.toString())
                 extra().put("error", error.stackTraceToString())
                 if (alive) runCatching { main { host.clearActionError() } }
             }
             record.put("end_ns", now())
+            drain = record.getString("status") == "timeout"
             if (record.optString("reason").startsWith("Timed out waiting for idle")) stuck = record.getString("reason")
             if (alive) sampleMemory()
             steps.put(record)
@@ -151,7 +163,7 @@ class BenchChainInstrumentation : Instrumentation() {
 
     private fun perform(step: JSONObject) = when (step.getString("do")) {
         "launch" -> launch()
-        "open" -> open(step.getString("document"))
+        "open" -> open(step)
         "stroke" -> stroke(step)
         "gesture" -> gesture(step)
         "drag" -> drag(step)
@@ -196,16 +208,17 @@ class BenchChainInstrumentation : Instrumentation() {
     private fun failed() = host.failure ?: host.actionError
 
     private fun await(label: String, timeoutMs: Long = 120_000, ready: (() -> Boolean)? = null): Long {
-        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        var beat = SystemClock.uptimeMillis()
+        val deadline = beat + timeoutMs
         shownNs = null
         while (true) {
             failed()?.let { error(it) }
             val met = main { host.snapshot != null && ready?.invoke() != false }
             if (met && ready != null && shownNs == null) shownNs = now()
             if (met && !native { Native.renderingPending(it) }) return now()
-            check(SystemClock.uptimeMillis() < deadline) {
-                "Timed out waiting for $label" + (shownNs?.let { " (shown, not settled)" } ?: "")
-            }
+            val at = SystemClock.uptimeMillis()
+            if (at >= deadline) throw Timeout("Timed out waiting for $label after ${timeoutMs / 1000} s" + (shownNs?.let { " (shown, not settled)" } ?: ""))
+            if (at - beat >= 30_000) { beat = at; progress("BENCH_WAIT $label") }
             LockSupport.parkNanos(2_000_000)
         }
     }
@@ -236,6 +249,40 @@ class BenchChainInstrumentation : Instrumentation() {
         memoryEnd = obj("app_pss_kib" to Debug.getPss())
         runCatching { org.json.JSONTokener(native { Native.rendererMemory(it) }).nextValue() as? JSONObject }.getOrNull()
             ?.takeIf { it.has("allocated_bytes") }?.let { memoryEnd.put("gpu_allocated_bytes", it.getLong("allocated_bytes")) }
+    }
+    private fun freeBytes() = StatFs(targetContext.cacheDir.path).availableBytes
+    private fun activeSize() = main { state().array("tabs").objects().first { it.optBoolean("active") }.let { it.getDouble("width") to it.getDouble("height") } }
+    private fun place(step: JSONObject) {
+        val anchor = step.optJSONArray("anchor")
+        when (val zoom = step.opt("zoom")) {
+            "fit" -> command("fit_canvas")
+            is Number -> {
+                if (anchor != null) command("fit_canvas")
+                dispatch(obj("type" to "set_zoom", "zoom" to zoom.toDouble()))
+            }
+        }
+        if (anchor != null) {
+            val (width, height) = activeSize()
+            val position = JSONArray(listOf(4 + anchor.getDouble(0) * width, 4 + anchor.getDouble(1) * height))
+            for (phase in listOf("down", "up")) dispatch(obj("type" to "navigator", "phase" to phase, "position" to position, "viewport" to JSONArray(listOf(width + 8, height + 8))))
+        }
+        await("camera placement")
+    }
+    private fun composite(): JSONObject {
+        command("fit_canvas")
+        await("Fit before the capture")
+        val a = area()
+        val shot = uiAutomation.takeScreenshot() ?: error("The screenshot failed")
+        val pixels = shot.copy(Bitmap.Config.ARGB_8888, false).also { shot.recycle() }
+        try {
+            val x = a.x.roundToInt().coerceIn(0, pixels.width - 1)
+            val y = a.y.roundToInt().coerceIn(0, pixels.height - 1)
+            val w = a.w.roundToInt().coerceIn(1, pixels.width - x)
+            val h = a.h.roundToInt().coerceIn(1, pixels.height - y)
+            val small = Bitmap.createScaledBitmap(Bitmap.createBitmap(pixels, x, y, w, h), 32, max(1, (32.0 * h / w).roundToInt()), true)
+            val rgb = IntArray(small.width * small.height).also { small.getPixels(it, 0, small.width, 0, 0, small.width, small.height) }
+            return obj("w" to small.width, "h" to small.height, "rgb" to rgb.joinToString("") { "%06x".format(it and 0xffffff) })
+        } finally { pixels.recycle() }
     }
     private fun area(): Area = main {
         val a = state().getJSONObject("camera").getJSONArray("work_area")
@@ -354,14 +401,32 @@ class BenchChainInstrumentation : Instrumentation() {
         extra().put("workspace", startWorkspace).put("tabs", main { host.drawingTabs.rows.size }).put("phone", main { phone() })
     }
 
-    private fun open(name: String) {
+    private fun open(step: JSONObject) {
+        val name = step.getString("document")
         record.put("input", "dispatch")
-        val file = staged.getValue(name).getOrThrow()
+        val reopen = step.optBoolean("reopen")
+        val file = if (reopen) saved[name] ?: throw Skipped("$name was not saved in this pass") else staged.getValue(name).getOrThrow()
+        if (reopen) {
+            showTab(name)
+            if (main { host.drawingTabs.rows.size } < 2) throw Skipped("closing the only open drawing ends the app, so $name cannot reopen")
+            extra().put("composite_before", composite())
+            closeActive()
+            documents.remove(name)
+        }
+        val free = freeBytes()
         val (tabs, epoch) = main { host.drawingTabs.rows.map { it.getLong("id") }.toSet() to state().getJSONObject("document_file").getLong("epoch") }
+        val notice = main { state().objectOrNull("notice")?.getLong("id") ?: 0L }
+        var hostError = main { state().nullableString("host_error") }
         val input = now()
         check(main { host.documents.openUris(listOf(Uri.fromFile(file))) }) { "The host did not accept $name" }
         var refusal: String? = null
-        val ready = await("$name to open", 120_000) {
+        fun declined(): String? {
+            val shown = state()
+            val error = shown.nullableString("host_error")
+            if (error == null) hostError = null
+            return shown.objectOrNull("notice")?.takeIf { it.getLong("id") > notice }?.getString("text") ?: error?.takeIf { it != hostError }
+        }
+        val ready = try { await("$name to open", 180_000) {
             val controller = host.documents
             val packagePrompt = controller.packagePrompt
             val profilePrompt = controller.profilePrompt
@@ -369,7 +434,7 @@ class BenchChainInstrumentation : Instrumentation() {
                 refusal != null -> quiet()
                 packagePrompt != null -> {
                     extra().put("open_prompt", packagePrompt)
-                    refusal = "Opening $name showed a package dialog: ${packagePrompt.getString("status")}"
+                    refusal = "Opening $name showed a package dialog: " + listOf(packagePrompt.optString("status"), packagePrompt.optString("reason")).filter(String::isNotEmpty).joinToString(": ")
                     controller.choosePackageCopy(null)
                     false
                 }
@@ -381,14 +446,20 @@ class BenchChainInstrumentation : Instrumentation() {
                 }
                 else -> {
                     val selected = host.drawingTabs.selected
-                    selected !in tabs && host.drawingTabs.rows.any { it.getLong("id") == selected } && quiet() &&
-                        state().getJSONObject("document_file").getLong("epoch") != epoch && host.snapshot!!.optBoolean("canvas_ready") && host.snapshot!!.optBoolean("brush_ready")
+                    val opened = selected !in tabs && host.drawingTabs.rows.any { it.getLong("id") == selected }
+                    if (!opened) refusal = declined()
+                    opened && quiet() && state().getJSONObject("document_file").getLong("epoch") != epoch &&
+                        host.snapshot!!.optBoolean("canvas_ready") && host.snapshot!!.optBoolean("brush_ready")
                 }
             }
+        } } catch (failure: IllegalStateException) {
+            main { host.actionError.takeIf { host.failure == null } }?.let { throw Refused(it) }
+            throw failure
         }
-        refusal?.let { error(it) }
+        refusal?.let { throw Refused(it) }
         latency("open", input, ready, "canvas")
-        val photo = if (chain.getJSONObject("documents").getJSONObject(name).getString("kind") == "photo") main { editingLayer() } else null
+        extra().put("disk_free_bytes", JSONArray(listOf(free, freeBytes())))
+        val photo = if (!reopen && chain.getJSONObject("documents").getJSONObject(name).getString("kind") == "photo") main { editingLayer() } else null
         if (photo != null) command("add_layer")
         val (tab, paint, size) = main {
             val shown = state().array("tabs").objects().first { it.optBoolean("active") }
@@ -398,6 +469,7 @@ class BenchChainInstrumentation : Instrumentation() {
         active = name
         if (canvas == null) canvas = size
         extra().put("canvas", size)
+        if (reopen) extra().put("composite_after", composite())
     }
 
     private fun editingLayer() = state().array("layers").objects().firstOrNull { it.optBoolean("editing") }?.getLong("id")
@@ -423,13 +495,10 @@ class BenchChainInstrumentation : Instrumentation() {
         await("brush $preset") { host.snapshot!!.optBoolean("brush_ready") }
         val tool = main { state().getJSONObject("brush").optString("tool") }
         if (tool in setOf("clone", "heal", "spot_heal")) command("use_reference_below")
-        val pixels = main { state().array("tabs").objects().first { it.optBoolean("active") }.let { it.getLong("width") * it.getLong("height") } }
+        val pixels = activeSize().let { (width, height) -> width * height }
         val size = step.get("size").let { if (it == "guarantee") (if (pixels < 20_000_000) 1024.0 else if (pixels < 40_000_000) 1536.0 else 2048.0) else (it as Number).toDouble() }
         dispatch(obj("type" to "set_brush_size", "value" to size))
-        when (val zoom = step.opt("zoom")) {
-            "fit" -> command("fit_canvas")
-            is Number -> dispatch(obj("type" to "set_zoom", "zoom" to zoom.toDouble()))
-        }
+        place(step)
         await("brush ready") { host.snapshot!!.optBoolean("brush_ready") }
         extra().put("size", main { state().getJSONObject("brush").optDouble("diameter") })
             .put("zoom", main { state().getJSONObject("camera").getDouble("zoom") })
@@ -493,13 +562,15 @@ class BenchChainInstrumentation : Instrumentation() {
         val kind = step.getString("gesture")
         if (kind !in setOf("pan", "pinch", "rotate")) throw Skipped("unknown gesture $kind")
         val quick = step.optString("release") == "quick"
+        val scale = step.optDouble("scale", 2.5)
+        place(step)
         val a = area()
         val radius = .12 * min(a.w, a.h)
         val before = main { state().getJSONObject("camera").getLong("revision") }
         motion(twoFingers(motionMs(step), if (quick) 100.0 else 0.0) { s, flick ->
             val wave = sin(PI * s)
             val c = a.at(.5 + if (kind == "pan") .3 * wave else 0.0, .5)
-            val spread = radius * (if (kind == "pinch") 1 + 1.5 * wave else 1.0) * (1 + .6 * flick)
+            val spread = radius * (if (kind == "pinch") 1 + (scale - 1) * wave else 1.0) * (1 + .6 * flick)
             val angle = if (kind == "rotate") PI / 3 * wave else 0.0
             listOf(-1.0, 1.0).map { d -> doubleArrayOf(c[0] + d * spread * cos(angle), c[1] + d * spread * sin(angle)) }
         })
@@ -550,6 +621,7 @@ class BenchChainInstrumentation : Instrumentation() {
         val tool = step.getString("tool")
         val document = tool == "fill"
         if (document && commandEnabled("deselect") == true) command("deselect")
+        place(step)
         command(tool)
         val surface = step.optString("surface", "canvas")
         val id = step.getString("id")
@@ -802,7 +874,7 @@ class BenchChainInstrumentation : Instrumentation() {
             } finally { dispatch(obj("type" to "layer", "action" to obj("op" to "delete", "id" to layer))) }
         } else {
             val ramp = step.getJSONArray("layer_opacity")
-            selectLayer(null)
+            selectLayer(step.optString("layer").ifEmpty { null })
             motion(perFrame(frames) { i ->
                 obj("type" to "set_layer_opacity", "opacity" to ramp.getDouble(0) + (ramp.getDouble(1) - ramp.getDouble(0)) * i / max(1, frames - 1))
             })
@@ -903,20 +975,39 @@ class BenchChainInstrumentation : Instrumentation() {
     private fun headerItems() = host.snapshot!!.optJSONObject("header")?.optJSONObject("model")?.array("zones")
         ?.values()?.flatMap { (it as JSONArray).objects() }.orEmpty()
 
-    private fun save(name: String) {
-        record.put("input", "dispatch").put("surface", "window")
+    private fun showTab(name: String) {
         val opened = documents[name] ?: throw Skipped("$name is not open")
         if (main { host.drawingTabs.selected } != opened.tab) {
             main { host.drawingTabs.select(opened.tab) }
             await("tab $name", 120_000) { host.drawingTabs.selected == opened.tab && quiet() }
             active = name
         }
+    }
+
+    private fun save(name: String) {
+        record.put("input", "dispatch").put("surface", "window")
+        showTab(name)
+        val source = staged.getValue(name).getOrThrow()
+        val target = File(source.parentFile, "$name-saved.capy").apply { delete() }
+        var picked = false
+        val free = freeBytes()
         val input = now()
         command("save_document")
-        latency("save", input, await("save", 120_000) {
-            quiet() && !state().getJSONObject("document_file").optBoolean("modified") &&
+        latency("save", input, await("save", 180_000) {
+            host.documents.picker?.takeIf { it.request.getJSONObject("kind").getJSONObject("request").getString("type") == "save" }?.let {
+                picked = true
+                host.documents.picked(Uri.fromFile(target))
+            }
+            quiet() && host.documents.picker == null && !state().getJSONObject("document_file").optBoolean("modified") &&
                 state().array("requests").objects().none { it.getJSONObject("kind").optString("type") == "document" }
         }, "window")
+        if (main { !activity.hasWindowFocus() }) {
+            check(uiAutomation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)) { "Back was refused" }
+            await("the window to return from the save picker", 30_000) { activity.hasWindowFocus() }
+        }
+        val file = if (picked) target else source
+        saved[name] = file
+        extra().put("saved_bytes", file.length()).put("disk_free_bytes", JSONArray(listOf(free, freeBytes())))
     }
 
     private fun resume() {
@@ -935,6 +1026,19 @@ class BenchChainInstrumentation : Instrumentation() {
         }, "canvas")
     }
 
+    private fun discardOnClose() = main {
+        state().array("requests").objects().firstOrNull {
+            it.getJSONObject("kind").optJSONObject("request")?.optString("type") == "confirm_close"
+        }?.getInt("id")?.let { host.documents.close(it, "discard") }
+    }
+
+    private fun closeActive() {
+        val count = main { host.drawingTabs.rows.size }
+        command("close_document")
+        discardOnClose()
+        await("the drawing to close", 120_000) { host.drawingTabs.rows.size < count && quiet() }
+    }
+
     private fun close() {
         record.put("input", "dispatch").put("surface", "window")
         while (alive) {
@@ -942,11 +1046,7 @@ class BenchChainInstrumentation : Instrumentation() {
             if (count == 0) break
             val input = now()
             command("close_document")
-            main {
-                state().array("requests").objects().firstOrNull {
-                    it.getJSONObject("kind").optJSONObject("request")?.optString("type") == "confirm_close"
-                }?.getInt("id")?.let { host.documents.close(it, "discard") }
-            }
+            discardOnClose()
             val deadline = SystemClock.uptimeMillis() + 120_000
             while (main { !activity.isFinishing && host.drawingTabs.rows.size >= count }) {
                 failed()?.let { error(it) }

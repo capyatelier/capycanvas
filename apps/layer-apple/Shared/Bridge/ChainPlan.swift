@@ -4,6 +4,14 @@ struct ChainPlan {
     struct RenderingTimeout: LocalizedError {
         var errorDescription: String? { "Rendering was still pending after 60 s" }
     }
+    struct Refused: LocalizedError {
+        let reason: String
+        var errorDescription: String? { reason }
+    }
+    struct Timeout: LocalizedError {
+        let reason: String
+        var errorDescription: String? { reason }
+    }
     @MainActor func run(perform: @MainActor (JSON) async -> String?, notRun: @MainActor (JSON, String) -> Void) async -> String? {
         var stopped: String?
         for step in steps {
@@ -18,6 +26,7 @@ struct ChainPlan {
     let steps: [JSON]
     let documents: JSON
     let motionFrames: Double
+    let needs: [String: [String]]
 
     init(data: Data, only: Set<String>? = nil) throws {
         let value = try JSON.decode(String(decoding: data, as: UTF8.self))
@@ -30,6 +39,14 @@ struct ChainPlan {
         if let missing = only?.subtracting(steps.map { $0["id"].string }).sorted().first {
             throw HostFailure(message: "CAPY_WORKLOAD_STEPS names \(missing), which the chain does not contain")
         }
+        var opened: String?, needs: [String: [String]] = [:]
+        for step in value["steps"].array {
+            let kind = step["do"].string
+            if kind == "open" { opened = step["document"].string; continue }
+            let named = step["tabs"].array.map(\.string) + (step["document"].isNull ? [] : [step["document"].string])
+            needs[step["id"].string] = named + (["launch", "resume", "close"].contains(kind) ? [] : opened.map { [$0] } ?? [])
+        }
+        self.needs = needs
     }
     func seconds(_ step: JSON, refreshHz: Double) -> Double {
         if !step["duration_ms"].isNull { return step["duration_ms"].number / 1000 }
@@ -61,10 +78,10 @@ struct ChainPlan {
     struct Pose: Equatable {
         var scale = 1.0, rotation = 0.0, pan = 0.0
     }
-    static func gesture(_ kind: String, progress p: Double) -> Pose {
+    static func gesture(_ kind: String, progress p: Double, scale: Double = 2.5) -> Pose {
         let amount = triangle(p)
         switch kind {
-        case "pinch": return Pose(scale: 1 + 1.5 * amount)
+        case "pinch": return Pose(scale: 1 + (scale - 1) * amount)
         case "rotate": return Pose(rotation: .pi / 3 * amount)
         default: return Pose(pan: 0.3 * amount)
         }

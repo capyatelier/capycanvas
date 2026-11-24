@@ -40,6 +40,12 @@ import Foundation
             do { _ = try ChainPlan(data: Data(invalid.utf8)); preconditionFailure("Invalid chain accepted: \(invalid)") } catch {}
         }
         do { _ = try ChainPlan(data: Data(source.utf8), only: ["launch", "missing"]); preconditionFailure("Unknown step accepted") } catch {}
+        let documents = try ChainPlan(data: Data(#"""
+        {"schema": 1, "steps": [{"id": "launch", "do": "launch"}, {"id": "nav.pan", "do": "gesture"}, {"id": "open.a", "do": "open", "document": "a"},
+         {"id": "a.draw", "do": "stroke"}, {"id": "open.b", "do": "open", "document": "b"}, {"id": "switch", "do": "repeat", "tabs": ["a", "b"]},
+         {"id": "save.a", "do": "save", "document": "a"}, {"id": "reopen.a", "do": "open", "document": "a", "reopen": true}, {"id": "close", "do": "close"}]}
+        """#.utf8))
+        precondition(documents.needs == ["launch": [], "nav.pan": [], "a.draw": ["a"], "switch": ["a", "b", "b"], "save.a": ["a", "b"], "close": []])
 
         precondition(ChainPlan.brushSize(JSON("guarantee"), pixels: 12e6) == 1024)
         precondition(ChainPlan.brushSize(JSON("guarantee"), pixels: 24e6) == 1536)
@@ -71,6 +77,7 @@ import Foundation
         precondition(ChainPlan.gesture("pinch", progress: 0) == ChainPlan.Pose())
         precondition(close(ChainPlan.gesture("pinch", progress: 0.5).scale, 2.5) && close(ChainPlan.gesture("pinch", progress: 1).scale, 1))
         precondition(ChainPlan.gesture("pinch", progress: 1.05).scale < 1)
+        precondition(close(ChainPlan.gesture("pinch", progress: 0.5, scale: 0.4).scale, 0.4))
         precondition(close(ChainPlan.gesture("rotate", progress: 0.5).rotation, .pi / 3))
         precondition(close(ChainPlan.gesture("pan", progress: 0.5).pan, 0.3) && close(ChainPlan.gesture("pan", progress: 1).pan, 0))
         let area = [100.0, 50, 2000, 1000]

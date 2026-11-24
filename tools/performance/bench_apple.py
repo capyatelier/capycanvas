@@ -40,6 +40,12 @@ Two versions on the Mac (A B B A):
   python3 tools/performance/bench_apple.py --device macmini --photo PHOTO.jpg \\
     --fixtures ~/capy-bench/fixtures/WxH --bundle origin/main=A.app --bundle CHANGE=B.app
 
+The gigapixel chain, main only, one cold pass (fixtures from bench_fixtures.py gigapixel):
+  python3 tools/performance/bench_apple.py --device macmini --chain tools/performance/bench-gigapixel.json \\
+    --fixtures /mnt/localssd/capy-bench/fixtures/gigapixel --bundle origin/main=A.app
+Each chain document is staged as Documents/capy-bench/NAME.EXT and named by CAPY_WORKLOAD_NAME:
+a document with a fixture comes from --fixtures, the others from --photo.
+
 One iPad pass (Release build with a signing team; keep the iPad unlocked, the app in front):
   xcodebuild -quiet -project apps/layer-apple/CapyCanvas.xcodeproj -scheme CapyCanvas-iPad \\
     -configuration Release -destination 'generic/platform=iOS' \\
@@ -64,8 +70,8 @@ One iPad pass (Release build with a signing team; keep the iPad unlocked, the ap
     --destination ~/capy-bench/runs/RUN/ipad/LABEL/pass-1
 
 Do not set CAPY_TRACE_SECONDS: the chain needs its own trace. CAPY_WORKLOAD_SECONDS (default 1200)
-bounds a pass. Keep the window visible and the Mac idle. Paths in CAPY_WORKLOAD_* are
-absolute or relative to the app container's home. CAPY_WORKLOAD_STEPS limits a pass to the
+bounds a pass; bench_apple.py sets it to 1.5 times a chain's pass_minutes. Keep the window visible
+and the Mac idle. Paths in CAPY_WORKLOAD_* are absolute or relative to the app container's home. CAPY_WORKLOAD_STEPS limits a pass to the
 named steps. A pass that cannot start records "error" in pass.json; skipped and failed steps
 carry a one-line "reason".
 """
@@ -81,7 +87,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from bench import PASS_MINUTES, pass_order, step_closure
+from bench import PASS_MINUTES, check_free_disk, document_files, pass_order, step_closure
 from bench_analyze import analyze_run, format_table
 
 TOOLS = Path(__file__).resolve().parent
@@ -197,13 +203,14 @@ def run(args, launch=launch_mac, home=Path.home(), process_alive=alive, sleep=ti
     commits = dict(item.split("=", 1) for item in args.commit)
     if unknown := commits.keys() - bundles.keys():
         raise SystemExit(f"Commit overrides name no bundle: {', '.join(sorted(unknown))}")
-    fixtures = Path(args.fixtures)
-    files = {"chain.json": args.chain, "photo" + Path(args.photo).suffix.lower(): args.photo,
-             "heavy.capy": fixtures / "heavy.capy", "vector.capy": fixtures / "vector.capy"}
-    missing = [str(path) for path in files.values() if not Path(path).is_file()]
-    if missing:
-        raise SystemExit(f"Missing input files: {', '.join(missing)}")
-    documents = {"photo": "photo" + Path(args.photo).suffix.lower(), "heavy": "heavy.capy", "vector": "vector.capy"}
+    try:
+        sources = document_files(chain, steps, args.photo, args.fixtures)
+    except ValueError as error:
+        raise SystemExit(str(error)) from None
+    documents = {name: name + path.suffix.lower() for name, path in sources.items()}
+    files = {"chain.json": args.chain, **{documents[name]: path for name, path in sources.items()}}
+    free_disk = {"before": shutil.disk_usage(home).free // 1024}
+    check_free_disk(args.device, free_disk["before"] * 1024, sources.values(), chain)
     versions = {label: {"bundle": str(Path(app).resolve()), "app_id": bundle_id(app), "commit": commit(commits.get(label, label))}
                 for label, app in bundles.items()}
     if unresolved := [label for label in commits if not versions[label]["commit"]]:
@@ -211,16 +218,18 @@ def run(args, launch=launch_mac, home=Path.home(), process_alive=alive, sleep=ti
     ids = [value["app_id"] for value in versions.values()]
     if len(set(ids)) < len(ids):
         print("Warning: versions share a bundle id, so they share a container and the OS Metal shader cache")
-    order = [(entry["version"], entry["pass"], entry["cold"]) for entry in pass_order(list(bundles), 1 if args.quick else args.passes, args.quick)]
+    passes = 1 if args.quick else args.passes or chain.get("passes", 2)
+    bound = 90 * chain["pass_minutes"] if "pass_minutes" in chain else None
+    order = [(entry["version"], entry["pass"], entry["cold"]) for entry in pass_order(list(bundles), passes, args.quick)]
     run_dir = Path(home) / "capy-bench/runs" / args.run_id / args.device
     run_dir.mkdir(parents=True, exist_ok=True)
-    print(f"{len(order)} passes, about {len(order) * PASS_MINUTES} min")
+    print(f"{len(order)} passes, about {len(order) * chain.get('pass_minutes', PASS_MINUTES)} min")
     started = time.monotonic()
     report = {"schema": 1, "run_id": args.run_id, "host": "apple", "device": args.device, "chain": str(args.chain),
               "chain_sha256": sha256(args.chain), "steps": steps, "versions": list(bundles),
               "builds": versions, "devices": {args.device: {"tier": "top"}},
               "order": [{"version": version, "pass": number, "cold": cold} for version, number, cold in order],
-              "started": datetime.now(timezone.utc).isoformat(), "passes": []}
+              "free_disk_kib": free_disk, "started": datetime.now(timezone.utc).isoformat(), "passes": []}
     roots = {label: f"bench-{label.replace('/', '_')}" for label in bundles}
     cold_roots = []
     for version, number, cold in order:
@@ -232,10 +241,12 @@ def run(args, launch=launch_mac, home=Path.home(), process_alive=alive, sleep=ti
             shutil.rmtree(data / output)
         env = pass_environment(output, number, cold, roots[version], args.device, version,
                                versions[version]["commit"], steps, documents)
+        if bound:
+            env["CAPY_WORKLOAD_SECONDS"] = str(bound)
         began = time.monotonic()
         print(f"{version} pass {number} ({'cold' if cold else 'warm'})", flush=True)
         launch(app, env)
-        result = wait_for_pass(data, output, args.timeout, process_alive, sleep)
+        result = wait_for_pass(data, output, max(args.timeout, (bound or 0) + 300), process_alive, sleep)
         if cold and result.get("root"):
             roots[version] = result["root"]
             cold_roots.append(data / "Library/Caches/CapyPerformanceSessions" / result["root"])
@@ -252,6 +263,7 @@ def run(args, launch=launch_mac, home=Path.home(), process_alive=alive, sleep=ti
     for session in cold_roots:
         if session.exists():
             shutil.rmtree(session)
+    free_disk["after"] = shutil.disk_usage(home).free // 1024
     report["finished"] = datetime.now(timezone.utc).isoformat()
     (run_dir.parent / "run.json").write_text(json.dumps(report, indent=2) + "\n")
     print(f"Done in {(time.monotonic() - started) / 60:.1f} min: {run_dir.parent}")
@@ -266,10 +278,10 @@ def parse(argv=None):
     parser.add_argument("--commit", action="append", default=[], metavar="VERSION=REF",
                         help="record the built source commit when a bundle label differs from its Git ref")
     parser.add_argument("--device", required=True, help="device name for the run directory, such as macmini")
-    parser.add_argument("--photo", required=True, help="tier JPEG opened by open.photo")
-    parser.add_argument("--fixtures", required=True, help="directory with heavy.capy and vector.capy for the tier canvas")
-    parser.add_argument("--chain", default=str(TOOLS / "bench-chain.json"))
-    parser.add_argument("--passes", type=int, default=2, help="passes per version (default 2: A B B A)")
+    parser.add_argument("--photo", help="tier JPEG for chain documents without a fixture (open.photo)")
+    parser.add_argument("--fixtures", help="directory with the chain's fixture files (heavy.capy and vector.capy for the tier canvas)")
+    parser.add_argument("--chain", default=str(TOOLS / "bench-chain.json"), help="chain file (bench-gigapixel.json is the gigapixel chain)")
+    parser.add_argument("--passes", type=int, help="passes per version (default: the chain's passes, else 2: A B B A)")
     parser.add_argument("--quick", action="store_true", help="one warm pass per version, no cold pass")
     parser.add_argument("--steps", help="comma-separated steps; launch and the opens they need are added")
     parser.add_argument("--run-id", default=datetime.now().strftime("%Y%m%d-%H%M%S"))
