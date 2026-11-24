@@ -106,7 +106,7 @@ impl WgpuRasterizer {
         self.fill_preview_shown.as_ref().is_some_and(|(_, receipt)| receipt.pending())
     }
     pub(crate) fn wakes(&self, input: Input) -> bool {
-        self.preparation_can_wake() && (input != Input::Gpu || self.gpu_results_pending())
+        self.preparation_can_wake() && (input != Input::Gpu || self.gpu_results_pending()) && (input != Input::Compile || self.compilation.check().is_ok())
     }
     pub(crate) fn frame_slot_blocked(&self) -> bool { !self.can_submit() && self.wakes(Input::FrameSlot) }
     fn unwoken(&self) -> impl Iterator<Item = (&'static str, Outstanding)> + '_ {

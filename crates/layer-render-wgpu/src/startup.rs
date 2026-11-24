@@ -1397,6 +1397,28 @@ mod gpu_tests {
         assert!(r.poll_startup().is_err());
     }
     #[test]
+    fn a_failed_brush_kernel_ends_the_startup_wait_and_fails_its_owner() {
+        use crate::frame_demand::{Input, Outstanding};
+        let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let (wake, woken) = mpsc::channel();
+        r.set_preparation_wake(Arc::new(move || { let _ = wake.send(()); }));
+        let document = Document::new(layer_core::PortableId::random(), 64, 64,
+            layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+        let mut startup = Startup::new(r.compilation.clone()).unwrap();
+        startup.brush = Some(ShaderBrushKey::new(&document, &layer_core::default_brush(layer_core::DefaultBrushPreset::Pencil)));
+        let batch = r.compilation.batch();
+        startup.require_brush(&[], &[Deferred::pipeline(|_| -> crate::Compilation<wgpu::ComputePipeline> { panic!("brush kernel rejected") })]);
+        r.startup = Some(startup);
+        assert_eq!(r.outstanding_terms(), [("startup", Outstanding::Blocked(Input::Compile))]);
+        assert_eq!(r.frame_demand(), layer_render::FrameDemand::Wait);
+        while woken.try_recv().is_ok() {}
+        drop(batch);
+        crate::test_support::wait_until("the brush kernel fails", || r.compilation.check().err().ok_or(()));
+        woken.recv_timeout(Duration::from_secs(5)).expect("the failure wakes its owner");
+        assert_eq!(r.frame_demand(), layer_render::FrameDemand::Work, "a failed compile ends the wait on it");
+        assert!(r.poll_startup().unwrap_err().to_string().contains("brush kernel rejected"));
+    }
+    #[test]
     fn restore_readiness_admits_the_integer_normalizer_without_the_float_recipe() {
         use layer_core::color::{DocumentColor,SampleDepth,RgbSpace};
         let reference=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
