@@ -16,7 +16,7 @@ import sys
 import time
 from pathlib import Path
 from wayland_objects import Objects
-from tablet_target import TabletTarget
+from tablet_target import TabletTarget, pressure
 
 runtime = Path(os.environ["XDG_RUNTIME_DIR"])
 display = os.environ["WAYLAND_DISPLAY"]
@@ -168,7 +168,7 @@ try:
             if "twist" in contact:
                 event(tool, 14, struct.pack("=i", int(contact["twist"] * 256)))
             if contact["pen"] == "down":
-                event(tool, 11, words(32768))
+                event(tool, 11, words(pressure(contact)))
                 event(tool, 8, words(serial))
             elif contact["pen"] == "up":
                 event(tool, 11, words(0))
@@ -178,6 +178,8 @@ try:
             elif contact["pen"] == "leave":
                 event(tool, 7)
                 near = None
+            elif "pressure" in contact:
+                event(tool, 11, words(pressure(contact)))
             event(tool, 18, words(int(time.monotonic() * 1000) & 0xFFFFFFFF))
             index += 1
 finally:

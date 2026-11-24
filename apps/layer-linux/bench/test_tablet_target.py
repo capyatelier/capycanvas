@@ -1,6 +1,6 @@
 import struct
 import unittest
-from tablet_target import TabletTarget
+from tablet_target import TabletTarget, pressure
 
 
 def words(*values):
@@ -8,6 +8,11 @@ def words(*values):
 
 
 class TabletTargetTests(unittest.TestCase):
+    def test_contacts_carry_their_pressure_and_default_to_half(self):
+        self.assertEqual([pressure(contact) for contact in ({"pen": "down"}, {"pen": "move", "pressure": .25},
+                                                            {"pen": "move", "pressure": 1.5}, {"pen": "down", "pressure": -1})],
+                         [32768, 16384, 65535, 0])
+
     def test_new_windows_receive_the_pen_after_activation_without_stealing_it_while_inactive(self):
         target = TabletTarget()
         for surface, xdg, toplevel in [(20, 21, 22), (30, 31, 32), (40, 41, 42)]:

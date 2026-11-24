@@ -36,3 +36,7 @@ class TabletTarget:
                 self.current = self.toplevels[obj]
             elif self.current == self.toplevels[obj]:
                 self.current = None
+
+
+def pressure(contact):
+    return round(min(1, max(0, contact.get("pressure", .5))) * 65535)

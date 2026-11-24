@@ -129,10 +129,14 @@ pub fn check_saved_data_cli() -> Option<gtk::glib::ExitCode> {
     }
 }
 
-pub fn run() -> gtk::glib::ExitCode {
+fn start_process() {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     heap::cap_arenas();
     glib::set_application_name(launch_localization().language().app_name());
+}
+
+pub fn run() -> gtk::glib::ExitCode {
+    start_process();
     if let Err(error) = gtk::init() {
         eprintln!("{error}");
         return gtk::glib::ExitCode::FAILURE;

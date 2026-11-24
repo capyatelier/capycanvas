@@ -329,7 +329,8 @@ does not qualify this measurement.
   connection when Quick Mask or Selection Layer rows change, so journeys through
   those modes run without `--tablet`. A pen contact with `"tool":"eraser"` uses
   the pen's eraser end; `"tool":"rotating"` uses a pen that reports barrel
-  rotation, set in degrees with `"twist"`.
+  rotation, set in degrees with `"twist"`. `"pressure"` (0–1, default 0.5) sets
+  a down or move contact's pressure.
 
 ### Run a journey without the runner
 

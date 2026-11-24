@@ -138,6 +138,8 @@ mod workspace_edge_grab;
 mod fullscreen;
 #[path = "screen_view_tests.rs"]
 mod screen_view;
+#[path = "bench_chain_tests.rs"]
+mod bench_chain;
 use super::*;
 use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};

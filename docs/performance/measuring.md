@@ -350,8 +350,8 @@ Runs land in `~/capy-bench/runs/`. `analyze RUN_DIR` prints the comparison and
 `publish RUN_DIR` appends its rows to the per-device CSVs in
 `docs/performance/results/`. The Windows PCs run the same chain over SSH with
 `bench_windows.py` (`bench-chain-windows.ps1` on the PC), the Mac and iPad
-with `bench_apple.py`, and browsers with `bench_web.py`; all write the
-same run layout for `analyze`.
+with `bench_apple.py`, the GTK app with `bench_gtk.py`, and browsers with
+`bench_web.py`; all write the same run layout for `analyze`.
 
 **Web host.** `bench_web.py run` runs the chain in a browser against each
 version's Web build (`build.sh`, `web-release` profile), served on a port
@@ -383,6 +383,21 @@ from `nvidia-smi`, the Windows GPU process counters or the Android GPU process
 Graphics row; macOS reports none. `--trace-steps STEPS` saves each pass's
 Chrome trace of those steps as `trace-STEP.json`, with any `--trace-categories`
 added; the extra categories slow those steps.
+
+**GTK host.** `python3 tools/performance/bench_gtk.py --versions v1.0.15,origin/main`
+builds each version's release test executable in a detached tree under
+`/mnt/localssd/capy-bench/gtk`, with the current
+[`bench_chain_tests.rs`](../../apps/layer-linux/src/bench_chain_tests.rs) journey
+and any `bench-patches/<label>-gtk.patch`. Each pass runs `native_bench_chain`
+through `workspace-motion.sh` on a private 120 Hz headless Mutter display: the
+production application setup, driven by tablet-proxy pen with pressure, touch
+and keys. Passes get fresh app storage; warm passes reuse the version's shader
+caches. Frames are Wayland presentation feedback for the canvas and GTK frame
+clock presentations for the window; memory is `/proc` RSS and `nvidia-smi`
+per-process GPU memory each second. Passes hold the GPU validation lock
+exclusively; `--shared-lock` is for smoke runs that do not qualify timing.
+`--tier` picks the photo and fixtures (default top); `--viewport` and `--scale`
+set the private monitor. Launch latency starts at application setup, not exec.
 
 **Brushes (Android).**
 

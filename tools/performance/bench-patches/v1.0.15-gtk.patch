@@ -1,0 +1,24 @@
+Subject: GTK chain benchmark hook for v1.0.15
+Base-commit: 1eb7d6d16975cb08f72da1df3fc6fb5d8b08f519
+
+bench_gtk.py runs bench_chain_tests.rs in each version, and the journey calls
+start_process() before the production application setup, as run() does.
+
+diff --git a/apps/layer-linux/src/lib.rs b/apps/layer-linux/src/lib.rs
+index 9c027b46b..b65556f97 100644
+--- a/apps/layer-linux/src/lib.rs
++++ b/apps/layer-linux/src/lib.rs
+@@ -103,8 +103,12 @@ fn stylesheet_provider() -> gtk::CssProvider {
+     css
+ }
+ 
+-pub fn run() -> gtk::glib::ExitCode {
++fn start_process() {
+     glib::set_application_name(launch_localization().language().app_name());
++}
++
++pub fn run() -> gtk::glib::ExitCode {
++    start_process();
+     let (app, active) = application(storage::APP_ID);
+     let result = app.run();
+     let windows = std::mem::take(&mut *active.borrow_mut());
