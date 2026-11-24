@@ -178,7 +178,7 @@ impl Owner {
 }
 impl Drop for Owner {fn drop(&mut self) {self.shutdown();}}
 fn wait_for_progress(submission_index:Option<wgpu::SubmissionIndex>,poll:impl FnOnce(wgpu::PollType)->Result<wgpu::PollStatus,wgpu::PollError>)->Result<bool,String> {
-    Ok(!matches!(poll(wgpu::PollType::Wait {submission_index,timeout:None}),Ok(wgpu::PollStatus::QueueEmpty)))
+    poll(wgpu::PollType::Wait {submission_index,timeout:None}).map(|status|!matches!(status,wgpu::PollStatus::QueueEmpty)).map_err(|error|error.to_string())
 }
 enum State {New {handle:RetirementHandle,receiver:mpsc::Receiver<Message>},Running(Owner),Retired(RetirementHandle)}
 pub(crate) struct Root {state:Mutex<State>,admitted:Mutex<usize>,drained:Condvar,queue:Arc<OnceLock<wgpu::Queue>>}
@@ -478,6 +478,20 @@ mod tests {
         assert_eq!(polls.load(Ordering::Acquire),1,"the poll owner polled a lost device again");
         assert!(retired.is_ok(),"a lost device left the poll service open");
         assert_eq!(joined.err().as_deref().map(crate::panic_message).as_deref(),Some("Parent device is lost"),"joining the poll owner lost the device's panic");
+    }
+    #[test]
+    fn the_poll_owner_retires_at_the_first_persistent_poll_error() {
+        use std::sync::atomic::{AtomicUsize,Ordering};
+        for error in [||wgpu::PollError::Timeout,||wgpu::PollError::WrongSubmissionIndex(2,1)] {
+            let (handle,receiver)=RetirementHandle::channel();
+            let polls=Arc::new(AtomicUsize::new(0));let counted=polls.clone();
+            let mut owner=Owner::start(move||wait_for_progress(None,|_| {counted.fetch_add(1,Ordering::AcqRel);Err(error())}),handle.clone(),receiver,Default::default()).unwrap();
+            let (closed,woken)=mpsc::channel();handle.on_retired(Arc::new(move||{let _=closed.send(());}));
+            let retired=woken.recv_timeout(Duration::from_secs(1));
+            owner.shutdown();
+            assert!(retired.is_ok(),"a persistent poll error left the poll service open after {} polls",polls.load(Ordering::Acquire));
+            assert_eq!(polls.load(Ordering::Acquire),1,"the poll owner polled again after a poll error");
+        }
     }
     #[test]
     fn close_joins_its_inflight_fence_while_a_raw_straggler_keeps_submitting() {
