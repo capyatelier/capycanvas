@@ -52,6 +52,8 @@ Progress notes, validation reports and other work records are not committed
 
 ## Design records
 
+- [Display consistency follow-ups](perf_followups/display-consistency-followups.md): the
+  stale-tile investigation's invariants, test tools, release gate and open work.
 - [Memory follow-ups](perf_followups/memory-followups.md): memory work designed or
   written but not shipped, with its evidence, agreed design and what is left to verify.
 - [Memory model: known issues and redesign requirements](memory-model-redesign.md):
