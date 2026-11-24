@@ -45,7 +45,7 @@ fn folded_document(count:u32)->Folded {
 }
 
 fn tile_pixels(r:&mut WgpuRasterizer,capture:&mut crate::artwork::Capture,target:SourceTarget,coordinate:[u32;2])->Vec<[f32;4]> {
-    let tile=crate::test_support::submit_encoded(r,|r,encoder|crate::test_support::query_ready(r,encoder,|r,encoder|capture.layer_tile(r,target,coordinate,encoder)));
+    let tile=crate::test_support::submit_encoded(r,|r,encoder|crate::test_support::query_ready(r,encoder,|r,encoder|capture.layer_tile(r,target,coordinate,encoder))).uncertified();
     crate::test_support::float_pixels(r,&tile.texture)
 }
 

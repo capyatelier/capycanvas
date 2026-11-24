@@ -166,7 +166,7 @@ impl WgpuRasterizer {
                             self.color_sampler.waiting = Some((request, frame));
                             return Ok(true);
                         }
-                        (result?.texture, [tx * PAGE_SIZE, ty * PAGE_SIZE])
+                        (result?.uncertified().texture, [tx * PAGE_SIZE, ty * PAGE_SIZE])
                     }
                 };
                 for row in y0..y1 {

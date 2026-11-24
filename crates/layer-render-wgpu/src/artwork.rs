@@ -139,17 +139,17 @@ pub(super) struct Capture {
 impl Capture {
     pub fn layer_tile(&mut self, r: &mut WgpuRasterizer, id: SourceTarget, coordinate: [u32; 2],
         encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<source_access::RawTile,GpuRasterError> {
+    ) -> Result<source_access::Sampled<source_access::RawTile>,GpuRasterError> {
         let frame = r.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?;
         self.layer_tile_at(r,&frame,id,coordinate,encoder)
     }
-    pub fn layer_tile_at(&mut self,r:&mut WgpuRasterizer,frame:&Frame,id:SourceTarget,coordinate:[u32;2],encoder:&mut crate::submission::CommandEncoder)->Result<source_access::RawTile,GpuRasterError> {
+    pub fn layer_tile_at(&mut self,r:&mut WgpuRasterizer,frame:&Frame,id:SourceTarget,coordinate:[u32;2],encoder:&mut crate::submission::CommandEncoder)->Result<source_access::Sampled<source_access::RawTile>,GpuRasterError> {
         if self.scene.is_none() {self.scene=Some(scene::Scene::new(r)?);}
         self.scene.as_mut().unwrap().layer_tile_for_query(r,frame.packet(r.document_extent),id,coordinate,encoder)
     }
     pub fn thumbnail_tile(&mut self, r: &mut WgpuRasterizer, target: layer_render::ThumbnailTarget, coordinate: [u32;2], encoder: &mut submission::CommandEncoder) -> Result<source_access::RawTile, GpuRasterError> {
         let frame = r.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?;
-        if let Some(source) = r.thumbnail_source(target) { return self.layer_tile(r, source, coordinate, encoder); }
+        if let Some(source) = r.thumbnail_source(target) { return self.layer_tile(r, source, coordinate, encoder).map(source_access::Sampled::uncertified); }
         let layer_render::ThumbnailTarget::Occurrence(handle) = target else { return Err(GpuRasterError::InvalidExtent); };
         let view = frame.scene.view();
         let occurrence = view.occurrence(handle).ok_or(GpuRasterError::InvalidExtent)?;

@@ -111,7 +111,7 @@ impl Scene {
         if coverage.use_.offset == [0; 2] && !coverage.use_.inverted {
             if let Some(page) = r.layer_masks.command_pages.get(&(command, tile)) {
                 let name=crate::raster::contents::command_mask(&coverage.source,coverage.selection.as_ref(),tile)?;
-                if let Ok(read)=page.read(name,self.submission.as_ref()) {return Ok(ColorInput { view: read.value().view.clone(), lease: None });}
+                if let Ok(read)=page.read(name,self.submission.as_ref()) {return Ok(ColorInput { view: crate::source_access::Sampled::read(&read).take(&mut self.complete), lease: None });}
             }
             if coverage.source.default_coverage == 0. && !layer_masks::command_page_needed(coverage,command.2,tile)
                 && (coverage.selection.is_some() || r.mask_data(SourceTarget::Coverage(coverage.use_.source),&coverage.source)?.tiles.get(&layer_core::raster::TileKey {plane:layer_core::raster::RasterPlane::Mask,coordinate:tile}).is_none()) {
@@ -492,6 +492,35 @@ mod tests {
                 scene.jobs.clear();
                 scene.used.iter_mut().for_each(scratch::Usage::reset);
             }
+        }
+    }
+
+    #[test]
+    fn a_command_mask_aliasing_an_incomplete_live_page_is_not_complete() {
+        let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let mut scene=Scene::new(&r).unwrap();
+        let command=(SourceTarget::default(),0,false);
+        let descriptor=layer_core::raster::RasterPlane::Mask.descriptor(r.document_color());
+        let tile=layer_core::raster::RasterTile::backed(layer_core::raster::TileBlob::encode(descriptor,&vec![0;descriptor.byte_len([PAGE_SIZE;2]).unwrap()]).unwrap());
+        let data=layer_core::raster::RasterRevision::backed(layer_core::raster::RasterData {
+            tiles:[(layer_core::raster::TileKey {plane:layer_core::raster::RasterPlane::Mask,coordinate:[0;2]},tile.clone())].into(),..Default::default()});
+        let mut page=layer_masks::MaskPage::new(&r.device,&r.raster_tiers.paint);
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        page.initialize(&encoder.submission()).unwrap().completed(false).publish(tile.content_version());
+        r.last_submission=encoder.submit(&r.queue);
+        r.layer_masks.command_pages.insert((command,[0;2]),page);
+        for offset in [[0;2],[8,0]] {
+            let mut coverage=layer_core::CoverageSnapshot::reveal_all(Default::default(),[512,256],offset);
+            coverage.source.raster=data.clone();
+            let doc=crate::scene::scale::tests::document_at([512,256]);
+            let packet=crate::test_support::packet(doc.scene(),[512,256]);
+            let declaration=scene.capture_declaration(&r,packet).unwrap();
+            let mut accepted=scene.accept_traversal(&mut r,Default::default(),declaration,|scene,r,accepted|
+                scene.command_mask_at(r,&coverage,[0;2],command,accepted).map(drop)).unwrap();
+            let (_,complete)=scene.certified(|scene|scene.command_mask_at(&r,&coverage,[0;2],command,&mut accepted)).unwrap();
+            assert!(!complete,"a command mask read through an incomplete live page at offset {offset:?} is not complete");
+            scene.jobs.clear();
+            scene.used.iter_mut().for_each(scratch::Usage::reset);
         }
     }
 }

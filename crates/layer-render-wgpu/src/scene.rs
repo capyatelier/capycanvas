@@ -986,7 +986,7 @@ impl Scene {
     /// belong to the fixed, queue-ordered source cache.
     pub fn layer_tile_for_query(&mut self, r: &mut WgpuRasterizer, packet:FramePacket<'_>, target: SourceTarget,
         coordinate: [u32; 2], encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<crate::source_access::RawTile, GpuRasterError> {
+    ) -> Result<crate::source_access::Sampled<crate::source_access::RawTile>, GpuRasterError> {
         debug_assert!(self.jobs.is_empty());
         self.used.iter_mut().for_each(scratch::Usage::reset); self.begin_frame();
         let scene=packet.scene;
@@ -1005,10 +1005,10 @@ impl Scene {
         let mut accepted=self.accept_capture(r,packet,None,&declaration,|this,r,accepted|read(this,r,accepted).map(drop))?;
         #[cfg(test)]
         let _record=sources::record_reads(&accepted);
-        let page = read(self,r,&mut accepted)?;
+        let (page,complete) = self.certified(|this|read(this,r,&mut accepted))?;
         let _page = self.own(page);
         accepted.clone().track(encoder);self.encode_jobs(r, encoder)?;accepted.track(encoder);
-        Ok(crate::source_access::RawTile { texture: self.pool[page].texture.clone().into(), view: self.pool[page].view.clone() })
+        Ok(crate::source_access::Sampled::new(crate::source_access::RawTile { texture: self.pool[page].texture.clone().into(), view: self.pool[page].view.clone() },complete))
     }
 
     pub(super) fn paint_base_tile_for_query(&mut self, r: &mut WgpuRasterizer, base: &layer_core::authored::PaintBase,
@@ -1509,10 +1509,11 @@ impl Scene {
             let name=crate::raster::contents::command_mask(source,coverage.selection.as_ref(),c)?;
             let Ok(read)=page.read(name,self.submission.as_ref()) else {continue;};
             ready.insert(c);
+            let view=source_access::Sampled::read(&read).take(&mut self.complete);
             self.draw(
                 r,
                 out,
-                read.value().view.clone(),
+                view,
                 None,
                 rect,
                 [2., 1., f32::from(mask.inverted), 0.],

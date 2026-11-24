@@ -649,30 +649,31 @@ impl RawRegions {
             let mut views: [wgpu::TextureView; BATCH_TILES] =
                 std::array::from_fn(|_| r.empty_view.clone());
             let mut leases = Vec::with_capacity(tiles.len());
+            let mut complete = true;
             for (slot, coordinate) in tiles.iter().enumerate() {
                 let source = if let Some(layer) = layer {
-                    if opaque {
+                    let read = if opaque {
                         let source = r
                             .tiled_sources
                             .get(&layer)
                             .cloned()
                             .ok_or(GpuRasterError::InvalidExtent)?;
-                        r.paint_base_tile(&source, *coordinate, encoder)?
-                    } else {
-                        if placed { Some(self.capture.layer_tile(r,layer,*coordinate,encoder)?) } else { r.raw_layer_tile(layer,*coordinate,encoder)?.map(source_access::Sampled::uncertified) }
-                    }
+                        r.paint_base_tile(&source, *coordinate, encoder)?.map(|tile| source_access::Sampled::new(tile, true))
+                    } else if placed { Some(self.capture.layer_tile(r,layer,*coordinate,encoder)?) } else { r.raw_layer_tile(layer,*coordinate,encoder)? };
+                    read.map(|read| read.take(&mut complete))
                 } else {
                     let region = page_rect(*coordinate).intersect(PixelRect::full([w, h]));
                     if self.captured.len() <= slot { self.captured.push(crate::create_color_target(&r.device, [PAGE_SIZE; 2], "raw region capture")); }
                     let (texture, view) = self.captured[slot].clone();
                     if slot >= self.progress.as_ref().unwrap().captured {
                         let packet = frame.as_ref().unwrap().packet([w, h]);
-                        if sampling == Sampling::Target { self.capture.authored_region_into(r, packet, region, &texture, encoder)?.uncertified(); }
-                        else { self.capture.region_into(r, packet, region, &texture, encoder)?.uncertified(); }
-                        self.progress.as_mut().unwrap().captured = slot + 1;
+                        if sampling == Sampling::Target { self.capture.authored_region_into(r, packet, region, &texture, encoder)?.take(&mut complete); }
+                        else { self.capture.region_into(r, packet, region, &texture, encoder)?.take(&mut complete); }
+                        if complete { self.progress.as_mut().unwrap().captured = slot + 1; }
                     }
                     Some(source_access::RawTile { texture: texture.into(), view })
                 };
+                if !complete { return Err(GpuRasterError::NotReady); }
                 if let Some(source) = &source { leases.extend(r.source_tiles.borrow().lease(&source.view)); }
                 views[slot] = source.map_or_else(|| r.empty_view.clone(), |t| t.view);
             }

@@ -2734,7 +2734,7 @@ fn each_traversal_reads_only_the_inputs_its_declaration_recorded() {
             let region=page_rect(coordinate).intersect(PixelRect::full(extent));
             let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
             crate::test_support::query_ready(&mut r,&mut encoder,|r,encoder|capture.region(r,captured.packet(extent),region,[PAGE_SIZE;2],encoder));
-            crate::test_support::query_ready(&mut r,&mut encoder,|r,encoder|capture.layer_tile(r,target,coordinate,encoder));
+            crate::test_support::query_ready(&mut r,&mut encoder,|r,encoder|capture.layer_tile(r,target,coordinate,encoder)).uncertified();
             crate::test_support::query_ready(&mut r,&mut encoder,|r,encoder|r.read_raw_neighborhood(target,coordinate,[Some([-1,0]),Some([0,0]),Some([1,0])],encoder));
             r.uploads.finish(&encoder);encoder.submit(&r.queue);
         }

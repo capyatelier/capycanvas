@@ -525,7 +525,7 @@ fn layer_tiles_beside_the_largest_offset_keep_their_exact_pixels() {
         let first = u32::try_from(offset.div_euclid(i64::from(PAGE_SIZE))).unwrap();
         (first..first + 3).map(|x| {
             let tile = crate::test_support::submit_encoded(&mut r, |r, encoder| crate::test_support::query_ready(r, encoder, |r, encoder|
-                scene.layer_tile_for_query(r,crate::test_support::packet(layer.scene(),r.document_extent),target(&layer),[x,0],encoder)));
+                scene.layer_tile_for_query(r,crate::test_support::packet(layer.scene(),r.document_extent),target(&layer),[x,0],encoder))).uncertified();
             crate::layer_tests::page_bytes(&r, &tile.texture)
         }).collect::<Vec<_>>()
     };

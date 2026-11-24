@@ -888,6 +888,22 @@ fn a_fill_whose_edge_band_reads_pixels_a_cold_donor_left_behind_is_not_complete(
 }
 
 #[test]
+fn a_fill_region_classified_from_pixels_a_cold_donor_left_behind_waits_for_them() {
+    let (mut fixture,style)=cold_clone([384.,0.]);
+    committed_miss(&mut fixture,&style);
+    fixture.r.retouch.as_mut().unwrap().take_miss();
+    assert!(!committed_complete(&fixture.r,TARGET,[0,0]),"the committed dab left its page incomplete");
+    let request=layer_render::RegionRequest {fill_areas:None,colour_mode:Default::default(),fill:None,reference_count:None,paper:None,request_id:1,
+        source:layer_render::RegionSource::Source(TARGET),position:[400,96],tolerance:0.,contiguous:true,selection:None,refinement:Default::default(),limit:None,enclosure:None};
+    assert!(fixture.r.request_region(request.into()).unwrap());
+    let deadline=std::time::Instant::now()+std::time::Duration::from_millis(500);
+    while std::time::Instant::now()<deadline {
+        assert!(fixture.r.take_region().is_none(),"a region classified from the committed dab's missing pixels is not answered");
+        std::thread::yield_now();
+    }
+}
+
+#[test]
 fn a_frequency_detail_over_a_low_page_a_cold_donor_left_behind_is_not_complete() {
     let (mut fixture,style)=cold_clone([384.,0.]);
     committed_miss(&mut fixture,&style);
