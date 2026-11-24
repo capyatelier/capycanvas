@@ -1114,7 +1114,7 @@ impl Cache {
             }
             shown=done.iter().filter(|(_,changed)|!changed.is_empty()).fold(PixelRect::EMPTY,|shown,(_,changed)|shown.union(texels(*changed)));
             if !written.is_empty() || self.pixels.committed_root().is_none() {self.commit_window(r,encoder)?;}
-            for region in blocked {self.hide(region);self.block(arrivals,region,waiting_input(scene,r,false));}
+            for region in blocked {self.block(arrivals,region,waiting_input(scene,r,false));}
             composed=done.into_iter().map(|(region,_)|region).collect();
         } else if !composes.is_empty() || !copies.is_empty() || !streamed.is_empty() || !halves.is_empty() || self.graph.prepared.is_some() || transition {
             let root = self.graph.root.clone().expect("prepared composition graph");

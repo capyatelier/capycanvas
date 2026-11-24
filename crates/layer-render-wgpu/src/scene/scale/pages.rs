@@ -2015,13 +2015,6 @@ impl Cache {
             .filter(|(_,coordinate)|scope.contains(&bounds(*coordinate,self.plan.level,self.plan.extent)))
             .all(|(cell,_)|cell.written()))
     }
-    pub(super) fn hide(&self,region:PixelRect) {
-        let Some((mut cells,_store,_))=self.cells() else {return;};
-        for index in Cells::reached(self.plan,region) {
-            let cell=&mut cells.cells[index];
-            cell.shown=None;cell.invalidate();
-        }
-    }
     pub(super) fn cell_reads(&self,target:SourceTarget,regions:&[PixelRect])->crate::IdMap<[u32;2],Arc<[PixelRect]>> {
         let Some((_cells,store,template))=self.cells() else {return Default::default();};
         let Some(frame)=store.expected() else {return Default::default();};
@@ -3779,13 +3772,12 @@ pub(super) mod query_tests {
         let display=r.scene_tiers.display.clone();
         let _held=display.charge(display.limit().saturating_sub(display.used()));
         let refused=display.blocked(Class::Visible,1).expect("the constrained tier refuses visible work");
-        for update in ["block","refuse","hide","shown","evict"] {
+        for update in ["block","refuse","shown","evict"] {
             let mut cache=Cache::new(&r,Request {plan:display_mips::Plan::at(extent,0),evaluation:Evaluation::Display},document.scene().order().len());
             cache.prepare_graph(&r,frame,&scene).unwrap();
             match update {
                 "block"=>cache.block(r.arrival_token(),cache.plan.bounds,None),
                 "refuse"=>cache.refuse(None,cache.plan.bounds,&refused),
-                "hide"=>cache.hide(cache.plan.bounds),
                 "shown"=>assert!(cache.shown_pages(cache.plan.bounds).is_empty()),
                 "evict"=>cache.evict_window(cache.plan.bounds),
                 _=>unreachable!(),

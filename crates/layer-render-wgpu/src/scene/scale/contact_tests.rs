@@ -1363,6 +1363,81 @@ fn pencil_cells(r:&WgpuRasterizer,[x,y]:[f32;2],radius:f32)->usize {
     [x,x+8.].into_iter().flat_map(|x|pages::coordinates(crate::pixel_rect::pixel_rect(pencil(x,y,radius,&style).bounds(),plan.extent).intersect(plan.bounds),plan.level))
         .collect::<BTreeSet<_>>().len()
 }
+fn a_cell_blocked_on_a_decode_mid_contact_keeps_its_ink_while_its_neighbour_writes(lift:bool) {
+    let extent=[1024,512];
+    let mut doc=Document::new(PortableId::random(),extent[0],extent[1],layer_core::DocumentNames {paint:"Current ink".into(),paper:"Paper".into()});
+    let below=paint_occurrence(&mut doc,"Below",Some(rgba8_source(extent,|x,y|[(x/5) as u8,(y/3) as u8,140,255])));
+    let working=doc.scene().position(doc.working.occurrence.unwrap()).unwrap();
+    insert_occurrence(&mut doc,below,working+1);
+    let mut program=(*crate::tests::fixture("exposure").program()).clone();
+    program.resolution=layer_core::EffectResolution::Display;
+    let mut effect=layer_core::EffectInstance::new(Arc::new(program));
+    effect.set("exposure",layer_core::EffectValue::Number(0.6)).unwrap();
+    let filter=effect_occurrence(&mut doc,effect,"Filter");
+    let mask=coverage_mask(&mut doc,filter,[0,0],Some(layer_core::Selection::polygon(vec![
+        layer_core::Point {x:270.,y:20.},layer_core::Point {x:500.,y:20.},layer_core::Point {x:500.,y:240.},layer_core::Point {x:270.,y:240.},
+    ]).unwrap()));
+    insert_occurrence(&mut doc,filter,0);
+    let ink=doc.active_target().unwrap();
+    let blocked=[1,0];
+    let masked=doc.artwork.coverage.get(mask).unwrap().raster.wait_data().unwrap().tiles.iter()
+        .find(|(key,_)|key.coordinate==blocked).map(|(_,tile)|tile.wait_backing().unwrap()).expect("the mask stores a tile under the blocked cell");
+    let photo=doc.scene().paint_base(doc.scene().source_target(below).unwrap()).unwrap().image.storage().clone();
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
+    let mut r=renderer(&doc);
+    crate::test_support::submit_settled(&mut r,frame);
+    let style=crate::layer_tests::preset_style(DefaultBrushPreset::Pencil);
+    let written=|r:&WgpuRasterizer| {
+        let cache=r.scale_display.as_ref().unwrap();
+        let index=pages::coordinates(cache.plan.bounds,cache.plan.level).position(|cell|cell==blocked).unwrap();
+        crate::test_support::published_coverage(crate::test_support::coverage_hash(&cache.geometry)).is_some_and(|coverage|coverage.written[index/32]>>(index%32)&1==1)
+    };
+    let mut step=0;
+    let mut draw=|r:&mut WgpuRasterizer,x:f32| {
+        predicted_frame(r,frame,ink,&style,1,&[pencil(x,128.,12.,&style),pencil(x+12.,128.,12.,&style)],step==0,0.01*(step+1) as f32);
+        crate::test_support::complete(r);step+=1;
+    };
+    for x in [380.,400.,420.] {draw(&mut r,x);}
+    let contact=r.scale_display.as_ref().unwrap().contact_id();
+    assert!(contact.is_some() && written(&r),"the stroke shows its ink in cell {blocked:?} in contact");
+    let stored=SourceImage {tiles:std::collections::BTreeMap::from([(blocked,masked)]),..(*photo).clone()};
+    let store=crate::test_support::GatedStore::new(&layer_core::raster_storage::RetainedTiles::from_sources([&stored]),false);
+    {
+        let samples=r.device.source_samples.clone();let limit=samples.stats().limit_bytes;
+        samples.set_limit(0);samples.trim_unused(usize::MAX);samples.set_limit(limit);
+        r.source_tiles.borrow().release_ready();r.source_tiles.borrow_mut().retire_evicted();
+    }
+    let pending=|store:&crate::test_support::GatedStore|store.gate.reads.load(std::sync::atomic::Ordering::Acquire)>0;
+    let mut held=0;
+    for x in [496.,500.,504.,508.] {
+        draw(&mut r,x);
+        held+=usize::from(pending(&store));
+        assert_eq!(r.scale_display.as_ref().unwrap().contact_id(),contact,"the stroke stays in its contact");
+        assert!(lift || written(&r),"cell {blocked:?} keeps the ink it showed while its decode is pending and its neighbour writes");
+    }
+    assert!(held>=2,"the decode of the mask tile under cell {blocked:?} stays pending across the frames its neighbour writes: {held}");
+    if lift {
+        pencil_lift(&mut r,frame,ink,1,[512.,128.],12.);
+        assert!(written(&r),"cell {blocked:?} keeps the ink it showed when the contact ends before its decode lands");
+    }
+    store.gate.release();
+    crate::test_support::settle_decodes(&mut r);
+    if !lift {pencil_lift(&mut r,frame,ink,1,[512.,128.],12.);}
+    crate::test_support::submit_settled(&mut r,frame);
+    let repaired=r.scale_display.as_ref().unwrap().shown_cells().into_iter().any(|(cell,shown)|cell==blocked && shown.is_some());
+    assert!(repaired,"cell {blocked:?} is composed again once its decode lands");
+}
+
+#[test]
+fn a_cell_blocked_on_a_decode_mid_contact_keeps_its_ink_across_the_frames_its_neighbour_writes() {
+    a_cell_blocked_on_a_decode_mid_contact_keeps_its_ink_while_its_neighbour_writes(false);
+}
+
+#[test]
+fn a_cell_blocked_on_a_decode_when_its_contact_ends_keeps_its_ink() {
+    a_cell_blocked_on_a_decode_mid_contact_keeps_its_ink_while_its_neighbour_writes(true);
+}
+
 struct Switched {counts:crate::test_support::PassCounts,decodes:u64,reach:usize,contact:bool,shown:bool}
 fn first_dab_after_a_switch_and_a_reaction_gap() -> Switched {
     let doc=crate::memory::memory_tests::layered_raster_document(32,16);
