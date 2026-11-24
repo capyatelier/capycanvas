@@ -6859,7 +6859,7 @@ mod tests {
     }
 
     fn wide_fixed_engine(feedback: bool) -> (InputProducer<PenEvent>, CanvasEngine<RecordingRenderer>) {
-        let taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, ..Default::default() };
+        let taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: [10., 10.], ..Default::default() };
         let (input, mut engine) = tapered_engine(taper, feedback);
         engine.set_brush(BrushSnapshot { diameter: 100., ..engine.configured_brush().clone() }).unwrap();
         (input, engine)
@@ -6891,6 +6891,46 @@ mod tests {
             assert!(spans.iter().any(|(_, span)| *span < step * 3900.), "feedback {feedback}: contacts are saved during the stroke");
             assert_eq!(live.iter().filter(|batch| batch.1).count(), 1, "feedback {feedback}: the stroke never repairs");
             assert_matches_replay(&mut engine, &live);
+        }
+    }
+
+    #[test]
+    fn a_pressed_fixed_end_or_start_stays_finite_and_no_wider_than_the_pen() {
+        let events = pen_stroke(1, 160, 1_000_000_000, |i| {
+            let (dx, dy) = [(0., 0.), (0.3, 0.1), (0.1, -0.2), (-0.2, 0.1), (0.4, 0.3)][i % 5];
+            if i < 40 { ([300. + dx + 0.05 * i as f32, 384. + dy], (0.05 + 0.03 * i as f32).min(0.8)) } else { ([302. + 3. * (i - 40) as f32, 384.], 0.8) }
+        });
+        let width = |dab: &layer_render::Dab| dab.radii[0] * 2.;
+        let finite = |dab: &layer_render::Dab| {
+            [dab.center.x, dab.center.y, dab.flow, dab.hardness].into_iter().chain(dab.radii).chain(dab.rotation).chain(dab.contact).chain(dab.previous_contact).all(f32::is_finite)
+        };
+        for feedback in [false, true] {
+            let frames = |taper| {
+                let (mut input, mut engine) = tapered_engine(taper, feedback);
+                let mut frames = Vec::new();
+                let live = draw_tapered(&mut engine, &mut input, &events, 1, |engine, _| {
+                    frames.push(engine.backend.persistent.iter().chain(&engine.backend.preview).copied().collect::<Vec<_>>());
+                });
+                (frames, engine, live)
+            };
+            let (plain, ..) = frames(layer_core::BrushTaper::default());
+            for lengths in [[0., 4.], [0., 10.], [4., 0.], [10., 0.]] {
+                let (tapered, mut engine, live) = frames(layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: lengths, ..Default::default() });
+                let mut start = 0f32;
+                for (i, (dabs, plain)) in tapered.iter().zip(&plain).enumerate() {
+                    let case = format!("{lengths:?}, feedback {feedback}, frame {i}");
+                    assert!(dabs.iter().all(finite), "{case}: every dab is finite");
+                    assert!(dabs.iter().any(|dab| (dab.center.x - 300.).hypot(dab.center.y - 384.) <= dab.radii[0]), "{case}: the press point stays covered");
+                    let widest = plain.iter().map(width).fold(0., f32::max);
+                    assert!(dabs.iter().all(|dab| width(dab) <= widest + 1e-3), "{case}: no dab is wider than the untapered {widest}");
+                    if lengths[0] == 0. {
+                        let drawn = dabs.iter().filter(|dab| dab.contact[2] * 18. <= 1.).map(width).fold(0., f32::max);
+                        assert!(drawn >= start - 1e-3, "{case}: the start shrank from {start} to {drawn}");
+                        start = drawn;
+                    }
+                }
+                assert_matches_replay(&mut engine, &live);
+            }
         }
     }
 

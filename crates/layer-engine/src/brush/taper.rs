@@ -242,7 +242,7 @@ impl Profile {
     }
 
     fn reach_after(&self, before: &ContactRecord, pressure: f32) -> f32 {
-        let reach = if before.pose.stroke_distance > self.edge() { before.reach } else { self.entry };
+        let reach = if before.pose.stroke_distance >= self.edge() { before.reach } else { self.entry };
         reach.max(pressure)
     }
 

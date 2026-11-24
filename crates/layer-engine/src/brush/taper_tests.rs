@@ -576,7 +576,7 @@ fn fixed_pen(diameter: f32, pointiness: f32) -> BrushSnapshot {
     let mut brush = layer_core::default_brush(DefaultBrushPreset::GPen);
     brush.stabilization.strength = 0.;
     brush.diameter = diameter;
-    brush.taper = BrushTaper { mode: TaperMode::Fixed, pointiness, ..BrushTaper::default() };
+    brush.taper = BrushTaper { mode: TaperMode::Fixed, fixed_widths: [10., 10.], pointiness, ..BrushTaper::default() };
     brush
 }
 
