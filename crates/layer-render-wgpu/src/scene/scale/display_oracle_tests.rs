@@ -37,8 +37,11 @@ const PENCIL: Brush = Brush { preset: DefaultBrushPreset::Pencil, radius: 24., c
 const ERASER: Brush = Brush { preset: DefaultBrushPreset::Eraser, radius: 60., color: [1.; 4], flow: 1. };
 const WIDE_PASTEL: Brush = Brush { preset: DefaultBrushPreset::PastelBlock, radius: 1000., color: [0.9, 0.7, 0.1, 1.], flow: 0.8 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fault { Compile, Decode, Grant, Discard, View }
+
 #[derive(Clone, Copy, Debug)]
-struct Case { seed: u64, brush: Brush, zoom: Zoom, pan: bool, surround: bool, layered: bool, budget: Option<u64> }
+struct Case { seed: u64, brush: Brush, zoom: Zoom, pan: bool, surround: bool, layered: bool, budget: Option<u64>, fault: Option<Fault> }
 
 macro_rules! cases {
     ($($name:ident: $case:expr,)*) => {$(
@@ -48,17 +51,87 @@ macro_rules! cases {
 }
 
 cases! {
-    g_pen_fit: Case { seed: 1, brush: G_PEN, zoom: Zoom::Fit, pan: false, surround: false, layered: false, budget: None },
-    g_pen_quarter_pan: Case { seed: 2, brush: G_PEN, zoom: Zoom::Quarter, pan: true, surround: false, layered: false, budget: None },
-    wide_g_pen_half_pan: Case { seed: 3, brush: WIDE_G_PEN, zoom: Zoom::Half, pan: true, surround: false, layered: false, budget: None },
-    wide_g_pen_fit_layered: Case { seed: 4, brush: WIDE_G_PEN, zoom: Zoom::Fit, pan: false, surround: false, layered: true, budget: None },
-    pencil_actual_layered: Case { seed: 5, brush: PENCIL, zoom: Zoom::Actual, pan: true, surround: false, layered: true, budget: None },
-    eraser_quarter_layered: Case { seed: 6, brush: ERASER, zoom: Zoom::Quarter, pan: false, surround: false, layered: true, budget: None },
-    wide_pastel_fit: Case { seed: 7, brush: WIDE_PASTEL, zoom: Zoom::Fit, pan: false, surround: false, layered: false, budget: None },
-    g_pen_fit_from_surround: Case { seed: 9, brush: G_PEN, zoom: Zoom::Fit, pan: false, surround: true, layered: false, budget: None },
+    g_pen_fit: Case { seed: 1, brush: G_PEN, zoom: Zoom::Fit, pan: false, surround: false, layered: false, budget: None, fault: None },
+    g_pen_quarter_pan: Case { seed: 2, brush: G_PEN, zoom: Zoom::Quarter, pan: true, surround: false, layered: false, budget: None, fault: None },
+    wide_g_pen_half_pan: Case { seed: 3, brush: WIDE_G_PEN, zoom: Zoom::Half, pan: true, surround: false, layered: false, budget: None, fault: None },
+    wide_g_pen_fit_layered: Case { seed: 4, brush: WIDE_G_PEN, zoom: Zoom::Fit, pan: false, surround: false, layered: true, budget: None, fault: None },
+    pencil_actual_layered: Case { seed: 5, brush: PENCIL, zoom: Zoom::Actual, pan: true, surround: false, layered: true, budget: None, fault: None },
+    eraser_quarter_layered: Case { seed: 6, brush: ERASER, zoom: Zoom::Quarter, pan: false, surround: false, layered: true, budget: None, fault: None },
+    wide_pastel_fit: Case { seed: 7, brush: WIDE_PASTEL, zoom: Zoom::Fit, pan: false, surround: false, layered: false, budget: None, fault: None },
+    g_pen_fit_from_surround: Case { seed: 9, brush: G_PEN, zoom: Zoom::Fit, pan: false, surround: true, layered: false, budget: None, fault: None },
+    g_pen_actual_compile_held: Case { seed: 21, brush: G_PEN, zoom: Zoom::Actual, pan: false, surround: false, layered: false, budget: None, fault: Some(Fault::Compile) },
+    pencil_half_sources_evicted: Case { seed: 22, brush: PENCIL, zoom: Zoom::Half, pan: false, surround: false, layered: true, budget: None, fault: Some(Fault::Decode) },
+    wide_g_pen_half_cells_refused: Case { seed: 23, brush: WIDE_G_PEN, zoom: Zoom::Half, pan: false, surround: false, layered: false, budget: None, fault: Some(Fault::Grant) },
+    g_pen_fit_frame_discarded: Case { seed: 24, brush: G_PEN, zoom: Zoom::Fit, pan: false, surround: false, layered: false, budget: None, fault: Some(Fault::Discard) },
+    g_pen_actual_view_moved: Case { seed: 25, brush: G_PEN, zoom: Zoom::Actual, pan: false, surround: false, layered: false, budget: None, fault: Some(Fault::View) },
 }
 
 struct Frame { dabs: Vec<Dab>, batches: Vec<DabBatch>, pan: [u32; 2] }
+
+#[derive(Clone, Copy, Debug)]
+struct Schedule { fault: Fault, at: usize, until: usize, shift: [u32; 2] }
+
+impl Schedule {
+    fn new(case: Case, sequence: &[Frame]) -> Option<Self> {
+        let fault = case.fault?;
+        let mut rng = Rng(case.seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+        let eligible: Vec<_> = (2..FRAMES - 3).filter(|&index| {
+            let frame = &sequence[index];
+            match fault {
+                Fault::Discard => !frame.batches.is_empty() && frame.batches.iter().all(|batch| batch.kind == DabBatchKind::Preview),
+                _ => true,
+            }
+        }).collect();
+        let at = if fault == Fault::Grant { FRAMES + rng.below(2) as usize } else { eligible[rng.below(eligible.len() as u64) as usize] };
+        let until = if fault == Fault::Discard { at + 1 } else { at + 1 + rng.below(4) as usize };
+        Some(Self { fault, at, until, shift: [160 + rng.below(320) as u32, 96 + rng.below(192) as u32] })
+    }
+    fn active(&self, index: usize) -> bool { (self.at..self.until).contains(&index) }
+    fn moves(&self) -> bool { matches!(self.fault, Fault::Compile | Fault::Decode | Fault::View) }
+}
+
+#[derive(Default)]
+struct Injected { batch: Option<crate::compile::Batch>, refused: PixelRect }
+
+impl Injected {
+    fn begin(&mut self, oracle: &mut Oracle, schedule: Schedule, painted: &[Dab]) {
+        let subject = &mut oracle.subject;
+        match schedule.fault {
+            Fault::Compile => {
+                self.batch = Some(subject.compilation.batch());
+                oracle.presenter = crate::test_support::float_presenter(subject);
+            },
+            Fault::Decode => crate::test_support::evict_sources(subject),
+            Fault::Grant => self.refused = painted.last().map_or(PixelRect::EMPTY, |dab| {
+                let bounds = dab.bounds();
+                let [x0, y0, x1, y1] = [bounds.min.x, bounds.min.y, bounds.max.x, bounds.max.y].map(|value| value.max(0.) as u32);
+                PixelRect::new(x0, y0, x1.min(EXTENT[0]), y1.min(EXTENT[1]))
+            }),
+            Fault::Discard => subject.test.discard_frame = true,
+            Fault::View => {},
+        }
+    }
+    fn hold(&self, oracle: &Oracle, schedule: Schedule) {
+        if schedule.fault != Fault::Grant { return; }
+        let cache = oracle.subject.scale_display.as_ref().unwrap();
+        let display = oracle.subject.scene_tiers.display.clone();
+        cache.invalidate_cells(cache.reached_cells(DocRect::from(self.refused)), None);
+        cache.refuse(None, self.refused, &display.blocked(crate::residency::Class::Visible, display.limit() + 1).expect("a unit larger than the display grant is refused"));
+    }
+    fn clear(&mut self, oracle: &mut Oracle, schedule: Schedule) {
+        let subject = &mut oracle.subject;
+        match schedule.fault {
+            Fault::Compile => {
+                drop(self.batch.take());
+                while crate::compile::tests::queued_recipes(&subject.compilation) != 0 { subject.compilation.check().unwrap(); subject.wait_idle().unwrap(); }
+            },
+            Fault::Decode => crate::test_support::settle_decodes(subject),
+            Fault::Grant => subject.scale_display.as_ref().unwrap().release(self.refused),
+            Fault::Discard => assert!(!subject.test.discard_frame, "frame {}'s encoder is dropped", schedule.at),
+            Fault::View => {},
+        }
+    }
+}
 
 struct Rng(u64);
 impl Rng {
@@ -232,12 +305,10 @@ impl Oracle {
         crate::layer_tests::page_bytes(&self.reference, &reduced)
     }
 
-    fn mismatches(&mut self, view: ViewState, level: u32) -> (Vec<Found>, Vec<[f32; 4]>) {
-        let side = 1u32 << level;
+    fn mismatches(&mut self, view: ViewState, bytes: &[u8]) -> (Vec<Found>, Vec<[f32; 4]>) {
         let size = [view.width_px, view.height_px];
-        let bytes = self.reduced(texel_origin(view, side).map(|texel| texel * side), size, side);
         let expected = texture(&self.subject.device, size, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
-        self.subject.queue.write_texture(expected.as_image_copy(), &bytes, wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(size[0] * 16), rows_per_image: None }, expected.size());
+        self.subject.queue.write_texture(expected.as_image_copy(), bytes, wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(size[0] * 16), rows_per_image: None }, expected.size());
         let (shown, target) = create_target(&self.subject.device, size, wgpu::TextureFormat::Rgba32Float, "display oracle presented frame");
         self.presenter.present(&self.subject, &target, view, [0.; 4]).unwrap();
         let found = self.subject.device.create_buffer(&wgpu::BufferDescriptor { label: Some("display oracle mismatches"), size: 16 + 48 * FOUND as u64,
@@ -266,9 +337,9 @@ fn texels(bytes: &[u8]) -> Vec<[f32; 4]> {
 
 fn difference(a: [f32; 4], b: [f32; 4]) -> f32 { (0..4).map(|channel| (a[channel] - b[channel]).abs()).fold(0., f32::max) }
 
-struct Inked { origin: [u32; 2], width: u32, before: Vec<[f32; 4]>, most: Vec<f32> }
+struct History { origin: [u32; 2], size: [u32; 2], side: u32, states: Vec<Vec<[f32; 4]>>, newest: Vec<usize> }
 
-impl Inked {
+impl History {
     fn new(oracle: &Oracle, views: impl Iterator<Item = ViewState>, level: u32) -> Self {
         let side = 1u32 << level;
         let [min, max] = views.map(|view| {
@@ -276,18 +347,31 @@ impl Inked {
             [origin, [origin[0] + view.width_px, origin[1] + view.height_px]]
         }).reduce(|[a, b], [c, d]| [[a[0].min(c[0]), a[1].min(c[1])], [b[0].max(d[0]), b[1].max(d[1])]]).unwrap();
         let size = [max[0] - min[0], max[1] - min[1]];
-        let before = texels(&oracle.reduced(min.map(|texel| texel * side), size, side));
-        Self { origin: min, width: size[0], most: vec![0.; before.len()], before }
+        let mut history = Self { origin: min, size, side, states: Vec::new(), newest: vec![0; (size[0] * size[1]) as usize] };
+        history.record(oracle);
+        history
     }
-    fn index(&self, texel: [u32; 2]) -> usize { ((texel[1] - self.origin[1]) * self.width + texel[0] - self.origin[0]) as usize }
-    fn reverts(&self, texel: [u32; 2], found: &Found) -> bool {
+    fn record(&mut self, oracle: &Oracle) { self.states.push(texels(&oracle.reduced(self.origin.map(|texel| texel * self.side), self.size, self.side))); }
+    fn index(&self, texel: [u32; 2]) -> usize { ((texel[1] - self.origin[1]) * self.size[0] + texel[0] - self.origin[0]) as usize }
+    fn expected(&self, view: ViewState) -> Vec<u8> {
+        let origin = texel_origin(view, self.side);
+        let current = self.states.last().unwrap();
+        (0..view.height_px).flat_map(|y| (0..view.width_px).map(move |x| [origin[0] + x, origin[1] + y]))
+            .flat_map(|texel| current[self.index(texel)]).flat_map(f32::to_le_bytes).collect()
+    }
+    fn older(&self, texel: [u32; 2], shown: [f32; 4]) -> Option<[usize; 2]> {
         let index = self.index(texel);
-        self.most[index] > INK && difference(found.shown, self.before[index]) <= APPROXIMATE && difference(found.expected, self.before[index]) > INK
+        let newest = self.newest[index];
+        if self.states[newest..].iter().any(|state| difference(shown, state[index]) <= INK) { return None; }
+        (0..newest).rev().find(|&state| difference(shown, self.states[state][index]) <= APPROXIMATE).map(|state| [state, newest])
     }
     fn present(&mut self, origin: [u32; 2], width: u32, shown: &[[f32; 4]]) {
         for (surface, value) in shown.iter().enumerate() {
             let index = self.index([origin[0] + surface as u32 % width, origin[1] + surface as u32 / width]);
-            self.most[index] = self.most[index].max(difference(*value, self.before[index]));
+            let before = self.states[0][index];
+            let matched = (self.newest[index]..self.states.len()).rev().find(|&state| difference(*value, self.states[state][index]) <= APPROXIMATE);
+            let departed = || (difference(*value, before) > INK).then(|| self.states.iter().position(|state| difference(state[index], before) > INK)).flatten();
+            if let Some(state) = matched.or_else(departed) { self.newest[index] = self.newest[index].max(state); }
         }
     }
 }
@@ -315,10 +399,62 @@ fn packet_for<'a>(base: FramePacket<'a>, zoom: Zoom, index: usize, frame: &'a Fr
     FramePacket { dabs: &frame.dabs, dab_batches: &frame.batches, view: zoom.view(frame.pan), time_seconds: (index + 1) as f32 / 120., ..base }
 }
 
+struct Checker { context: String, level: u32, history: History, owing: BTreeMap<[u32; 2], usize>, painted: Vec<Dab>, schedule: Option<Schedule> }
+
+impl Checker {
+    fn observe(&mut self, oracle: &mut Oracle, index: usize, frame: &Frame, view: ViewState, settled: bool) -> usize {
+        let (context, level) = (format!("{} frame {index} level {}", self.context, self.level), self.level);
+        self.painted.extend(batch_dabs(frame, DabBatchKind::Persistent).copied());
+        self.history.record(oracle);
+        let cache = oracle.subject.scale_display.as_ref().unwrap();
+        let labels = cache.shown_cells().into_iter().collect::<BTreeMap<_, _>>();
+        let mislabelled = cache.mislabelled_cells();
+        assert!(mislabelled.is_empty(), "{context}: cells {mislabelled:?} show pixels labelled with inputs that are no longer current and are not queued");
+        let preview_level = oracle.subject.preview_level;
+        let side = 1u32 << level;
+        let origin = texel_origin(view, side);
+        let mut owed = BTreeSet::new();
+        let mut missed = 0;
+        let (mismatches, shown) = oracle.mismatches(view, &self.history.expected(view));
+        for found in mismatches {
+            let surface = [found.index as u32 % view.width_px, found.index as u32 / view.width_px];
+            let texel = [origin[0] + surface[0], origin[1] + surface[1]];
+            if texel[0] * side >= EXTENT[0] || texel[1] * side >= EXTENT[1] { continue; }
+            missed += 1;
+            let cell = texel.map(|value| value / PAGE_SIZE);
+            let label = if settled { Some(true) } else { labels.get(&cell).copied().flatten() };
+            let edge = preview_level > 0 && near_edge(batch_dabs(frame, DabBatchKind::Preview), texel, level, (1u32 << preview_level) as f32)
+                || label == Some(false) && near_edge(self.painted.iter().chain(batch_dabs(frame, DabBatchKind::Preview)), texel, level, (1u32 << level.max(preview_level)) as f32);
+            let tolerance = if edge { EDGE } else if label == Some(true) { STRICT } else { APPROXIMATE };
+            if found.error <= tolerance { continue; }
+            let kind = match label { None => "pending cell", Some(true) => "exact cell", Some(false) => "reduced cell" };
+            if let Some([older, newest]) = self.history.older(texel, found.shown) {
+                panic!("{context}: surface texel {surface:?} (display texel {texel:?}, {kind} {cell:?}) shows {:?}, accepted state {older}, after it showed accepted state {newest}, where the reference shows {:?}",
+                    found.shown, found.expected);
+            }
+            if label.is_none() { owed.insert(cell); continue; }
+            panic!("{context}: surface texel {surface:?} (display texel {texel:?}, {kind} {cell:?}{}) shows {:?} where the reference shows {:?}: error {} beyond {tolerance}",
+                if edge { " at a dab edge" } else { "" }, found.shown, found.expected, found.error);
+        }
+        self.history.present(origin, view.width_px, &shown);
+        let quiet = self.schedule.is_none_or(|schedule| !schedule.active(index));
+        self.owing.retain(|cell, _| owed.contains(cell));
+        for cell in owed { *self.owing.entry(cell).or_default() += usize::from(quiet); }
+        if let Some((cell, frames)) = self.owing.iter().find(|(_, frames)| **frames > REPAIR_FRAMES) {
+            panic!("{context}: cell {cell:?} has shown pixels that differ from the reference while pending for {frames} frames without a fault");
+        }
+        missed
+    }
+}
+
 fn run(name: &str, case: Case) {
     let (doc, target) = document(case.layered);
     let style = layer_render::DabStyle { blend_space: doc.composition().blend, ..crate::layer_tests::preset_style(case.brush.preset) };
-    let sequence = strokes(case, target, &style);
+    let mut sequence = strokes(case, target, &style);
+    let schedule = Schedule::new(case, &sequence);
+    if let Some(schedule) = schedule.filter(Schedule::moves) {
+        for frame in &mut sequence[schedule.at..schedule.until] { frame.pan = [0, 1].map(|axis| frame.pan[axis] + schedule.shift[axis]); }
+    }
     let outside = |dab: &Dab| dab.bounds().max.x < 0.;
     assert!(!case.surround || sequence.iter().any(|frame| batch_dabs(frame, DabBatchKind::Preview).next().is_some() && batch_dabs(frame, DabBatchKind::Preview).all(outside)),
         "{name}: the stream predicts a stroke wholly in the surround");
@@ -333,53 +469,39 @@ fn run(name: &str, case: Case) {
     crate::test_support::submit_settled(subject, FramePacket { composite_all: true, ..base });
     crate::test_support::submit_settled(&mut oracle.reference, FramePacket { composite_all: true, ..base });
     assert_eq!(oracle.subject.scale_display.as_ref().unwrap().plan.level, level, "{name}: the view shows level {level}");
-    let mut inked = Inked::new(&oracle, sequence.iter().map(|frame| case.zoom.view(frame.pan)), level);
-    let mut owing = BTreeMap::<[u32; 2], usize>::new();
-    let mut painted = Vec::new();
+    let context = format!("{name} seed {}{}", case.seed, schedule.map_or(String::new(), |schedule| format!(" ({:?} from frame {} until frame {})", schedule.fault, schedule.at, schedule.until)));
+    let history = History::new(&oracle, sequence.iter().map(|frame| case.zoom.view(frame.pan)), level);
+    let mut checker = Checker { context: context.clone(), level, history, owing: BTreeMap::new(), painted: Vec::new(), schedule };
+    let mut injected = Injected::default();
     let mut seen = retained_keys(&oracle.subject);
-    let settle = Frame { dabs: Vec::new(), batches: Vec::new(), pan: sequence.last().unwrap().pan };
-    for (index, frame) in sequence.iter().chain(std::iter::once(&settle)).enumerate() {
-        let settled = index == sequence.len();
+    let idle = Frame { dabs: Vec::new(), batches: Vec::new(), pan: sequence.last().unwrap().pan };
+    let mut missed = 0;
+    for index in 0..FRAMES + REPAIR_FRAMES + 2 {
+        let frame = sequence.get(index).unwrap_or(&idle);
         let frame_packet = packet_for(base, case.zoom, index, frame);
-        painted.extend(batch_dabs(frame, DabBatchKind::Persistent).copied());
-        if settled { crate::test_support::submit_settled(&mut oracle.subject, frame_packet); } else { crate::test_support::submit_ready(&mut oracle.subject, frame_packet).unwrap(); }
-        if let Err(error) = oracle.publish_reference(FramePacket { composite_all: true, ..frame_packet }) { panic!("{name} seed {} frame {index}: {error}", case.seed); }
-        if !settled { seen.extend(retained_keys(&oracle.subject)); }
-        let cache = oracle.subject.scale_display.as_ref().unwrap();
-        let labels = cache.shown_cells().into_iter().collect::<BTreeMap<_, _>>();
-        let mislabelled = cache.mislabelled_cells();
-        assert!(mislabelled.is_empty(), "{name} seed {} frame {index} level {level}: cells {mislabelled:?} show pixels labelled with inputs that are no longer current and are not queued", case.seed);
-        let preview_level = oracle.subject.preview_level;
-        let view = frame_packet.view;
-        let side = 1u32 << level;
-        let origin = texel_origin(view, side);
-        let mut owed = BTreeSet::new();
-        let (mismatches, shown) = oracle.mismatches(view, level);
-        for found in mismatches {
-            let surface = [found.index as u32 % view.width_px, found.index as u32 / view.width_px];
-            let texel = [origin[0] + surface[0], origin[1] + surface[1]];
-            if texel[0] * side >= EXTENT[0] || texel[1] * side >= EXTENT[1] { continue; }
-            let cell = texel.map(|value| value / PAGE_SIZE);
-            let label = if settled { Some(true) } else { labels.get(&cell).copied().flatten() };
-            let edge = preview_level > 0 && near_edge(batch_dabs(frame, DabBatchKind::Preview), texel, level, (1u32 << preview_level) as f32)
-                || label == Some(false) && near_edge(painted.iter().chain(batch_dabs(frame, DabBatchKind::Preview)), texel, level, (1u32 << level.max(preview_level)) as f32);
-            let tolerance = if edge { EDGE } else if label == Some(true) { STRICT } else { APPROXIMATE };
-            if found.error <= tolerance { continue; }
-            if label.is_none() {
-                assert!(!inked.reverts(texel, &found), "{name} seed {} frame {index} level {level}: surface texel {surface:?} (display texel {texel:?}, pending cell {cell:?}) shows the picture before the stroke {:?} after an earlier frame showed ink there, where the reference shows {:?}",
-                    case.seed, found.shown, found.expected);
-                owed.insert(cell); continue;
-            }
-            panic!("{name} seed {} frame {index} level {level}: surface texel {surface:?} (display texel {texel:?}, cell {cell:?}, {}) shows {:?} where the reference shows {:?}: error {} beyond {tolerance}",
-                case.seed, if edge { "dab edge" } else if label == Some(true) { "exact cell" } else { "reduced cell" }, found.shown, found.expected, found.error);
+        if let Some(schedule) = schedule {
+            if index == schedule.until { injected.clear(&mut oracle, schedule); }
+            if index == schedule.at { injected.begin(&mut oracle, schedule, &checker.painted); }
+            if schedule.active(index) { injected.hold(&oracle, schedule); }
         }
-        inked.present(origin, view.width_px, &shown);
-        owing.retain(|cell, _| owed.contains(cell));
-        for cell in owed { *owing.entry(cell).or_default() += 1; }
-        if let Some((cell, frames)) = owing.iter().find(|(_, frames)| **frames > REPAIR_FRAMES) {
-            panic!("{name} seed {} frame {index} level {level}: cell {cell:?} has shown pixels that differ from the reference while pending for {frames} frames", case.seed);
+        if index >= FRAMES && schedule.is_none_or(|schedule| index > schedule.until) && oracle.subject.next_frame() == layer_render::FrameDemand::Wait {
+            if missed == 0 { break; }
+            let terms = oracle.subject.outstanding_terms();
+            assert!(!terms.is_empty(), "{context} frame {index}: the renderer waits with nothing outstanding while {missed} presented texels differ from the reference");
+            crate::test_support::wait_until(format_args!("{context} frame {index}: the inputs the renderer waits on arrive while {missed} presented texels differ from the reference"), || {
+                oracle.subject.poll_pending(frame_packet.view).unwrap();
+                if oracle.subject.next_frame() == layer_render::FrameDemand::Wait { Err(oracle.subject.outstanding_terms()) } else { Ok(()) }
+            });
         }
+        crate::test_support::submit_ready(&mut oracle.subject, frame_packet).unwrap();
+        if let Err(error) = oracle.publish_reference(FramePacket { composite_all: true, ..frame_packet }) { panic!("{context} frame {index}: {error}"); }
+        if index < FRAMES { seen.extend(retained_keys(&oracle.subject)); }
+        missed = checker.observe(&mut oracle, index, frame, frame_packet.view, false);
     }
+    let frame_packet = packet_for(base, case.zoom, FRAMES + REPAIR_FRAMES + 2, &idle);
+    crate::test_support::submit_settled(&mut oracle.subject, frame_packet);
+    if let Err(error) = oracle.publish_reference(FramePacket { composite_all: true, ..frame_packet }) { panic!("{context} settled: {error}"); }
+    checker.observe(&mut oracle, FRAMES + REPAIR_FRAMES + 2, &idle, frame_packet.view, true);
     let retained = retained_keys(&oracle.subject);
     let evicted = seen.iter().filter(|key| !retained.contains(key)).count();
     assert!(case.budget.is_none() || evicted > EVICTED, "{name}: the tight budget evicts more than {EVICTED} pages, not {evicted}");

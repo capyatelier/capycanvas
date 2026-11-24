@@ -1975,6 +1975,11 @@ impl Cache {
         }
         if refusal.class()==Class::Refinement && let Some(overview)=&self.overview {overview.refuse(since,region,refusal);}
     }
+    #[cfg(test)]
+    pub(super) fn release(&self,region:PixelRect) {
+        let Some((mut cells,_store,_))=self.cells() else {return;};
+        for index in Cells::reached(self.plan,region) {cells.cells[index].refusal=None;}
+    }
     pub(super) fn owe_exact(&self) {
         let mut cells=self.cells.lock().unwrap();
         for cell in cells.cells.iter_mut().filter(|cell|!cell.derived && cell.shown.as_ref().is_some_and(|shown|!shown.exact)) {cell.queued=true;cell.lag=None;}
@@ -3021,10 +3026,7 @@ pub(super) mod query_tests {
         main.invalidate_cells(main.reached_cells(DocRect::from(area)),None);
         main.refuse(None,area,&display.blocked(Class::Visible,display.limit()+1).expect("a unit larger than the display grant is refused"));
     }
-    fn release_cell(r:&WgpuRasterizer,area:PixelRect) {
-        let main=r.scale_display.as_ref().unwrap();let mut cells=table(main);
-        for index in Cells::reached(main.plan,area) {cells.cells[index].refusal=None;}
-    }
+    fn release_cell(r:&WgpuRasterizer,area:PixelRect) {r.scale_display.as_ref().unwrap().release(area);}
     fn changed_overview(document:&layer_core::Document,page:[u32;2])->[f32;4] {
         let mut fresh=paged(document);blue_page(&mut fresh,document,page);
         crate::test_support::submit_settled(&mut fresh,half_view(document));
