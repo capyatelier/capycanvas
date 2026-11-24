@@ -152,7 +152,7 @@ impl Scope {
             let demand=Demand {owner:self.0.id,generation,class};
             if !q.live(&demand) {return (false,None);}
             if let Some(error)=recipe.error() {
-                return (false,(q.fail(self.0.id,error.into()) && class<=Class::Visible).then(||q.owners[&self.0.id].wake.clone()).flatten());
+                return (false,q.failure_wakes(&demand,error.into()).then(||q.owners[&self.0.id].wake.clone()).flatten());
             }
             (q.submit(Key::Recipe(recipe.identity()),demand,recipe.async_pipeline(),||platform::pipeline(recipe.clone())),None)
         });
@@ -560,27 +560,23 @@ impl<W> Queue<W> {
         {
             self.input();
         }
-        let Some(entry) = self.entries.get_mut(&key) else {
+        let Some(mut entry) = self.entries.remove(&key) else {
             return Vec::new();
         };
-        entry.running = false;
+        entry.demands.sort_by_key(|demand| demand.class);
         let error = result.err();
         let mut wakes = Vec::new();
-        for demand in &entry.demands {
-            if let Some(owner) = self.owners.get_mut(&demand.owner)
-                && demand.generation.is_none_or(|g| g == owner.generation)
+        for demand in entry.demands {
+            if !self.live(&demand) {
+                continue;
+            }
+            let failed = error.clone().is_some_and(|error| self.failure_wakes(&demand, error));
+            if (demand.generation.is_none() || failed)
+                && let Some(wake) = self.owners.get(&demand.owner).and_then(|owner| owner.wake.clone())
             {
-                if let Some(error) = &error {
-                    owner.error.get_or_insert(error.clone());
-                }
-                if demand.generation.is_none()
-                    && let Some(wake) = &owner.wake
-                {
-                    wakes.push((demand.owner, wake.clone()));
-                }
+                wakes.push((demand.owner, wake));
             }
         }
-        self.entries.remove(&key);
         wakes
     }
     fn pending(&self, owner: u64) -> usize {
@@ -624,6 +620,7 @@ impl<W> Queue<W> {
         if owner.error.is_some() {return false;}
         owner.error=Some(error);true
     }
+    fn failure_wakes(&mut self,demand:&Demand,error:String)->bool {self.fail(demand.owner,error) && demand.class<=Class::Visible}
     fn check(&self, owner: u64) -> Result<(), GpuRasterError> {
         self.owners
             .get(&owner)

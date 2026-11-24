@@ -3,25 +3,37 @@ use super::*;
 const CLASSES:[Class;5]=[Class::Required,Class::Validation,Class::Visible,Class::Anticipated,Class::Background];
 
 #[test]
-fn every_compile_class_keeps_completion_but_only_visible_demand_wakes() {
+fn every_compile_class_completes_but_wakes_only_real_waiters_and_visible_failures() {
     let mut missing=Vec::new();
-    for class in CLASSES {for failed in [false,true] {
+    for class in CLASSES {for failed in [false,true] {for generation in [None,Some(0)] {
         let mut queue=Queue::<()>::new(1);
         let owner=queue.owner();
         let called=Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let count=called.clone();
         queue.owners.get_mut(&owner).unwrap().wake=Some(Arc::new(move||{count.fetch_add(1,std::sync::atomic::Ordering::Relaxed);}));
-        queue.submit(Key::Job(1),Demand {owner,generation:None,class},false,||());
+        queue.submit(Key::Job(1),Demand {owner,generation,class},false,||());
         let job=queue.take(Instant::now(),true).unwrap();
         let wakes=queue.finish(job.key,job.class,job.independent,if failed {Err("compile failure".into())}else {Ok(())});
         assert!(!queue.entries.contains_key(&Key::Job(1)));
         assert_eq!(queue.check(owner).is_err(),failed);
         for (_,wake) in wakes {wake();}
         let actual=called.load(std::sync::atomic::Ordering::Relaxed);
-        let expected=usize::from(class<=Class::Visible);
-        if actual!=expected {missing.push((class,failed,actual,expected));}
-    }}
+        let expected=usize::from(generation.is_none() || failed && class<=Class::Visible);
+        if actual!=expected {missing.push((class,failed,generation,actual,expected));}
+    }}}
     assert!(missing.is_empty(),"compile completion wake classes differ: {missing:?}");
+}
+
+#[test]
+fn a_failure_wakes_an_owner_whose_most_urgent_warming_is_visible() {
+    for classes in [[Class::Background,Class::Visible],[Class::Visible,Class::Background]] {
+        let mut queue=Queue::<()>::new(1);
+        let owner=queue.owner();
+        queue.owners.get_mut(&owner).unwrap().wake=Some(Arc::new(||{}));
+        for class in classes {queue.submit(Key::Job(1),Demand {owner,generation:Some(0),class},false,||());}
+        let job=queue.take(Instant::now(),true).unwrap();
+        assert_eq!(queue.finish(job.key,job.class,job.independent,Err("compile failure".into())).len(),1,"{classes:?}");
+    }
 }
 
 #[test]
@@ -65,7 +77,7 @@ fn queued_recipe_completed_by_another_executor_wakes_its_owner() {
     while completed.try_recv().is_ok() {}
     let batch=scope.batch();
     let recipe=Deferred::new(||31u32);
-    scope.warm(&recipe,Class::Visible,scope.generation());
+    assert!(!scope.require([&recipe],Class::Visible));
     pollster::block_on(scope.prepare_all([&recipe])).unwrap();
     assert!(recipe.ready());
     drop(batch);
