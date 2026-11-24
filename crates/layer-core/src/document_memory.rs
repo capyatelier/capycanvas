@@ -59,6 +59,9 @@ impl DocumentMemory {
         if !self.has_package() {return None;}
         self.owner.inventories.lock().unwrap().current.check_stored_bytes().err()
     }
+    pub fn package_damage_caused(&self,error:&str)->bool {
+        self.has_package() && self.owner.inventories.lock().unwrap().current.stored_failures().any(|failure|error.contains(&failure))
+    }
     pub fn release_package_wait(&self) {self.owner.package_pending.store(false,Ordering::Release);}
     pub fn package_pending(&self)->bool {self.owner.package_pending.load(Ordering::Acquire)}
     pub fn has_package(&self)->bool {self.owner.package.load(Ordering::Acquire)}

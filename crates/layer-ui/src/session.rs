@@ -5256,10 +5256,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         let tile_refusals=self.engine.metrics().saved_tile_refusals;
         let memory_refusals=self.engine.backend().stroke_memory_refusals();
         if let Err(cause)=self.engine.render_frame_for(now_ns,presentation_ns) {
-            if self.recover_failed_edits(false)? {
+            let cause=error(cause);
+            if self.recover_failed_edits(false,Some(&cause))? {
                 return Err(self.localization().text(MessageId::DOCUMENTS_PACKAGE_DAMAGED_BODY).to_string());
             }
-            return Err(error(cause));
+            return Err(cause);
         }
         self.receive_brush_stamps();
         if self.drawing_switch_pending && !self.rendering_suspended && self.paint_ready() {

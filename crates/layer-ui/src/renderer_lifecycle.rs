@@ -461,7 +461,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.cancel_auto_levels();self.cancel_histogram();self.cancel_effect_analyses();
         self.rendering_suspended = true;
         self.storage_activity.set_busy(false);self.storage_activity.touch();
-        self.recover_failed_edits(interrupted_selection)?;
+        self.recover_failed_edits(interrupted_selection, None)?;
         Ok(self.changed(
             retired_regions
                 | regions::DOCUMENT
@@ -472,12 +472,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         ))
     }
 
-    pub(super) fn recover_failed_edits(&mut self, interrupted: bool) -> Result<bool, String> {
+    pub(super) fn recover_failed_edits(&mut self, interrupted: bool, failure: Option<&str>) -> Result<bool, String> {
         let recovered = self.engine.recover_failed_rasters().map_err(error);
         self.refresh_document();
         self.poll_document_close();
         self.refresh_commands();
-        let damaged = self.engine.document().memory().package_failure().is_some();
+        let memory = self.engine.document().memory();
+        let damaged = failure.map_or_else(|| memory.package_failure().is_some(), |failure| memory.package_damage_caused(failure));
         if damaged {
             self.raise_message_notice(MessageId::DOCUMENTS_PACKAGE_DAMAGED_BODY);
             self.set_host_error(Some(self.localization().text(MessageId::DOCUMENTS_PACKAGE_DAMAGED_BODY).to_string()));
@@ -873,17 +874,17 @@ mod tests {
 
     #[cfg(not(target_arch="wasm32"))]
     #[test]
-    fn a_failed_capture_is_reported_as_file_damage_only_when_package_bytes_are_damaged() {
+    fn a_failed_capture_reports_its_own_error_and_suspending_reports_only_real_damage() {
         for damaged in [false,true] {
             let mut drawing=package_drawing(damaged);
             let failures=fail_stroke_capture(&mut drawing);
             let damage=drawing.localization().text(MessageId::DOCUMENTS_PACKAGE_DAMAGED_BODY).to_string();
-            if damaged {
-                assert_eq!(failures[0],damage);assert_eq!(notice_text(&drawing),Some(damage.as_str()));
-            } else {
-                assert!(failures.iter().all(|failure|failure.contains("Invalid canonical comparison result")),"a failed capture is reported as {failures:?}");
-                assert_ne!(notice_text(&drawing),Some(damage.as_str()));
-            }
+            assert!(failures.iter().all(|failure|failure.contains("Invalid canonical comparison result")),"a failed capture is reported as {failures:?}");
+            assert_ne!(notice_text(&drawing),Some(damage.as_str()));
+            let memory=drawing.engine.document().memory();
+            assert_eq!(memory.package_failure().is_some_and(|failure|memory.package_damage_caused(&format!("canvas renderer failed: {failure}"))),damaged,"a frame failed by damaged bytes reports damage");
+            drawing.suspend_renderer().unwrap();
+            assert_eq!(notice_text(&drawing)==Some(damage.as_str()),damaged,"suspending reports file damage only for damaged package bytes");
         }
     }
 

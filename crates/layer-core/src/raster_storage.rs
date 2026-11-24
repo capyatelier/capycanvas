@@ -262,14 +262,10 @@ impl RetainedTiles {
         }
         Ok(())
     }
-    pub(crate) fn check_stored_bytes(&self)->Result<(),String> {
-        for blob in &self.sources {blob.compressed.healthy()?;}
-        for raster in &self.rasters {
-            if let Some(Ok(data))=raster.try_data() {for tile in data.tiles.values() {
-                if let Some(Ok(blob))=tile.try_backing() {blob.compressed.healthy()?;}
-            }}
-        }
-        for backing in &self.backings {backing.healthy()?;}Ok(())
+    pub(crate) fn check_stored_bytes(&self)->Result<(),String> {self.stored_failures().next().map_or(Ok(()),Err)}
+    pub(crate) fn stored_failures(&self)->impl Iterator<Item=String>+'_ {
+        let tiles=self.rasters.iter().filter_map(|raster|raster.try_data()?.ok()).flat_map(|data|data.tiles.values().filter_map(|tile|tile.try_backing()?.ok()).collect::<Vec<_>>());
+        self.sources.iter().cloned().chain(tiles).filter_map(|blob|blob.compressed.healthy().err()).chain(self.backings.iter().filter_map(|backing|backing.healthy().err()))
     }
     pub async fn await_blobs(&self)->Result<Vec<Arc<TileBlob>>,String> {
         #[cfg(not(target_arch="wasm32"))]
