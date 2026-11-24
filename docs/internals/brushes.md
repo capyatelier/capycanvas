@@ -104,10 +104,10 @@ the Taper section, after Tip:
   curve up to 50 and typed values reach 200 (`BrushTaper::MAX_FIXED_WIDTHS`).
 - Proportional measures each end as a share of the line (0–50 %), at most 50
   full widths.
-- Where the ends overlap on a short line, the narrower one wins. A Fixed line
-  shorter than its end length, or than its start length when it has no end, fades
-  its taper in with its length, so a tap stays a full dot and short lines stay
-  blunt.
+- A Fixed line shorter than its start and end together shrinks both in
+  proportion, so they meet and the line tapers over its whole length; a single
+  end shrinks to the line. A Fixed taper fades in over a line's first 2 widths,
+  so a tap stays a full dot.
 - The start grows towards the highest pressure drawn so far, and each point of
   the end towards the highest pressure between the end's start and that point, so
   a light touch-down or a fading lift does not shorten either, and a press near
@@ -130,8 +130,8 @@ brushes ignore it.
 
 While the pen is down, contacts that a later lift could still change are held:
 the last end length of the line and, for Proportional, the whole line until its
-start reaches 50 widths. A Fixed start is final as it is drawn; without an end,
-the line is held until it reaches the start length.
+start reaches 50 widths. A Fixed line is held until it reaches its start and end
+together, and at least 2 widths; after that its start is final as it is drawn.
 
 Held contacts are drawn in the preview, shaped as if the pen lifted at the visible
 tip, together with the tip's own contacts. The preview draws within half a screen
@@ -148,10 +148,10 @@ per pass, once no later input can change them. Held work has one allowance, the
 constants at the top of `brush::taper`: 16,384 contacts, 4 MiB and 256 pages (or
 the pages one full-width contact covers, if more), with dab bounds deciding the
 pages. Once the newest contacts no longer fit it, the zones stop growing there: a
-Proportional line keeps the start and end lengths it had, a Fixed start without an
-end keeps its fade, and an end shrinks to the contacts that fit. The point depends
-only on the contacts, so live drawing, the preview, rebuilds, corrections and
-replays all reach it, and nothing is saved early or replayed at lift. Replays and
+line keeps the start and end lengths it had, its start is final, a Fixed taper
+has faded in, and an end shrinks to the contacts that fit. The point depends only
+on the contacts, so live drawing, the preview, rebuilds, corrections and replays
+all reach it, and nothing is saved early or replayed at lift. Replays and
 late corrections regenerate the stroke from its real samples and recorded release
 batch ends (`Stroke::taper_cuts`), so every path produces the same pixels. Masks
 taper once, at release. Vector lines fit the shaped widths.

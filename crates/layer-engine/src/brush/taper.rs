@@ -194,13 +194,12 @@ impl TaperPlan {
 
     fn zones(&self, length: f32, cap: Option<Cap>) -> [f32; 2] {
         let grown = cap.map_or(length, |cap| length.min(cap.frozen));
-        let [start, end] = [0, 1].map(|end| {
-            if self.proportional {
-                (self.lengths[end] * grown).min(PROPORTIONAL_LIMIT_WIDTHS * self.full_width)
-            } else {
-                self.lengths[end] * self.full_width
-            }
-        });
+        let [start, end] = if self.proportional {
+            [0, 1].map(|end| (self.lengths[end] * grown).min(PROPORTIONAL_LIMIT_WIDTHS * self.full_width))
+        } else {
+            let fit = (grown / ((self.lengths[0] + self.lengths[1]) * self.full_width)).min(1.);
+            [0, 1].map(|end| self.lengths[end] * self.full_width * fit)
+        };
         [start, cap.map_or(end, |cap| end.min(length - cap.edge))]
     }
 
@@ -210,13 +209,7 @@ impl TaperPlan {
 
     fn profile_from(&self, real: f32, visible: f32, cap: Option<Cap>, entry: f32) -> Profile {
         let zones = self.zones(real, cap);
-        let scale = if self.proportional {
-            1.
-        } else if self.lengths[1] > 0. {
-            (real / zones[1]).min(1.)
-        } else {
-            (cap.map_or(real, |cap| real.min(cap.frozen)) / zones[0]).min(1.)
-        };
+        let scale = if self.proportional || cap.is_some() { 1. } else { (real / (2. * self.full_width)).min(1.) };
         Profile { plan: *self, zones, entry, length: visible, scale }
     }
 
@@ -228,7 +221,7 @@ impl TaperPlan {
             || if self.proportional {
                 self.lengths[0] <= 0. || self.lengths[0] * length >= PROPORTIONAL_LIMIT_WIDTHS * self.full_width
             } else {
-                self.lengths[1] > 0. || length >= self.lengths[0] * self.full_width
+                length >= (self.lengths[0] + self.lengths[1]).max(2.) * self.full_width
             };
         let end = self.lengths[1] <= 0. || last.pose.stroke_distance <= self.edge(length, cap);
         start && end

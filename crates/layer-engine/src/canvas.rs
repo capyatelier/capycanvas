@@ -6868,7 +6868,7 @@ mod tests {
     #[test]
     fn a_fixed_taper_holds_only_its_live_end_zone() {
         let step = 2. * 318. * (0.5f32 / 318.).sin();
-        let events = pen_stroke(1, 2000, 1_000_000_000, |i| {
+        let events = pen_stroke(1, 4000, 1_000_000_000, |i| {
             let angle = i as f32 / 318.;
             ([512. + 318. * angle.cos(), 512. + 318. * angle.sin()], 1.)
         });
@@ -6879,28 +6879,51 @@ mod tests {
                 if engine.active_stroke.is_some() {
                     let accepted = if feedback { engine.finalized_real_points } else { engine.builder.real_points().len() };
                     let released = engine.backend.persistent.last().map_or(0., |dab| dab.contact[2] * 100.);
-                    spans.push(step * accepted.saturating_sub(1) as f32 - released);
+                    let length = step * accepted.saturating_sub(1) as f32;
+                    spans.push((length, length - released));
                 }
             });
             let distances: Vec<_> = engine.backend.persistent.iter().map(|dab| dab.contact[2] * 100.).collect();
             let spacing = distances.windows(2).map(|pair| pair[1] - pair[0]).fold(0., f32::max);
-            let widest = spans.iter().copied().fold(0., f32::max);
-            assert!(widest <= 1000. + spacing, "feedback {feedback}: held {widest} px with contacts {spacing} px apart");
-            assert!(spans.iter().any(|span| *span < step * 1900.), "feedback {feedback}: contacts are saved during the stroke");
+            let widest = spans.iter().filter(|(length, _)| *length >= 2000. + 2. * spacing).map(|(_, span)| *span).fold(0., f32::max);
+            assert!(widest <= 1000. + spacing + step, "feedback {feedback}: held {widest} px with contacts {spacing} px apart");
+            assert!(spans.iter().filter(|(length, _)| *length < 2000.).all(|(length, span)| span == length), "feedback {feedback}: the line is held until it passes both ends");
+            assert!(spans.iter().any(|(_, span)| *span < step * 3900.), "feedback {feedback}: contacts are saved during the stroke");
             assert_eq!(live.iter().filter(|batch| batch.1).count(), 1, "feedback {feedback}: the stroke never repairs");
             assert_matches_replay(&mut engine, &live);
         }
     }
 
     #[test]
-    fn a_stroke_shorter_than_both_zones_lifts_into_its_overlap() {
+    fn a_short_fixed_line_holds_its_start_until_it_reaches_both_ends() {
+        let taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: [10., 10.], ..Default::default() };
+        let events = pen_stroke(1, 300, 1_000_000_000, |i| ([100. + 2. * i as f32, 384.], 1.));
+        for feedback in [false, true] {
+            let (mut input, mut engine) = tapered_engine(taper, feedback);
+            let (mut early, mut saved) = (false, false);
+            let live = draw_tapered(&mut engine, &mut input, &events, 4, |engine, _| {
+                if engine.active_stroke.is_some() {
+                    let held = engine.backend.persistent.is_empty();
+                    early |= !held && engine.dab_generator.modeled_length() < 360.;
+                    saved |= !held;
+                }
+            });
+            assert!(!early && saved, "feedback {feedback}: the start is saved only once the line passes both ends");
+            assert_matches_replay(&mut engine, &live);
+        }
+    }
+
+    #[test]
+    fn a_stroke_shorter_than_both_zones_is_held_and_meets_in_the_middle() {
         let events = pen_stroke(1, 300, 1_000_000_000, |i| ([100. + 2. * i as f32, 384.], 1.));
         let (mut input, mut engine) = wide_fixed_engine(false);
         let live = draw_tapered(&mut engine, &mut input, &events, 4, |engine, _| {
-            assert!(engine.active_stroke.is_none() || engine.backend.persistent.is_empty(), "the whole stroke is in its end zone");
+            assert!(engine.active_stroke.is_none() || engine.backend.persistent.is_empty(), "the whole stroke is held");
         });
-        let widest = engine.backend.persistent.iter().map(|dab| dab.radii[0] * 2.).fold(0., f32::max);
-        assert!(widest < 0.9 * 100., "the zones overlap: {widest}");
+        let saved = &engine.backend.persistent;
+        let widest = saved.iter().max_by(|a, b| a.radii[0].total_cmp(&b.radii[0])).unwrap();
+        let tips = [saved[0].radii[0], saved.last().unwrap().radii[0]].map(|radius| radius * 2.);
+        assert!(tips.iter().all(|tip| *tip <= 0.15 * 100.) && (widest.center.x - 400.).abs() <= 30., "tips {tips:?}, widest at {}", widest.center.x);
         assert_eq!(live.len(), 1, "{live:?}");
         assert_matches_replay(&mut engine, &live);
     }

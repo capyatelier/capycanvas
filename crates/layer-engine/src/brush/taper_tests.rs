@@ -150,24 +150,28 @@ fn proportional_zones_follow_the_stroke() {
 }
 
 #[test]
-fn overlapping_zones_take_the_narrower_end() {
+fn ends_longer_than_the_line_meet_at_full_width_in_the_middle() {
     let dabs = draw(&pen(taper(TaperMode::Fixed, [10., 10.])), line(120., |_| 1.));
     let widest = dabs.iter().max_by(|a, b| width(a).total_cmp(&width(b))).unwrap();
-    assert!((widest.center.x - 60.).abs() <= 2. && width(widest) < 18., "{} at {}", width(widest), widest.center.x);
+    assert!((widest.center.x - 60.).abs() <= 2. && width(widest) > 0.99 * 18., "{} at {}", width(widest), widest.center.x);
     let rising: Vec<_> = dabs.iter().filter(|dab| dab.center.x <= 60.).map(width).collect();
     assert!(rising.windows(2).all(|pair| pair[1] >= pair[0]), "{rising:?}");
 }
 
 #[test]
-fn a_stroke_shorter_than_its_end_stays_blunt_and_a_near_tap_stays_a_dot() {
-    let brush = pen(taper(TaperMode::Fixed, [10., 10.]));
-    let widest = |length: f32| draw(&brush, line(length, |_| 1.)).iter().map(width).fold(0., f32::max) / 18.;
-    let widths = [0., 0.5, 2., 9., 45., 90., 180.].map(widest);
-    assert!(widths[0] > 0.999 && widths[1] > 0.99, "{widths:?}");
-    assert!(widths.windows(2).all(|pair| pair[1] <= pair[0] + 1e-3), "{widths:?}");
-    let blunt = 0.99 * super::taper::shaped(1., 1., 1., 0.5, 0.75) + 0.01;
-    assert!(widths.iter().all(|width| *width >= blunt - 0.01), "{widths:?} against {blunt}");
-    assert!(widest(360.) > 0.999 && widest(270.) > widths[6], "longer strokes widen again");
+fn a_short_fixed_line_tapers_over_its_whole_length() {
+    for diameter in [18., 60.] {
+        let mut brush = pen(taper(TaperMode::Fixed, [50., 50.]));
+        brush.diameter = diameter;
+        for widths in [5., 10., 25.] {
+            let length = widths * diameter;
+            let dabs = draw(&brush, line(length, |_| 1.));
+            let tips = [width(&dabs[0]), width(dabs.last().unwrap())];
+            assert!(tips.iter().all(|tip| *tip <= 0.15 * diameter), "{diameter} px, {widths} widths: tips {tips:?}");
+            let widest = dabs.iter().max_by(|a, b| width(a).total_cmp(&width(b))).unwrap();
+            assert!((widest.center.x - 0.5 * length).abs() <= 0.1 * length, "{diameter} px, {widths} widths: widest at {}", widest.center.x);
+        }
+    }
 }
 
 #[test]
@@ -178,8 +182,13 @@ fn a_tap_stays_a_full_dot() {
         crate::test_support::point(50., 50., 0.8, 8_000),
     ];
     let off = draw(&pen(BrushTaper::default()), points.clone());
-    for lengths in [[2., 2.], [2., 0.], [0., 2.]] {
+    for lengths in [[2., 2.], [2., 0.], [0., 2.], [50., 50.]] {
         assert_eq!(draw(&pen(taper(TaperMode::Fixed, lengths)), points.clone()), off, "{lengths:?}");
+    }
+    let brush = pen(taper(TaperMode::Fixed, [50., 50.]));
+    for length in [0.5, 2., 18.] {
+        let widest = draw(&brush, line(length, |_| 1.)).iter().map(width).fold(0., f32::max);
+        assert!(widest >= 0.9 * 18., "a {length} px line keeps {widest}");
     }
 }
 
