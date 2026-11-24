@@ -209,7 +209,7 @@ impl<R:CanvasRenderer> UiSession<R> {
             effect_gesture:_,preview_target:_,paper_preview:_,papers:_,object_motion:_,property_editor:_,sdr_gesture:_,last_proof_mode:_,proof_setup_pending:_,filter_previews:_,
             eyedropper:_,region_tools:_,selection_tools:_,tonal_tools:_,painted_selections:_,vector_lines:_,vector_moves:_,vector_paths:_,vector_points:_,figure_options:_,deferred_edits:_,switch_contacts:_,selection_masks:_,
             canvas_size:_,image_size:_,frequency_separation:_,content_bounds:_,conversion:_,rulers:_,retouch:_,operation:_,objects:_,
-            system_theme:_,system_accent:_,platform_prediction_available:_,logical_viewport:_,phone_defaults:_,initial_fit:_,restored_view:_,preparation_context:_,toolbar_brushes:_,
+            system_theme:_,system_accent:_,platform_prediction_available:_,logical_viewport:_,initial_fit:_,restored_view:_,preparation_context:_,toolbar_brushes:_,
             automatic_camera_revision:_,workspace_view_revision:_,divider_drag:_,edge_contacts:_,floating_resize:_,floating_auto_fit:_,workspace_drag:_,workspace_tab_drag:_,
             workspace_drag_tabs:_,workspace_model_revision:_,workspace_content_revision:_,workspace_history:_,
             workspace_transition:_,workspace_read_only:_,workspace_preview:_,managed_workspace:_,interaction:_,

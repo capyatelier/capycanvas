@@ -99,8 +99,9 @@ available for mouse and screenless tablets without adding input prediction lead.
 ## Tapers
 
 Taper narrows a line's ends. Off, Fixed and Proportional are one choice that opens
-the Taper section, between Smoothing and Tip. Pens start at Off, or at Fixed while
-the phone layout is shown (`tools::defaults`); a saved choice wins.
+the Taper section, between Smoothing and Tip. Pens start at Off, or at Fixed on a
+phone, as the host's `DeviceClass` reports it (`tools::defaults`); a saved choice
+wins.
 - Fixed measures each end in full line widths: the slider follows Smoothness's
   curve up to 50 and typed values reach 200 (`BrushTaper::MAX_FIXED_WIDTHS`).
 - Proportional measures each end as a share of the line (0–50 %), at most 50

@@ -345,7 +345,6 @@ pub struct UiSession<R: CanvasRenderer> {
     system_accent: Option<HexColor>,
     platform_prediction_available: Option<bool>,
     logical_viewport: Option<[f32; 2]>,
-    phone_defaults: bool,
     initial_fit: bool,
     restored_view: Option<(session_recovery::SessionCamera, u64)>,
     preparation_context: Option<layer_render::PreparationContext>,
@@ -636,7 +635,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             system_accent: None,
             platform_prediction_available: None,
             logical_viewport: None,
-            phone_defaults: false,
             initial_fit: true,
             restored_view: None,
             preparation_context: None,
@@ -4014,7 +4012,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.state.brush.diameter = value;
                 self.apply_brush()?;
                 self.tools
-                    .set_override(self.state.brush.preset, "size", value, self.phone_defaults, &self.state.localization)?;
+                    .set_override(self.state.brush.preset, "size", value, self.phone_device(), &self.state.localization)?;
                 (BRUSH, false)
             }
             UiAction::SetBrushOpacity { value } => {
@@ -4022,7 +4020,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.state.brush.opacity = value;
                 self.apply_brush()?;
                 self.tools
-                    .set_override(self.state.brush.preset, "opacity", value, self.phone_defaults, &self.state.localization)?;
+                    .set_override(self.state.brush.preset, "opacity", value, self.phone_device(), &self.state.localization)?;
                 (BRUSH, false)
             }
             UiAction::SetBrushStrength { value } => {
@@ -4153,7 +4151,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     || id == "grain_depth" && matches!(self.layer_interaction.tool, LayerCanvasTool::LassoFill | LayerCanvasTool::Gradient { .. }) {
                     region_tools::RegionTools::default().controls(&self.state.localization)
                 } else {
-                    let brush = tools::defaults(tools::preset(self.state.brush.preset)?, self.phone_defaults);
+                    let brush = tools::defaults(tools::preset(self.state.brush.preset)?, self.phone_device());
                     let id = tool_settings::stored(&id, self.engine.configured_brush()).to_owned();
                     let value = tool_settings::value(self.state.brush.preset, &brush, &id).ok_or("This setting has no default")?;
                     return self.dispatch(UiAction::SetToolSetting { id, value });
@@ -6280,7 +6278,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn select_brush(&mut self, id: u32) -> Result<(), String> {
         let preset = preset(id)?;
         self.cancel_layer_gesture()?;
-        let brush = self.tools.brush_in(preset, self.engine.document().composition().color.space, self.phone_defaults);
+        let brush = self.tools.brush_in(preset, self.engine.document().composition().color.space, self.phone_device());
         self.engine.set_brush(brush.clone()).map_err(error)?;
         self.layer_interaction.tool = LayerCanvasTool::Paint;
         self.state.layer_tools.tool = LayerCanvasTool::Paint;
@@ -6300,20 +6298,17 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.brush.diameter = brush.diameter;
         self.state.brush.opacity = brush.opacity;
         self.engine.set_brush(brush).map_err(error)?;
-        self.tools.set_override(self.state.brush.preset, id, value, self.phone_defaults, &self.state.localization)?;
+        self.tools.set_override(self.state.brush.preset, id, value, self.phone_device(), &self.state.localization)?;
         self.apply_brush()
     }
 
-    fn follow_form_factor(&mut self) -> bool {
-        let phone = self.phone_layout().is_some();
-        if std::mem::replace(&mut self.phone_defaults, phone) == phone { return false; }
-        let Ok(preset) = preset(self.state.brush.preset) else { return true; };
+    fn follow_device_defaults(&mut self) {
+        let Ok(preset) = preset(self.state.brush.preset) else { return; };
         let mut brush = self.engine.configured_brush().clone();
-        brush.taper = self.tools.brush(preset, phone).taper;
+        brush.taper = self.tools.brush(preset, self.phone_device()).taper;
         if brush.taper != self.engine.configured_brush().taper && self.engine.set_brush(brush).is_ok() {
             self.refresh_tools();
         }
-        true
     }
 
     fn apply_brush(&mut self) -> Result<(), String> {
@@ -6658,9 +6653,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         let menu = if self.state.phone.menu { self.phone_menu() } else { None };
         if self.state.phone.menu_navigation.retain(menu.as_ref()) { regions |= regions::LAYOUT | regions::CUSTOMIZATION; }
         regions |= if std::mem::take(&mut self.host_requests_changed) { regions::HOST } else { 0 };
-        if regions & (regions::LAYOUT | regions::BRUSH) != 0 && self.follow_form_factor() {
-            regions |= regions::BRUSH;
-        }
         if regions & (regions::COMMANDS | regions::LAYOUT) != 0 && self.refresh_tool_set() {
             regions |= regions::BRUSH;
         }
@@ -6796,7 +6788,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             };
             if id == self.state.brush.preset || presets.contains(&id) { return None; }
             presets.push(id);
-            Some(self.tools.brush_in(tools::preset(id).ok()?, self.engine.document().composition().color.space, self.phone_defaults))
+            Some(self.tools.brush_in(tools::preset(id).ok()?, self.engine.document().composition().color.space, self.phone_device()))
         }).collect()
     }
     fn update_toolbar_context(&mut self) {

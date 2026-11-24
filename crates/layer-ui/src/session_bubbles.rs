@@ -849,7 +849,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             BubbleAction::ToggleRingSetting { brush, setting } => {
                 let preset = tools::preset(brush)?;
-                let snapshot = self.tools.brush(preset, self.phone_defaults);
+                let snapshot = self.tools.brush(preset, self.phone_device());
                 let controls = tool_settings::controls(brush, &snapshot, self.localization());
                 let mut shown = self.saved_ring(brush)
                     .unwrap_or_else(|| self.ring_ids(brush, &snapshot, &controls).into_iter().map(str::to_owned).collect());
@@ -1479,7 +1479,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn ring_menu(&self, brush: u32) -> Option<Vec<ContextMenuItem>> {
-        let snapshot = self.tools.brush(tools::preset(brush).ok()?, self.phone_defaults);
+        let snapshot = self.tools.brush(tools::preset(brush).ok()?, self.phone_device());
         let controls = tool_settings::controls(brush, &snapshot, self.localization());
         let shown = self.ring_ids(brush, &snapshot, &controls);
         let count = self.saved_ring(brush).map_or(shown.len(), |saved| saved.len());

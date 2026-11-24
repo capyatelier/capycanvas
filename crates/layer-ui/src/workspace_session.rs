@@ -284,7 +284,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         state.colors.set_rgb_space(space)?;
         state.colors.set_document_depth(self.engine.document().composition().color.depth)?;
         state.mask_colors.set_document_depth(layer_core::color::SampleDepth::U8)?;
-        let mut brush = state.tools.brush_in(preset(state.preset)?, space, self.phone_defaults);
+        let mut brush = state.tools.brush_in(preset(state.preset)?, space, self.phone_device());
         let tool = stroke_paint(tools::tool(state.preset), &state.colors, space, &mut brush)?;
         let mut region = region_tools::RegionTools::default();
         region.last_fill = self.region_tools.last_fill;
@@ -335,7 +335,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.tools.overrides.is_empty() {
             return Ok(UiChange::default());
         }
-        let mut brush = tools::ToolMemory::default().brush_in(preset(self.state.brush.preset)?, self.engine.document().composition().color.space, self.phone_defaults);
+        let mut brush = tools::ToolMemory::default().brush_in(preset(self.state.brush.preset)?, self.engine.document().composition().color.space, self.phone_device());
         self.state.colors.load_paint(&mut brush, self.engine.document().composition().color.space)?;
         self.engine.set_brush(brush.clone()).map_err(error)?;
         self.tools.overrides.clear();

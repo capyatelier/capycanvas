@@ -38,7 +38,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             && self.selection_masks.target().is_none()).then_some(layer)
     }
     fn draws_paths(&self, id: u32) -> bool {
-        tools::tool(id) == Tool::Eraser || tools::preset(id).is_ok_and(|preset| self.tools.brush(preset, self.phone_defaults).draws_vector_lines())
+        tools::tool(id) == Tool::Eraser || tools::preset(id).is_ok_and(|preset| self.tools.brush(preset, self.phone_device()).draws_vector_lines())
     }
     pub(super) fn vector_pen(&self) -> Option<u32> {
         self.vector_lines.pen.into_iter().chain(tools::group_presets(ToolGroup::Pen)).chain(tools::brush_ids())
@@ -56,7 +56,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let blocker = match *action {
             UiAction::SelectBrush { id } => tools::preset(id).ok().and_then(|preset| {
                 let setting = self.tools.path_blocker(preset)?;
-                crate::tool_settings::controls(preset as u32, &self.tools.brush(preset, self.phone_defaults), l).into_iter().find(|control| control.id == setting).map(|control| control.label)
+                crate::tool_settings::controls(preset as u32, &self.tools.brush(preset, self.phone_device()), l).into_iter().find(|control| control.id == setting).map(|control| control.label)
             }),
             _ => None,
         };

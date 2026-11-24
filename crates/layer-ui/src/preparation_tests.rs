@@ -14,7 +14,7 @@ fn preparation_fixture(platform: Platform) -> UiSession<Recorder> {
 
 fn assert_toolbar(s: &UiSession<Recorder>, presets: &[u32]) {
     let expected: Vec<_> = presets.iter().map(|&id| s.tools.brush_in(
-        tools::preset(id).unwrap(), s.engine.document().composition().color.space, s.phone_defaults,
+        tools::preset(id).unwrap(), s.engine.document().composition().color.space, s.phone_device(),
     )).collect();
     let actual = &s.engine.backend().contexts.last().unwrap().brushes;
     assert_eq!(actual.len(), expected.len());

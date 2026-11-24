@@ -38,9 +38,15 @@ impl FingerInput {
 }
 impl<R: CanvasRenderer> UiSession<R> {
     pub fn set_device_class(&mut self, device: DeviceClass) -> UiChange {
+        let phone = self.phone_device();
         self.finger.device = device;
-        self.changed(regions::CUSTOMIZATION | regions::SETTINGS, false)
+        let brush = if self.phone_device() == phone { 0 } else {
+            self.follow_device_defaults();
+            regions::BRUSH
+        };
+        self.changed(regions::CUSTOMIZATION | regions::SETTINGS | brush, false)
     }
+    pub(super) fn phone_device(&self) -> bool { self.finger.device == DeviceClass::Phone }
     pub fn finger_mode(&self) -> FingerDrawing {
         self.state.settings.finger_drawing.effective(self.finger.device, self.state.settings.pen_seen)
     }

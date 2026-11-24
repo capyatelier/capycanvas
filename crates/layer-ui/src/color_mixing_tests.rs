@@ -146,9 +146,10 @@ fn stored_taper_overrides_restore_in_either_order() {
 fn phone_pens_default_to_a_fixed_taper_that_saves_nothing() {
     use layer_core::TaperMode;
     let pen = DefaultBrushPreset::GPen as u32;
-    let sized = |platform, viewport: [u32; 2], overrides: Option<(&str, f32)>| {
+    let sized = |platform, device: Option<DeviceClass>, viewport: [u32; 2], overrides: Option<(&str, f32)>| {
         let mut s = session(platform);
         s.state.workspace.layout = WorkspacePreset::Painter.layout(platform);
+        if let Some(device) = device { s.set_device_class(device); }
         if let Some((id, value)) = overrides {
             let mut editing = s.editing_state();
             editing.tools.overrides.insert(pen, [(id.into(), value)].into());
@@ -159,14 +160,15 @@ fn phone_pens_default_to_a_fixed_taper_that_saves_nothing() {
         s
     };
     let mode = |s: &UiSession<Recorder>| s.engine.configured_brush().taper.mode;
-    for (platform, viewport) in [(Platform::Gtk, [1280, 800]), (Platform::Android, [800, 1280])] {
-        let s = sized(platform, viewport, None);
-        assert!(s.phone_layout().is_none());
-        assert_eq!(mode(&s), TaperMode::Off, "{platform:?} {viewport:?}");
+    for (platform, device) in [(Platform::Gtk, None), (Platform::Web, Some(DeviceClass::Desktop)), (Platform::Android, None), (Platform::Android, Some(DeviceClass::Tablet))] {
+        for viewport in [[1280, 800], [412, 891]] {
+            let s = sized(platform, device, viewport, None);
+            assert_eq!(s.phone_layout().is_some(), viewport == [412, 891], "{platform:?} {viewport:?}");
+            assert_eq!(mode(&s), TaperMode::Off, "{platform:?} {device:?} {viewport:?}");
+        }
     }
 
-    let mut s = sized(Platform::Android, [412, 891], None);
-    assert!(s.phone_layout().is_some());
+    let mut s = sized(Platform::Android, Some(DeviceClass::Phone), [412, 891], None);
     assert_eq!(mode(&s), TaperMode::Fixed);
     assert!(s.command(CommandId::TaperFixed).selected);
     assert!(!s.editing_state().tools.overrides.contains_key(&pen), "the default saves nothing");
@@ -175,15 +177,19 @@ fn phone_pens_default_to_a_fixed_taper_that_saves_nothing() {
     s.reset_brushes().unwrap();
     assert_eq!(mode(&s), TaperMode::Fixed, "Reset returns to the phone default");
     assert!(s.editing_state().tools.overrides.is_empty());
-    s.set_viewport([800., 1280.], [800, 1280]).unwrap();
-    assert_eq!(mode(&s), TaperMode::Off, "a tablet window reads the tablet default");
-    s.set_viewport([412., 891.], [412, 891]).unwrap();
+    s.set_viewport([891., 412.], [891, 412]).unwrap();
+    s.set_viewport([1280., 800.], [1280, 800]).unwrap();
+    assert_eq!(mode(&s), TaperMode::Fixed, "a phone keeps its default in any window");
+    s.set_device_class(DeviceClass::Tablet);
+    assert_eq!(mode(&s), TaperMode::Off, "an unfolded phone reports a tablet");
+    s.set_device_class(DeviceClass::Phone);
     assert_eq!(mode(&s), TaperMode::Fixed);
+    assert!(s.editing_state().tools.overrides.is_empty(), "following the device saves nothing");
 
-    let s = sized(Platform::Android, [412, 891], Some(("taper", TaperMode::Off as u8 as f32)));
+    let s = sized(Platform::Android, Some(DeviceClass::Phone), [412, 891], Some(("taper", TaperMode::Off as u8 as f32)));
     assert_eq!(mode(&s), TaperMode::Off, "a stored choice wins");
 
-    let mut s = sized(Platform::Android, [412, 891], None);
+    let mut s = sized(Platform::Android, Some(DeviceClass::Phone), [412, 891], None);
     s.select_brush(DefaultBrushPreset::Paintbrush as u32).unwrap();
     assert_eq!(s.engine.configured_brush().taper, layer_core::BrushTaper::default());
     assert!(!s.state.tool_settings.iter().any(|f| f.group_id == MessageId::TOOL_SETTING_GROUP_TAPER.key()));
