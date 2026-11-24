@@ -98,7 +98,7 @@ impl Canvas {
     fn memory(&self) -> Memory {
         let r = self.engine.backend();
         let scratch = r.liquify.as_ref().map_or(0, |liquify| resident::Storage::storage_bytes(&liquify.empty)
-            + liquify.scratch_map.iter().map(resident::Storage::storage_bytes).sum::<u64>() + liquify.scratch_color.iter().map(PageSurface::storage_bytes).sum::<u64>());
+            + liquify.scratch_map.iter().map(resident::Storage::storage_bytes).sum::<u64>() + liquify.partials.surfaces.iter().map(|(texture, ..)| texture_bytes(texture)).sum::<u64>());
         let mut strokes = 0;
         for stroke in r.liquify.iter().flat_map(|liquify| liquify.strokes.values()) {
             layer_core::liquify::Field::resources(&stroke.field, &mut |_, bytes| strokes += bytes as u64);
@@ -269,39 +269,59 @@ fn a_liquify_session_holds_only_what_its_contact_reads_and_commits_what_a_roomy_
     assert!(roomy.len() == 5 && pressed == roomy, "contacts that rebuild their originals commit the pixels of contacts that kept them, through Undo and Redo");
 }
 
+fn drag<T>(extent: [u32; 2], scale: f32, start: [f32; 2], mut frame: impl FnMut(&mut WgpuRasterizer, &mut dyn FnMut(&mut WgpuRasterizer)) -> T) -> Vec<T> {
+    use crate::layer_tests::{dab, placement, preset_style};
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut doc = placement::paint_document(extent, "Liquify passes");
+    placement::set_source(&mut doc, layer_core::color::source::rgba8_source(extent, |x, y| [(x % 251) as u8, (y % 239) as u8, ((x + y) % 173) as u8, 255]));
+    let target = placement::target(&doc);
+    let view = layer_render::ViewState { width_px: (extent[0] as f32 * scale) as u32, height_px: (extent[1] as f32 * scale) as u32, document_to_surface: [scale, 0., 0., scale, 0., 0.] };
+    crate::test_support::submit_settled(&mut r, FramePacket { view, ..crate::test_support::packet(doc.scene(), extent) });
+    let mut style = preset_style(layer_core::DefaultBrushPreset::LiquifyPush);
+    style.liquify = Some(Arc::new(layer_core::liquify::Context::for_source(placement::paint(&doc), false)));
+    const STEPS: usize = 6;
+    (0..=STEPS).map(|step| {
+        let mut real = dab([0.; 4]);
+        real.center = layer_core::Point { x: start[0] + 90. * step as f32, y: start[1] + 20. * step as f32 };
+        real.radii = [140.; 2];real.motion = [40., 10.];real.material[3] = 1.;
+        let mut predicted = real;predicted.center.x += 45.;
+        let dabs = [real, predicted];
+        let mut persistent = crate::test_support::dab_batch(target, style.clone(), real.bounds());
+        persistent.stroke_id = StrokeId(53);persistent.stroke_start = step == 0;persistent.stroke_end = step == STEPS;
+        let mut preview = crate::test_support::dab_batch(target, style.clone(), predicted.bounds());
+        preview.stroke_id = StrokeId(53);preview.kind = DabBatchKind::Preview;preview.stroke_start = false;preview.stroke_end = false;preview.first_dab = 1;
+        let batches = [persistent, preview];
+        if step == STEPS { placement::paint_mut(&mut doc).raster = layer_core::raster::RasterRevision::pending(); }
+        let measured = frame(&mut r, &mut |r: &mut WgpuRasterizer| {
+            crate::test_support::submit_ready(r, FramePacket { view, composite_all: false, dabs: &dabs[..if step == STEPS { 1 } else { 2 }], dab_batches: &batches[..if step == STEPS { 1 } else { 2 }],
+                ..crate::test_support::packet(doc.scene(), extent) }).unwrap();
+        });
+        assert_eq!(r.preview_level > 0, scale < 1. && step < STEPS, "the view sets whether color waits for the stroke's end");
+        measured
+    }).collect()
+}
+
+#[test]
+fn a_fit_drag_across_original_chunks_reconstructs_no_tile_that_waits_on_another_in_its_pass() {
+    let frames = drag([1024, 3072], 0.25, [200., 2750.], |r, submit| crate::test_support::liquify_writes(|| submit(r)).1);
+    assert!(frames.iter().any(|writes| writes.iter().any(|(_, _, previous)| writes.iter().any(|(_, written, _)| written == previous))),
+        "the drag across page row 11 reconstructs tiles from two chunks of originals");
+    for (frame, writes) in frames.iter().enumerate() {
+        for (pass, written, _) in writes {
+            assert!(writes.iter().filter(|(other, again, _)| other == pass && again == written).count() == 1
+                && writes.iter().all(|(other, _, previous)| other != pass || previous != written),
+                "frame {frame}: reconstruct pass {pass:?} writes a surface that another dispatch of the same pass writes or reads");
+        }
+    }
+}
+
 #[test]
 fn a_stroke_that_fits_keeps_its_passes_and_dispatches() {
-    use crate::layer_tests::{dab, placement, preset_style};
-    let frames = |scale: f32| {
-        let extent = [1024, 768];
-        let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-        let mut doc = placement::paint_document(extent, "Liquify passes");
-        placement::set_source(&mut doc, layer_core::color::source::rgba8_source(extent, |x, y| [(x % 251) as u8, (y % 239) as u8, ((x + y) % 173) as u8, 255]));
-        let target = placement::target(&doc);
-        let view = layer_render::ViewState { width_px: (extent[0] as f32 * scale) as u32, height_px: (extent[1] as f32 * scale) as u32, document_to_surface: [scale, 0., 0., scale, 0., 0.] };
-        crate::test_support::submit_settled(&mut r, FramePacket { view, ..crate::test_support::packet(doc.scene(), extent) });
-        let mut style = preset_style(layer_core::DefaultBrushPreset::LiquifyPush);
-        style.liquify = Some(Arc::new(layer_core::liquify::Context::for_source(placement::paint(&doc), false)));
-        const STEPS: usize = 6;
-        (0..=STEPS).map(|step| {
-            let mut real = dab([0.; 4]);
-            real.center = layer_core::Point { x: 200. + 90. * step as f32, y: 300. + 20. * step as f32 };
-            real.radii = [140.; 2];real.motion = [40., 10.];real.material[3] = 1.;
-            let mut predicted = real;predicted.center.x += 45.;
-            let dabs = [real, predicted];
-            let mut persistent = crate::test_support::dab_batch(target, style.clone(), real.bounds());
-            persistent.stroke_id = StrokeId(53);persistent.stroke_start = step == 0;persistent.stroke_end = step == STEPS;
-            let mut preview = crate::test_support::dab_batch(target, style.clone(), predicted.bounds());
-            preview.stroke_id = StrokeId(53);preview.kind = DabBatchKind::Preview;preview.stroke_start = false;preview.stroke_end = false;preview.first_dab = 1;
-            let batches = [persistent, preview];
-            if step == STEPS { placement::paint_mut(&mut doc).raster = layer_core::raster::RasterRevision::pending(); }
-            let before = (r.metrics().command_passes, crate::test_support::PassCounts::snapshot());
-            crate::test_support::submit_ready(&mut r, FramePacket { view, composite_all: false, dabs: &dabs[..if step == STEPS { 1 } else { 2 }], dab_batches: &batches[..if step == STEPS { 1 } else { 2 }],
-                ..crate::test_support::packet(doc.scene(), extent) }).unwrap();
-            assert_eq!(r.preview_level > 0, scale < 1. && step < STEPS, "the view sets whether color waits for the stroke's end");
-            [r.metrics().command_passes - before.0, crate::test_support::PassCounts::snapshot().delta(before.1).liquify_dispatches]
-        }).collect::<Vec<_>>()
-    };
+    let frames = |scale: f32| drag([1024, 768], scale, [200., 300.], |r, submit| {
+        let before = (r.metrics().command_passes, crate::test_support::PassCounts::snapshot());
+        submit(r);
+        [r.metrics().command_passes - before.0, crate::test_support::PassCounts::snapshot().delta(before.1).liquify_dispatches]
+    });
     assert_eq!([frames(0.25), frames(1.)], [[[8, 12], [5, 12], [6, 18], [5, 12], [5, 18], [5, 22], [3, 14]], [[7, 16], [6, 16], [7, 20], [6, 16], [6, 24], [6, 20], [3, 8]]],
         "the command passes and Liquify dispatches of each frame, below full size and at it");
 }

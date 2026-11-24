@@ -221,9 +221,32 @@ pub(super) struct Liquify {
     unchanged_previews: std::collections::BTreeSet<(SourceTarget, [u32; 2])>,
     empty: TileStorage,
     scratch_map: [TileStorage; 2],
-    scratch_color: [PageSurface; 2],
+    partials: Partials,
     sessions: Vec<Weak<Mutex<Originals>>>,
     idle: Arc<AtomicU64>,
+}
+
+#[derive(Default)]
+struct Partials {
+    block: u32,
+    surfaces: Vec<(wgpu::Texture, wgpu::TextureView, crate::residency::Charge)>,
+}
+impl Partials {
+    fn reserve(&mut self, r: &WgpuRasterizer, encoder: &submission::CommandEncoder, block: u32, wanted: usize) -> usize {
+        if self.block != block && wanted != 0 {
+            let retired = std::mem::replace(self, Self { block, surfaces: Vec::new() }).surfaces;
+            #[cfg(not(target_arch = "wasm32"))]
+            if !retired.is_empty() { encoder.retire(retired); }
+            #[cfg(target_arch = "wasm32")]
+            if !retired.is_empty() { encoder.retire(retired.into_iter().map(|(_, _, charge)| charge).collect::<Vec<_>>()); }
+        }
+        while self.surfaces.len() < wanted.min(2 * (block * block) as usize) {
+            let (texture, view) = create_target(&r.device, [PAGE_SIZE / block; 2], r.device.working_format(), "liquify color gather");
+            let charge = r.raster_tiers.paint.charge(texture_bytes(&texture));
+            self.surfaces.push((texture, view, charge));
+        }
+        self.surfaces.len()
+    }
 }
 
 #[derive(Default)]
@@ -475,7 +498,7 @@ impl Liquify {
             unchanged_previews: Default::default(),
             empty: TileStorage::new(r,1),
             scratch_map: std::array::from_fn(|_| TileStorage::new(r,1)),
-            scratch_color: std::array::from_fn(|_| r.create_page_surface(&r.raster_tiers.paint, "liquify color gather")),
+            partials: Partials::default(),
             sessions: Vec::new(), idle: Default::default() }
     }
 
@@ -661,26 +684,28 @@ impl Liquify {
     }
 
     fn dispatch(&self, r: &mut WgpuRasterizer, encoder: &mut submission::CommandEncoder, batch_index: usize,
-        batch: &DabBatch, jobs: &[Dispatch], map: bool) {
-        if jobs.is_empty() { return; }
+        batch: &DabBatch, passes: &[Vec<Dispatch>], map: bool) {
+        let count = passes.iter().map(Vec::len).sum::<usize>();
+        if count == 0 { return; }
         let phase = if map { 16 } else { 18 };
         let measured = r.telemetry.phase_begin(phase, &r.device, &r.queue, encoder);
-        performance_trace::counter(if map { c"Capy Liquify map dispatches" } else { c"Capy Liquify reconstruct dispatches" }, jobs.len() as u64);
-        #[cfg(test)] crate::test_support::PassCounts {liquify_dispatches:jobs.len() as u64,..Default::default()}.record();
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("liquify sparse tiles"), timestamp_writes: None });
-        pass.set_pipeline(if map { self.pipelines.update(&batch.style) } else { &self.pipelines.reconstruct });
+        performance_trace::counter(if map { c"Capy Liquify map dispatches" } else { c"Capy Liquify reconstruct dispatches" }, count as u64);
+        #[cfg(test)] crate::test_support::PassCounts {liquify_dispatches:count as u64,..Default::default()}.record();
         let size = PAGE_SIZE / r.dry_material_block(batch);
-        if map {
-            let key = WgpuRasterizer::texture_set_key(&batch.style);
-            pass.set_bind_group(3, &r.texture_sets.iter().find(|t| t.key == key).unwrap().bind_group, &[]);
+        for jobs in passes.iter().filter(|jobs| !jobs.is_empty()) {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("liquify sparse tiles"), timestamp_writes: None });
+            pass.set_pipeline(if map { self.pipelines.update(&batch.style) } else { &self.pipelines.reconstruct });
+            if map {
+                let key = WgpuRasterizer::texture_set_key(&batch.style);
+                pass.set_bind_group(3, &r.texture_sets.iter().find(|t| t.key == key).unwrap().bind_group, &[]);
+            }
+            for job in jobs {
+                pass.set_bind_group(0, &job.output, &[batch_index as u32 * r.style_stride as u32]);
+                pass.set_bind_group(1, r.paint_target_binding(&batch.style), &[r.layer_target_offset(batch.target, job.coordinate)]);
+                pass.set_bind_group(2, &job.sources, &[job.record]);
+                pass.dispatch_workgroups(size.div_ceil(16), size.div_ceil(8), 1);
+            }
         }
-        for job in jobs {
-            pass.set_bind_group(0, &job.output, &[batch_index as u32 * r.style_stride as u32]);
-            pass.set_bind_group(1, r.paint_target_binding(&batch.style), &[r.layer_target_offset(batch.target, job.coordinate)]);
-            pass.set_bind_group(2, &job.sources, &[job.record]);
-            pass.dispatch_workgroups(size.div_ceil(16), size.div_ceil(8), 1);
-        }
-        drop(pass);
         if measured { r.telemetry.phase_end(phase, encoder); }
     }
 
@@ -792,10 +817,9 @@ impl Liquify {
             outputs.push((tile.coordinate, output));
         }
         #[cfg(test)] if preview {for (coordinate,_) in &outputs {crate::test_support::record_liquify_tile(crate::test_support::LiquifyVisit::Preview,*coordinate);}}
-        self.dispatch(r, encoder, batch_index, batch, &dispatches, true);
+        self.dispatch(r, encoder, batch_index, batch, &[dispatches], true);
         let actual=encoder.submission();
         for publication in map_publications {publication.publish(&actual);}
-        dispatches.clear();
         let mut color_bounds = BTreeMap::new();
         if !preview {
             let stroke = self.strokes.get_mut(&batch.target).unwrap();
@@ -867,8 +891,14 @@ impl Liquify {
             }
             Ok((chunks.into_iter().collect::<Vec<_>>(),complete))
         }).collect::<Result<Vec<_>,GpuRasterError>>()?;
+        let partials_of=|source:usize|region_chunks[source].0.len().saturating_sub(1).min(2);
+        let slots=self.partials.reserve(r,encoder,block,sources.iter().map(|source|partials_of(*source)).sum());
+        let (mut passes,mut round,mut used)=(Vec::<Vec<Dispatch>>::new(),0,0);
+        #[cfg(test)] let call=crate::test_support::next_liquify_reconstruct();
         for ((coordinate, field), source) in outputs.iter().zip(sources) {
             let (chunks,mut complete)=(&region_chunks[source].0,region_chunks[source].1);
+            if used+partials_of(source)>slots {(round,used)=(passes.len(),0);}
+            if passes.len()<round+chunks.len() {passes.resize_with(round+chunks.len(),Vec::new);}
             let current=current_tiles.remove(coordinate).map(|view|view.take(&mut complete));
             let prior_view=stroke.colored(coordinate).and_then(|tile|tile.read(&receipt).ok()).map(|read|read.value().view.clone());
             let field_view=field.read(&receipt)?.value().view.clone();
@@ -907,7 +937,9 @@ impl Liquify {
                 let current = if preview {
                     current.as_ref().unwrap_or(&r.empty_view)
                 } else { &original_view };
-                let output_view = if index + 1 == chunks.len() { &destination } else { &self.scratch_color[index % 2].view };
+                let output_view = if index + 1 == chunks.len() { &destination } else { &self.partials.surfaces[used + index % 2].1 };
+                let previous = if index == 0 { &r.empty_view } else { &self.partials.surfaces[used + (index + 1) % 2].1 };
+                #[cfg(test)] crate::test_support::record_liquify_write([call,round + index],output_view,previous);
                 let output_binding = bindings::group(&r.device, "liquify color output", &self.pipelines.color_layout, [
                     wgpu::BindingResource::Buffer(wgpu::BufferBinding {buffer: &r.style_buffer, offset: 0, size: NonZeroU64::new(mem::size_of::<StyleGpu>() as u64)}),
                     wgpu::BindingResource::TextureView(output_view),
@@ -915,14 +947,15 @@ impl Liquify {
                 let inputs = bindings::group(&r.device, "liquify original inputs", &self.pipelines.color_sources,
                     (0..ORIGINAL_BINDINGS).map(|i| wgpu::BindingResource::TextureView(&originals.atlases.get(chunk * ORIGINAL_BINDINGS + i).and_then(Option::as_ref).unwrap_or(resident).view))
                         .chain([wgpu::BindingResource::Buffer(r.material_records.binding()), wgpu::BindingResource::TextureView(&field_view),
-                            wgpu::BindingResource::TextureView(&self.scratch_color[(index + 1) % 2].view),
+                            wgpu::BindingResource::TextureView(previous),
                             wgpu::BindingResource::TextureView(&original_view), index_buffer.as_entire_binding(),
                             wgpu::BindingResource::TextureView(current), wgpu::BindingResource::TextureView(prior_view.as_ref().unwrap_or(&self.empty.view))]));
-                dispatches.push(Dispatch { output: output_binding, sources: inputs, coordinate: *coordinate,
+                passes[round + index].push(Dispatch { output: output_binding, sources: inputs, coordinate: *coordinate,
                     record: r.material_records.offset(first_record + index) });
             }
+            used += partials_of(source);
         }
-        self.dispatch(r, encoder, batch_index, batch, &dispatches, false);
+        self.dispatch(r, encoder, batch_index, batch, &passes, false);
         let actual=encoder.submission();
         r.publish_material(batch,publications.into_iter().map(|publication|publication.encoded(&actual)).collect())?;
         drop(originals);

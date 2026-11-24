@@ -97,6 +97,17 @@ pub(crate) fn liquify_tiles<T>(run:impl FnOnce()->T)->(T,crate::IdMap<LiquifyTil
     let value=run();
     (value,LIQUIFY_TILES.with(|tiles|tiles.borrow_mut().take().unwrap_or_default()))
 }
+pub(crate) type LiquifyWrite=([usize;2],wgpu::TextureView,wgpu::TextureView);
+std::thread_local! {static LIQUIFY_WRITES:std::cell::RefCell<Option<(usize,Vec<LiquifyWrite>)>>=const {std::cell::RefCell::new(None)};}
+pub(crate) fn next_liquify_reconstruct()->usize {LIQUIFY_WRITES.with(|writes|writes.borrow_mut().as_mut().map_or(0,|(calls,_)|{*calls+=1;*calls}))}
+pub(crate) fn record_liquify_write(pass:[usize;2],written:&wgpu::TextureView,previous:&wgpu::TextureView) {
+    LIQUIFY_WRITES.with(|writes|if let Some((_,writes))=writes.borrow_mut().as_mut() {writes.push((pass,written.clone(),previous.clone()));});
+}
+pub(crate) fn liquify_writes<T>(run:impl FnOnce()->T)->(T,Vec<LiquifyWrite>) {
+    LIQUIFY_WRITES.with(|writes|*writes.borrow_mut()=Some(Default::default()));
+    let value=run();
+    (value,LIQUIFY_WRITES.with(|writes|writes.borrow_mut().take().map(|(_,writes)|writes).unwrap_or_default()))
+}
 type SourcePreparation=(layer_core::SourceTarget,u32,[u32;2]);
 std::thread_local! {static SOURCE_PREPARATIONS:std::cell::RefCell<Option<crate::IdMap<SourcePreparation,u32>>>=const {std::cell::RefCell::new(None)};}
 pub(crate) fn record_source_preparation(page:SourcePreparation) {SOURCE_PREPARATIONS.with(|pages|if let Some(pages)=pages.borrow_mut().as_mut() {*pages.entry(page).or_default()+=1;});}

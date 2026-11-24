@@ -577,7 +577,10 @@ its field the same way; accept it rather than restrict these tools.
   within the portable limit of sixteen sampled textures. Original pixels
   occupy 16-layer texture arrays, with a sparse tile-index buffer.
   Reconstruction binds at most eleven arrays per source chunk. Large sources use
-  additional chunks; scratch textures accumulate disjoint contributions. A
+  additional chunks, each in its own pass; every tile accumulates their disjoint
+  contributions in its own scratch texture, so no dispatch in a pass waits for
+  another. The scratch pool holds two pages' bytes at the preview's block size,
+  and tiles beyond it take further passes. A
   tile's chunk is its block of 16 × 11 pages, so the order of those sums never
   depends on which tiles a session copied first or rebuilt later. No
   Float32 filtering, Float32 blending, bindless texture arrays or float atomics
