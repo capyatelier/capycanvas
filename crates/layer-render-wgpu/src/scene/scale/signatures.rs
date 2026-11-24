@@ -471,6 +471,9 @@ impl Prepared {
     }
     fn source_version(&self,id:SourceTarget,frame:SourceFrame,extent:[u32;2],region:DocRect,input_level:u32,global:bool)->Result<(ContentVersion,PixelRect),GpuRasterError> {
         let s=&self.snapshot;let scene=s.scene.view();let mut inputs=Vec::new();let mut name=Recipe::new();name.add(&(id,frame,extent,scene.color_mode(id)));
+        if let SourceTarget::Coverage(coverage)=id && let Some((use_,source))=scene.source_owner(id).and_then(|owner|scene.mask(owner)).filter(|(use_,_)|use_.source==coverage) {
+            name.add(&(use_.inverted,source.default_coverage.to_bits()));
+        }
         let moving=s.moving==scene.source_owner(id);let level=s.source_level(id,frame,extent,(!global).then_some(region),input_level,moving);name.add(&level);
         let halo=if frame.aligned() && !moving {0}else {1<<level};let watercolor=s.watercolor.get(&id).copied();name.watercolor(watercolor);
         let local=if global {PixelRect::full(extent)}else {source_footprint(region,frame,extent,level,halo+watercolor.map_or(0,|style|style.radius()))};

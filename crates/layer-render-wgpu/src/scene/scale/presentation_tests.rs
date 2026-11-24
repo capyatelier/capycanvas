@@ -1288,6 +1288,39 @@ fn a_vector_crossing_settles_to_the_level_a_fresh_view_renders() { assert_crossi
 fn an_object_crossing_settles_to_the_level_a_fresh_view_renders() { assert_crossing_settles_to_the_level_a_fresh_view_renders(Crossed::Object); }
 
 #[test]
+fn a_masked_object_at_half_size_settles_to_a_fresh_view_after_its_mask_is_inverted_or_given_a_new_default() {
+    use layer_core::{Edit, Point, Selection};
+    for offset in [[0, 0], [7, -9]] {
+        let mut doc = crossing_document(Crossed::Object);
+        let owner = doc.scene().order()[0];
+        let mask = coverage_mask(&mut doc, owner, offset, Some(Selection::polygon(vec![Point { x: 60., y: 40. }, Point { x: 700., y: 90. }, Point { x: 300., y: 520. }]).unwrap()));
+        let view = crossing_view(0.5);
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        settle_at(&mut r, FramePacket { view, ..packet(doc.scene(), CROSSING_EXTENT) });
+        for change in ["inversion", "default coverage"] {
+            let edit = if change == "inversion" {
+                let mut inverted = doc.scene().occurrence(owner).unwrap().clone();
+                inverted.mask.as_mut().unwrap().inverted = true;
+                Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences, owner, Some(inverted)).unwrap())
+            } else {
+                let mut source = doc.artwork.coverage.get(mask).unwrap().clone();
+                source.default_coverage = 0.3;
+                Edit::Coverage(RecordChange::replace(&doc.artwork.coverage, mask, Some(source)).unwrap())
+            };
+            doc.apply(edit).unwrap();
+            let frame = FramePacket { view, ..packet(doc.scene(), CROSSING_EXTENT) };
+            settle_at(&mut r, frame);
+            let mut fresh = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+            settle_at(&mut fresh, frame);
+            assert_eq!([&r, &fresh].map(|r| r.scale_display.as_ref().unwrap().plan.level), [1; 2]);
+            let [shown, rendered] = [&r, &fresh].map(|r| pixels(r, r.scale_display.as_ref().unwrap().texture()));
+            let error = crate::test_support::max_error(&shown, &rendered);
+            assert!(error < 1e-5, "mask offset {offset:?}: after its {change} changes the display settles {error} away from a fresh view");
+        }
+    }
+}
+
+#[test]
 fn a_level_change_without_a_committed_root_presents_the_floor() {
     let (extent, mut doc) = (CROSSING_EXTENT, crossing_document(Crossed::Raster));
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
