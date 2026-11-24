@@ -926,11 +926,11 @@ mod tests {
         renderer.advance_papers(false,None).unwrap();
         assert_eq!(stage(&renderer.papers), 1);
         assert!(!renderer.papers.submitted.load(Ordering::Acquire), "the probe is still in flight");
-        renderer.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        crate::test_support::complete(&renderer);
         assert!(renderer.papers.submitted.load(Ordering::Acquire));
         while stage(&renderer.papers) < 2 + PAGES_PER_STEP {
             renderer.advance_papers(false,None).unwrap();
-            renderer.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            crate::test_support::complete(&renderer);
         }
         assert_eq!(stage(&renderer.papers), 2 + PAGES_PER_STEP, "one step of pages per completed submission");
     }
