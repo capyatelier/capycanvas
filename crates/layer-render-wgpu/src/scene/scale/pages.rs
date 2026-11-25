@@ -1541,12 +1541,17 @@ impl Asked {
     fn no_higher_than(self,earlier:Self)->bool {self.view==earlier.view && (self.moving || !earlier.moving)}
 }
 #[derive(Default)]
-struct Cell {shown:Option<Shown>,current:bool,wait:Option<crate::frame_demand::UnitWait>,refusal:Option<crate::residency::Blocked>,queued:bool,derived:bool,reduced:bool,reduced_from:Option<layer_core::raster::ContentStamp>,waits:Vec<super::super::object_cache::ObjectWait>,lag:Option<PixelRect>}
+struct Cell {shown:Option<Shown>,current:bool,wait:Option<crate::frame_demand::UnitWait>,refusal:Option<crate::residency::Blocked>,queued:bool,derived:bool,reduced:bool,reduced_from:Option<layer_core::raster::ContentStamp>,waits:Vec<super::super::object_cache::ObjectWait>,lag:Option<PixelRect>,
+    selected:Option<ContentVersion>,refused_request:Option<ContentVersion>}
 impl Cell {
     fn showing(shown:Shown)->Self {Self {shown:Some(shown),current:true,lag:Some(PixelRect::EMPTY),..Self::default()}}
     fn queue(&mut self) {if !self.derived {self.queued=true;}}
     fn stale(&mut self) {if !self.derived {self.current=false;self.queued=true;self.lag=None;}}
-    fn invalidate(&mut self) {self.stale();self.waits.clear();}
+    fn invalidate(&mut self) {self.stale();self.waits.clear();self.selected=None;}
+    fn select(&mut self,request:&ContentVersion) {
+        if self.refusal.is_some() && self.refused_request.get_or_insert_with(||request.clone()).matches(request)!=Some(true) {self.release();}
+        self.selected=Some(request.clone());
+    }
     fn reach(&mut self,area:Option<PixelRect>,template:&Key) {
         let lag=self.lag.zip(area).filter(|_|self.shown.as_ref().is_some_and(|shown|shown.composition(template))).map(|(lag,area)|lag.union(area));
         self.invalidate();self.lag=lag;
@@ -1577,6 +1582,7 @@ impl Cell {
     }
     fn allowance(&self,r:&WgpuRasterizer)->crate::frame_demand::Allowance {self.wait.as_ref().and_then(|wait|wait.eligible(r)).unwrap_or(crate::frame_demand::Allowance::Fresh)}
     fn release(&mut self) {
+        self.refused_request=None;
         if self.refusal.take().is_some() && self.wait.as_ref().is_some_and(crate::frame_demand::UnitWait::refusing) {self.wait=None;}
     }
     fn derive(&mut self,derived:bool) {
@@ -1811,11 +1817,13 @@ impl Cache {
             if !(cells.cells[index].queued || owed) {continue;}
             let region=bounds(coordinate,plan.level,plan.extent);
             let hold=(!region.intersect(visible).is_empty()).then_some(index);
+            let key=Key {coordinate,..template.clone()};
+            let expected=frame.expected_key(&key,region,input_level);
+            if let Ok(expected)=&expected {cells.cells[index].select(expected.version());}
             if cells.cells[index].refused(r) {selection.held=selection.held.or(hold);continue;}
             if cells.cells[index].sleeping() {for (lease,_) in &cells.cells[index].waits {lease.stamp(class(region));}selection.held=selection.held.or(hold);continue;}
-            let key=Key {coordinate,..template.clone()};
             let cell=&mut cells.cells[index];
-            match frame.expected_key(&key,region,input_level) {
+            match expected {
                 Ok(expected) if expected.version().resolved().is_some()=>if cell.wait.as_ref().is_some_and(|wait|!wait.refusing()) {cell.wait=None;},
                 Ok(expected)=>{cell.wait=Some(crate::frame_demand::UnitWait::input(crate::frame_demand::Producer::Name(expected.into_version())));selection.held=selection.held.or(hold);continue;},
                 Err(error@(GpuRasterError::NotReady|GpuRasterError::Waiting(_)))=>{
@@ -2096,6 +2104,7 @@ impl Cache {
                 if cell.pending() && cell.refusal_applies(refusal) {
                     #[cfg(test)] let previous=cell.wait.clone();
                     (cell.refusal,cell.wait)=(Some(refusal.clone()),Some(crate::frame_demand::UnitWait::parked(refusal.clone(),allowance)));cell.queued=true;
+                    cell.refused_request=cell.selected.clone();
                     #[cfg(test)] if crate::test_support::destination_wait_changed(previous.as_ref(),cell.wait.as_ref()) {crate::test_support::PassCounts {destination_wait_transitions:1,..Default::default()}.record();}
                 }
             }

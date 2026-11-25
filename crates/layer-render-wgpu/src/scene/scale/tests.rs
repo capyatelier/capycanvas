@@ -3087,6 +3087,38 @@ fn a_transition_shows_no_cell_of_the_new_revision_while_another_cell_waits() {
 }
 
 #[test]
+fn a_cell_parked_on_a_costly_revision_lets_a_cached_cheaper_revision_show_without_new_room() {
+    let extent=[1024,512];
+    let doc=document_at(extent);
+    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    r.set_preparation_wake(Arc::new(||{}));
+    let revision=|opacity:f32|{let mut revised=doc.clone();occurrence_mut(&mut revised,0).opacity=opacity;revised};
+    let (cheap,costly)=(revision(0.5),revision(0.25));
+    let [mut shown,mut cached,mut parked]=[&doc,&cheap,&costly].map(|doc|packet(doc.scene(),extent));
+    for frame in [&mut shown,&mut cached,&mut parked] {frame.view.document_to_surface=[0.5,0.,0.,0.5,0.,0.];}
+    submit_published(&mut r,shown);
+    submit_published(&mut r,FramePacket {composite_all:false,..cached});
+    submit_published(&mut r,FramePacket {composite_all:false,..shown});
+    let before=display_pixels(&r);
+    let cache=r.scale_display.as_ref().unwrap();
+    let waiting=pages::bounds([1,0],cache.plan.level,extent);
+    cache.invalidate_cells(cache.reached_cells(waiting.into()),None);
+    cache.refuse(waiting,&r.scene_tiers.display.wanting(crate::residency::Class::Visible,u64::MAX>>2),crate::frame_demand::Allowance::Spent);
+    crate::test_support::submit_ready(&mut r,FramePacket {composite_all:false,..parked}).unwrap();
+    r.wait_idle().unwrap();
+    assert!(display_pixels(&r)==before,"the costly revision keeps the shown picture while its cell is parked");
+    let mut fresh=WgpuRasterizer::new_native_headless(cheap.composition().color).unwrap();
+    submit_published(&mut fresh,cached);
+    let expected=display_pixels(&fresh);
+    let returned=(1..=4).find(|_| {
+        crate::test_support::submit_ready(&mut r,FramePacket {composite_all:false,..cached}).unwrap();
+        r.wait_idle().unwrap();
+        crate::test_support::max_error(&display_pixels(&r),&expected)<1e-5
+    });
+    assert!(returned.is_some(),"the cached cheaper revision shows within four frames without new room: {:?}",r.outstanding_terms());
+}
+
+#[test]
 fn a_refused_display_window_sleeps_until_its_room_returns_instead_of_spinning() {
     use crate::frame_demand::Outstanding;
     let extent=[1024,512];
