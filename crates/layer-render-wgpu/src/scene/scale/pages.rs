@@ -207,6 +207,11 @@ impl Cache {
             .map(|page|page.key.expression).collect::<std::collections::HashSet<_>>().len()
     }
     #[cfg(test)]
+    pub(crate) fn has_cell_halves(&self,region:PixelRect)->bool {
+        let cells=self.half_cells(region);
+        !cells.is_empty() && cells.len()==coordinates(region.intersect(self.plan.bounds),self.plan.level).count()
+    }
+    #[cfg(test)]
     pub(crate) fn half_pages(&self)->Vec<(u32,PixelRect)> {
         let halves=self.pivot_halves();
         self.pages.lock().unwrap().pages.keys().filter(|key|key.source.is_none() && halves.contains(&key.expression)).map(|key|(key.level,key.plan().bounds)).collect()

@@ -252,15 +252,22 @@ fn the_first_preview_frame_shows_its_ink_and_commits_like_a_fresh_renderer(conta
         r.poll_pending(preview.view).unwrap();
         crate::test_support::pace(&mut r);
         let compiling=r.compilation.batch();
-        let counts=PassCounts::snapshot();
+        let before_halves=r.scale_display.as_ref().unwrap().half_pages();
         assert!(matches!(r.submit_when_ready(preview,None),std::task::Poll::Ready(Ok(()))),"{format:?} {contact:?}: the first preview frame is accepted without waiting");
-        let counts=PassCounts::snapshot().delta(counts);
         assert_eq!(crate::compile::tests::queued_recipes(&r.compilation),0,"{format:?} {contact:?}: the first preview frame waits for no pipeline");
         assert!(!publication_pending(&r),"{format:?} {contact:?}: the first preview frame covers the view");
         let shown=display_pixels(&r)[centre][0]-before;
         assert!(shown>0.3,"{format:?} {contact:?}: the first preview frame adds {shown} red at its dab centre");
         assert!(r.preview_level>0,"{format:?} {contact:?}: the stroke keeps its preview below full size");
-        if contact!=FirstContact::OnTop {assert!(counts.fold_inputs>0,"{format:?} {contact:?}: the first preview frame builds its backdrop halves: {counts:?}");}
+        if contact!=FirstContact::OnTop {
+            let cache=r.scale_display.as_ref().unwrap();
+            let damage=pixel_rect(dab.bounds(),doc.composition().size);
+            let reached=cache.wanted_cells(damage,preview.view);
+            assert!(!reached.is_empty() && cache.half_cells(damage)==reached,"{format:?} {contact:?}: the reached cells have valid backdrop halves");
+            let built:Vec<_>=cache.half_pages().into_iter().filter(|page|!before_halves.contains(page)).collect();
+            assert!(built.iter().all(|(level,region)|*level==cache.plan.level && reached.contains(region))
+                && built.len()<=cache.pivot_halves().len()*reached.len(),"{format:?} {contact:?}: the first preview only builds missing reached-cell halves: {built:?}");
+        }
         drop(compiling);
         let moved=ink_dab(FIRST_DAB[0]+4.);
         let batch=DabBatch {damage:moved.bounds(),..batch};

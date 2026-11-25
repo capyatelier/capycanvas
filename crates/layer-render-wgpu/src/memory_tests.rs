@@ -2788,7 +2788,9 @@ fn stroke_frames_build_every_half_of_their_dab_cells_and_none_outside_them() {
     frame.view.width_px=512;frame.view.height_px=512;frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
     settle_observing(&mut r,frame,|_|{});
     let cell=PixelRect::new(0,0,1024,1024);
-    let units=2*(cell.width()/PAGE_SIZE*cell.height()/PAGE_SIZE) as usize;
+    let level=r.scale_display.as_ref().unwrap().plan.level;
+    assert_eq!(level,2);
+    let units=2*(cell.width()/(PAGE_SIZE<<level)*cell.height()/(PAGE_SIZE<<level)) as usize;
     let mut built=0;
     for step in 0..8 {
         let dab=crate::tests::test_dab([200.+8.*step as f32,200.],[0.9,0.1,0.3,1.],0.8);
@@ -2797,9 +2799,10 @@ fn stroke_frames_build_every_half_of_their_dab_cells_and_none_outside_them() {
         crate::test_support::complete(&r);
         let halves=r.scale_display.as_ref().unwrap().half_pages();
         assert!(halves.iter().all(|(_,region)|region.intersect(cell)==*region),"stroke frame {step} built halves outside its dab cell: {halves:?}");
-        built=halves.iter().filter(|(level,_)|*level==0).count();
+        built=halves.iter().filter(|(actual,_)|*actual==level).count();
     }
-    assert_eq!(built,units,"the stroke builds both halves of the cell it reaches");
+    assert_eq!(built,units,"the stroke builds both halves at the level of the cell it reaches");
+    assert!(r.scale_display.as_ref().unwrap().has_cell_halves(cell),"both reached halves have valid coverage");
 }
 
 #[test]
