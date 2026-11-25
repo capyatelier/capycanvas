@@ -806,7 +806,7 @@ fn native_filter_windows_share_display_storage_and_preserve_halos_during_navigat
             frame.view.document_to_surface = [zoom, 0., 0., zoom, x, -32.];
             submit_published(&mut r, frame); submit_published(&mut exact, frame);
             let cache = r.scale_display.as_ref().unwrap();
-            assert!(cache.evaluation == Evaluation::Native);
+            cache.assert_native_effect_scope(frame.scene);
             let context = format!("{space:?}, zoom {zoom}, x {x}, opacity {opacity}");
             let units = page_coordinates(PixelRect::full(extent)).count() + cells(cache) + cache.overview.as_deref().map_or(0, cells) + r.navigator.cache().map_or(0, cells);
             let published = visible_pixels(&r, frame.view);

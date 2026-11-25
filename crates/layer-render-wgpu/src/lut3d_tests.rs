@@ -396,7 +396,6 @@ fn shared_samples_with_different_domains_have_distinct_gpu_headers() {
 
 #[test]
 fn native_lookup_charges_its_composition_windows_to_the_display_tier() {
-    use crate::scene::scale::Evaluation;
     let extent=[1033,517];
     let color=DocumentColor{space:RgbSpace::Srgb,depth:SampleDepth::F32};
     let mut window=WgpuRasterizer::new_native_headless(color).unwrap();
@@ -404,9 +403,12 @@ fn native_lookup_charges_its_composition_windows_to_the_display_tier() {
     let mut document=empty_document(extent,color);insert_effect(&mut document,lookup(table(17,[[0.;3],[1.;3]],false),0,100.));insert_source(&mut document,"Native lookup",original);
     let scale=0.25;let mut frame=packet(document.scene().with_owner(0,0),extent);frame.view.width_px=43;frame.view.height_px=25;
     frame.view.document_to_surface=[scale,0.,0.,scale,-610.*scale,-270.*scale];
-    publish(&mut window,frame);window.wait_idle().unwrap();
+    let mut effect_passes=0;
+    crate::test_support::submit_published_observing(&mut window,frame,|r|effect_passes+=r.scene.as_ref().unwrap().effect_passes);
+    window.wait_idle().unwrap();
     let cache=window.scale_display.take().unwrap();
-    assert!(cache.evaluation==Evaluation::Native);
+    cache.assert_native_effect_scope(frame.scene);
+    assert!(effect_passes>0,"the lookup performed effect work");
     let held_by_cache=cache.storage_bytes()-window.scene.as_ref().unwrap().retained_scale_bytes()[0];
     let held=window.scene_tiers.display.used();
     drop(cache);

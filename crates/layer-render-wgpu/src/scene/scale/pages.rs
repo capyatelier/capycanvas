@@ -199,6 +199,18 @@ impl Cache {
             "optional branch pages cannot consume the nearest pending unit's display allowance: optional={optional}");
     }
     #[cfg(test)]
+    pub(crate) fn assert_native_effect_scope(&self,scene:SceneView<'_>) {
+        let root=self.graph.root.as_ref().unwrap();
+        if self.plan.level>0 {
+            assert!(self.evaluation!=Evaluation::Native,"native capture belongs to the effect node, not the reduced root");
+            assert!(cell_plan::Footprint::captures(root,scene,self.plan.level,true));
+            let scope=cell_plan::Footprint::of(root,scene,self.plan.bounds,self.plan.extent,self.plan.level,true);
+            assert!(!scope.native.is_empty(),"the effect requests its input on the native grid");
+        } else {
+            assert_eq!(self.required_input_level(),0,"the effect's output grid is already native");
+        }
+    }
+    #[cfg(test)]
     pub(crate) fn cached_branches(&self) -> usize {
         self.pages.lock().unwrap().retained_pages().into_iter()
             .filter(|page|page.key.source.is_none() && !page.written.is_empty()
