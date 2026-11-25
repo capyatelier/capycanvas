@@ -1616,7 +1616,8 @@ impl Cell {
     fn awaits_native(&self,refining:bool)->bool {self.live() || refining && !self.derived && self.unsettled() && self.shown.as_ref().is_some_and(|shown|!shown.exact)}
     fn owed(&self,area:PixelRect,changed:PixelRect)->PixelRect {if !self.derived {PixelRect::EMPTY}else if self.reduced {area.intersect(changed)}else {area}}
     fn keyed(&self,area:PixelRect)->Option<&Recorded> {self.shown.as_ref()?.recorded.as_ref().filter(|recorded|recorded.written.intersect(area)==area)}
-    fn pending(&self)->bool {!self.derived && (self.queued || self.shown.as_ref().is_none_or(|shown|!shown.exact))}
+    fn due(&self,exact:bool)->bool {!self.derived && (self.queued || exact && self.shown.as_ref().is_none_or(|shown|!shown.exact))}
+    fn pending(&self)->bool {self.due(true)}
     fn parked_by(&self,class:Class)->bool {class!=Class::Refinement || self.current && self.shown.as_ref().is_some_and(|shown|!shown.exact)}
     fn refusal_applies(&self,refusal:&crate::residency::Blocked)->bool {self.parked_by(refusal.class())}
     fn applied_refusal(&self)->Option<&crate::residency::Blocked> {self.refusal.as_ref().filter(|refusal|self.refusal_applies(refusal))}
@@ -1859,15 +1860,14 @@ impl Cache {
         self.above_revision=Some((above,revision));
         Ok(())
     }
-    pub(super) fn select_cells(&self,r:&WgpuRasterizer,visible:PixelRect,presented:Accuracy,class:&dyn Fn(PixelRect)->Class)->Result<Selection,GpuRasterError> {
+    pub(super) fn select_cells(&self,r:&WgpuRasterizer,visible:PixelRect,presented:Accuracy,exact:bool,class:&dyn Fn(PixelRect)->Class)->Result<Selection,GpuRasterError> {
         let mut selection=Selection {copies:Vec::new(),composes:Vec::new(),transition:false,held:None};
         let Some((mut store,mut cells,template))=self.cells() else {return Ok(selection);};
         let frame=store.expected().cloned().ok_or(GpuRasterError::Invariant("signature frame is missing or inconsistent"))?;
         selection.transition=self.pixels.committed_root().is_some_and(|root|root.authored()!=frame.authored_revision(&template.expression).ok());
         let (plan,input_level)=(self.plan,self.required_input_level());
         for (index,coordinate) in coordinates(plan.bounds,plan.level).enumerate() {
-            let owed=presented==Accuracy::Exact && !cells.cells[index].derived && cells.cells[index].shown.as_ref().is_some_and(|shown|!shown.exact);
-            if !(cells.cells[index].queued || owed) {continue;}
+            if !cells.cells[index].due(exact) {continue;}
             let region=bounds(coordinate,plan.level,plan.extent);
             let hold=(!region.intersect(visible).is_empty()).then_some(index);
             let key=Key {coordinate,..template.clone()};
@@ -2090,7 +2090,7 @@ impl Cache {
         let (_store,cells,_)=self.cells()?;
         let held=self.refusals_hold(r);
         let mut blocked=None;
-        for cell in cells.cells.iter().filter(|cell|cell.pending() && !(held && cell.parked(r)) && !cell.sleeping() && (refining || cell.queued)) {
+        for cell in cells.cells.iter().filter(|cell|cell.due(refining) && !(held && cell.parked(r)) && !cell.sleeping()) {
             match cell.waiting(r,held) {
                 None=>return Some(Runnable),
                 Some(input)=>blocked=blocked.or(Some(Blocked(input))),
@@ -2817,7 +2817,7 @@ pub(super) mod query_tests {
         {let mut cells=table(&cache);cells.cells[index].shown=None;cells.cells[index].invalidate();}
         let mut commands=RegionRecords::new(&r);
         let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
-        let selection=cache.select_cells(&r,cache.plan.bounds,Accuracy::Display,&|_|Class::Visible).unwrap();
+        let selection=cache.select_cells(&r,cache.plan.bounds,Accuracy::Display,false,&|_|Class::Visible).unwrap();
         assert_eq!(selection.copies.len(),1,"the unshown cell copies its current Store page");
         assert!(!cache.copy_cells(&mut r,&mut encoder,&mut commands,selection.copies).unwrap().is_empty(),"the interrupted frame copies the cell");
         cache.commit_window(&mut r,&mut encoder).unwrap();

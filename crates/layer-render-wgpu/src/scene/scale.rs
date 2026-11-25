@@ -1133,7 +1133,7 @@ impl Cache {
         if std::mem::replace(&mut self.presented,presented)==pages::Accuracy::Display && presented==pages::Accuracy::Exact {self.owe_exact();}
         let selected=|region:PixelRect|if region.intersect(visible).is_empty() {deferred}else {Class::Visible};
         let selection=if live {pages::Selection {copies:Vec::new(),composes:self.contact_composes(),transition:false,held:None}}
-            else {self.select_cells(r,served,presented,&selected)?};
+            else {self.select_cells(r,served,presented,presented==pages::Accuracy::Exact,&selected)?};
         let transition=selection.transition;
         if !transition {self.staged.clear();}
         let direct=if view {self.stroke_only(packet)}else {stroking};
@@ -1308,7 +1308,7 @@ impl Cache {
             if target==Root::Window {shown=composed.iter().zip(lags).fold(shown,|shown,(region,(_,lag))|shown.union(texels(lag.map_or(*region,|lag|region.intersect(lag)))));}
             let mut followed=None;
             let held=target==Root::Store && {
-                let selection=self.select_cells(r,served,presented,&selected)?;
+                let selection=self.select_cells(r,served,presented,presented==pages::Accuracy::Exact,&selected)?;
                 let complete=!transition || selection.complete(served);
                 let regions=selection.copies.iter().map(|(_,copy,_)|copy.region).collect::<Vec<_>>();
                 if !complete {match selection.held {
@@ -1487,7 +1487,7 @@ impl Cache {
 
     fn copy_level(&mut self,scene:&Scene,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,commands:&mut RegionRecords)->Result<PixelRect,GpuRasterError> {
         if !self.ensure_window(r,scene,encoder) {return Err(GpuRasterError::NotReady);}
-        let selection=self.select_cells(r,self.plan.bounds,pages::Accuracy::Display,&|_|Class::Visible)?;
+        let selection=self.select_cells(r,self.plan.bounds,pages::Accuracy::Display,refinement::refining(r),&|_|Class::Visible)?;
         if selection.transition && !selection.complete(self.plan.bounds) {return Ok(PixelRect::EMPTY);}
         let copied=self.copy_cells(r,encoder,commands,selection.copies)?;
         if !copied.is_empty() {self.commit_window(r,encoder)?;}

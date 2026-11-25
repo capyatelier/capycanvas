@@ -438,6 +438,24 @@ fn a_cell_a_discarded_contact_left_unnamed_is_not_named_by_a_later_contact_after
 }
 
 #[test]
+fn a_cell_a_contact_fills_over_its_current_exact_page_shows_that_page_once_the_stroke_settles() {
+    let extent=[2048,512];let doc=document_at(extent);let target=primary_target(&doc);
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
+    let mut r=renderer(&doc);crate::test_support::submit_settled(&mut r,frame);
+    let far=PixelRect::new(1792,256,2048,512);
+    contact_frame(&mut r,frame,target,200.,true);
+    let contact=r.scale_display.as_ref().unwrap().contact_id();
+    r.scale_display.as_ref().unwrap().evict_window(far);
+    let filled=(1..5).any(|step|{contact_frame(&mut r,frame,target,200.+20.*step as f32,false);r.scale_display.as_ref().unwrap().keyless(far)});
+    assert!(contact.is_some() && filled && r.scale_display.as_ref().unwrap().contact_id()==contact,"the contact fills the far cell without a key");
+    let lift=stroke_dab(300.,200.);
+    crate::test_support::submit_ready(&mut r,FramePacket {dabs:std::slice::from_ref(&lift),dab_batches:std::slice::from_ref(&stroke_batch(target,&lift,false,true)),..frame}).unwrap();
+    crate::test_support::submit_settled(&mut r,frame);
+    let inexact=r.scale_display.as_ref().unwrap().exact_cells().into_iter().filter(|(_,exact)|!exact).map(|(cell,_)|cell).collect::<Vec<_>>();
+    assert!(inexact.is_empty(),"the settled view shows every cell's exact page: {inexact:?}");
+}
+
+#[test]
 fn a_cell_refused_at_pen_down_and_reached_later_in_the_contact_shows_every_dab_it_receives() {
     let extent=[2048,512];let doc=document_at(extent);let target=primary_target(&doc);
     let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);

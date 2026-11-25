@@ -45,7 +45,7 @@ fn asleep(wait:Option<&crate::frame_demand::UnitWait>,r:&WgpuRasterizer)->crate:
 }
 
 #[derive(Default)]
-pub(super) struct Exact {pub(super) committed:bool,pub(super) blocks:Vec<(pages::Key,Option<crate::frame_demand::UnitWait>)>,pub(super) refusals:Vec<(PixelRect,crate::residency::Blocked,Allowance)>,
+pub(super) struct Exact {pub(super) blocks:Vec<(pages::Key,Option<crate::frame_demand::UnitWait>)>,pub(super) refusals:Vec<(PixelRect,crate::residency::Blocked,Allowance)>,
     pub(super) pivot:sources::Prepared}
 impl Exact {
     fn refuse(&mut self,region:PixelRect,refusal:crate::residency::Blocked,allowance:Allowance,pivot:bool) {
@@ -213,7 +213,8 @@ impl Cache {
         let pivot=self.pivot_allowance(r);
         let halves=if self.pivot_edited() {self.pivot_halves()}else {Vec::new()};
         let wanted=if halves.is_empty() {Vec::new()}else {self.wanted_cells(self.plan.bounds,packet.view)};
-        let mut exact=if exact_at_view_level(packet.scene,self.plan.level) {
+        let settles=exact_at_view_level(packet.scene,self.plan.level);
+        let mut exact=if settles {
             self.build_halves(scene,r,packet,encoder,budget,0,wanted,Class::Refinement,false,pivot)?
         } else {
             let mut coordinates=pages::coordinates(self.plan.bounds,self.plan.level)
@@ -235,7 +236,7 @@ impl Cache {
             }
             self.settle_pivot(prepared,allowance);
         }
-        if exact.committed {self.project_exact(scene,r,encoder,commands)}else {Ok(PixelRect::EMPTY)}
+        if settles {Ok(PixelRect::EMPTY)}else {self.project_exact(scene,r,encoder,commands)}
     }
 
     #[expect(clippy::too_many_arguments, reason = "Exact units share the frame's scene, encoding and budget with the pass that selected their cells")]
@@ -275,7 +276,7 @@ impl Cache {
                 let outcome=self.exact_unit(scene,r,packet,encoder,budget,&mut pass,&mut pinned,&key,class,allowance)?;
                 let held=!matches!(outcome,Outcome::Committed);
                 let input=match outcome {
-                    Outcome::Committed=>{exact.committed=true;None},
+                    Outcome::Committed=>None,
                     Outcome::Waiting(input)=>Some(input),
                     Outcome::Deferred=>None,
                     Outcome::Refused(region,refusal)=>{exact.refuse(region,refusal,allowance,half);if allowance==Allowance::Spent {break;}continue;},
