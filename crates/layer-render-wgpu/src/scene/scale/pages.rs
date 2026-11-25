@@ -785,7 +785,8 @@ impl Store {
         #[cfg(test)]
         crate::scene::sources::assert_reading("store write");
 
-        let accepted=if let Some(input)=self.inputs.get(&key).and_then(|inputs|inputs.iter().find(|input|input.at(region,input_level))) {
+        let frame=self.expected.as_ref().ok_or(GpuRasterError::Invariant("signature frame is missing or inconsistent"))?;
+        let accepted=if let Some(input)=self.inputs.get(&key).and_then(|inputs|inputs.iter().find(|input|input.at(region,input_level) && Arc::ptr_eq(&input.accepted.frame,frame))) {
             input.accepted.clone()
         }else {self.capture(&key,region,input_level)?};
         Ok(Write {key,region,accuracy,accepted:Some(accepted),witness:None})
@@ -4521,6 +4522,16 @@ mod freshness_tests {
         assert!(coverage(&written,&after).needs(key.plan().bounds,Accuracy::Display));
         store.set_expected(before.clone());assert_eq!(written.matches(store.expected().unwrap(),0),Some(true));
         assert!(coverage(&written,&before).ready(key.plan().bounds,Accuracy::Exact));
+    }
+    #[test]
+    fn a_source_write_after_its_held_acceptance_goes_stale_records_the_current_frame() {
+        let (mut document,target)=fixture();let descriptor=RasterPlane::Color.descriptor(Default::default());
+        install(&mut document,target,RasterTile::pending(descriptor));let source=Key {source:Some(target),..key(target)};let region=source.plan().bounds;
+        let mut store=Store::default();store.set_expected(frame(&document));
+        hold_fixture_inputs(&mut store,&source,region,Evaluation::Display,Default::default(),0);
+        install(&mut document,target,RasterTile::pending(descriptor));let after=frame(&document);store.set_expected(after.clone());
+        assert_eq!(store.fixture_handle(&source,region,0).recorded.matches(&after,0),Some(false),"the held acceptance belongs to the earlier frame");
+        assert_eq!(accepted(&store,&source).matches(&after,0),Some(true),"a write records the version its frame expects, not a held earlier one");
     }
     #[test]
     fn undeclared_expected_inputs_need_preparation_instead_of_waiting_for_packing() {
