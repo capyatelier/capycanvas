@@ -38,6 +38,7 @@ pub(super) struct Contact {
     cell_reads:IdMap<[u32;2],Arc<[PixelRect]>>,
     diverged:bool,
     owed:Vec<PixelRect>,
+    refill:BTreeSet<[u32;2]>,
 }
 #[derive(Clone)]
 pub(super) struct Witness {contact:u64,reads:Arc<[PixelRect]>,versions:crate::raster::contents::Versions,predicted:bool,tip:Option<PixelRect>}
@@ -105,6 +106,8 @@ fn crop(jobs:&mut [crate::scene::Job],[x,y,width,height]:[u32;4]) {
 #[derive(Default)]
 struct Declared {cells:Vec<(PixelRect,crate::scene::sources::Inputs,graph::Node)>,inputs:crate::scene::sources::AcceptedInputs,pages:IdMap<pages::Key,pages::Held>,level:Option<u32>,cell_reads:IdMap<[u32;2],Arc<[PixelRect]>>,
     waits:Vec<(PixelRect,Option<crate::residency::Blocked>)>}
+#[derive(Default)]
+struct Claimed {pages:Vec<(pages::Key,pages::Held)>,refill:BTreeSet<[u32;2]>,inputs:crate::scene::sources::AcceptedInputs}
 
 #[derive(PartialEq)]
 struct Guard {inspect_mask:Option<OccurrenceHandle>,clipping:[bool;2],blend_space:layer_core::BlendSpace,watercolor:Option<WatercolorLayerStyle>}
@@ -358,8 +361,8 @@ impl Cache {
             previewed:r.preview_input_tiles(target),next:None,
             ahead,
             footprints,tainted,guard,generation:std::sync::Mutex::new(generation),exit:std::sync::OnceLock::new(),preview_level,cells,inputs,pages,level,
-            stale:BTreeMap::new(),written:IdMap::default(),submissions:Vec::new(),stamps:Arc::default(),reduced,baselines:BTreeMap::new(),drawn_directly,reduced_from:BTreeMap::new(),
-            tip,cell_reads,diverged:false,owed};
+            stale:BTreeMap::new(),written:IdMap::default(),submissions:Vec::new(),stamps:Arc::default(),reduced:if level.is_some() {reduced}else {BTreeSet::new()},
+            baselines:BTreeMap::new(),drawn_directly,reduced_from:BTreeMap::new(),tip,cell_reads,diverged:false,owed,refill:BTreeSet::new()};
         contact.stale=contact.phased(&contact.previewed).map(|tile|(tile,page_rect(tile))).collect();
         self.gesture=Some(contact);
         Ok(())
@@ -420,20 +423,16 @@ impl Cache {
     )->Result<Option<Declared>,GpuRasterError> {
         let wet=frame.watercolor(target);
         let mut held:std::collections::HashSet<pages::Key>=self.gesture.iter().flat_map(|contact|contact.pages.keys().cloned()).collect();
-        let (mut ready,mut requests,mut waits,mut tiles,live)=(Vec::new(),Vec::<(SourceTarget,SourceRequest)>::new(),Vec::new(),tiles.clone(),self.gesture.is_some());
+        let (mut ready,mut requests,mut waits,mut claimed,live)=(Vec::new(),Vec::<(SourceTarget,SourceRequest)>::new(),Vec::new(),Vec::new(),self.gesture.is_some());
         for cell in cells {
             let (mut wanted,class)=(self.region_sources(scene,r,packet,cell,tiled),prepare(cell));
+            let mut claims=Vec::<(Class,pages::Key,PixelRect,u32)>::new();
             for (class,request) in class.filter(|_|live).into_iter().flat_map(|class|wanted.iter().filter(|(id,request)|*id==target && request.plan.level>0).map(move|(_,request)|(class,request))) {
                 let (source,level)=(&scene.scale_sources.entries[&target],request.plan.level);
                 for coordinate in request.required.regions.iter().flat_map(|area|pages::coordinates(*area,level)) {
                     let key=source.key(r,target,level,coordinate);let valid=key.plan().bounds.intersect(PixelRect::full(key.extent));
-                    if held.contains(&key) || self.pages.lock().unwrap().has(&key,valid,pages::Accuracy::Display,level) {continue;}
-                    let tier=self.pages.lock().unwrap().tier();
-                    let Ok(mut reservation)=r.admit_tier(Some(scene),&tier,class,key.bytes(),crate::frame_demand::Allowance::Fresh) else {continue;};
-                    let Ok(page)=self.pages.lock().unwrap().claim_reserved(r,key.clone(),self.window,class,&mut reservation) else {continue;};
-                    let contact=self.gesture.as_mut().expect("live contact");
-                    contact.stale.extend(page_coordinates(valid).map(|tile|(tile,page_rect(tile))));contact.reduced.extend(page_coordinates(valid));tiles.extend(page_coordinates(valid));
-                    contact.pages.insert(key.clone(),page);held.insert(key);
+                    if held.contains(&key) || claims.iter().any(|(_,claim,..)|*claim==key) || self.pages.lock().unwrap().has(&key,valid,pages::Accuracy::Display,level) {continue;}
+                    claims.push((class,key,valid,level));
                 }
             }
             for (id,request) in &mut wanted {
@@ -441,7 +440,7 @@ impl Cache {
                 let mut unheld=Vec::new();
                 for area in &request.required.regions {for coordinate in pages::coordinates(*area,level) {
                     let key=source.key(r,*id,level,coordinate);
-                    if !held.contains(&key) {unheld.push(key.plan().bounds.intersect(*area));}
+                    if !held.contains(&key) && !claims.iter().any(|(_,claim,..)|*claim==key) {unheld.push(key.plan().bounds.intersect(*area));}
                 }}
                 request.required=Damage::from_regions(unheld);
             }
@@ -451,7 +450,15 @@ impl Cache {
                     refusal=refusal.or(self.prepare_source(scene,r,packet,encoder,id,request,class,crate::frame_demand::Allowance::Fresh,budget)?.refusal);
                 }
             }
-            if wanted.iter().all(|(id,request)|self.source_ready(scene,r,*id,request)) {ready.push(cell);requests.extend(wanted);}else {waits.push((cell,refusal));}
+            if !wanted.iter().all(|(id,request)|self.source_ready(scene,r,*id,request)) {waits.push((cell,refusal));continue;}
+            if !claims.is_empty() {
+                let Claimed {pages,refill,inputs}=match self.claim(scene,r,packet,encoder,frame,target,claims)? {Ok(claim)=>claim,Err(refusal)=>{waits.push((cell,refusal));continue;}};
+                let contact=self.gesture.as_mut().expect("live contact");
+                contact.reduced.extend(&refill);contact.refill.extend(refill);
+                for (key,page) in pages {held.insert(key.clone());contact.pages.insert(key,page);}
+                claimed.push(inputs);
+            }
+            ready.push(cell);requests.extend(wanted);
         }
         let bounds=ready.iter().fold(PixelRect::EMPTY,|bounds,cell|bounds.union(*cell)).intersect(self.plan.bounds);
         let mut areas=IdMap::<pages::Key,(PixelRect,u32)>::default();
@@ -488,12 +495,36 @@ impl Cache {
             cells.push((cell,declared,node));
         }
         let level=level.or_else(||requests.iter().find(|(id,_)|*id==target).map(|(_,request)|request.plan.level));
-        let reductions=match level.filter(|_|!tiles.is_empty()) {Some(level)=>Self::declare_reductions(scene,r,packet,frame,target,level,&tiles,encoder),None=>Ok(Default::default())};
-        let Some(inputs)=reductions.ok().and_then(|inputs|inputs.accept_query(r,Some(scene),crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh).ok()) else {return Ok(None);};
+        let reductions=match level.filter(|_|!tiles.is_empty()) {Some(level)=>Self::declare_reductions(scene,r,packet,frame,target,level,tiles,encoder),None=>Ok(Default::default())};
+        let Some(mut inputs)=reductions.ok().and_then(|inputs|inputs.accept_query(r,Some(scene),crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh).ok()) else {return Ok(None);};
+        for claimed in claimed {inputs.adopt(claimed)?;}
         let cell_reads=self.cell_reads(target,&cells.iter().map(|(cell,..)|*cell).collect::<Vec<_>>());
         let span=PAGE_SIZE<<self.plan.level;
         cells.retain(|(cell,..)|cell_reads.contains_key(&[cell.min_x()/span,cell.min_y()/span]));
         Ok(Some(Declared {cells,inputs,pages,level,cell_reads,waits}))
+    }
+    #[expect(clippy::too_many_arguments,reason="A cell claims its layer's pages with the frame's scene and encoding once the reductions they owe accept their inputs")]
+    fn claim(&self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,frame:&Arc<SignatureFrame>,target:SourceTarget,
+        claims:Vec<(Class,pages::Key,PixelRect,u32)>,
+    )->Result<Result<Claimed,Option<crate::residency::Blocked>>,GpuRasterError> {
+        let Some(&(class,..,level))=claims.first() else {return Ok(Ok(Claimed::default()));};
+        let (mut pages,mut refill)=(Vec::new(),BTreeSet::new());
+        for (class,key,valid,level) in claims {
+            let tier=self.pages.lock().unwrap().tier();
+            let mut reservation=match r.admit_tier(Some(scene),&tier,class,key.bytes(),crate::frame_demand::Allowance::Fresh) {Ok(reservation)=>reservation,Err(need)=>return Ok(Err(Some(need)))};
+            let mut store=self.pages.lock().unwrap();
+            refill.extend(page_coordinates(valid).filter(|tile|!store.has(&key,page_rect(*tile).intersect(valid),pages::Accuracy::Display,level)));
+            pages.push((key.clone(),store.claim_reserved(r,key,self.window,class,&mut reservation)?));
+        }
+        let accepted=Self::declare_reductions(scene,r,packet,frame,target,level,&refill,encoder)
+            .and_then(|inputs|inputs.accept_query(r,Some(scene),class,crate::frame_demand::Allowance::Fresh));
+        let inputs=match accepted {
+            Ok(inputs)=>inputs,
+            Err(GpuRasterError::Waiting(waiting))=>return Ok(Err(Some(waiting.need().clone()))),
+            Err(GpuRasterError::NotReady|GpuRasterError::NotPublished|GpuRasterError::SourceWorkingSetExceeded)=>return Ok(Err(None)),
+            Err(error)=>return Err(error),
+        };
+        Ok(if inputs.prepare(r)? {Ok(Claimed {pages,refill,inputs})}else {Err(None)})
     }
     fn declare_reductions(scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,frame:&Arc<SignatureFrame>,target:SourceTarget,level:u32,tiles:&BTreeSet<[u32;2]>,
         encoder:&mut submission::CommandEncoder,
@@ -571,7 +602,7 @@ impl Cache {
         let (plan,frame)=(contact.plan,contact.source);
         let patch=Patch::of(contact,tiled,frame);
         let (side,span)=(1u32<<plan.level,PAGE_SIZE<<plan.level);
-        let reduced=contact.reduced_tiles(std::iter::empty());
+        let mut reduced=contact.reduced_tiles(std::iter::empty());reduced.extend(&contact.refill);
         let mut inputs=std::mem::take(&mut contact.inputs);
         let cells=std::mem::take(&mut contact.cells);
         let stale=std::mem::take(&mut contact.stale);
@@ -595,6 +626,7 @@ impl Cache {
             }
             (*tile,now)
         }).collect::<Vec<_>>();
+        parts.extend(contact.refill.iter().map(|tile|(*tile,page_rect(*tile))));
         let start=scene.jobs.len();
         let result=(|| {
             let handle=packet.scene.source_owner(target).ok_or(GpuRasterError::NotReady)?;
@@ -662,7 +694,7 @@ impl Cache {
             let mut store=self.pages.lock().unwrap();
             for (key,region,tile,_) in reductions {
                 if !tipped.contains(&tile) {contact.stale.remove(&tile);}
-                store.forget(&key,region);contact.written.insert(tile,(key,region,submission.clone()));
+                contact.refill.remove(&tile);store.forget(&key,region);contact.written.insert(tile,(key,region,submission.clone()));
             }
         }
         contact.submissions.push(submission);

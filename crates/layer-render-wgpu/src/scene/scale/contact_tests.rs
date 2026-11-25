@@ -1481,6 +1481,55 @@ fn view_publishes_every_dab_of_a_contact_over_a_cold_fit_view_while_a_remote_hol
 }
 
 #[test]
+fn a_stroke_begun_over_an_all_cold_fit_view_reduces_the_pages_it_claims_only_from_inputs_it_accepted() {
+    let extent=[4096,2048];
+    let (doc,below)=over_a_photo(extent);
+    let (ink,lower)=(doc.active_target().unwrap(),doc.scene().source_target(below).unwrap());
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,4);
+    let xs=[1300.,1360.,1420.,1480.,1540.];
+    let draw=|r:&mut WgpuRasterizer,step:usize,all:bool| {
+        let dab=stroke_dab(xs[step],500.);let batch=stroke_batch(ink,&dab,step==0,step+1==xs.len());
+        crate::test_support::submit_ready(r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),time_seconds:0.01*(step+1) as f32,composite_all:all,..frame}).unwrap();
+        crate::test_support::complete(r);
+    };
+    let mut twin=renderer(&doc);
+    crate::test_support::submit_settled(&mut twin,frame);
+    for step in 0..xs.len() {draw(&mut twin,step,true);}
+    crate::test_support::submit_settled(&mut twin,frame);
+    let expected=display_pixels(&twin);
+    let mut r=renderer(&doc);
+    crate::test_support::submit_settled(&mut r,frame);
+    let plan=r.scale_display.as_ref().unwrap().plan;
+    let holes=pages::coordinates(plan.bounds,plan.level).map(|coordinate|pages::bounds(coordinate,plan.level,plan.extent)).collect::<Vec<_>>();
+    let store=chill(&r,&doc,lower,&holes);
+    {
+        let cache=r.scale_display.as_ref().unwrap();
+        for hole in &holes {for level in 0..=plan.level {cache.pages.lock().unwrap().discard_source_chunks(ink,level,*hole);}}
+    }
+    let original=display_pixels(&r);
+    let texel=(500/4*(extent[0]/4)+xs[0] as u32/4) as usize;
+    let inked=|r:&WgpuRasterizer|max_error(&display_pixels(r)[texel..=texel],&original[texel..=texel])>0.1;
+    let (signal,woken)=std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move||{let _=signal.send(());}));
+    draw(&mut r,0,false);
+    let contact=r.scale_display.as_ref().unwrap().contact_id();
+    assert!(contact.is_some() && !inked(&r),"the stroke begins its contact at pen down while every cell waits for its photo");
+    for step in 1..3 {draw(&mut r,step,false);}
+    store.gate.release();
+    let (idle,deadline)=(FramePacket {dabs:&[],dab_batches:&[],..frame},std::time::Instant::now()+crate::test_support::WAIT_BOUND);
+    while !inked(&r) {
+        assert!(std::time::Instant::now()<deadline,"the resting pen shows the cell under its dabs once the photo arrives");
+        let _=woken.recv_timeout(std::time::Duration::from_millis(5));
+        crate::test_support::submit_ready(&mut r,idle).unwrap();crate::test_support::complete(&r);
+    }
+    assert_eq!(r.scale_display.as_ref().unwrap().contact_id(),contact,"the resting pen keeps the contact begun at pen down");
+    for step in 3..xs.len() {draw(&mut r,step,false);}
+    crate::test_support::submit_settled(&mut r,frame);
+    let error=max_error(&display_pixels(&r),&expected);
+    assert!(error<1e-4,"after pen up the cold view matches a twin that composed every frame: {error}");
+}
+
+#[test]
 fn a_memory_trim_during_a_stroke_ends_the_contact_for_cells_it_did_not_declare_instead_of_stopping_the_canvas() {
     let extent=[2048,1024];
     let mut doc=Document::new(PortableId::random(),extent[0],extent[1],layer_core::DocumentNames {paint:"Current ink".into(),paper:"Paper".into()});
