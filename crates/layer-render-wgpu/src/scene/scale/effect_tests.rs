@@ -121,15 +121,19 @@ fn native_pointwise_document(name: &str) -> (Document, OccurrenceHandle, Occurre
 fn cells_a_frame_composes_leave_their_refinement_units_to_refinement_and_settle_exact() {
     let (doc, _, _) = native_pointwise_document("threshold");
     let mut frame = FramePacket { composite_all: false, ..packet(doc.scene(), doc.composition().size) };
-    frame.view.width_px = 51; frame.view.height_px = 31;
-    frame.view.document_to_surface = [1., 0., 0., 1., 0., -70.];
+    frame.view.width_px = doc.composition().size[0]; frame.view.height_px = doc.composition().size[1];
+    frame.view.document_to_surface = [1., 0., 0., 1., 0., 0.];
     let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
     submit_published(&mut exact, frame);
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     crate::test_support::submit_settled(&mut r, frame);
     assert_eq!(r.scale_display.as_ref().unwrap().plan.level, 0);
-    evict_view(&r);
+    let cache=r.scale_display.as_ref().unwrap();
+    let keys=pages::coordinates(cache.plan.bounds,0).map(|coordinate|cache.refinement_interest(0,pages::bounds(coordinate,0,cache.plan.extent)).key).collect::<Vec<_>>();
+    assert!(keys.len()>1);
+    evict_composite_pages(cache,&[cache.plan.bounds]);
+    assert!(keys.iter().all(|key|!cache.awaits_compose(key.plan().bounds) && cache.pages.lock().unwrap().get(key,key.plan().bounds,pages::Accuracy::Exact,0,Class::Refinement).is_none()));
     crate::test_support::complete(&r);
     let mut scene = r.scene.take().unwrap();
     let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
@@ -137,7 +141,7 @@ fn cells_a_frame_composes_leave_their_refinement_units_to_refinement_and_settle_
     scene.refine_display(&mut r, frame, &mut encoder, &mut budget).unwrap();
     drop(budget);
     r.uploads.finish(&encoder); encoder.submit(&r.queue); r.scene = Some(scene);
-    assert!(r.scale_display.as_ref().unwrap().streamed_interests(frame.view).count() > 0, "refinement leaves an admitted unit in flight");
+    assert!(r.scale_display.as_ref().unwrap().streamed_interests(frame.view).any(|interest|keys.contains(&interest.key)), "refinement leaves the independently owed level-zero unit in flight");
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
 }
 

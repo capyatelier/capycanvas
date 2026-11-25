@@ -2723,7 +2723,11 @@ fn a_cold_32_layer_open_decodes_each_present_tile_once_and_reduces_no_layer() {
         layer_pages.extend(crate::scene::scale::layer_pages(r));leased=leased.max(r.source_tiles.borrow().leased_bytes());
     });
     let present=32*36;
-    assert!(layer_pages.is_empty(),"a cold exact open reduces no layer on its own: {layer_pages:?}");
+    let expected=doc.scene().order().iter().filter_map(|&owner|doc.scene().source_target(owner)).filter(|&target|matches!(target,layer_core::authored::SourceTarget::Paint(_)) && doc.scene().raster(target).is_some_and(|raster|!raster.is_empty())).collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(expected.len(),32);
+    assert_eq!(layer_pages,expected,"a cold reduced exact open prepares each paint input separately");
+    let cache=r.scale_display.as_ref().unwrap();
+    assert!(!cache.shown_cells().is_empty() && cache.shown_cells().iter().all(|(_,exact)|*exact==Some(true)),"the reduced view has complete current exact coverage");
     assert_eq!(r.source_tiles.borrow().misses,present,"each present tile is decoded once");
     let unit=32*scene::sources::NORMALIZED_PAGE_BYTES;
     let frame_budget=(8<<20)/(u64::from(PAGE_SIZE).pow(2)*32)+1;

@@ -519,6 +519,10 @@ fn cold_multilayer_idle_refinement_finishes_with_a_bounded_source_batch() {
         crate::test_support::complete(&r);
     }
     assert!(r.source_tiles.borrow().free_slots() >= SOURCE_SLOTS + 4);
+    let cache=r.scale_display.as_ref().unwrap();
+    for id in doc.scene().order().iter().filter_map(|&owner|doc.scene().source_target(owner)) {
+        for level in 0..=cache.plan.level {cache.pages.lock().unwrap().remove_source_level(id,level);}
+    }
     let pages = page_coordinates(PixelRect::full(extent)).count();
     crate::scene::sources::Inputs::begin_accepted_reads();
     let mut completed_batches = Vec::new();
@@ -527,15 +531,17 @@ fn cold_multilayer_idle_refinement_finishes_with_a_bounded_source_batch() {
         if r.next_frame()!=layer_render::FrameDemand::Work { break; }
         crate::test_support::complete(&r);
         crate::test_support::settle_decodes(&mut r);
-        let before = covered_document_pages(r.scale_display.as_ref().unwrap(),pages::Accuracy::Exact).count();
+        let before = r.scale_display.as_ref().unwrap().shown_cells().iter().filter(|(_,exact)|*exact==Some(true)).count();
         crate::test_support::submit_ready(&mut r, frame).unwrap();
         frames += 1;
-        let after = covered_document_pages(r.scale_display.as_ref().unwrap(),pages::Accuracy::Exact).count();
+        let after = r.scale_display.as_ref().unwrap().shown_cells().iter().filter(|(_,exact)|*exact==Some(true)).count();
         if after > before { completed_batches.push(after - before); }
     }
     assert!(r.next_frame()!=layer_render::FrameDemand::Work, "idle refinement must finish; frames={frames}, completed batches={completed_batches:?}");
-    assert!(!completed_batches.is_empty(), "idle frames complete at least one native page");
+    assert!(!completed_batches.is_empty(), "idle frames complete at least one cell at the requested level");
     let cache = r.scale_display.as_ref().unwrap();
+    assert_eq!(cache.plan.level,2);
+    assert!(cache.output_complete(),"every current-level cell must finish exactly");
     assert!(quality(&display_pixels(&r), &expected, cache.plan, cache.texture().format())[2] < 2e-5);
     assert_eq!(doc.artwork, authored);
     let reads=crate::scene::sources::Inputs::take_accepted_read_results();
@@ -617,7 +623,11 @@ fn settled_composition_reuses_every_zoom_and_refines_only_changed_pages() {
     assert_eq!(r.scale_display.as_ref().unwrap().texture(), &drawing_target, "settling repairs the drawing texture in place");
     assert!(r.scale_display.as_ref().unwrap().retained_ready());
     assert!(r.scale_display.as_ref().unwrap().exact_cells().iter().all(|(_, exact)| *exact), "the settled view is exact");
-    assert_eq!(r.metrics.composited_pixels, PixelRect::full(extent).area(), "publishing and settling compose each native texel once");
+    let view=r.scale_display.as_ref().unwrap();
+    let nav=r.navigator.cache().unwrap();
+    let area=u64::from(view.plan.size[0])*u64::from(view.plan.size[1])
+        +if nav.plan.level==view.plan.level {0}else {u64::from(nav.plan.size[0])*u64::from(nav.plan.size[1])};
+    assert_eq!(r.metrics.composited_pixels,area,"publishing and settling compose each texel of the requested levels once");
     let zooms=[1.,2.,0.25,0.125,0.5];
     for zoom in zooms {
         frame.view.document_to_surface=[zoom,0.,0.,zoom,-40.,-20.];
@@ -665,7 +675,12 @@ fn settled_composition_reuses_every_zoom_and_refines_only_changed_pages() {
     for moving in [true, false] {
         preview.moving = moving;
         for renderer in [&mut r, &mut exact] { renderer.set_transform_preview(Some(&preview)).unwrap(); crate::test_support::submit_ready(renderer, frame).unwrap(); }
-        if !moving { assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact))); }
+        if !moving {
+            assert_settled_with(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)), |fresh| {
+                fresh.set_transform_preview(Some(&preview)).unwrap();
+                crate::test_support::submit_settled(fresh, frame);
+            });
+        }
         crate::test_support::assert_same_canonical(&mut r, &mut exact);
     }
     for renderer in [&mut r, &mut exact] { renderer.set_transform_preview(None).unwrap(); crate::test_support::submit_ready(renderer, frame).unwrap(); }
@@ -1085,14 +1100,12 @@ fn fit_refinement_accepts_native_input_quality_and_reaches_exact() {
         if r.scale_display.as_ref().is_some_and(Cache::output_complete) && r.next_frame()!=layer_render::FrameDemand::Work {break;}
     }
     let cache=r.scale_display.as_ref().unwrap();assert_eq!(cache.plan.level,2);
-    assert!(cache.output_complete() && r.next_frame()!=layer_render::FrameDemand::Work,"a Fit request must finish its native exact producers");
+    assert!(cache.output_complete() && r.next_frame()!=layer_render::FrameDemand::Work,"a Fit request must finish its current-level exact producers");
     let mut exact=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();exact.test.reference=true;
     submit_published(&mut exact,packet(doc.scene(),extent));
     let expected=pixels(&exact,crate::test_support::document_texture(&exact));
-    let key=cache.refinement_interest(cache.plan.level,PixelRect::full(extent)).key;
-    let image=cache.pages.lock().unwrap().get(&key,key.plan().bounds,pages::Accuracy::Exact,0,crate::residency::Class::Visible);
-    let image=image.expect("the native exact producer reduced to the view level");
-    let actual=pixels(&r,&image.texture);let error=quality(&actual,&expected,image.plan,image.texture.format());
+    assert_eq!(cache.shown_cells(),vec![([0,0],Some(true))],"the current Fit cell is exact for the current signature");
+    let actual=display_pixels(&r);let error=quality(&actual,&expected,cache.plan,cache.texture().format());
     assert!(error[2]<2e-5,"{error:?}: actual={:?}, expected={:?}",actual[0],expected[0]);
 }
 

@@ -664,7 +664,10 @@ fn native_threshold_larger_than_the_decoded_floor_publishes_every_page_once() {
     assert!(reference.scene_tiers.display.grant() > pages * NORMALIZED_PAGE_BYTES);
     let [floor_cache, reference_cache] = [&floor, &reference].map(|r| r.scale_display.as_ref().unwrap());
     assert_eq!((floor_cache.plan.level, floor_cache.plan.bounds), (2, PixelRect::full(extent)));
-    assert_eq!(floor.metrics.composited_pixels, u64::from(extent[0]) * u64::from(extent[1]), "resumed composition draws each native pixel once");
+    assert_eq!(floor.metrics.composited_pixels,u64::from(floor_cache.plan.size[0])*u64::from(floor_cache.plan.size[1]),"resumed composition draws each level-two texel once");
+    let coverage=floor_cache.shown_cells();
+    assert_eq!(coverage.len(),(floor_cache.plan.size[0].div_ceil(PAGE_SIZE)*floor_cache.plan.size[1].div_ceil(PAGE_SIZE)) as usize);
+    assert!(coverage.iter().all(|(_,exact)|*exact==Some(true)),"every current-level cell has exact current-signature coverage");
     assert_eq!(crate::test_support::float_pixels(&floor, floor_cache.texture()),
         crate::test_support::float_pixels(&reference, reference_cache.texture()));
 }

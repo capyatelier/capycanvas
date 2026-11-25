@@ -145,15 +145,19 @@ fn deferred_fine_objects_keep_committed_coarse_pages_without_backup() {
 
 #[test]
 fn reduced_photo_larger_than_decoded_cache_publishes_only_after_its_exact_cells_finish() {
+    let extent=[4608,4096];
     let mut doc = photo(0);
+    composition_mut(&mut doc).size=extent;
+    paint_mut(&mut doc,0).domain=extent;
+    paint_mut(&mut doc,0).base=Some(PaintBase::new(rgba8_source(extent,|x,y|color(x,y,0)).into()));
     let (ink, copy) = (doc.scene().order()[0], copy_paint(&mut doc, 0));
     set_root_entries(&mut doc, vec![ink, copy]);
     let mut previous = doc.clone();
     paint_mut(&mut previous, 0).base = Some(PaintBase::new(rgba8_source([2048; 2], |x, y| color(x, y, 27)).into()));
     let mut r = crate::memory::memory_tests::renderer_for_restore(&previous);
     assert_ne!(r.adapter.get_info().device_type, wgpu::DeviceType::Cpu);
-    let view = ViewState { width_px: 320, height_px: 256, document_to_surface: [0.125, 0., 0., 0.125, 0., 0.] };
-    let previous_frame = FramePacket { view, blend_space: layer_core::BlendSpace::Linear, ..packet(previous.scene(), EXTENT) };
+    let view = ViewState { width_px: extent[0]/8, height_px: extent[1]/8, document_to_surface: [0.125, 0., 0., 0.125, 0., 0.] };
+    let previous_frame = FramePacket { view, blend_space: layer_core::BlendSpace::Linear, ..packet(previous.scene(), extent) };
     crate::memory::memory_tests::declare_source_budget(&mut r, previous_frame, 64, 16 << 20, 44 << 20);
     assert!(r.source_tiles.borrow().free_slots() >= 64);
     crate::test_support::submit_settled(&mut r, previous_frame);
@@ -166,17 +170,17 @@ fn reduced_photo_larger_than_decoded_cache_publishes_only_after_its_exact_cells_
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let mut composed = BTreeSet::new();
     let mut partial = false;
-    let cells = page_coordinates(PixelRect::full(EXTENT)).count();
+    let cells = pages::coordinates(PixelRect::full(extent),3).count();
     let mut settled = false;
     let mut presentation_change = None;
     for step in 0..256 {
         assert!(std::time::Instant::now() < deadline, "photo progress timed out at {}/{cells} cells", composed.len());
         r.poll_pending(view).unwrap();
-        let frame = FramePacket { view, composite_all: step == 0, blend_space: layer_core::BlendSpace::Linear, ..packet(doc.scene().with_owner(doc.owner, 1), EXTENT) };
+        let frame = FramePacket { view, composite_all: step == 0, blend_space: layer_core::BlendSpace::Linear, ..packet(doc.scene().with_owner(doc.owner, 1), extent) };
         crate::memory::memory_tests::declare_source_budget(&mut r, frame, 64, 16 << 20, 44 << 20);
         if r.can_submit() && r.raster_dependencies_ready(frame, None) { crate::test_support::submit_ready(&mut r, frame).unwrap(); }
         r.wait_idle().unwrap();
-        composed.extend(r.metrics.frame_composited_pages.iter().filter(|(level,_)|*level==0).map(|(_,coordinate)|*coordinate));
+        composed.extend(r.metrics.frame_composited_pages.iter().filter(|(level,_)|*level==3).map(|(_,coordinate)|coordinate.map(|value|value>>3)));
         partial |= !composed.is_empty() && composed.len() < cells;
         if crate::scene::scale::tests::publication_pending(&r) {
             let shown = present(&r, &mut presenter, view);
@@ -191,11 +195,13 @@ fn reduced_photo_larger_than_decoded_cache_publishes_only_after_its_exact_cells_
     }
     assert!(settled && partial && composed.len() == cells, "the replaced photo's exact cells must finish: settled={settled} partial={partial} cells={}", composed.len());
     let actual = display_pixels(&r);
-    let plan = r.scale_display.as_ref().unwrap().plan;
-    assert_eq!((plan.level, plan.size), (3, [320, 256]));
-    assert_eq!(actual.len(), 320 * 256);
+    let cache=r.scale_display.as_ref().unwrap();
+    assert!(cache.output_complete(),"the exact current-level destination is complete");
+    let plan = cache.plan;
+    assert_eq!((plan.level, plan.size), (3, extent.map(|side|side/8)));
+    assert_eq!(actual.len(), (plan.size[0]*plan.size[1]) as usize);
     for (index, pixel) in actual.iter().enumerate() {
-        let rgba = color((index as u32 % 320) * 8, (index as u32 / 320) * 8, 0);
+        let rgba = color((index as u32 % plan.size[0]) * 8, (index as u32 / plan.size[0]) * 8, 0);
         for c in 0..4 {
             let expected = if c == 3 { 1. } else { doc.composition().color.space.decode(f64::from(rgba[c]) / 255.) as f32 };
             assert!((pixel[c] - expected).abs() < 2e-6, "reduced pixel {index} channel {c}: {pixel:?} vs {expected}");

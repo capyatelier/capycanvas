@@ -103,11 +103,6 @@ pub(crate) fn publication_pending(r: &WgpuRasterizer) -> bool {
     !r.display_published()
 }
 
-pub(super) fn covered_document_pages(cache:&Cache,accuracy:pages::Accuracy)->impl Iterator<Item=[u32;2]> {
-    let coverage=cache.coverage_snapshot();let bounds=cache.plan.bounds;
-    page_coordinates(bounds).filter(move|coordinate|coverage.ready(page_rect(*coordinate).intersect(bounds),accuracy))
-}
-
 fn reset_page_store(cache:&mut Cache) {
     let expected=cache.pages.lock().unwrap().expected().cloned();
     let mut store=pages::Store::default();if let Some(expected)=expected {store.set_expected(expected);}
