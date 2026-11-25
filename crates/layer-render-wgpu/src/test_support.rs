@@ -783,11 +783,11 @@ pub(crate) fn submit_settled_observing(r: &mut WgpuRasterizer, frame: FramePacke
         }
         r.wait_idle().unwrap();
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        assert!(!remaining.is_zero(), "renderer work must settle");
+        assert!(!remaining.is_zero(), "renderer work must settle: {:?}", r.outstanding_terms());
         if first { std::thread::sleep(std::time::Duration::from_millis(1)); continue; }
         if r.next_frame() == layer_render::FrameDemand::Work { continue; }
         if r.settled() { break; }
-        assert!(woken.recv_timeout(remaining).is_ok(), "an idle renderer waits on inputs whose completion never woke it");
+        assert!(woken.recv_timeout(remaining).is_ok(), "an idle renderer waits on inputs whose completion never woke it: {:?}", r.outstanding_terms());
     }
     match installed { Some(wake) => r.set_preparation_wake(wake), None => r.preparation_wake = None }
 }

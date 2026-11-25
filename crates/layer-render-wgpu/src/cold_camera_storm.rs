@@ -318,7 +318,7 @@ fn storm(fixture:Fixture,grant:Grant,profile:IoProfile) {
                 }
                 settled=true;break;
             }
-            assert!(Instant::now()<deadline,"settle timeout: {profile:?}/{fixture:?}/{grant:?}, seed={seed:x}, frame={frame}, first_visible={:?}",coverage.first_visible);
+            assert!(Instant::now()<deadline,"settle timeout: {profile:?}/{fixture:?}/{grant:?}, seed={seed:x}, frame={frame}, first_visible={:?}, terms={:?}",coverage.first_visible,live.backend().outstanding_terms());
             if !waiting {std::thread::sleep(Duration::from_millis(1));}
         }
         eprintln!("STORM profile={profile:?} fixture={fixture:?} grant={grant:?} seed={seed:x} first_visible={:?} zero={} partial={} full={} cpu_p99={:?} cpu_max={:?} eviction_lag={:?}",coverage.first_visible,coverage.zero,coverage.partial,coverage.full,timings[timings.len()*99/100],timings.last(),lag.worst);

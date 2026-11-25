@@ -57,7 +57,7 @@ fn submit(r: &mut WgpuRasterizer, doc: &layer_core::Document, view: ViewState, a
         if bounded {working_scene_frame(r,frame);}
         crate::test_support::submit_ready(r,frame).unwrap();
         if r.next_frame()!=layer_render::FrameDemand::Work {break;}
-        assert!(std::time::Instant::now()<deadline,"display did not settle");
+        assert!(std::time::Instant::now()<deadline,"display did not settle: {:?}",r.outstanding_terms());
         r.wait_idle().unwrap();
         frame.composite_all=false;
     }

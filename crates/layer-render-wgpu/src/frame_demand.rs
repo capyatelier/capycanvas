@@ -257,9 +257,10 @@ impl WgpuRasterizer {
     fn assert_blocked_inputs_outstanding(&self) {
         let decodes = self.moving_decode.as_ref().is_some_and(|(_, queue)| queue.pending())
             || self.bake_preflight.as_ref().is_some_and(|state| state.waiting()) || !self.source_results.is_empty();
+        let gpu = self.gpu_awaited();
         let lost: Vec<_> = self.outstanding().into_iter().filter(|(_, state)| match state {
             Some(Outstanding::Blocked(Input::Decode)) => !decodes,
-            Some(Outstanding::Blocked(Input::Gpu)) => !self.gpu_awaited(),
+            Some(Outstanding::Blocked(Input::Gpu)) => !gpu,
             _ => false,
         }).collect();
         debug_assert!(lost.is_empty(), "an idle renderer waits on inputs that are not outstanding: {lost:?}");
