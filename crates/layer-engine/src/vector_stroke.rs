@@ -114,6 +114,7 @@ impl VectorStroke {
                     ending: builder.ending().then_some(latest.elapsed_micros),
                     boundary: false,
                     held: None,
+                    landing: None,
                 },
                 0,
                 &mut tail,

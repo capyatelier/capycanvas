@@ -24,7 +24,7 @@ mod rest_tests;
 mod taper_tests;
 pub(crate) use smoothing::{CurveModel, PositionField, CurvePreview, pen_up_settlement_micros};
 pub use taper::can_taper;
-pub(crate) use taper::{tapers, HeldStroke, Release};
+pub(crate) use taper::{landing_preview, tapers, HeldStroke, Release};
 use taper::{ContactRecord, TaperPlan, Transfer};
 
 const SPEED_FILTER_SECONDS: f32 = 0.015;

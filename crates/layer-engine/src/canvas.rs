@@ -116,6 +116,25 @@ struct ActiveStroke {
     momentum: Option<(Vec<Dab>, usize)>,
     taper: Option<HeldStroke>,
     room: TileRoom,
+    landing: Option<Landing>,
+}
+
+#[derive(Clone, Debug)]
+struct ContactState {
+    generator: DabGenerator,
+    taper: Option<HeldStroke>,
+    room: TileRoom,
+    started: bool,
+    finalized: usize,
+    refusals: u64,
+}
+
+#[derive(Clone, Debug)]
+struct Landing {
+    after: ContactState,
+    dabs: Vec<Dab>,
+    batches: Vec<DabBatch>,
+    preview: Vec<Dab>,
 }
 
 #[derive(Clone, Debug)]
@@ -2023,6 +2042,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             let changed = self.correct_input(event)?;
             if changed && let Some((_, parked)) = &mut self.pending_up {
                 *parked = self.frame_clock_ns.unwrap_or(event.timestamp_ns);
+                if let Some(active) = self.active_stroke.as_mut() {
+                    active.landing = None;
+                }
             }
             return Ok(());
         }
@@ -2137,6 +2159,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     momentum: None,
                     taper: None,
                     room,
+                    landing: None,
                 };
                 self.active_stroke = Some(active);
                 self.admitted_pen |= event.tool.is_pen() && !event.flags.contains(SampleFlags::UNCLASSIFIED);
@@ -2242,20 +2265,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     }
                 }
                 if !momentum && !event.flags.contains(SampleFlags::PREDICTED) {
-                    if self
-                        .active_stroke
-                        .as_ref()
-                        .expect("checked above")
-                        .feedback.enabled
-                    {
-                        self.finalize_active_tail();
-                    } else if self.builder.ending() {
-                        let point = *self.builder.real_points().last().expect("up adds a point");
-                        self.append_real_dab(Some((point, self.builder.real_points().len() - 1)), true);
-                    } else {
-                        self.append_real_dab(None, true);
+                    match self.active_stroke.as_mut().expect("checked above").landing.take() {
+                        Some(landing) => self.install_landing(landing),
+                        None => self.finish_contact_dabs(),
                     }
-                    self.release_taper(Release::All);
                     let tail = self.dab_generator.momentum(&self.active_stroke.as_ref().unwrap().brush);
                     if !tail.is_empty() {
                         self.active_stroke.as_mut().unwrap().momentum = Some((tail, 0));
@@ -2422,6 +2435,77 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         kept != generated
     }
 
+    fn finish_contact_dabs(&mut self) {
+        if self.active_stroke.as_ref().expect("stroke is active").feedback.enabled {
+            self.finalize_active_tail();
+        } else if self.builder.ending() {
+            let point = *self.builder.real_points().last().expect("up adds a point");
+            self.append_real_dab(Some((point, self.builder.real_points().len() - 1)), true);
+        } else {
+            self.append_real_dab(None, true);
+        }
+        self.release_taper(Release::All);
+    }
+
+    fn contact_state(&self) -> ContactState {
+        let active = self.active_stroke.as_ref().expect("stroke is active");
+        ContactState {
+            generator: self.dab_generator.clone(),
+            taper: active.taper.clone(),
+            room: active.room.clone(),
+            started: active.persistent_started,
+            finalized: self.finalized_real_points,
+            refusals: self.metrics.saved_tile_refusals,
+        }
+    }
+
+    fn swap_contact_state(&mut self, mut state: ContactState) -> ContactState {
+        let active = self.active_stroke.as_mut().expect("stroke is active");
+        std::mem::swap(&mut self.dab_generator, &mut state.generator);
+        std::mem::swap(&mut active.taper, &mut state.taper);
+        std::mem::swap(&mut active.room, &mut state.room);
+        std::mem::swap(&mut active.persistent_started, &mut state.started);
+        std::mem::swap(&mut self.finalized_real_points, &mut state.finalized);
+        std::mem::swap(&mut self.metrics.saved_tile_refusals, &mut state.refusals);
+        state
+    }
+
+    fn prepare_landing(&mut self) {
+        let Some(active) = self.active_stroke.as_ref() else {
+            return;
+        };
+        if self.pending_up.is_none()
+            || active.landing.is_some()
+            || active.momentum.is_some()
+            || crate::brush::has_completions(&active.brush)
+            || matches!(active.style.execution, BrushExecution::Smudge | BrushExecution::Liquify)
+        {
+            return;
+        }
+        let before = self.contact_state();
+        let dabs = std::mem::take(&mut self.dabs);
+        let batches = std::mem::take(&mut self.batches);
+        self.finish_contact_dabs();
+        let landed = std::mem::replace(&mut self.dabs, dabs);
+        let landed_batches = std::mem::replace(&mut self.batches, batches);
+        let after = self.swap_contact_state(before);
+        let scale = self.view.document_to_surface[0].hypot(self.view.document_to_surface[1]);
+        let active = self.active_stroke.as_mut().expect("stroke is active");
+        active.landing = Some(Landing {
+            preview: crate::brush::landing_preview(&active.brush, &landed, scale),
+            dabs: landed,
+            batches: landed_batches,
+            after,
+        });
+    }
+
+    fn install_landing(&mut self, landing: Landing) {
+        self.swap_contact_state(landing.after);
+        let base = self.dabs.len().min(u32::MAX as usize) as u32;
+        self.dabs.extend(landing.dabs);
+        self.batches.extend(landing.batches.into_iter().map(|batch| DabBatch { first_dab: batch.first_dab.saturating_add(base), ..batch }));
+    }
+
     fn release_taper(&mut self, release: Release) {
         let Some(active) = self.active_stroke.as_mut() else {
             return;
@@ -2550,6 +2634,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         boundary: bool,
     ) {
         if let Some(batch) = &self.liquify_preview { self.batches.push(batch.clone()); }
+        self.prepare_landing();
         let Some(active) = self.active_stroke.as_mut() else {
             return;
         };
@@ -2597,6 +2682,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             ending: self.pending_up.and_then(|(_, parked)| self.builder.elapsed_micros_at(parked)),
             boundary,
             held: active.taper.as_ref(),
+            landing: active.landing.as_ref().map(|landing| landing.preview.as_slice()),
         };
         let source = active.tip.build(&self.dab_generator, input, start, &mut self.dabs);
         self.push_active_preview(start);
@@ -7536,10 +7622,10 @@ mod tests {
         (input, engine, last)
     }
 
-    fn ink_gap(dab: &Dab, point: Point) -> f32 {
+    fn ink_gap(dab: &Dab, point: Point, share: f32, slack: f32) -> f32 {
         let [dx, dy] = dab.motion;
         let (qx, qy) = (point.x - dab.center.x + dx, point.y - dab.center.y + dy);
-        let (from, grow) = (0.96 * dab.previous[0], 0.96 * (dab.radii[0] - dab.previous[0]));
+        let (from, grow) = (share * dab.previous[0] + slack, share * (dab.radii[0] - dab.previous[0]));
         let length = dx * dx + dy * dy;
         let along = qx * dx + qy * dy;
         let t = if length <= grow * grow {
@@ -7551,8 +7637,28 @@ mod tests {
         (qx - t * dx).hypot(qy - t * dy) - (from + t * grow)
     }
 
-    fn inked(dabs: &[Dab], point: Point) -> bool {
-        dabs.iter().any(|dab| ink_gap(dab, point) <= 0.)
+    fn inked(dabs: &[Dab], point: Point, share: f32, slack: f32) -> bool {
+        dabs.iter().any(|dab| ink_gap(dab, point, share, slack) <= 0.)
+    }
+
+    fn samples_inside(dab: &Dab, step: f32) -> impl Iterator<Item = Point> + '_ {
+        let (lo, hi) = ink_bounds(dab);
+        let [x, y] = [(lo[0] / step).ceil() as i32, (lo[1] / step).ceil() as i32];
+        let columns = ((hi[0] / step).floor() as i32 - x + 1).max(0);
+        (0..columns * ((hi[1] / step).floor() as i32 - y + 1).max(0))
+            .map(move |index| Point { x: (x + index % columns) as f32 * step, y: (y + index / columns) as f32 * step })
+            .filter(move |point| ink_gap(dab, *point, 0.96, 0.) <= 0.)
+    }
+
+    fn near<'a>(dabs: &'a [Dab], dab: &Dab) -> Vec<Dab> {
+        let (lo, hi) = ink_bounds(dab);
+        dabs.iter()
+            .filter(|other| {
+                let (a, b) = ink_bounds(other);
+                a[0] <= hi[0] && a[1] <= hi[1] && b[0] >= lo[0] && b[1] >= lo[1]
+            })
+            .copied()
+            .collect()
     }
 
     fn ink_bounds(dab: &Dab) -> ([f32; 2], [f32; 2]) {
@@ -7562,7 +7668,7 @@ mod tests {
             [dab.center.x.max(start[0]) + reach, dab.center.y.max(start[1]) + reach])
     }
 
-    fn ink_lost_while_landing(brush: BrushSnapshot, scale: f32, turn: f32, events: usize) -> Vec<usize> {
+    fn landing_ink_errors(brush: BrushSnapshot, scale: f32, turn: f32, events: usize) -> Vec<[usize; 2]> {
         let (mut input, mut engine) = engine_with(
             RecordingRenderer::default(),
             Document::new(layer_core::authored::PortableId::random(), 9504, 6336, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
@@ -7585,43 +7691,45 @@ mod tests {
             }
         }
         let ink = &engine.backend.persistent;
+        let slack = 0.5 / scale;
+        let step = |dabs: &[Dab]| dabs.iter().map(|dab| dab.radii[0].max(dab.previous[0])).fold(0., f32::max) / 16.;
         frames.windows(2).filter(|pair| pair[1].2).map(|pair| {
             let (before, (persistent, preview, _)) = (&pair[0].1, &pair[1]);
-            let step = before.iter().map(|dab| dab.radii[0].max(dab.previous[0])).fold(0., f32::max) / 16.;
-            before.iter().map(|dab| {
-                let (lo, hi) = ink_bounds(dab);
-                let near = |dab: &&Dab| {
-                    let (a, b) = ink_bounds(dab);
-                    a[0] <= hi[0] && a[1] <= hi[1] && b[0] >= lo[0] && b[1] >= lo[1]
-                };
-                let committed: Vec<Dab> = ink.iter().filter(near).copied().collect();
-                let shown: Vec<Dab> = preview.iter().chain(&ink[..*persistent]).filter(near).copied().collect();
-                let [x, y] = [(lo[0] / step).ceil() as i32, (lo[1] / step).ceil() as i32];
-                let columns = (hi[0] / step).floor() as i32 - x + 1;
-                (0..columns * ((hi[1] / step).floor() as i32 - y + 1))
-                    .map(|index| Point { x: (x + index % columns) as f32 * step, y: (y + index / columns) as f32 * step })
-                    .filter(|point| ink_gap(dab, *point) <= 0. && inked(&committed, *point) && !inked(&shown, *point))
+            let shown: Vec<Dab> = preview.iter().chain(&ink[..*persistent]).copied().collect();
+            let lost = before.iter().map(|dab| {
+                let (committed, shown) = (near(ink, dab), near(&shown, dab));
+                samples_inside(dab, step(before))
+                    .filter(|point| inked(&committed, *point, 0.96, 0.) && !inked(&shown, *point, 1.04, slack))
                     .count()
-            }).sum()
+            }).sum();
+            let extra = preview.iter().map(|dab| {
+                let committed = near(ink, dab);
+                samples_inside(dab, step(preview)).filter(|point| !inked(&committed, *point, 1.04, slack)).count()
+            }).sum();
+            [lost, extra]
         }).collect()
     }
 
     #[test]
-    fn landing_frames_keep_ink_the_final_stroke_shares_with_the_frame_before() {
+    fn landing_frames_show_only_the_final_stroke_and_keep_what_the_frame_before_shares_with_it() {
         let pen = default_brush(DefaultBrushPreset::GPen);
         let taper = layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: [10., 10.], ..Default::default() };
-        let lost: Vec<_> = [
+        let proportional = layer_core::BrushTaper { mode: layer_core::TaperMode::Proportional, proportional_shares: [0.25, 0.25], ..Default::default() };
+        let smoothed = layer_core::BrushStabilization { strength: 1., ..pen.stabilization };
+        let errors: Vec<_> = [
             ("wide", BrushSnapshot { diameter: 2000., ..pen.clone() }, 0.3, 0.0166, 228),
             ("tapered", BrushSnapshot { diameter: 100., taper, ..pen.clone() }, 1., 0.0166, 228),
+            ("smoothed taper", BrushSnapshot { diameter: 100., taper, stabilization: smoothed, ..pen.clone() }, 1., 0.0166, 228),
+            ("blotty", BrushSnapshot { taper: proportional, ..default_brush(DefaultBrushPreset::BlottyInk) }, 1., 0.0166, 228),
             ("thin", pen.clone(), 1., 0.0166, 228),
             ("fast", pen, 1., 0.0497, 76),
             ("airbrush", BrushSnapshot { diameter: 100., ..default_brush(DefaultBrushPreset::Airbrush) }, 1., 0.0166, 228),
             ("eraser", BrushSnapshot { diameter: 15., ..default_brush(DefaultBrushPreset::Eraser) }, 1., 0.0166, 228),
         ]
         .into_iter()
-        .map(|(label, brush, scale, turn, events)| (label, ink_lost_while_landing(brush, scale, turn, events)))
+        .map(|(label, brush, scale, turn, events)| (label, landing_ink_errors(brush, scale, turn, events)))
         .collect();
-        assert!(lost.iter().all(|(_, lost)| !lost.is_empty() && lost.iter().all(|lost| *lost == 0)), "samples the frame before and the final stroke both ink: {lost:?}");
+        assert!(errors.iter().all(|(_, errors)| !errors.is_empty() && errors.iter().all(|error| *error == [0, 0])), "[lost, extra] samples per landing frame: {errors:?}");
     }
 
     #[test]

@@ -15,6 +15,7 @@ const MAX_INSERTIONS: f32 = 64.;
 const SAVED: Resolution = Resolution { share: 0.02, minimum: 0.05, preview: None };
 const PATH_SHARE: f32 = 0.02;
 const THIN_SHARE: f32 = 0.02;
+const PREVIEW_SHARE: f32 = 0.04;
 const FIRST_SAMPLE: f32 = 1e-4;
 const SAMPLE_RATIO: f32 = 1.5;
 
@@ -782,7 +783,7 @@ impl HeldStroke {
                 .collect();
             kept = selection(&estimates, scale, |_| THIN_SHARE).into_iter().map(|position| kept[position]).collect();
         }
-        let resolution = Resolution { share: 0.04, minimum: 0.5 / scale.max(f32::EPSILON), preview: Some(scale.max(f32::EPSILON)) };
+        let resolution = Resolution { share: PREVIEW_SHARE, minimum: 0.5 / scale.max(f32::EPSILON), preview: Some(scale.max(f32::EPSILON)) };
         let contacts = |indices: &[usize]| -> (Vec<_>, Vec<_>) {
             let dabs = indices.iter().flat_map(|&index| (first(index)..first(index) + usize::from(chain.get(index).copies)).map(dab));
             (indices.iter().map(|&index| self.reached(&reach, &chain, index)).collect(), dabs.collect())
@@ -861,6 +862,24 @@ pub(super) fn selection(dabs: &[Dab], scale: f32, share: impl Fn(&Dab) -> f32) -
         anchor = next;
     }
     kept
+}
+
+pub(crate) fn landing_preview(brush: &BrushSnapshot, dabs: &[Dab], scale: f32) -> Vec<Dab> {
+    if !tapers(brush) || varies(brush) {
+        return dabs.to_vec();
+    }
+    let mut linked: Option<Dab> = None;
+    selection(dabs, scale, |_| PREVIEW_SHARE)
+        .into_iter()
+        .map(|index| {
+            let mut dab = dabs[index];
+            if linked.is_some() {
+                connect_contact(linked, &mut dab);
+            }
+            linked = Some(dab);
+            dab
+        })
+        .collect()
 }
 
 fn estimated(brush: &BrushSnapshot, mapping: &BrushMapping, template: &Dab, jitter: f32, pose: DynamicPoint, transfer: Option<Transfer>) -> Dab {
@@ -958,7 +977,7 @@ impl DabGenerator {
                             };
                             let candidates: Vec<_> =
                                 std::iter::once(last).chain(inserted.iter().map(|&t| candidate(t))).chain(std::iter::once(dab)).collect();
-                            selection(&candidates, scale, |_| 0.04).into_iter().filter(|&index| index > 0 && index <= inserted.len()).map(|index| inserted[index - 1]).collect()
+                            selection(&candidates, scale, |_| PREVIEW_SHARE).into_iter().filter(|&index| index > 0 && index <= inserted.len()).map(|index| inserted[index - 1]).collect()
                         }
                         None => inserted,
                     };

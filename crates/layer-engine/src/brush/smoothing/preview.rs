@@ -55,17 +55,28 @@ fn reference_delay(strength: f64) -> f64 {
 #[derive(Clone, Debug)]
 struct Display { canonical: CurveModel, continuation: Curve, endpoint: f64 }
 #[derive(Clone, Debug)]
-struct Landing { begin: u32, endpoint: f64, taper: f32 }
+struct Landing { begin: u32, endpoint: f64 }
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CurvePreview { current: Option<Display>, landing: Option<Landing>, now: u32 }
+
+const REMAINING_STEPS: u32 = 16;
 
 pub(crate) fn pen_up_settlement_micros(settings: &BrushStabilization) -> u32 {
     if settings.strength > 0. { 32_000 } else { 0 }
 }
 impl CurvePreview {
     pub(crate) fn is_present(&self) -> bool { self.current.is_some() }
-    pub(crate) fn taper_amount(&self) -> f32 {
-        self.landing.as_ref().map_or(1., |landing| landing.taper * (1. - progress(f64::from(self.now.saturating_sub(landing.begin)) / 32_000.)) as f32)
+    pub(crate) fn remaining(&self) -> f32 {
+        let Some(display) = self.current.as_ref() else { return 0. };
+        let (begin, end) = (display.endpoint, display.continuation.end_time());
+        if !(end > begin) { return 0.; }
+        let mut previous = self.sample(begin).0;
+        (1..=REMAINING_STEPS).map(|step| {
+            let point = self.sample(begin + (end - begin) * f64::from(step) / f64::from(REMAINING_STEPS)).0;
+            let distance = (point.x - previous.x).hypot(point.y - previous.y);
+            previous = point;
+            distance
+        }).sum()
     }
     pub(crate) fn observe(&mut self, now: u32, model: CurveModel, settings: &BrushStabilization, forecast: &[StrokePoint]) {
         self.now = now.max(self.now);
@@ -97,11 +108,10 @@ impl CurvePreview {
         self.landing = None;
     }
     pub(crate) fn land(&mut self, now: u32, begin: u32, model: CurveModel) {
-        let taper = self.taper_amount();
         self.now = now.max(self.now);
         let previous = self.current.as_ref().map_or(model.curve.end_time(), |display| display.endpoint);
         if self.landing.as_ref().is_none_or(|landing| landing.begin != begin) {
-            self.landing = Some(Landing { begin, endpoint: previous, taper });
+            self.landing = Some(Landing { begin, endpoint: previous });
         }
         let landing = self.landing.as_ref().unwrap();
         let end = model.curve.end_time();
@@ -145,11 +155,11 @@ mod tests {
             for i in 0..100 { let t=0.4+(f64::from(end.elapsed_micros)*1e-6-0.4)*i as f64/99.; let p=preview.sample(t).0; assert!(p.x<=204.0001 && p.x>=0. && p.y.abs()<=30.0001); }
             preview.land(400000,400000,model.clone());
             preview.land(416000,400000,model.clone());
-            let taper = preview.taper_amount();
+            let remaining = preview.remaining();
             preview.land(416000,416000,model.clone());
-            assert_eq!(preview.taper_amount(), taper);
+            assert_eq!(preview.remaining(), remaining);
             preview.land(448000,416000,model);
-            assert_eq!(preview.taper_amount(), 0.);
+            assert!(preview.remaining() < 1e-4);
             assert_eq!(preview.endpoint(*real.last().unwrap()).unwrap().position,real.last().unwrap().position);
         }
     }

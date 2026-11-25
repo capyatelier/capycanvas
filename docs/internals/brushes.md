@@ -89,7 +89,8 @@ without smoothing, so widely spaced brushes such as Liquify and Smudge follow
 the pen every frame. On pen-up, the curve completes through its held endpoint, pressure included.
 The up event's own pressure is not used: the lift continues the last measured
 fall for at most one input interval. An enabled preview lands over 32 ms before
-publication. With preview off, or
+publication. The landing shows only the final stroke, built once at pen-up and
+drawn out to the lift point, and publication saves those same contacts. With preview off, or
 strength zero, there is no additional preview settlement wait. Live drawing and
 replay use the same completion path, including Smudge.
 

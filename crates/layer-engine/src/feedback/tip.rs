@@ -3,7 +3,7 @@ use crate::brush::{
     CurvePreview, DabGenerator, HeldStroke, LiftPreview, PositionField, has_completions, lock_dab_tail,
     taper_prediction,
 };
-use layer_core::{BrushAccumulation, BrushExecution, BrushSnapshot, StrokePoint};
+use layer_core::{BrushSnapshot, StrokePoint};
 use layer_render::Dab;
 
 #[derive(Clone, Debug, Default)]
@@ -12,7 +12,6 @@ pub(crate) struct PreviewTip {
     pub curve_preview: CurvePreview,
     pub preview_taper: bool,
     pub frame_lift: Option<LiftPreview>,
-    last_prediction: Vec<Dab>,
     real: Option<f32>,
 }
 
@@ -28,6 +27,7 @@ pub(crate) struct TipInput<'a> {
     pub ending: Option<u32>,
     pub boundary: bool,
     pub held: Option<&'a HeldStroke>,
+    pub landing: Option<&'a [Dab]>,
 }
 
 pub(crate) fn tip_times(feedback: InstantFeedbackConfig, latest: StrokePoint, elapsed: impl Fn(u64) -> u32,
@@ -40,13 +40,21 @@ pub(crate) fn tip_times(feedback: InstantFeedbackConfig, latest: StrokePoint, el
 
 impl PreviewTip {
     pub fn build(&mut self, generator: &DabGenerator, input: TipInput<'_>, start: usize, output: &mut Vec<Dab>) -> Option<TipSource> {
+        if let (Some(ready), Some(landing)) = (input.ending, input.landing) {
+            let hidden = generator.preview_model(input.brush, input.real, true).map_or(0., |model| {
+                self.curve_preview.land(input.now, ready, model);
+                self.curve_preview.remaining()
+            });
+            output.extend_from_slice(&landing[..revealed(landing, hidden)]);
+            return None;
+        }
         let now = if input.ending.is_some() {
             input.real.last()?.elapsed_micros
         } else {
             input.now
         };
         let lift = self.frame_lift.take();
-        let source = generator.preview_lift(
+        generator.preview_lift(
             input.brush,
             input.pending,
             input.ending.is_some(),
@@ -62,16 +70,7 @@ impl PreviewTip {
                 }
                 source
             },
-        );
-        if coverage_merges(input.brush) {
-            if input.ending.is_some() {
-                output.splice(start..start, self.last_prediction.iter().copied());
-            } else {
-                self.last_prediction.clear();
-                self.last_prediction.extend_from_slice(&output[start..]);
-            }
-        }
-        source
+        )
     }
 
     fn build_main(
@@ -124,8 +123,8 @@ impl PreviewTip {
             if let Some(endpoint) = tip.modeled_position() {
                 tip.reach_endpoint(endpoint, start, self.preview_taper, input.brush, output);
             }
-            if self.preview_taper && (input.ending.is_none() || input.brush.rendering.accumulation != BrushAccumulation::Flow) {
-                taper_prediction(&mut output[extra_start..], taper_start, self.curve_preview.taper_amount());
+            if self.preview_taper && input.ending.is_none() {
+                taper_prediction(&mut output[extra_start..], taper_start, 1.);
             }
             return estimate.filter(|_| input.ending.is_none()).map(|estimate| estimate.source);
         }
@@ -155,6 +154,15 @@ impl PreviewTip {
     }
 }
 
-fn coverage_merges(brush: &BrushSnapshot) -> bool {
-    brush.execution == BrushExecution::Dry && brush.rendering.accumulation == BrushAccumulation::Uniform
+fn revealed(dabs: &[Dab], hidden: f32) -> usize {
+    if hidden <= 0. {
+        return dabs.len();
+    }
+    let mut travel = 0.;
+    dabs.iter()
+        .rposition(|dab| {
+            travel += dab.motion[0].hypot(dab.motion[1]);
+            travel > hidden
+        })
+        .map_or(0, |index| index + 1)
 }

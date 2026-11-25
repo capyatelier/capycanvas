@@ -279,6 +279,7 @@ mod tests {
                 ending: None,
                 boundary: false,
                 held: None,
+                landing: None,
             },
             0,
             &mut output,

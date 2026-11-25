@@ -99,6 +99,22 @@ Taper Off → Fixed on `a83b9c823`:
 
 After ten retained 256 px strokes, idle native heap is 8 MiB below Off and flat.
 
+Pen-up landing on the saved stroke, measured 2026-11-25 on the 24 MP canvas in
+lifts mode, ABBA, six five-second gestures per arm, `ec3b77811` → candidate:
+
+| Row | Completed updates/s | Completed p99 gap ms | Fresh input updates/s | Next contact first submit p50 ms |
+| --- | ---: | ---: | ---: | ---: |
+| G-Pen 18 px, 10 widths | 224.29 → 224.78 | 16.51 → 16.40 | 152.58 → 152.17 | 26.49 → 25.87 |
+| G-Pen 100 px, 10 widths | 188.12 → 189.46 | 30.66 → 31.80 | 138.85 → 138.84 | 26.67 → 26.67 |
+| G-Pen 18 px, Off | 238.41 → 237.31 | 18.39 → 18.48 | 153.36 → 153.14 | 25.01 → 24.92 |
+| Blotty Ink 46 px, Proportional 25 % | 141.20 → 147.23 | 27.20 → 30.35 | 118.91 → 122.18 | 30.28 → 25.98 |
+
+Blotty Ink's longest gap ends at publication on both builds, and publication
+costs the same (13.5 ms CPU, 18.1 ms GPU paint). Landing frames draw one preview
+instead of two (GPU 10.4 → 5.9 ms) and finish earlier, so every frame completes
+no later than on the control. Both builds miss the gap target in the 100 px and
+Blotty Ink rows.
+
 ## Stroke patches below 100%
 
 Measured 2026-11-21 against `bd6ad1e02`: benchmark APKs in ABBA order, candidate
