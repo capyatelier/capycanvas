@@ -271,12 +271,30 @@ pub(crate) struct FillEdgesPreflight {
     owner:u64,color:layer_core::color::DocumentColor,inputs:Vec<Input>,steps:Vec<Step>,next:usize,
     capture:artwork::Capture,scene:Option<Box<Scene>>,seed:Texture,scratch:Vec<Texture>,zero:Texture,line_seeds:Vec<wgpu::Texture>,
     pages:Vec<((usize,[u32;2]),Texture,Texture)>,failure:Option<GpuRasterError>,unadmitted:Option<(u64,usize)>,complete:bool,
+    wait:crate::frame_demand::UnitWait,
 }
 impl FillEdgesPreflight {
     pub fn matches(&self,packet:FramePacket<'_>,color:layer_core::color::DocumentColor)->bool {
         self.owner==packet.scene.owner() && self.color==color
     }
     pub fn pending(&self)->bool {self.failure.is_none() && (self.unadmitted.is_some() || self.next<self.steps.len())}
+    pub(crate) fn demand(&self,r:&WgpuRasterizer)->Option<crate::frame_demand::Outstanding> {
+        use crate::frame_demand::{Input,Outstanding,Turn};
+        if !self.pending() {return None;}
+        match self.wait.observe(r) {
+            Turn::Sleep(input)=>Some(Outstanding::Blocked(input)),
+            Turn::Dormant=>None,
+            Turn::Enter(_) if r.image_decode_waiting()=>Some(Outstanding::Blocked(Input::Decode)),
+            Turn::Enter(_)|Turn::Deliver=>Some(Outstanding::Runnable),
+        }
+    }
+    pub(crate) fn awaits_gpu(&self)->bool {
+        matches!(&self.wait,crate::frame_demand::UnitWait::Input(crate::frame_demand::Producer::Gpu(prefix),_) if prefix.pending())
+    }
+    pub(crate) fn serves(&self,fill:&layer_render::FillPreview)->bool {
+        matches!(&fill.operation.kind,RasterOperationKind::Fill {edges:Some(edges),..} if self.inputs.iter().any(|input|input.target==fill.target
+            && matches!(&input.operation.kind,RasterOperationKind::Fill {edges:Some(stored),..} if same_edges(stored,edges))))
+    }
     fn admit(&mut self,r:&mut WgpuRasterizer)->Result<(),GpuRasterError> {
         let Some((bytes,scratch))=self.unadmitted else {return Ok(());};
         r.admit_preparation_bytes(r.projected_restore_bytes(),bytes)?;
@@ -331,18 +349,19 @@ impl WgpuRasterizer {
         if self.snapshot_worker {return true;}
         let requested:Vec<_>=packet.dab_batches.iter().filter_map(|batch| {
             let DabBatchKind::RasterOperation(index)=batch.kind else {return None;};
-            Some((batch.target,packet.scene.operations(batch.target)?.get(index as usize)?,batch_pixel_rect(batch,packet.scene.target_extent(batch.target))))
-        }).chain(self.fill_preview.iter().map(|fill|(fill.target,&fill.operation,pixel_rect(fill.operation.bounds(packet.scene.target_extent(fill.target)),packet.scene.target_extent(fill.target)))))
-            .filter_map(|(target,operation,damage)| {
+            Some((batch.target,packet.scene.operations(batch.target)?.get(index as usize)?,batch_pixel_rect(batch,packet.scene.target_extent(batch.target)),true))
+        }).chain(self.fill_preview.iter().map(|fill|(fill.target,&fill.operation,pixel_rect(fill.operation.bounds(packet.scene.target_extent(fill.target)),packet.scene.target_extent(fill.target)),false)))
+            .filter_map(|(target,operation,damage,committed)| {
                 let RasterOperationKind::Fill {edges:Some(edges),underfill:Some(_),..}=&operation.kind else {return None;};
-                Some((target,operation,damage,external(edges,packet,self.fill_preview.as_ref())))
+                Some((target,operation,damage,external(edges,packet,self.fill_preview.as_ref()),committed))
             }).collect();
         if requested.is_empty() {self.fill_edges_preflight=None;return true;}
+        let required=requested.iter().any(|(..,committed)|*committed);
         if !self.compilation.require([&self.scene_pipelines.pipeline[fill_line_pipeline(&self.device)]],startup::DOCUMENT) {return false;}
-        let mut state=if let Some(state)=self.fill_edges_preflight.take().filter(|state|requested.iter().all(|(target,operation,_,external)|
+        let mut state=if let Some(state)=self.fill_edges_preflight.take().filter(|state|requested.iter().all(|(target,operation,_,external,_)|
             matches!(&operation.kind,RasterOperationKind::Fill {edges:Some(edges),..} if state.input(*target,edges,external,
                 packet.scene.target_extent(*target),packet.scene.target_offset(*target)).is_some()))) {state}else {
-            let inputs:Vec<_>=requested.iter().map(|(target,operation,_,external)|Input {target:*target,operation:(**operation).clone(),external:external.clone(),
+            let inputs:Vec<_>=requested.iter().map(|(target,operation,_,external,_)|Input {target:*target,operation:(**operation).clone(),external:external.clone(),
                 extent:packet.scene.target_extent(*target),offset:packet.scene.target_offset(*target)}).collect();
             let steps=inputs.iter().enumerate().filter(|(_,input)|input.external.iter().any(|external|*external)).flat_map(|(id,input)| {
                 std::iter::once(Step::Seed(id)).chain(page_coordinates(requested[id].2).filter(move |coordinate|band_intersects(&input.operation,*coordinate,input.extent,0)).map(move |coordinate|Step::Page(id,coordinate)))
@@ -355,14 +374,30 @@ impl WgpuRasterizer {
             FillEdgesPreflight {owner:packet.scene.owner(),color:self.document_color(),inputs,steps,next:0,capture:Default::default(),scene:None,
                 seed:create_color_target(&self.device,[1;2],"prepared fill seed"),scratch:Vec::new(),
                 zero:create_target(&self.device,[SIDE;2],self.device.scalar_format(),"prepared fill empty cover"),line_seeds,pages:Vec::new(),
-                failure:bytes.is_none().then_some(GpuRasterError::SizeOverflow),unadmitted:bytes.map(|bytes|(bytes,scratch_count)),complete:true}
+                failure:bytes.is_none().then_some(GpuRasterError::SizeOverflow),unadmitted:bytes.map(|bytes|(bytes,scratch_count)),complete:true,wait:Default::default()}
         };
         if state.pending() {
-            if let Some((bytes,_))=state.unadmitted {self.extend_close(packet,bytes);}
-            let mut encoder=submission::CommandEncoder::new(&self.device,&Default::default());
-            let result=state.admit(self).and_then(|()|self.drain_image_decodes(&mut encoder)).and_then(|()|state.advance(self,packet,&mut encoder));
-            if let Err(error)=result && !matches!(error,GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished) {state.failure=Some(error);}
-            if encoder.has_work() {self.uploads.finish(&encoder);self.last_submission=encoder.submit(&self.queue);}
+            use crate::frame_demand::{Allowance,Producer,Turn,UnitWait};
+            if required && matches!(state.wait,UnitWait::Parked(_)) {state.wait=UnitWait::default();}
+            match state.wait.observe(self) {
+                Turn::Enter(allowance)=> {
+                    if let Some((bytes,_))=state.unadmitted {self.extend_close(packet,bytes);}
+                    let mut encoder=submission::CommandEncoder::new(&self.device,&Default::default());
+                    let next=state.next;
+                    let result=state.admit(self).and_then(|()|self.drain_image_decodes(&mut encoder)).and_then(|()|state.advance(self,packet,&mut encoder));
+                    let prefix=encoder.has_work().then(||encoder.submission());
+                    state.wait=match &result {
+                        Err(GpuRasterError::Waiting(waiting)) if state.next==next=>if required {UnitWait::refused(waiting.need().clone(),allowance)}else {UnitWait::parked(waiting.need().clone(),allowance)},
+                        Err(GpuRasterError::Waiting(_))=>prefix.map_or(UnitWait::default(),|prefix|UnitWait::Input(Producer::Gpu(prefix),Allowance::Fresh)),
+                        _ if state.next==next=>UnitWait::Ready(allowance),
+                        _=>UnitWait::default(),
+                    };
+                    if let Err(error)=result && !matches!(error,GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished) {state.failure=Some(error);}
+                    if encoder.has_work() {self.uploads.finish(&encoder);self.last_submission=encoder.submit(&self.queue);}
+                },
+                Turn::Deliver=>state.failure=state.wait.ended(),
+                Turn::Sleep(_)|Turn::Dormant=>{},
+            }
         }
         let ready=!state.pending();self.fill_edges_preflight=Some(state);ready
     }
@@ -520,8 +555,10 @@ mod tests {
         let pressure=budget.admit_import(budget.import_headroom_bytes()).unwrap();r.refresh_memory_limits();
         let preview=layer_render::FillPreview {transaction:42,revision:0,target,operation};
         r.set_fill_preview(Some(preview.clone()));
-        crate::test_support::prepare_raster(&mut r,|r|if r.prepare_fill_edges(frame){Ok(())}else{Err(GpuRasterError::NotReady)}).unwrap();
-        assert!(matches!(r.submit(frame),Err(GpuRasterError::SourceWorkingSetExceeded|GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
+        let asleep=|r:&WgpuRasterizer|!r.outstanding_terms().iter().any(|(term,_)|matches!(*term,"fill edges"|"fill preview"));
+        crate::test_support::prepare_raster(&mut r,|r|if r.prepare_fill_edges(frame) || asleep(r) {Ok(())}else {Err(GpuRasterError::NotReady)}).unwrap();
+        assert!(!r.prepare_fill_edges(frame),"a preview waits while the import holds the room its line captures need");
+        assert!(asleep(&r) && r.take_fill_edges_failure().is_none() && r.fill_preview_drawn().is_none(),"a parked preview asks for no frames, fails nothing and draws nothing");
         drop(pressure);r.refresh_memory_limits();crate::test_support::prepare_raster(&mut r,|r|submit_ready(r,frame)).unwrap();
         let pixels=r.readback_srgb_rgba8().unwrap();
         let mut control=WgpuRasterizer::new_native_headless(Default::default()).unwrap();

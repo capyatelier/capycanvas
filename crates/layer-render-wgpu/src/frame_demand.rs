@@ -168,7 +168,7 @@ impl WgpuRasterizer {
             ("selection previews", self.selection_previews_outstanding()),
             ("fill preview", self.fill_preview_outstanding()),
             ("held decode results", self.held_result_ready().then_some(Runnable)),
-            ("fill edges", gated(self.fill_edges_preflight.as_ref().is_some_and(|state| state.pending()))),
+            ("fill edges", self.fill_edges_preflight.as_ref().and_then(|state| state.demand(self))),
             ("bake preflight", self.bake_preflight.as_ref().filter(|state| state.pending())
                 .map(|state| if state.waiting() { Blocked(Input::Decode) } else { Runnable })),
             ("restore preparation", self.restore_preparation()),
@@ -215,8 +215,11 @@ impl WgpuRasterizer {
         }
     }
     fn fill_preview_outstanding(&self) -> Option<Outstanding> {
-        let key = self.fill_preview.as_ref()?.key();
-        if self.fill_preview_drawn() != Some(key) { return Some(Outstanding::Runnable); }
+        let fill = self.fill_preview.as_ref()?;
+        let key = fill.key();
+        if self.fill_preview_drawn() != Some(key) {
+            return self.fill_edges_preflight.as_ref().filter(|state| state.pending() && state.serves(fill)).map_or(Some(Outstanding::Runnable), |state| state.demand(self));
+        }
         let (_, receipt) = self.fill_preview_shown.as_ref()?;
         Producer::Gpu(receipt.clone()).pending(self).then_some(Outstanding::Blocked(Input::Gpu))
     }
@@ -227,7 +230,7 @@ impl WgpuRasterizer {
         self.preparation_can_wake() && (input != Input::Gpu || self.gpu_awaited()) && (input != Input::Compile || self.compilation.check().is_ok())
     }
     fn gpu_awaited(&self) -> bool {
-        self.gpu_results_pending() || self.restore_awaits_gpu()
+        self.gpu_results_pending() || self.restore_awaits_gpu() || self.fill_edges_preflight.as_ref().is_some_and(scene::fill_edges::FillEdgesPreflight::awaits_gpu)
     }
     pub(crate) fn frame_slot_blocked(&self) -> bool { !self.can_submit() && self.wakes(Input::FrameSlot) }
     fn unwoken(&self) -> impl Iterator<Item = (&'static str, Outstanding)> + '_ {
