@@ -6304,9 +6304,11 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn follow_device_defaults(&mut self) {
         let Ok(preset) = preset(self.state.brush.preset) else { return; };
+        let device = self.tools.brush(preset, self.phone_device());
         let mut brush = self.engine.configured_brush().clone();
-        brush.taper = self.tools.brush(preset, self.phone_device()).taper;
-        if brush.taper != self.engine.configured_brush().taper && self.engine.set_brush(brush).is_ok() {
+        brush.taper = device.taper;
+        brush.stabilization.strength = device.stabilization.strength;
+        if brush != *self.engine.configured_brush() && self.engine.set_brush(brush).is_ok() {
             self.refresh_tools();
         }
     }

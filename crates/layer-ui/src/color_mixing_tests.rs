@@ -143,6 +143,30 @@ fn stored_taper_overrides_restore_in_either_order() {
 }
 
 #[test]
+fn phone_brushes_default_to_twenty_percent_smoothing_that_saves_nothing() {
+    let pencil = DefaultBrushPreset::Pencil as u32;
+    let smoothing = |s: &UiSession<Recorder>| s.engine.configured_brush().stabilization.strength;
+    for (platform, device, expected) in [(Platform::Gtk, None, 0.06), (Platform::Android, Some(DeviceClass::Tablet), 0.06), (Platform::Android, Some(DeviceClass::Phone), 0.2)] {
+        let mut s = session(platform);
+        if let Some(device) = device { s.set_device_class(device); }
+        s.select_brush(pencil).unwrap();
+        assert_eq!(smoothing(&s), expected, "{platform:?} {device:?}");
+        assert!(s.editing_state().tools.overrides.is_empty());
+    }
+    let mut s = session(Platform::Android);
+    s.set_device_class(DeviceClass::Phone);
+    s.select_brush(pencil).unwrap();
+    s.set_device_class(DeviceClass::Tablet);
+    assert_eq!(smoothing(&s), 0.06, "an unfolded phone reports a tablet");
+    s.set_device_class(DeviceClass::Phone);
+    assert_eq!(smoothing(&s), 0.2);
+    s.dispatch(UiAction::SetToolSetting { id: "smoothing_strength".into(), value: 0.06 }).unwrap();
+    assert_eq!(s.editing_state().tools.overrides[&pencil]["smoothing_strength"], 0.06);
+    s.reset_brushes().unwrap();
+    assert_eq!(smoothing(&s), 0.2, "Reset returns to the phone default");
+}
+
+#[test]
 fn phone_pens_default_to_a_fixed_taper_that_saves_nothing() {
     use layer_core::TaperMode;
     let pen = DefaultBrushPreset::GPen as u32;
