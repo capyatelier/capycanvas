@@ -56,6 +56,9 @@ Progress notes, validation reports and other work records are not committed
   stale-tile investigation's invariants, test tools, release gate and open work.
 - [Memory follow-ups](perf_followups/memory-followups.md): memory work designed or
   written but not shipped, with its evidence, agreed design and what is left to verify.
+- [Renderer follow-ups after the release blockers](perf_followups/renderer-followups.md):
+  ledger accuracy, frame loops that are not hangs, reduced-display polish, speed
+  rows below the release bar and tests to make deterministic, each with its code.
 - [Memory model: known issues and redesign requirements](memory-model-redesign.md):
   issues open at the release of the renderer memory model, why its design needs
   to be redone, and what the next design must guarantee.
