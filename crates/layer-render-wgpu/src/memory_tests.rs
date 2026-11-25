@@ -1647,18 +1647,27 @@ fn a_held_raster_head_whose_room_drains_on_the_poll_thread_is_woken() {
     let mut r=renderer(Default::default(),layer_core::DeviceMemoryFacts {budget_bytes:Some(1<<30),..Default::default()}).unwrap();
     let (send,woken)=std::sync::mpsc::channel();
     r.set_preparation_wake(Arc::new(move||{let _=send.send(());}));
+    r.live_stroke=Some(layer_core::StrokeId(1));r.memory.claim(r.live_stroke);
     let transient=crate::present_transition::Charge::new(768*MIB,&r.device.transient_display,r.device.transient_memory.clone());
+    let retirement=r.device.transient_display.heap().retire();
     r.publish_memory();r.factory.memory_budget().flush_reports();r.refresh_memory_limits();
-    assert!(r.admit_raster_working(512*MIB,crate::frame_demand::Allowance::Fresh).is_err(),"the retiring display bytes hold the room the raster head needs");
+    let refused=r.admit_raster_working(512*MIB,crate::frame_demand::Allowance::Fresh).err().expect("the retiring display bytes hold the room the raster head needs");
+    assert!(refused.waiting().is_some_and(|batch|!batch.settled()));
+    assert!(r.lane_waits() && r.take_lane_failure(layer_core::StrokeId(1)).is_none(),"the claimed head waits for its retiring bytes");
     assert_eq!(r.next_frame(),layer_render::FrameDemand::Wait,"the renderer waits for the retiring bytes to drain");
     let edge=r.device.retirement_handle();
     edge.flush().unwrap();
     while woken.try_recv().is_ok() {}
-    edge.run(move||drop(transient));
+    assert!(woken.recv_timeout(std::time::Duration::from_millis(200)).is_err(),"no wake before the retirement drains");
+    edge.run(move||{drop(transient);drop(retirement);});
     edge.flush().unwrap();
     let woke=woken.try_recv().is_ok();
     assert!(r.memory.raster.handle.gpu_working_limit()>=r.raster_tiers.raster.used()+512*MIB,"the drained bytes leave room for the head");
     assert!(woke,"the bytes that drain on the poll thread wake the held raster head");
+    assert!(woken.try_recv().is_err(),"the sealed retirement wakes its head once");
+    assert!(!r.lane_waits());
+    assert!(r.admit_raster_working(512*MIB,crate::frame_demand::Allowance::Fresh).is_ok(),"the claimed head takes the released room");
+    assert!(r.take_lane_failure(layer_core::StrokeId(1)).is_none());
 }
 
 #[test]
@@ -1938,16 +1947,25 @@ fn raster_admission_counts_pages_and_retained_buffers_from_creation() {
 
 #[cfg(not(target_arch="wasm32"))]
 #[test]
-fn refused_raster_admission_is_woken_by_a_released_page() {
+fn a_refused_raster_admission_is_not_rearmed_by_an_unrelated_page_release() {
     let mut r = legacy_scene_renderer(Default::default());
     let page = r.create_page([0, 0], "released raster page");
     let (send, receive) = std::sync::mpsc::channel();
     r.set_preparation_wake(Arc::new(move || { let _ = send.send(()); }));
-    while receive.try_recv().is_ok() {}
+    let stroke=layer_core::StrokeId(1);
+    r.live_stroke=Some(stroke);r.memory.claim(r.live_stroke);
     let room = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used());
-    assert!(r.admit_raster_working(room + lendable(&r) + 1,crate::frame_demand::Allowance::Fresh).is_err());
+    let wanted=room+lendable(&r)+1;
+    assert!(r.admit_raster_working(wanted,crate::frame_demand::Allowance::Fresh).is_err());
+    assert!(r.lane_exhausted() && !r.lane_waits(),"an unretiring page is no producer for this head");
+    while receive.try_recv().is_ok() {}
+    let before=crate::test_support::PassCounts::snapshot();
     drop(page);
-    receive.recv_timeout(std::time::Duration::from_secs(1)).expect("a release that makes the refused raster unit fit must wake it");
+    assert!(receive.recv_timeout(std::time::Duration::from_millis(200)).is_err(),"the unrelated release must not wake the refused head");
+    assert!(r.admit_raster_working(wanted,crate::frame_demand::Allowance::Fresh).is_err(),"the undelivered refusal is unchanged");
+    assert_eq!(crate::test_support::PassCounts::snapshot().delta(before).raster_admissions,0,"the head must not admit again until its refusal is delivered");
+    assert_eq!(r.take_lane_failure(stroke),Some(GpuRasterError::StrokeMemory));
+    assert_eq!(r.take_lane_failure(stroke),None,"the operation receives its refusal once");
 }
 
 #[test]
