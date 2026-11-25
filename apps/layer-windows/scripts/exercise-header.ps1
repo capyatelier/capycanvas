@@ -519,6 +519,119 @@ function Check-Fullscreen([switch]$WindowOnly) {
         }
     }
 }
+function Position-Window {
+    [CapyRowPointer]::VerifyPrivateDesktop($env:CAPY_PRIVATE_DESKTOP)
+    $pattern=$root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)
+    $pattern.SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Normal)
+    Wait-Until {$pattern.Current.WindowVisualState -eq [System.Windows.Automation.WindowVisualState]::Normal} 'The owned window did not restore'
+    $work=[Windows.Forms.Screen]::FromHandle($drawingWindow).WorkingArea
+    $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+    $width=[int][Math]::Min($work.Width-120,1800*$scale)
+    $height=[int][Math]::Min($work.Height-180,950*$scale)
+    $left=$work.Left+60;$top=$work.Top+45
+    if(![CapyWindowMoveProbe]::MoveWindow($drawingWindow,$left,$top,$width,$height,$true)){throw 'Could not position the owned test window'}
+    $null=[CapyRowPointer]::SetForegroundWindow($drawingWindow)
+    Wait-Until {
+        $rect=[CapyWindowMoveProbe]::Bounds($drawingWindow)
+        [CapyRowPointer]::GetForegroundWindow() -eq $drawingWindow -and $rect.left -eq $left -and $rect.top -eq $top -and
+            $rect.right-$rect.left -eq $width -and $rect.bottom-$rect.top -eq $height -and (Control 'drawing-canvas').Current.IsEnabled
+    } 'The owned test window did not settle at its starting rect'
+}
+function Check-WindowMove {
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -TypeDefinition @'
+using System;using System.Collections.Generic;using System.ComponentModel;using System.Diagnostics;using System.Runtime.InteropServices;using System.Threading;
+public sealed class CapyWindowMoveProbe {
+ [StructLayout(LayoutKind.Sequential)] public struct Rect {public int left,top,right,bottom;}
+ [StructLayout(LayoutKind.Sequential)] struct GuiThreadInfo {public uint size,flags;public IntPtr active,focus,capture,menuOwner,moveSize,caret;public Rect caretBounds;}
+ [DllImport("user32.dll",SetLastError=true)] public static extern bool MoveWindow(IntPtr window,int x,int y,int width,int height,bool repaint);
+ [DllImport("user32.dll",SetLastError=true)] static extern bool GetWindowRect(IntPtr window,out Rect rect);
+ [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window,IntPtr process);
+ [DllImport("user32.dll",SetLastError=true)] static extern bool GetGUIThreadInfo(uint thread,ref GuiThreadInfo info);
+ [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+ [DllImport("user32.dll")] static extern IntPtr GetThreadDesktop(uint thread);
+ [DllImport("user32.dll",SetLastError=true)] static extern bool SetThreadDesktop(IntPtr desktop);
+ [DllImport("user32.dll",SetLastError=true)] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+ [DllImport("winmm.dll")] static extern uint timeBeginPeriod(uint period);
+ [DllImport("winmm.dll")] static extern uint timeEndPeriod(uint period);
+ public static Rect Bounds(IntPtr window){Rect rect;if(!GetWindowRect(window,out rect))throw new Win32Exception(Marshal.GetLastWin32Error());return rect;}
+ public static bool Moving(IntPtr window){
+  uint thread=GetWindowThreadProcessId(window,IntPtr.Zero);var info=new GuiThreadInfo{size=(uint)Marshal.SizeOf(typeof(GuiThreadInfo))};
+  if(thread==0||!GetGUIThreadInfo(thread,ref info))throw new Win32Exception(Marshal.GetLastWin32Error());return (info.flags&2)!=0;
+ }
+ public class Sample {public double ms;public int left,top;}
+ readonly List<Sample> samples=new List<Sample>();readonly Thread thread;volatile bool stopped;Exception error;
+ public CapyWindowMoveProbe(IntPtr window){
+  var desktop=GetThreadDesktop(GetCurrentThreadId());var ready=new ManualResetEventSlim();
+  if(timeBeginPeriod(1)!=0)throw new Exception("Could not request 1 ms window sampling");
+  thread=new Thread(()=>{try{
+   if(!SetThreadDesktop(desktop)||SetThreadDpiAwarenessContext(new IntPtr(-4))==IntPtr.Zero)throw new Win32Exception(Marshal.GetLastWin32Error());
+   var clock=Stopwatch.StartNew();do{var rect=Bounds(window);samples.Add(new Sample{ms=clock.Elapsed.TotalMilliseconds,left=rect.left,top=rect.top});ready.Set();Thread.Sleep(1);}while(!stopped);
+  }catch(Exception failure){error=failure;}finally{ready.Set();}}){IsBackground=true};
+  thread.Start();ready.Wait();if(error!=null){Stop();throw error;}
+ }
+ public Sample[] Stop(){stopped=true;thread.Join();timeEndPeriod(1);if(error!=null)throw error;return samples.ToArray();}
+}
+'@
+    $failures=@()
+    foreach($case in 'settings-mouse','settings-touch','settings-pen','inactive-tab-mouse'){
+        $id='settings-button';$device=($case -split '-')[-1];$selected=(Model).windows_tabs.selected
+        if($case -eq 'inactive-tab-mouse'){
+            New-HeaderDrawings 2
+            $tabs=(Model).windows_tabs;$selected=$tabs.selected
+            $source=@($tabs.tabs|Where-Object id -ne $selected)[0].id
+            if(!$source -or !$selected){throw 'Two distinct drawing tabs are required'}
+            $id='drawing-tab-'+$source
+        }
+        Position-Window
+        $box=(Control $id -Arranged).Current.BoundingRectangle
+        $x=[int]($box.Left+$box.Width/2);$y=[int]($box.Top+$box.Height/2)
+        $steps=if($device -eq 'mouse'){40}else{8};$step=if($device -eq 'mouse'){3}else{10}
+        $delta=if($device -eq 'mouse'){$steps*$step}else{0};$before=[CapyWindowMoveProbe]::Bounds($drawingWindow)
+        $probe=[CapyWindowMoveProbe]::new($drawingWindow);$issues=@()
+        try{
+            [CapyRowPointer]::Down($device,$x,$y)
+            foreach($i in 1..$steps){
+                [CapyRowPointer]::Move($x,($y+$i*$step))
+                Start-Sleep -Milliseconds $(if($device -eq 'mouse'){2}else{18})
+            }
+            if($device -eq 'mouse'){Start-Sleep -Milliseconds 300}
+            [CapyRowPointer]::Up()
+        }catch{$issues+= $_.Exception.Message}
+        finally{
+            if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}
+            Start-Sleep -Milliseconds 500
+            $samples=$probe.Stop()
+        }
+        $peak=0;$swing=0;$offAxis=0
+        foreach($sample in $samples){
+            $dy=$sample.top-$before.top;$dx=$sample.left-$before.left
+            $peak=[Math]::Max($peak,$dy);$swing=[Math]::Max($swing,$peak-$dy);$offAxis=[Math]::Max($offAxis,[Math]::Abs($dx))
+        }
+        $dx=$samples[-1].left-$before.left;$dy=$samples[-1].top-$before.top;$overshoot=[Math]::Max(0,$peak-$delta)
+        $model=Model
+        if(!$model){$issues+='The owned drawing model is unavailable'}
+        if([Math]::Abs($dx) -gt 2 -or [Math]::Abs($dy-$delta) -gt 2){$issues+="Expected settled offset (0,$delta), got ($dx,$dy)"}
+        if($swing -gt 3){$issues+="Backward swing $swing px exceeds 3 px"}
+        if($overshoot -gt 3){$issues+="Overshoot $overshoot px exceeds 3 px"}
+        if($offAxis -gt 3){$issues+="Off-axis movement $offAxis px exceeds 3 px"}
+        if($model.state.settings_open){$issues+='Settings opened during the drag'}
+        if($model.windows_tabs.selected -ne $selected){$issues+='Drawing tab activated during the drag'}
+        if([CapyWindowMoveProbe]::Moving($drawingWindow)){$issues+='GUI_INMOVESIZE remained set after release'}
+        $samples|ConvertTo-Json -Depth 3 -Compress|Set-Content (Join-Path $run ("window-move-$case-samples.json"))
+        $result=@{case=$case;dx=$dx;dy=$dy;max_swing=$swing;overshoot=$overshoot;off_axis=$offAxis;failures=$issues}|ConvertTo-Json -Compress
+        $result|Add-Content (Join-Path $run 'window-move.jsonl');Write-Output $result
+        if($issues.Count){
+            $failures+= "${case}: $($issues -join '; ')"
+            if([CapyWindowMoveProbe]::Moving($drawingWindow)){
+                [CapyWindowApi]::PostMessage($drawingWindow,0x001F,[UIntPtr]::Zero,[IntPtr]::Zero)|Out-Null
+                Wait-Until {![CapyWindowMoveProbe]::Moving($drawingWindow)} 'The owned Win32 move loop did not dismiss'
+            }
+            if($model.state.settings_open){[CapyRowPointer]::Key([uint32]$review.Id,27);Wait-Until {!(Model).state.settings_open} 'Settings did not dismiss'}
+        }
+    }
+    if($failures.Count){throw ($failures -join "`n")}
+}
 function Check-FullscreenWindow {
     Add-Type -AssemblyName System.Drawing
     $references=if($PSEdition -eq 'Core'){@(Get-ChildItem -LiteralPath (Join-Path $PSHOME 'ref') -Filter '*.dll' | ForEach-Object FullName)+@([System.Drawing.Bitmap].Assembly.Location)+@((Join-Path $PSHOME 'System.Private.Windows.Core.dll'),(Join-Path $PSHOME 'System.Private.Windows.GdiPlus.dll'))}else{@('System.dll','System.Core.dll','System.Drawing.dll')}
@@ -1062,6 +1175,7 @@ try {
         return
     }
     if($FullscreenOnly){
+        Check-WindowMove
         Check-FullscreenWindow
         & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
         if((Get-Item -LiteralPath $stderr).Length){throw 'Native fullscreen stderr requires inspection'}

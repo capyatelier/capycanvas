@@ -151,12 +151,12 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
         ++contactGeneration;release();if(!captured)endSlide();if(button&&previous)button.ReleasePointerCapture(previous);if(menu)menu.Hide();}
     bool cancelAll(){bool active=pointer.has_value()||finishing||reopen.has_value();reopen.reset();cancel();return (rowDrag&&rowDrag->Cancel())||active;}
     void move(PointerRoutedEventArgs const& e){if(pointer!=e.Pointer().PointerId())return;position=e.GetCurrentPoint(root).Position();
-        if(moving){moving.Move(root.XamlRoot(),position);e.Handled(true);return;}
+        if(moving){moving.Move();e.Handled(true);return;}
         if(recognizing)hold.Move(root,e);
-        if(!dragging&&!held&&hold.Moved()&&tabs.contains(source)&&movesWindow()&&moving.Begin(root.XamlRoot(),origin)){
+        if(!dragging&&!held&&hold.Moved()&&tabs.contains(source)&&movesWindow()&&moving.Begin(root.XamlRoot(),e.Pointer(),origin,position)){
             if(!claim())return;
             if(recognizing){recognizing=false;hold.CompleteGesture();}
-            tabs.at(source).menu.Hide();moving.Move(root.XamlRoot(),position);e.Handled(true);return;
+            tabs.at(source).menu.Hide();moving.Move();e.Handled(true);return;
         }
         if(!dragging&&hold.Moved()){if(!claim())return;dragging=true;held=false;dragCursor(root,e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Touch,true);if(tabs.contains(source))tabs.at(source).menu.Hide();beginSlide();}
         if(dragging){updateSlide();AutomationProperties::SetItemStatus(root,data->caption(L"header",L"dragging"));}if(dragging||held)e.Handled(true);

@@ -268,12 +268,12 @@ struct HeaderInput::Impl:std::enable_shared_from_this<Impl>{
         if(recognizing)recognizer.Move(root,e);
         bool moved=recognizer.Moved();
         if(!editable()){
-            if(moving){moving.Move(root.XamlRoot(),next);e.Handled(true);return;}
+            if(moving){moving.Move();e.Handled(true);return;}
             if(!moved)return;
             stopRecognition();
-            if(!held&&movesWindow()&&moving.Begin(root.XamlRoot(),origin)){
+            if(!held&&movesWindow()&&moving.Begin(root.XamlRoot(),e.Pointer(),origin,next)){
                 if(!claim())return;
-                hideMenu();moving.Move(root.XamlRoot(),next);e.Handled(true);
+                hideMenu();moving.Move();e.Handled(true);
             }
             return;
         }

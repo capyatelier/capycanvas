@@ -167,8 +167,9 @@ primary drag on the bar does:
 
 Native window buttons keep their actions. Controls keep their clicks, holds and
 context menus. GTK starts the move with `gdk::Toplevel::begin_move`, Windows moves
-the restored `AppWindow` with the captured contact, and macOS calls
-`NSWindow.performDrag(with:)`.
+the restored `AppWindow` with a captured mouse contact, and macOS calls
+`NSWindow.performDrag(with:)`. On Windows, touch and pen move the window only from
+title-bar areas.
 An outside contact on the bar or a toolbar dismisses a tool drawer without
 consuming the target's normal click or drag. Another eligible tool can switch
 the drawer in one click; clicking its current opener toggles it closed. Contacts
@@ -236,6 +237,10 @@ and Windows' `tools/windows-vm/windows-vm.py fixtures header:zen`. They compare
 the button and icon rectangles through entry and exit in each starting workspace
 and header size, in both themes. Customized regions, absent or overflowed Capy,
 native-control clearance and right-to-left GTK/Web layouts have separate cases.
+Windows' `tools/windows-vm/windows-vm.py fixtures window` drags the window with the
+mouse from Settings and an inactive drawing tab, samples its position every
+millisecond, and fails on any backward swing or overshoot. Touch and pen drags on
+Settings must leave the window in place.
 
 Other cases in `apps/layer-linux/src/workspace_header_tests.rs` cover editor
 controls, keyboard editing, the 640×480 minimum window, spacing in both themes,
