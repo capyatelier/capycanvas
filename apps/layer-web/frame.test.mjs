@@ -167,9 +167,9 @@ function launchFrameHarness(numbers = false) {
   let owner=numbers?11:11n,finished=false,submitted=true,wakes=0,ready=true,modal=false;
   let ticket=numbers?1:1n;
   const context={app:{
-    launch_state:(_chrome,_failed,interaction)=>{interactions.push(['state',interaction]);return {visible:!finished&&!interaction,finished,frame:finished||!ready||interaction?null:ticket};},
+    launch_state:(_chrome,_failed,interaction)=>{interactions.push(['state',interaction]);return {visible:!finished&&!interaction,finished,frame:finished||!ready||interaction?undefined:ticket};},
     startup_progress:()=>[true,true,false],canvas_presented:()=>true,canvas_notice:()=>null,
-    launch_frame:()=>finished||!ready||!submitted||modal?null:[ticket,owner],
+    launch_frame:()=>finished||!ready||!submitted||modal?undefined:[ticket,owner],
     wait_for_canvas:()=>new Promise(resolve=>waits.push(resolve)),
     launch_presented:(frame,surface,_chrome,interaction)=>{assert.equal(typeof frame,'bigint');assert.equal(typeof surface,'bigint');interactions.push(['presented',interaction]);acknowledgments.push([frame,surface]);if(surface===BigInt(owner)&&frame===BigInt(ticket)&&ready&&!interaction)finished=true;},
     next_frame_ms:()=>0,language_pending:()=>false,dispatch(action){ready=action.type==='close_settings';if(!ready)submitted=false;return{regions:0,canvas_wake:false};},
@@ -186,6 +186,15 @@ function launchFrameHarness(numbers = false) {
     async paint(){for(const callback of frames.splice(0))callback();await Promise.resolve();await Promise.resolve();},get pendingFrames(){return frames.length;},
     unsubmitted(){submitted=false;},submit(){submitted=true;},unready(){ready=false;submitted=false;},ready(){ready=true;},digest(value){ticket=value;submitted=false;},get wakes(){return wakes;},get finished(){return finished;}};
 }
+
+test('a finished launch schedules no more frames when wasm reports its absent frame as undefined',async()=>{
+  const h=launchFrameHarness();h.refresh();
+  h.waits[0]();await Promise.resolve();await Promise.resolve();await h.paint();await h.paint();
+  assert.equal(h.finished,true);
+  const wakes=h.wakes;
+  for(let i=0;i<4;i++)h.refresh();
+  assert.equal(h.wakes,wakes,'An idle page asks for no frame once the launch is finished');
+});
 
 test('GPU completion leaves a browser paint opportunity before the launch acknowledgment',async()=>{
   const h=launchFrameHarness();h.refresh();
@@ -275,7 +284,7 @@ test('same-turn Settings dispatch cancels the old receipt before its queue promi
 
 test('hidden unfinished launch mutations publish before any submission receipt exists',()=>{
   const h=launchFrameHarness();h.unsubmitted();h.bypass();h.dispatch({type:'open_settings'});
-  assert.equal(h.views.at(-1).frame,null);
+  assert.equal(h.views.at(-1).frame,undefined);
   assert.equal(h.waits.length,0);
 });
 

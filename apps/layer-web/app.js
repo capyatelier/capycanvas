@@ -480,7 +480,7 @@ function launchChromeReady() { return !!layout && workspaceLayoutReady() && !wor
 function refreshStartup() {
   if (!app || !bootstrap) return;
   const launch = app.launch_state(launchChromeReady(), compilerFailed || document.body.dataset.gpu === 'unavailable', hasModalDialog());
-  if (launch.frame === null || launchPresentation && launchPresentation[0] !== launch.frame) launchPresentation = null;
+  if (launch.frame == null || launchPresentation && launchPresentation[0] !== launch.frame) launchPresentation = null;
   launchCover.update(launch, bootstrap);
   if (!gpuReady || compilerFailed) return;
   const [documentReady, brushReady, complete] = app.startup_progress();
@@ -508,7 +508,7 @@ function refreshStartup() {
       wake();
     }).catch(error => { if (epoch === compilerEpoch && launchPresentation === frame) stopGpu(error); });
   }
-  if (launch.frame !== null && (!frame || frame[0] !== launch.frame)) wake();
+  if (launch.frame != null && (!frame || frame[0] !== launch.frame)) wake();
 }
 // Host timing and contacts govern admission; Rust also checks queued input,
 // strokes, gestures and unfinished edits. Required jobs always retain priority.
