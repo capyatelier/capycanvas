@@ -507,13 +507,28 @@ fn a_fit_drag_across_page_row_11_of_a_204_page_target_reconstructs_each_destinat
 
 #[test]
 fn a_stroke_that_fits_keeps_its_passes_and_dispatches() {
-    let frames = |scale: f32| drag([1024, 768], scale, [200., 300.], |r, submit| {
-        let before = (r.metrics().command_passes, crate::test_support::PassCounts::snapshot());
-        submit(r);
-        [r.metrics().command_passes - before.0, crate::test_support::PassCounts::snapshot().delta(before.1).liquify_dispatches]
-    });
-    assert_eq!([frames(0.25), frames(1.)], [[[8, 12], [5, 12], [6, 18], [5, 12], [5, 18], [5, 22], [3, 14]], [[7, 16], [6, 16], [7, 20], [6, 16], [6, 24], [6, 20], [3, 8]]],
-        "the command passes and Liquify dispatches of each frame, below full size and at it");
+    let frames = |scale: f32| {
+        let mut step=0u32;
+        drag([1024, 768], scale, [200., 300.], |r, submit| {
+            let before = (r.metrics().command_passes, crate::test_support::PassCounts::snapshot());
+            submit(r);
+            let counts=crate::test_support::PassCounts::snapshot().delta(before.1);
+            if scale<1. {
+                let plan=r.scale_display.as_ref().unwrap().plan;
+                let x=200+90*step;
+                let near=PixelRect::new(x.saturating_sub(2*PAGE_SIZE),0,(x+2*PAGE_SIZE+45).min(plan.extent[0]),plan.extent[1]);
+                let reduced_page=u64::from(PAGE_SIZE>>plan.level).pow(2);
+                let bound=page_coordinates(near).count() as u64*reduced_page+u64::from(PAGE_SIZE).pow(2);
+                assert!(counts.composed_texels<=bound,"Fit frame {step} exceeds its brush neighborhood and one cell: {} > {bound}",counts.composed_texels);
+            }
+            step+=1;
+            [r.metrics().command_passes-before.0,counts.liquify_dispatches]
+        })
+    };
+    let fit=frames(0.25);
+    assert_eq!(fit.iter().map(|frame|frame[1]).collect::<Vec<_>>(),[12,12,18,12,18,22,14],"every Fit frame retains its Liquify dispatch count");
+    assert_eq!(&fit[1..],[[5,12],[6,18],[5,12],[5,18],[5,22],[3,14]],"Fit continuation frames retain their passes and dispatches");
+    assert_eq!(frames(1.),[[7,16],[6,16],[7,20],[6,16],[6,24],[6,20],[3,8]],"native frames retain their passes and dispatches");
 }
 
 #[test]

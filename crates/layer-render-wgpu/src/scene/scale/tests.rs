@@ -1554,10 +1554,10 @@ fn groups_clipping_and_all_blends_share_exact_stack_semantics() {
 
 #[test]
 fn pivot_halves_bound_edit_recomposition_independently_of_layer_count_and_preserve_untouched_regions() {
-    assert_eq!(pivot_edit_work(8), pivot_edit_work(32), "an edit's records per frame and committed pages must not depend on the layer count");
+    assert_eq!(pivot_edit_work(8), pivot_edit_work(32), "an edit's committed pages and prepared-half composition texels must not depend on the layer count");
 }
 
-fn pivot_edit_work(layers: usize) -> Vec<(Vec<u32>, u64)> {
+fn pivot_edit_work(layers: usize) -> Vec<(u64,Option<u64>)> {
     const PARTS: usize = 2;
     const WINDOW_REDUCTION: u32 = 1;
     let mut doc = document();
@@ -1600,7 +1600,8 @@ fn pivot_edit_work(layers: usize) -> Vec<(Vec<u32>, u64)> {
             let before = crate::test_support::PassCounts::snapshot();
             let mut records = Vec::new();
             crate::test_support::submit_published_observing(&mut r, p, |r| records.push(r.scene.as_ref().unwrap().scale_commands.as_ref().unwrap().cursor));
-            let commits = crate::test_support::PassCounts::snapshot().delta(before).composite_commits;
+            let counts = crate::test_support::PassCounts::snapshot().delta(before);
+            let commits=counts.composite_commits;
             crate::test_support::submit_published(&mut exact, p);
             let building = switched && kind == DabBatchKind::Preview;
             let (record_bound, commit_bound) = if building { (WINDOW_REDUCTION + half_reductions, cells.len() as u64 + half_pages) } else { (WINDOW_REDUCTION, cells.len() as u64) };
@@ -1608,6 +1609,11 @@ fn pivot_edit_work(layers: usize) -> Vec<(Vec<u32>, u64)> {
                 "{layers} layers, step={step} layer={index} {kind:?}: records per frame {records:?} exceed {record_bound} for {} touched cells (building halves: {building})", cells.len());
             assert!(commits <= commit_bound,
                 "{layers} layers, step={step} layer={index} {kind:?}: {commits} committed pages exceed {commit_bound} for {} touched cells (building halves: {building})", cells.len());
+            if !building {
+                let texels=cells.iter().map(|cell|cell_plan::level_texels(*cell,plan.level).area()).sum::<u64>();
+                let bound=PARTS as u64*texels;
+                assert!(counts.composed_texels<=bound,"{layers} layers, step={step} layer={index} {kind:?}: composing the active cell with its two prepared halves is bounded by touched current-level texels: {} > {bound}",counts.composed_texels);
+            }
             let scene = r.scene.as_ref().unwrap();
             let cache = r.scale_display.as_ref().unwrap();
             assert_eq!(cache.graph.active(), Some(doc.scene().order()[index]), "step={step}: the edited layer is the pivot");
@@ -1616,7 +1622,7 @@ fn pivot_edit_work(layers: usize) -> Vec<(Vec<u32>, u64)> {
             assert!(error[0] < 0.003 && error[1] < 0.025, "{layers} layers, step={step} kind={kind:?}: {error:?}");
             assert_presentation_mip(&r);
             assert!(resident_bytes(cache, scene) <= crate::memory::CACHE_BYTES);
-            work.push((records, commits));
+            work.push((commits,(!building).then_some(counts.composed_texels)));
         }
     }
     for step in 0..4 {
