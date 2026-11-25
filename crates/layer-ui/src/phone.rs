@@ -899,7 +899,7 @@ impl PhoneMenuContact {
     }
     pub fn swipe(&mut self, delta: [f32; 2], width: f32, past_slop: bool, rtl: bool) -> PhoneMenuSwipe {
         if past_slop { self.cancel_press(); }
-        if !self.can_back { return PhoneMenuSwipe::Scroll; }
+        if !self.can_back { return if past_slop { PhoneMenuSwipe::Scroll } else { PhoneMenuSwipe::Pending }; }
         let along = delta[0] * if rtl { -1. } else { 1. };
         if self.swipe_axis.is_none() && past_slop {
             self.swipe_axis = Some(if along > delta[1].abs() { crate::Axis::Horizontal } else { crate::Axis::Vertical });
@@ -1121,6 +1121,17 @@ mod menu_tests {
                 "can_back":false,"input":{"kind":"release","hit":hit,"inside":true}}).to_string()).unwrap();
             assert_eq!(released["reply"]["accepted"],true);
         }
+    }
+    #[test]
+    fn root_page_contacts_stay_pending_until_slop_so_a_still_press_activates() {
+        let route = PhoneMenuRoute::default(); let hit = PhoneMenuHit::Row([0, 0]);
+        let mut contact = PhoneMenuContact::default();
+        contact.press(&route, hit.clone()); contact.begin_swipe_at(&route, 1, false);
+        assert_eq!(contact.sample_swipe([0., 0.], 100., false, false, 2), PhoneMenuSwipe::Pending);
+        assert!(contact.release(&route, &hit, true));
+        contact.press(&route, hit.clone()); contact.begin_swipe_at(&route, 1, false);
+        assert_eq!(contact.sample_swipe([0., 20.], 100., true, false, 2), PhoneMenuSwipe::Scroll);
+        assert!(!contact.release(&route, &hit, true));
     }
     #[test]
     fn menu_release_rejects_scroll_swipe_cancel_and_page_changes() {
