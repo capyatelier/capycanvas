@@ -1,9 +1,9 @@
 use super::*;
 use crate::residency::Class;
-use layer_core::{authored::{PaintBase, PaintSource}, color::{ColorProfile, RgbSpace, source::{SourceChannels, SourceImage}}, raster::{TileBlob, TileKey}};
+use layer_core::{MemoryBudget, MemoryReservation, authored::{PaintBase, PaintSource}, color::{ColorProfile, RgbSpace, source::{SourceChannels, SourceImage}}, raster::{TileBlob, TileKey}};
 use object_image_mips::PreparedImageWork;
 use scene::sources::PreparedSourcePixels;
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Weak};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Leaf { Image(usize, [u32; 2]), Raster(u64) }
@@ -31,22 +31,36 @@ struct Entry { input: Input, pixels: Option<PreparedSourcePixels>, requested: bo
 impl Entry {
     fn missing(&self) -> bool { self.pixels.is_none() && !self.failed }
     fn charged(&self) -> u64 { let (bytes, shared) = self.input.bytes(); if self.failed || shared && self.pixels.is_some() { 0 } else { bytes } }
+    fn read_elsewhere(&self) -> Option<(Weak<Vec<u8>>, u64)> {
+        let (bytes, shared) = self.input.bytes();
+        let (PreparedSourcePixels::NativeSamples(pixels) | PreparedSourcePixels::PremultipliedWorkingPixels(pixels)) = self.pixels.as_ref().filter(|_| !shared)?;
+        (Arc::strong_count(pixels) > 1).then(|| (Arc::downgrade(pixels), bytes))
+    }
 }
 
 #[derive(PartialEq)]
 struct Identity { owner: u64, raster: u64, base: Option<PaintBase>, original: Option<usize> }
 
 pub(crate) struct LiquifySources {
-    target: SourceTarget,
+    target: Option<SourceTarget>,
     space: RgbSpace,
     identity: Option<Identity>,
     entries: HashMap<Leaf, Entry>,
     order: Vec<Leaf>,
+    retired: Vec<(Weak<Vec<u8>>, u64)>,
     missing: usize,
     charged: u64,
-    reservation: Option<layer_core::MemoryReservation>,
+    reservation: Option<MemoryReservation>,
     synced: bool,
     yielded: bool,
+}
+
+fn cover(budget: &MemoryBudget, reservation: &MemoryReservation, bytes: u64) -> bool {
+    match bytes.checked_sub(reservation.reserved_bytes()) {
+        Some(0) => true,
+        Some(more) => budget.admit_covered_import(more).is_some_and(|more| reservation.merge(more).is_ok()),
+        None => reservation.resize(bytes),
+    }
 }
 
 fn leaves(source: &PaintSource, wanted: &mut Vec<([u32; 2], Input)>) -> bool {
@@ -66,14 +80,31 @@ fn leaves(source: &PaintSource, wanted: &mut Vec<([u32; 2], Input)>) -> bool {
 }
 
 impl LiquifySources {
-    fn new(target: SourceTarget, space: RgbSpace) -> Self {
-        Self { target, space, identity: None, entries: HashMap::new(), order: Vec::new(), missing: 0, charged: 0, reservation: None, synced: false, yielded: false }
+    fn new(target: Option<SourceTarget>, space: RgbSpace) -> Self {
+        Self { target, space, identity: None, entries: HashMap::new(), order: Vec::new(), retired: Vec::new(), missing: 0, charged: 0, reservation: None, synced: false, yielded: false }
+    }
+    fn reset(&mut self, target: Option<SourceTarget>, space: RgbSpace) {
+        let entries = std::mem::take(&mut self.entries);
+        self.retired.extend(entries.values().filter_map(Entry::read_elsewhere));
+        *self = Self { retired: std::mem::take(&mut self.retired), reservation: self.reservation.take(), ..Self::new(target, space) };
+        self.charged = self.retired.iter().map(|(_, bytes)| bytes).sum();
+        self.shrink();
     }
     pub(crate) fn release(&mut self) {
-        *self = Self { yielded: true, ..Self::new(self.target, self.space) };
+        self.reset(self.target, self.space);
+        self.yielded = true;
+    }
+    fn shrink(&mut self) {
+        if self.charged == 0 { self.reservation = None; }
+        else if let Some(reservation) = self.reservation.as_ref().filter(|reservation| reservation.reserved_bytes() != self.charged) { reservation.resize(self.charged); }
+    }
+    fn reap(&mut self) {
+        let charged = self.charged;
+        self.retired.retain(|(pixels, bytes)| pixels.strong_count() != 0 || { self.charged -= bytes; false });
+        if self.charged != charged { self.shrink(); }
     }
     fn filling(&self) -> bool { self.reservation.is_some() && self.missing != 0 }
-    pub(crate) fn due(&self) -> bool { !self.yielded && (!self.synced || self.filling()) }
+    pub(crate) fn due(&self) -> bool { self.target.is_some() && !self.yielded && (!self.synced || self.filling()) }
     pub(crate) fn image(&self, source: &Arc<SourceImage>, coordinate: [u32; 2], destination: RgbSpace) -> Option<PreparedSourcePixels> {
         self.entries.get(&Leaf::Image(Arc::as_ptr(source) as usize, coordinate)).filter(|_| destination == self.space)?.pixels.clone()
     }
@@ -97,16 +128,16 @@ impl LiquifySources {
         let (released, captured) = (before - entry.charged(), entry.pixels.is_some());
         self.missing -= 1;
         self.charged -= released;
-        if released != 0 && let Some(reservation) = &self.reservation { reservation.resize(self.charged); }
+        if released != 0 { self.shrink(); }
         captured
     }
     fn select(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, drawing: bool) {
-        let (scene, space) = (packet.scene, r.document_color().space);
-        if space != self.space { *self = Self::new(self.target, space); }
+        let (scene, space, budget) = (packet.scene, r.document_color().space, r.factory.memory_budget());
+        if space != self.space { self.reset(self.target, space); }
         self.synced = true;
-        let SourceTarget::Paint(handle) = self.target else { return; };
-        let Some(current) = scene.paint(handle) else { *self = Self { synced: true, ..Self::new(self.target, space) }; return; };
-        let alpha_locked = scene.source_owner(self.target).and_then(|owner| scene.occurrence(owner)).is_some_and(|occurrence| occurrence.alpha_locked);
+        let Some(SourceTarget::Paint(handle)) = self.target else { return; };
+        let Some(current) = scene.paint(handle) else { self.reset(self.target, space); self.synced = true; return; };
+        let alpha_locked = scene.source_owner(SourceTarget::Paint(handle)).and_then(|owner| scene.occurrence(owner)).is_some_and(|occurrence| occurrence.alpha_locked);
         let original = current.raster.liquify().filter(|state| state.compatible(current, alpha_locked)).map(|state| state.original.clone());
         let identity = Identity { owner: scene.owner(), raster: current.raster.identity(), base: current.base.clone(), original: original.as_ref().map(|source| Arc::as_ptr(source) as usize) };
         if self.identity.as_ref() != Some(&identity) {
@@ -125,15 +156,15 @@ impl LiquifySources {
                 entries.insert(leaf, self.entries.remove(&leaf).unwrap_or(Entry { input, pixels: None, requested: false, failed: false }));
                 self.order.push(leaf);
             }
-            self.entries = entries;
+            let replaced = std::mem::replace(&mut self.entries, entries);
+            self.retired.extend(replaced.values().filter_map(Entry::read_elsewhere));
             self.missing = self.entries.values().filter(|entry| entry.missing()).count();
-            self.charged = self.entries.values().map(Entry::charged).sum::<u64>()
+            self.charged = self.entries.values().map(Entry::charged).sum::<u64>() + self.retired.iter().map(|(_, bytes)| bytes).sum::<u64>()
                 + (self.entries.capacity() * std::mem::size_of::<(Leaf, Entry)>() + self.order.capacity() * std::mem::size_of::<Leaf>()) as u64;
             self.identity = known.then_some(identity);
-            if self.reservation.as_ref().is_some_and(|reservation| !reservation.resize(self.charged)) { self.release(); return; }
+            if self.reservation.as_ref().is_some_and(|reservation| !cover(budget, reservation, self.charged)) { self.release(); return; }
         }
-        let budget = r.factory.memory_budget();
-        if !drawing && self.reservation.is_none() && self.missing != 0 && budget.import_headroom_bytes() >= self.charged { self.reservation = budget.admit_import(self.charged); }
+        if !drawing && self.reservation.is_none() && self.missing != 0 && budget.import_headroom_bytes() >= self.charged { self.reservation = budget.admit_covered_import(self.charged); }
     }
     fn fill(&mut self, r: &mut WgpuRasterizer) {
         if !self.filling() { return; }
@@ -153,19 +184,20 @@ impl LiquifySources {
                 Err(_) => { self.charged -= entry.charged(); entry.failed = true; self.missing -= 1; },
             }
         }
-        if let Some(reservation) = self.reservation.as_ref().filter(|reservation| reservation.reserved_bytes() != self.charged) { reservation.resize(self.charged); }
+        self.shrink();
     }
 }
 
 impl WgpuRasterizer {
     pub(crate) fn select_liquify_target(&mut self, target: Option<SourceTarget>) {
-        if self.liquify_sources.as_ref().map(|sources| sources.target) != target {
-            self.liquify_sources = target.map(|target| LiquifySources::new(target, self.document_color().space));
-        }
+        let space = self.document_color().space;
+        let sources = self.liquify_sources.get_or_insert_with(|| LiquifySources::new(None, space));
+        if sources.target != target { sources.reset(target, space); }
     }
     pub(crate) fn prepare_liquify_sources(&mut self, packet: FramePacket<'_>) {
         let Some(mut sources) = self.liquify_sources.take() else { return; };
-        let drawing = self.liquify.as_ref().is_some_and(|liquify| liquify.drawing(sources.target));
+        sources.reap();
+        let drawing = sources.target.zip(self.liquify.as_ref()).is_some_and(|(target, liquify)| liquify.drawing(target));
         if packet.dab_batches.is_empty() && !sources.yielded {
             if !drawing && self.memory.reclaim_unanswered() { sources.release(); } else { sources.select(self, packet, drawing); }
         }

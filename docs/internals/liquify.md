@@ -603,14 +603,17 @@ its field the same way; accept it rather than restrict these tools.
 - **Prepared sources.** While Liquify is selected, the decode workers prepare
   the active layer's source pages at prefetch priority: its raster tiles and
   photo pages, and on a continued field those of $I_0$ too. The renderer keeps
-  them in RAM it admits from free memory and charges once; pages shared with
-  the sample cache stay charged there. Target restores and rebuilt originals
+  them in RAM it admits and grows only from physically free memory, never from
+  pages another owner has yet to release, and charges once; pages shared with
+  the sample cache stay charged there, and a converted page stays charged until
+  its last reader drops it. Target restores and rebuilt originals
   take a prepared page instead of waiting on a decode, so a contact whose
   decoded cache was evicted costs uploads only. A tool or layer change, device
   loss or a parked tab releases the set, and a new version drops its stale
   pages. A set that does not fit, or whose lane is refused on unified memory,
   leaves restores decoding on demand. `liquify::memory_tests` checks a Fit Push
-  across two evictions of the decoded cache.
+  across two evictions of the decoded cache, a set beside reclaimable memory
+  and a page read after Liquify is deselected.
 - **Peak memory.** Map storage costs 16 bytes per touched pixel, plus unchanged
   tiles shared across versions. An update temporarily owns both old and new
   tiles. Original caches cost 16 bytes per pixel plus one third for mip levels,

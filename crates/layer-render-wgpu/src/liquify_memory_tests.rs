@@ -23,15 +23,34 @@ struct Canvas {
 
 struct Memory { admitted: u64, strokes: u64 }
 
+fn promised(budget: &layer_core::MemoryBudget) -> u64 {
+    budget.flush_reports();
+    let ledger = budget.snapshot();
+    ledger.ram_pinned_bytes - ledger.rows.iter().flatten().map(|row| row.pinned_ram_bytes).sum::<u64>()
+        - ledger.devices.iter().filter(|device| device.unified).map(|device| device.pinned_bytes).sum::<u64>()
+}
+
 impl Canvas {
     fn photo(budget_mib: u64) -> Self { Self::photo_of(EXTENT, layer_core::color::SampleDepth::U8, budget_mib) }
     fn photo_of(extent: [u32; 2], depth: layer_core::color::SampleDepth, budget_mib: u64) -> Self {
         let photo = layer_core::color::source::rgba8_source(extent, |x, y| [
             ((3 * x + y / 8) % 251) as u8, ((5 * y + x / 8) % 241) as u8, (((x + y) / 4 + x * y % 31) % 197) as u8, 255]);
-        let document = layer_color::photo_project(Arc::unwrap_or_clone(photo), Default::default(), "Photo".into(), depth).unwrap();
+        Self::open(Arc::unwrap_or_clone(photo), depth, layer_core::DeviceMemoryFacts { budget_bytes: Some(budget_mib << 20), ..Default::default() })
+    }
+    fn rgb_photo(facts: layer_core::DeviceMemoryFacts) -> Self {
+        use layer_core::color::source::{SourceBuilder, SourceChannels, SourceInterpretation};
+        let interpretation = SourceInterpretation { channels: SourceChannels::Rgb, depth: layer_core::color::SampleDepth::U8, profile: Default::default(), profile_assumed: false };
+        let mut photo = SourceBuilder::new(EXTENT, interpretation, layer_core::ProjectLimits::default().asset_bytes as usize).unwrap();
+        for y in 0..EXTENT[1] {
+            photo.push_row(&(0..EXTENT[0]).flat_map(|x| [((3 * x + y / 8) % 251) as u8, ((5 * y + x / 8) % 241) as u8, ((x + y) / 4 % 197) as u8]).collect::<Vec<_>>()).unwrap();
+        }
+        Self::open(photo.finish().unwrap(), layer_core::color::SampleDepth::U8, facts)
+    }
+    fn open(photo: layer_core::color::source::SourceImage, depth: layer_core::color::SampleDepth, facts: layer_core::DeviceMemoryFacts) -> Self {
+        let extent = photo.extent;
+        let document = layer_color::photo_project(photo, Default::default(), "Photo".into(), depth).unwrap();
         let target = document.active_target().unwrap();
-        let r = crate::memory::memory_tests::renderer(document.composition().color,
-            layer_core::DeviceMemoryFacts { budget_bytes: Some(budget_mib << 20), ..Default::default() }).unwrap();
+        let r = crate::memory::memory_tests::renderer(document.composition().color, facts).unwrap();
         let view = layer_render::ViewState { width_px: (extent[0] as f32 * FIT) as u32, height_px: (extent[1] as f32 * FIT) as u32,
             document_to_surface: [FIT, 0., 0., FIT, 0., 0.] };
         let (input, consumer) = input_queue(1024);
@@ -114,6 +133,11 @@ impl Canvas {
             layer_core::liquify::Field::resources(&*state.field, &mut visit);
         }
         atlases.values().sum()
+    }
+    fn prepared(&self, coordinate: [u32; 2]) -> Option<crate::scene::sources::PreparedSourcePixels> {
+        let SourceTarget::Paint(paint) = self.target else { unreachable!() };
+        let (base, r) = (self.engine.document().artwork.paint.get(paint)?.base.clone()?, self.engine.backend());
+        r.liquify_sources.as_ref()?.image(base.image.storage(), coordinate, r.document_color().space)
     }
     fn photo_page_bytes(&self) -> u64 {
         let data = self.engine.document().scene().raster(self.target).unwrap().wait_data().unwrap();
@@ -348,6 +372,47 @@ fn a_fit_push_on_a_selected_photo_layer_restores_without_waiting_on_a_decode_aft
     let (waits, today) = contact(false);
     assert!(waits > 0, "with no room for the prepared sources the restore decodes on demand");
     assert!(!prepared.is_empty() && today == prepared, "the prepared and on-demand restores commit the same pixels");
+}
+
+#[test]
+fn selected_liquify_sources_prepare_nothing_until_reclaimable_memory_is_physically_released() {
+    let mut canvas = Canvas::rgb_photo(layer_core::DeviceMemoryFacts { budget_bytes: Some(1 << 30), ..Default::default() });
+    let budget = canvas.engine.backend().factory.memory_budget().clone();
+    let before = promised(&budget);
+    let ledger = budget.snapshot();
+    let reclaimable = budget.register_owner(layer_core::MemoryOwnerKind::Other, layer_core::MemoryClass::Warm, None);
+    reclaimable.report(layer_core::MemoryReport { ram_bytes: ledger.ram_limit_bytes - ledger.ram_physical_bytes - before - (8 << 20), ..Default::default() });
+    let settle = |canvas: &mut Canvas| (0..SETTLE_FRAMES).any(|_| {
+        canvas.frame(canvas.clock + FRAME_NS);
+        let promised = promised(&budget);
+        let ledger = budget.snapshot();
+        assert!(ledger.ram_physical_bytes + promised <= ledger.ram_limit_bytes, "resident {} and promised {promised} bytes stay within the {}-byte limit", ledger.ram_physical_bytes, ledger.ram_limit_bytes);
+        canvas.idle()
+    });
+    canvas.brush(layer_core::DefaultBrushPreset::LiquifyPush, 512.);
+    assert!(settle(&mut canvas), "the selected Liquify layer settles, not waiting on {:?}", canvas.engine.backend().outstanding_terms());
+    assert!(canvas.prepared([0; 2]).is_none() && promised(&budget) == before, "while the free room is only reclaimable the set prepares nothing");
+    reclaimable.report(layer_core::MemoryReport::default());
+    assert!(settle(&mut canvas), "the set fills, not waiting on {:?}", canvas.engine.backend().outstanding_terms());
+    assert!(canvas.prepared([0; 2]).is_some() && promised(&budget) > before, "once the room is physically free the set prepares the layer's pages");
+}
+
+#[test]
+fn a_prepared_liquify_page_stays_charged_after_liquify_is_deselected_until_its_last_reader_drops_it() {
+    let mut canvas = Canvas::rgb_photo(layer_core::DeviceMemoryFacts { budget_bytes: Some(1 << 30), ..Default::default() });
+    let budget = canvas.engine.backend().factory.memory_budget().clone();
+    let before = promised(&budget);
+    canvas.brush(layer_core::DefaultBrushPreset::LiquifyPush, 512.);
+    assert!(canvas.settle(), "the selected Liquify layer settles, not waiting on {:?}", canvas.engine.backend().outstanding_terms());
+    let reader = canvas.prepared([0; 2]).expect("the selected layer's pages are prepared");
+    let (crate::scene::sources::PreparedSourcePixels::NativeSamples(pixels) | crate::scene::sources::PreparedSourcePixels::PremultipliedWorkingPixels(pixels)) = &reader;
+    let bytes = pixels.len() as u64;
+    canvas.brush(layer_core::DefaultBrushPreset::LoadedOil, 200.);
+    canvas.frame(canvas.clock + FRAME_NS);
+    assert!(promised(&budget) >= before + bytes, "a converted page another reader holds stays charged after Liquify is deselected: {} of its {bytes} bytes", promised(&budget) - before);
+    drop(reader);
+    canvas.frame(canvas.clock + FRAME_NS);
+    assert_eq!(promised(&budget), before, "the last reader's drop returns the page's charge");
 }
 
 fn drag<T>(extent: [u32; 2], scale: f32, start: [f32; 2], mut frame: impl FnMut(&mut WgpuRasterizer, &mut dyn FnMut(&mut WgpuRasterizer)) -> T) -> Vec<T> {

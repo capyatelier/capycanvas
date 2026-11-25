@@ -564,11 +564,23 @@ impl MemoryBudget {
             if changed { self.rebalance(state); }
             return None;
         }
+        Some(self.reserve_import(state, bytes))
+    }
+    pub fn admit_covered_import(&self, bytes: u64) -> Option<MemoryReservation> {
+        let mut state = self.0.state.lock().unwrap();
+        let changed = state.apply_reports();
+        if bytes > state.import_headroom().min(state.free_ram()) {
+            if changed { self.rebalance(state); }
+            return None;
+        }
+        Some(self.reserve_import(state, bytes))
+    }
+    fn reserve_import(&self, mut state: MutexGuard<'_, State>, bytes: u64) -> MemoryReservation {
         state.next = state.next.checked_add(1).expect("Memory owner identity exhausted");
         let id = state.next;
         state.set_reserved(id, Reserved::Import(bytes));
         self.rebalance(state);
-        Some(MemoryReservation(Arc::new(Reservation { budget: self.clone(), id, bytes: AtomicU64::new(bytes), active: AtomicBool::new(true), _owner:None })))
+        MemoryReservation(Arc::new(Reservation { budget: self.clone(), id, bytes: AtomicU64::new(bytes), active: AtomicBool::new(true), _owner:None }))
     }
     pub fn snapshot(&self) -> MemoryBudgetSnapshot {
         let state = self.0.state.lock().unwrap();
