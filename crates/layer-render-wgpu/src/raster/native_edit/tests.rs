@@ -1048,10 +1048,24 @@ fn abandoned_native_frame_fails_roots_and_tile_waiters_without_submitting_edits(
 
 #[test]
 fn a_settlement_keeps_its_completed_capture_until_its_frame_restores_and_then_publishes_once() {
+    settle_completed_capture(true);
+}
+
+#[test]
+fn a_settlement_whose_preview_cannot_fit_publishes_its_completed_capture_without_the_preview() {
+    settle_completed_capture(false);
+}
+
+fn settle_completed_capture(preview_fits: bool) {
     let color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
-    let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
+    let mut r = crate::memory::memory_tests::renderer(color, layer_core::DeviceMemoryFacts { budget_bytes: Some(1 << 30), ..Default::default() }).unwrap();
     let mut layers = paint_document([PAGE_SIZE * 4, PAGE_SIZE], "settled capture");
     set_color(&mut layers, color);
+    let mut unplaced = reveal_all(layers.composition().size, Default::default()).source;
+    unplaced.raster = RasterRevision::pending();
+    let other = unplaced.raster.clone();
+    let inserted = layer_core::authored::RecordChange::insert(&layers.artwork.coverage, unplaced);
+    layers.apply(layer_core::Edit::Coverage(inserted)).unwrap();
     let id = target(&layers);
     let descriptor = RasterPlane::Color.descriptor(color);
     let tiles = (0..4u32).map(|x| {
@@ -1103,9 +1117,10 @@ fn a_settlement_keeps_its_completed_capture_until_its_frame_restores_and_then_pu
     assert_eq!(r.restore_preparation(), Some(crate::frame_demand::Outstanding::Blocked(crate::frame_demand::Input::Compile)),
         "the settlement waits on its frame's restore");
     assert_ne!(r.next_frame(), layer_render::FrameDemand::Work, "the waiting settlement sleeps on its restore instead of asking for frames");
+    let pinned = (!preview_fits).then(|| crate::memory::memory_tests::pin_every_free_byte(&mut r));
     release.send(()).unwrap();
     wait_until("the settlement publishes", || {
-        r.poll_pending(frame.view).unwrap();
+        r.poll_pending(frame.view).expect("the settlement refuses nothing");
         r.wait_idle().unwrap();
         if r.settling.is_none() { Ok(()) } else { Err(()) }
     });
@@ -1113,6 +1128,9 @@ fn a_settlement_keeps_its_completed_capture_until_its_frame_restores_and_then_pu
     assert!(r.restore_preflight.as_ref().is_some_and(|restore| restore.native.is_none()), "the completed capture is admitted instead of a second one");
     assert!(r.take_refused_stroke().is_none(), "the settlement refuses no stroke");
     assert_eq!(backing(&root), before, "the published root keeps every authored tile");
+    assert!(other.try_data().is_none(), "a root the settlement does not capture is left to its own producer");
+    assert_eq!(r.artwork_frame.as_ref().map(|shown| shown.previews.len()), Some(usize::from(preview_fits)), "the settlement shows its preview only when it fits");
+    drop(pinned);
 }
 
 #[test]

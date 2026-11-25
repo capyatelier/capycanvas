@@ -24,7 +24,7 @@ pub(super) struct PendingFrame {
 impl PendingFrame {
     pub fn fail(&self, error: &str) {
         let view = self.frame.scene.view();
-        for root in view.targets().filter_map(|target| view.raster(target)) {
+        for root in source_access::placed_targets(view).filter_map(|target| view.raster(target)) {
             if root.try_data().is_none() { let _ = root.publish(Err(error.into())); }
         }
     }
@@ -111,6 +111,10 @@ impl Frame {
             previews,
             preview_dabs,
         }
+    }
+    pub fn without_previews(&self) -> Self { Self { previews: Vec::new(), preview_dabs: Vec::new(), ..self.clone() } }
+    pub fn settlement(&self, extent: [u32; 2], view: ViewState, composite_all: bool) -> FramePacket<'_> {
+        FramePacket { view, composite_all, ..self.packet(extent) }
     }
     pub fn packet(&self, extent: [u32; 2]) -> FramePacket<'_> {
         FramePacket {

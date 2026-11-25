@@ -4540,20 +4540,28 @@ impl WgpuRasterizer {
             self.telemetry.submitted(&self.queue);
             self.settling = Some(pending);
         } else {
-            let frame = pending.frame.clone();
-            let mut packet = frame.packet(self.document_extent);
-            packet.view = view;
-            packet.composite_all = pending.capture.is_none();
             self.settling = Some(pending);
-            if !self.raster_dependencies_ready(packet, None) || self.lane_exhausted() { return Ok(()); }
+            if !self.prepare_settlement(view) { return Ok(()); }
             let Some(mut pending) = self.settling.take() else { return Ok(()); };
+            let frame = pending.frame.clone();
             let native = pending.capture.take().map(|capture| capture.frame);
-            let result = self.submit_frame(packet, native);
+            let result = self.submit_frame(frame.settlement(self.document_extent, view, native.is_none()), native);
             debug_assert!(!result.as_ref().is_err_and(GpuRasterError::is_preparation_pending), "a ready settlement must not defer preparation during submission");
             result?;
             self.release_unused_retouch();
         }
         Ok(())
+    }
+    fn prepare_settlement(&mut self, view: layer_render::ViewState) -> bool {
+        let Some(pending) = &self.settling else { return false; };
+        let (frame, operation, composite_all, extent) = (pending.frame.clone(), pending.operation, pending.capture.is_none(), self.document_extent);
+        let ready = self.raster_dependencies_ready(frame.settlement(extent, view, composite_all), None);
+        if !self.lane_exhausted() { return ready; }
+        if frame.previews.is_empty() || !self.lane_refuses(operation) { return false; }
+        self.take_lane_failure(operation);
+        let deferred = Arc::new(frame.without_previews());
+        if let Some(pending) = &mut self.settling { pending.frame = deferred.clone(); }
+        self.raster_dependencies_ready(deferred.settlement(extent, view, composite_all), None) && !self.lane_exhausted()
     }
     pub(crate) fn raster_dependencies_ready(&mut self, packet: FramePacket<'_>, preview: Option<&layer_render::TransformPreview>) -> bool {
         self.activate_presentation(packet.scene);

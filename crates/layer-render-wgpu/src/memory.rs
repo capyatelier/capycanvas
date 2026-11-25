@@ -380,6 +380,10 @@ impl WgpuRasterizer {
         blocked
     }
     pub(crate) fn lane_exhausted(&self)->bool {matches!(self.memory.lane.borrow().wait,crate::frame_demand::UnitWait::End(_))}
+    pub(crate) fn lane_refuses(&self,claimant:StrokeId)->bool {
+        let lane=self.memory.lane.borrow();
+        matches!(lane.wait,crate::frame_demand::UnitWait::End(None)) && lane.owner.is_some_and(|(owner,_)|owner==Some(claimant))
+    }
     pub(crate) fn take_lane_failure(&mut self,claimant:StrokeId)->Option<GpuRasterError> {
         let failure={let lane=self.memory.lane.borrow();lane.wait.ended().filter(|_|lane.owner.is_none_or(|(owner,_)|owner.is_none_or(|owner|owner==claimant)))}?;
         self.retire_restore();self.end_lane_wait();
