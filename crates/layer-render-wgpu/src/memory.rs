@@ -327,6 +327,7 @@ impl WgpuRasterizer {
         let mut admitted=self.try_group(raster,display,allowance);
         if admitted.is_err() && evict {trimmed=self.yield_to_lane(raster,display);admitted=self.try_group(raster,display,allowance);}
         if admitted.is_err() && least!=raster {self.memory.lend(self.raster_tiers.raster.used(),least,0);admitted=self.try_group(least,display,allowance);}
+        if admitted.is_err() && self.memory.unified && self.liquify_sources.as_mut().is_some_and(crate::liquify_sources::LiquifySources::release) {admitted=self.try_group(least,display,allowance);}
         if admitted.is_err() && self.close_overcommits(least.saturating_add(display)) {
             let class=crate::residency::Class::Authored;
             admitted=Ok((self.scene_tiers.display.wanting(class,display).overcommit(),self.raster_tiers.admitted.wanting(class,least).overcommit()));
@@ -365,7 +366,6 @@ impl WgpuRasterizer {
         trimmed
     }
     fn hold_lane(&mut self,blocked:crate::residency::Blocked,allowance:crate::frame_demand::Allowance,trimmed:Option<crate::residency::Batch>)->crate::residency::Blocked {
-        if self.memory.unified && let Some(sources)=&mut self.liquify_sources {sources.release();}
         let batch=(allowance==crate::frame_demand::Allowance::Fresh).then(||crate::residency::Batch::joined(blocked.waiting().cloned().into_iter().chain(trimmed).chain(self.raster_backing_landed()).chain(self.device.transient_display.heap().retiring()))).flatten();
         let blocked=blocked.reclaiming(batch);
         let wait=crate::frame_demand::UnitWait::refused(blocked.clone(),allowance);

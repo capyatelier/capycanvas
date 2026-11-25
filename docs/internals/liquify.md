@@ -610,10 +610,12 @@ its field the same way; accept it rather than restrict these tools.
   take a prepared page instead of waiting on a decode, so a contact whose
   decoded cache was evicted costs uploads only. A tool or layer change, device
   loss or a parked tab releases the set, and a new version drops its stale
-  pages. A set that does not fit, or whose lane is refused on unified memory,
-  leaves restores decoding on demand. `liquify::memory_tests` checks a Fit Push
-  across two evictions of the decoded cache, a set beside reclaimable memory
-  and a page read after Liquify is deselected.
+  pages. A set that does not fit leaves restores decoding on demand. On
+  unified memory a stroke whose lane does not fit releases the set and asks
+  again before it is refused. `liquify::memory_tests` checks a Fit Push
+  across two evictions of the decoded cache, a set beside reclaimable memory,
+  a page read after Liquify is deselected and a dab that fits once the set
+  yields.
 - **Peak memory.** Map storage costs 16 bytes per touched pixel, plus unchanged
   tiles shared across versions. An update temporarily owns both old and new
   tiles. Original caches cost 16 bytes per pixel plus one third for mip levels,

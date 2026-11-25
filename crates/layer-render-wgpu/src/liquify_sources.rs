@@ -90,9 +90,11 @@ impl LiquifySources {
         self.charged = self.retired.iter().map(|(_, bytes)| bytes).sum();
         self.shrink();
     }
-    pub(crate) fn release(&mut self) {
+    pub(crate) fn release(&mut self) -> bool {
+        let held = self.reservation.as_ref().map_or(0, MemoryReservation::reserved_bytes);
         self.reset(self.target, self.space);
         self.yielded = true;
+        self.reservation.as_ref().map_or(0, MemoryReservation::reserved_bytes) < held
     }
     fn shrink(&mut self) {
         if self.charged == 0 { self.reservation = None; }

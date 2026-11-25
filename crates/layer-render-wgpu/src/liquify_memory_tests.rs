@@ -415,6 +415,28 @@ fn a_prepared_liquify_page_stays_charged_after_liquify_is_deselected_until_its_l
     assert_eq!(promised(&budget), before, "the last reader's drop returns the page's charge");
 }
 
+#[test]
+fn on_unified_memory_a_dab_that_fits_once_the_liquify_sources_yield_takes_their_room_instead_of_being_refused() {
+    let mut canvas = Canvas::rgb_photo(layer_core::DeviceMemoryFacts { unified: true, ..Default::default() });
+    let budget = canvas.engine.backend().factory.memory_budget().clone();
+    let before = promised(&budget);
+    canvas.brush(layer_core::DefaultBrushPreset::LiquifyPush, 512.);
+    assert!(canvas.settle(), "the selected Liquify layer settles, not waiting on {:?}", canvas.engine.backend().outstanding_terms());
+    let held = promised(&budget) - before;
+    assert!(held >= 16 << 20, "the set holds its converted pages: {held} bytes");
+    let (mut pinned, mut chunk) = (Vec::new(), 1u64 << 32);
+    while chunk >= 64 << 10 {
+        match budget.admit_import(chunk) { Some(taken) if taken.covered() => pinned.push(taken), _ => chunk /= 2 }
+    }
+    let r = canvas.engine.backend_mut();
+    r.live_stroke = Some(StrokeId(1)); r.memory.claim(r.live_stroke);
+    r.publish_memory(); budget.flush_reports();
+    let room = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used());
+    let admitted = r.admit_raster_working(room + held / 2, crate::frame_demand::Allowance::Spent);
+    assert!(admitted.is_ok() && r.take_lane_failure(StrokeId(1)).is_none(), "the dab takes the room the set yields instead of being refused: {:?}", admitted.as_ref().err());
+    drop((admitted, pinned));
+}
+
 fn drag<T>(extent: [u32; 2], scale: f32, start: [f32; 2], mut frame: impl FnMut(&mut WgpuRasterizer, &mut dyn FnMut(&mut WgpuRasterizer)) -> T) -> Vec<T> {
     use crate::layer_tests::{dab, placement, preset_style};
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
