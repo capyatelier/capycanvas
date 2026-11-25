@@ -154,10 +154,9 @@ impl Cache {
         let root=self.graph.root.as_ref().unwrap();
         let (level,extent,at_rest)=(self.plan.level,self.plan.extent,self.at_rest(r,packet));
         let input=input_plan(self.plan,packet.scene,Some(self.graph.objects()));
-        let window=input.doc_bounds.in_frame(extent);
         let expected=scene.scale_pages.lock().unwrap().expected().cloned();
         let unit=unit_plan(input,packet.scene,region,tiled,Some(self.graph.objects()));
-        let read=if unit==input {Damage::EMPTY}else {unit.doc_bounds.in_frame(extent).into()};
+        let read=(unit!=input).then_some(unit.doc_bounds);
         let whole=cell_plan::Footprint::of(root,packet.scene,region,extent,level,at_rest).reduced;
         let held=self.half_cells(region);
         let inside:BTreeSet<SourceTarget>=self.pivot_halves().iter().flat_map(|node|node.reads().0).collect();
@@ -167,7 +166,8 @@ impl Cache {
         let partial=cell_plan::Footprint::of(root,packet.scene,open,extent,level,at_rest).reduced;
         targets(r,packet).filter(|(_,id)|whole.contains_key(id) && !r.transforms.as_ref().is_some_and(|t|t.display_source(*id)))
             .filter_map(|(handle,id)| {
-                let required=if inside.contains(&id) {partial.get(&id).cloned().unwrap_or_default()}else {whole[&id].clone().union(read.clone())}.intersect(window);
+                let required:Vec<DocRect>=if inside.contains(&id) {partial.get(&id).cloned().unwrap_or_default()}else {whole[&id].iter().copied().chain(read).collect()}
+                    .into_iter().map(|area|area.intersect(input.doc_bounds)).filter(|area|!area.is_empty()).collect();
                 if required.is_empty() {return None;}
                 let frame=source_frame(Some(&scene.scale_sources),packet.scene,id);
                 let extent=packet.scene.target_extent(id);let moving=r.moving_layer==Some(handle);
@@ -175,6 +175,7 @@ impl Cache {
                 let plan=source_plan(input,frame,extent,moving,level);
                 if tiled && self.plan.level==0 && plan.level==0 {return None;}
                 let (required,covered)=local_damage(&required,PixelRect::EMPTY,frame,extent,plan.level,moving);
+                let required=required.intersect(PixelRect::full(scene.scale_sources.entries[&id].valid_extent(plan.level)));
                 Some((id,SourceRequest {plan,required,covered}))
             }).collect()
     }
@@ -235,23 +236,9 @@ impl Cache {
         requests:&[(SourceTarget,SourceRequest)],class:Class,
     )->Result<(Vec<(pages::Key,PixelRect)>,Stream),GpuRasterError> {
         if !self.pages.same(&scene.scale_pages) {self.pages=scene.scale_pages.clone();}
-        let native_page=|frame:SourceFrame,local:PixelRect| {let origin=frame.document(local).min;origin.map(|value|value.clamp(0,i64::from(u32::MAX)) as u32/PAGE_SIZE)};
-        let (mut planned,mut writes)=(Vec::new(),Vec::new());
-        for (id,request) in requests {
-            let frame=source_frame(Some(&scene.scale_sources),packet.scene,*id);
-            if frame.aligned() && !r.moving_layer.is_some_and(|layer|packet.scene.source_owner(*id)==Some(layer)) {
-                planned.push(cell_plan::Planned {id:*id,frame,extent:packet.scene.target_extent(*id),required:request.required.map(|local|frame.document(local).in_frame(packet.document_extent))});
-                continue;
-            }
-            let valid=PixelRect::full(scene.scale_sources.entries[id].valid_extent(request.plan.level));
-            writes.extend(page_coordinates(request.required.bounds().intersect(request.plan.bounds))
-                .filter(|coordinate|request.required.intersects(page_rect(*coordinate).intersect(valid)))
-                .map(|coordinate|(native_page(frame,page_rect(coordinate)),*id,coordinate)));
-        }
-        writes.extend(cell_plan::writes(&planned).map(|write|(write.page,write.source,write.coordinate)));
-        writes.sort_by_key(|(page,..)|[page[1],page[0]]);
+        let planned=requests.iter().map(|(id,request)|cell_plan::Planned {id:*id,frame:source_frame(Some(&scene.scale_sources),packet.scene,*id),required:request.required.clone()}).collect::<Vec<_>>();
         let (mut areas,mut stream,mut seen)=(Vec::<(pages::Key,PixelRect)>::new(),Stream::default(),BTreeSet::new());
-        for (page,id,coordinate) in writes {
+        for cell_plan::Write {page,source:id,coordinate} in cell_plan::writes(&planned) {
             if !seen.insert((id,coordinate)) {continue;}
             let plan=requests.iter().find(|(source,_)|*source==id).map(|(_,request)|request.plan).unwrap();
             let source=&scene.scale_sources.entries[&id];

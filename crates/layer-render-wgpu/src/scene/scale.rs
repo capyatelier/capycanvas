@@ -53,7 +53,6 @@ impl Damage {
     pub fn is_empty(&self) -> bool { self.regions.is_empty() }
     pub fn bounds(&self) -> PixelRect { self.regions.iter().fold(PixelRect::EMPTY, |r, n| r.union(*n)) }
     pub fn intersects(&self, region: PixelRect) -> bool { self.regions.iter().any(|r| !r.intersect(region).is_empty()) }
-    pub fn union(mut self, other: Self) -> Self { self.extend(&other); self }
     pub fn extend(&mut self, other: &Self) { for &region in &other.regions { self.push(region); } }
     fn push(&mut self, mut region: PixelRect) {
         if region.is_empty() { return; }
@@ -467,10 +466,10 @@ fn page_regions(pages: impl IntoIterator<Item = [u32; 2]>, bounds: PixelRect) ->
 
 /// The pixels of the levels that `required` document pixels need, and the
 /// part of them a finer cache still covers.
-fn local_damage(required: &Damage, covered: PixelRect, frame: SourceFrame, extent: [u32; 2], level: u32, moving: bool) -> (Damage, PixelRect) {
-    let local = |region: PixelRect| frame.local(region.into(), extent);
-    if frame.aligned() && !moving { return (required.map(local), local(covered)); }
-    (required.map(|region| local(region).expand(1 << level, frame.extent(extent))), PixelRect::EMPTY)
+fn local_damage(required: &[DocRect], covered: PixelRect, frame: SourceFrame, extent: [u32; 2], level: u32, moving: bool) -> (Damage, PixelRect) {
+    let local = |region: DocRect| frame.local(region, extent);
+    if frame.aligned() && !moving { return (Damage::from_regions(required.iter().copied().map(local)), local(covered.into())); }
+    (Damage::from_regions(required.iter().map(|region| local(*region).expand(1 << level, frame.extent(extent)))), PixelRect::EMPTY)
 }
 
 fn source_plan(output: display_mips::Plan, frame: SourceFrame, extent: [u32; 2], moving: bool, preview: u32) -> display_mips::Plan {
@@ -1982,7 +1981,11 @@ impl Evaluator<'_> {
                 Some(contact)=>contact.pages.get(&key).map(|held|self.cache.pages.lock().unwrap().restamped(&key,held)),
                 None=>self.cache.pages.lock().unwrap().get(&key,region,pages::Accuracy::Display,plan.level,self.class),
             };
-            match image {Some(image)=>inputs.push((key,image,region)),None if self.accepted.declaring()=>unwritten=true,None=>return Err(GpuRasterError::NotReady)}
+            match image {
+                Some(image)=>inputs.push((key,image,region)),None if self.accepted.declaring()=>unwritten=true,
+                None if self.cache.gesture.is_some()=>return Err(GpuRasterError::NotReady),
+                None=>return Err(GpuRasterError::Invariant("a cell reads a source page its declaration does not cover")),
+            }
         }
         let (view,plan,slot)=if inputs.len()==1 && !unwritten {
             let (_,image,_)=inputs.pop().unwrap();

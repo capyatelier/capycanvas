@@ -19,7 +19,7 @@ fn chain_resolution(scene: SceneView<'_>, chain: &[(OccurrenceHandle, u64, u32)]
 }
 
 #[derive(Default)]
-pub(super) struct Footprint { pub reduced: BTreeMap<SourceTarget, Damage>, pub native: BTreeMap<SourceTarget, Damage> }
+pub(super) struct Footprint { pub reduced: BTreeMap<SourceTarget, Vec<DocRect>>, pub native: BTreeMap<SourceTarget, Vec<DocRect>> }
 impl Footprint {
     pub(super) fn domains(&self) -> [BTreeSet<SourceTarget>; 2] { [self.reduced.keys().copied().collect(), self.native.keys().copied().collect()] }
     pub(super) fn approximate(node: &Expression, scene: SceneView<'_>, level: u32, at_rest: bool) -> bool { Self::resolves(node, scene, level, at_rest, Resolution::Display) }
@@ -35,16 +35,17 @@ impl Footprint {
     }
     pub(super) fn of(node: &Expression, scene: SceneView<'_>, region: impl Into<Damage>, extent: [u32; 2], level: u32, at_rest: bool) -> Self {
         let mut footprint = Self::default();
-        footprint.visit(node, scene, region.into().intersect(PixelRect::full(extent)), extent, level, at_rest, false);
+        footprint.visit(node, scene, region.into().intersect(PixelRect::full(extent)).regions.into_iter().map(DocRect::from).collect(), extent, level, at_rest, false);
         footprint
     }
     #[expect(clippy::too_many_arguments, reason = "The walk carries the region, grid and domain of each node it visits")]
-    fn visit(&mut self, node: &Expression, scene: SceneView<'_>, region: Damage, extent: [u32; 2], level: u32, at_rest: bool, native: bool) {
-        if region.is_empty() { return; }
+    fn visit(&mut self, node: &Expression, scene: SceneView<'_>, region: Vec<DocRect>, extent: [u32; 2], level: u32, at_rest: bool, native: bool) {
+        if region.iter().all(|area| area.is_empty()) { return; }
         match node {
             Expression::Source { id, .. } => {
                 let domain = if native { &mut self.native } else { &mut self.reduced };
-                domain.entry(*id).or_default().extend(&region);
+                let areas = domain.entry(*id).or_default();
+                for area in region { if !area.is_empty() && !areas.contains(&area) { areas.push(area); } }
             }
             Expression::Opacity { input, .. } => self.visit(input, scene, region, extent, level, at_rest, native),
             Expression::Combine { front, back, .. } => {
@@ -54,10 +55,13 @@ impl Footprint {
             Expression::Effect { input, chain, masks, .. } => {
                 let captured = chain_resolution(scene, chain, level, at_rest) == Resolution::Native;
                 let grid = if captured { 0 } else { level };
-                let output = if captured { region.map(|area| paint_transform::aligned(area, 1 << level, extent)) } else { region };
-                let radius = chain.iter().try_fold(0u32, |radius, (handle, ..)| radius.checked_add(crate::effects::damage_radius(scene.effect(*handle).unwrap(), grid)?));
-                let support = match radius { Some(radius) => output.expand(radius, extent), None => PixelRect::full(extent).into() };
-                self.visit(input, scene, support, extent, level, at_rest, native || captured);
+                let output: Vec<DocRect> = if captured { region.iter().map(|area| area.aligned(1 << level)).collect() } else { region };
+                let spatial: Vec<_> = chain.iter().map(|(handle, ..)| scene.effect(*handle).unwrap()).filter(|effect| !effect.program.passes.is_empty()).collect();
+                let reads = if spatial.is_empty() { output.clone() } else {
+                    let support = input.support(scene, extent, level);
+                    output.iter().map(|area| spatial.iter().fold(*area, |area, effect| crate::effects::document_pass_regions(*effect, area, support, grid)[0])).collect()
+                };
+                self.visit(input, scene, reads, extent, level, at_rest, native || captured);
                 for mask in masks.iter().flatten() { self.visit(mask, scene, output.clone(), extent, level, at_rest, native || captured); }
             }
             Expression::Color(_) | Expression::Objects { .. } | Expression::Vector { .. } | Expression::VectorPreview { .. } | Expression::VectorMotion { .. } => {}
@@ -74,21 +78,15 @@ pub(super) fn level_texels(local: PixelRect, level: u32) -> PixelRect {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Write { pub page: [u32; 2], pub source: SourceTarget, pub coordinate: [u32; 2] }
 
-pub(super) struct Planned { pub id: SourceTarget, pub frame: SourceFrame, pub extent: [u32; 2], pub required: Damage }
-impl Planned {
-    fn wanted(&self, page: [u32; 2]) -> PixelRect {
-        let local = self.frame.local(page_rect(page).into(), self.extent);
-        self.required.regions.iter().fold(PixelRect::EMPTY, |wanted, area| wanted.union(self.frame.local((*area).into(), self.extent).intersect(local)))
-    }
-}
+pub(super) struct Planned { pub id: SourceTarget, pub frame: SourceFrame, pub required: Damage }
 
-pub(super) fn writes(planned: &[Planned]) -> impl Iterator<Item = Write> + '_ {
-    debug_assert!(planned.iter().all(|source| source.frame.aligned()));
-    let bounds = planned.iter().fold(PixelRect::EMPTY, |bounds, source| bounds.union(source.required.bounds()));
-    page_coordinates(bounds).flat_map(move |page| planned.iter().filter_map(move |source| {
-        let wanted = source.wanted(page);
-        (!wanted.is_empty()).then(|| Write { page, source: source.id, coordinate: [wanted.min_x() / PAGE_SIZE, wanted.min_y() / PAGE_SIZE] })
-    }))
+pub(super) fn writes(planned: &[Planned]) -> impl Iterator<Item = Write> {
+    let mut writes: Vec<_> = planned.iter().flat_map(|source| page_coordinates(source.required.bounds())
+        .filter(|coordinate| source.required.intersects(page_rect(*coordinate)))
+        .map(|coordinate| Write { page: source.frame.document(page_rect(coordinate)).min.map(|value| value.clamp(0, i64::from(u32::MAX)) as u32 / PAGE_SIZE), source: source.id, coordinate }))
+        .collect();
+    writes.sort_by_key(|write| [write.page[1], write.page[0]]);
+    writes.into_iter()
 }
 
 #[cfg(test)]
@@ -98,7 +96,7 @@ pub(super) enum Read { Tiles, Uniform }
 #[cfg(test)]
 impl Write {
     pub(super) fn texels(&self, planned: &[Planned], level: u32) -> PixelRect {
-        level_texels(planned.iter().find(|source| source.id == self.source).unwrap().wanted(self.page), level)
+        level_texels(planned.iter().find(|source| source.id == self.source).unwrap().required.intersect(page_rect(self.coordinate)).bounds(), level)
     }
     pub(super) fn read(&self, occupied: &dyn Fn(SourceTarget, [u32; 2]) -> bool) -> Read {
         if occupied(self.source, self.coordinate) { Read::Tiles } else { Read::Uniform }
@@ -148,12 +146,16 @@ mod tests {
         handle
     }
     fn ink(doc: &Document) -> SourceTarget { doc.scene().source_target(*doc.scene().order().last().unwrap()).unwrap() }
-    fn declared(doc: &Document, footprint: &BTreeMap<SourceTarget, Damage>) -> Vec<Planned> {
+    fn declared(doc: &Document, footprint: &BTreeMap<SourceTarget, Vec<DocRect>>) -> Vec<Planned> {
         let scene = doc.scene();
         scene.order().iter().rev().flat_map(|&handle| scene.source_target(handle).into_iter().chain(scene.mask(handle).map(|(mask, _)| SourceTarget::Coverage(mask.source))))
-            .filter_map(|id| footprint.get(&id).map(|required| Planned { id, frame: source_frame(None, scene, id), extent: scene.target_extent(id), required: required.clone() }))
+            .filter_map(|id| footprint.get(&id).map(|required| {
+                let frame = source_frame(None, scene, id);
+                Planned { id, frame, required: Damage::from_regions(required.iter().map(|area| frame.local(*area, scene.target_extent(id)))) }
+            }))
             .collect()
     }
+    fn bounds(areas: &[DocRect]) -> DocRect { areas.iter().fold(DocRect::default(), |bounds, area| bounds.union(*area)) }
 
     #[test]
     fn a_native_effect_below_full_size_captures_at_rest_and_approximates_during_a_gesture() {
@@ -207,13 +209,13 @@ mod tests {
         assert!(native < reduced, "the level grid rounds each pass up by a level texel: {native} vs {reduced}");
         let at_rest = Footprint::of(&node, scene, cell, extent, level, true);
         assert!(at_rest.reduced.is_empty());
-        assert_eq!(at_rest.native[&ink(&doc)].bounds(), cell.expand(native, extent));
+        assert_eq!(bounds(&at_rest.native[&ink(&doc)]), DocRect::from(cell.expand(native, extent)));
         let moving = Footprint::of(&node, scene, cell, extent, level, false);
         assert!(moving.native.is_empty());
-        assert_eq!(moving.reduced[&ink(&doc)].bounds(), cell.expand(reduced, extent));
+        assert_eq!(bounds(&moving.reduced[&ink(&doc)]), DocRect::from(cell.expand(reduced, extent)));
         let full = Footprint::of(&node, scene, cell, extent, 0, true);
         assert_eq!(full.domains(), [BTreeSet::from([ink(&doc)]), BTreeSet::new()]);
-        assert_eq!(full.reduced[&ink(&doc)].bounds(), cell.expand(native, extent));
+        assert_eq!(bounds(&full.reduced[&ink(&doc)]), DocRect::from(cell.expand(native, extent)));
     }
 
     #[test]
@@ -258,7 +260,7 @@ mod tests {
         let node = root(&doc, 1);
         assert_eq!(crate::effects::damage_radius(doc.scene().effect(handle).unwrap(), 1), None);
         let footprint = Footprint::of(&node, doc.scene(), PixelRect::new(700, 300, 702, 302), extent, 1, true);
-        assert_eq!(footprint.reduced[&ink(&doc)].bounds(), PixelRect::full(extent));
+        assert_eq!(bounds(&footprint.reduced[&ink(&doc)]), DocRect::from(PixelRect::full(extent)));
     }
 
     #[test]
