@@ -1240,7 +1240,7 @@ impl Cache {
                     #[cfg(test)]
                     let _record=crate::scene::sources::record_reads(&sources);
                     let mut compositor = Evaluator { cache: &mut *self, scene: &mut *scene, packet, r: &mut *r, encoder,
-                        region: region.into(), input, tiled, unit: &mut unit, accepted:&mut sources,
+                        region: region.into(), declared: region.into(), input, tiled, unit: &mut unit, accepted:&mut sources,
                         previous_motion: completed.iter().rev().find_map(|ready| ready.unit.motion.as_ref()),retained:*retained,
                         approximate: false, preview, class: evaluated };
                     compositor.evaluate_root(&node, target)?;
@@ -1417,7 +1417,7 @@ impl Cache {
             let result = (|| {
                 #[cfg(test)]
                 let _record=crate::scene::sources::record_reads(&sources);
-                let mut compositor = Evaluator { cache: self, scene, packet, r, encoder, region: region.into(), input, tiled,
+                let mut compositor = Evaluator { cache: self, scene, packet, r, encoder, region: region.into(), declared: region.into(), input, tiled,
                     unit: &mut unit, accepted:&mut sources,
                     previous_motion: completed.iter().rev().find_map(|ready| ready.unit.motion.as_ref()),retained,
                     approximate: false, preview: false, class };
@@ -1701,6 +1701,7 @@ struct Evaluator<'a> {
     r: &'a mut WgpuRasterizer,
     encoder: &'a mut crate::submission::CommandEncoder,
     region: DocRect,
+    declared: DocRect,
     input: display_mips::Plan,
     tiled: bool,
     unit: &'a mut Unit,
@@ -1934,7 +1935,7 @@ impl Evaluator<'_> {
         }
         let moving = self.r.moving_layer == self.packet.scene.source_owner(id);
         let level=self.cache.pages.lock().unwrap().expected().map_or_else(||source_level(self.input.level,frame,moving,0),
-            |expected|expected.source_level(id,frame,extent,self.region,self.input.level,moving));
+            |expected|expected.source_level(id,frame,extent,self.declared,self.input.level,moving));
         let plan=display_mips::Plan::at(frame.extent(extent),level);
         if self.tiled && self.cache.plan.level == 0 && plan.level == 0 {
             let tile = [self.region.in_frame(self.packet.document_extent).min_x() / PAGE_SIZE, self.region.in_frame(self.packet.document_extent).min_y() / PAGE_SIZE];

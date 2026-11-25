@@ -20,7 +20,7 @@ fn capture(r:&mut WgpuRasterizer,scene:&mut Scene,cache:&mut Cache,doc:&Document
         let side=1<<plan.level;
         let region=PixelRect::new(rect.min_x()*side,rect.min_y()*side,rect.max_x()*side,rect.max_y()*side).intersect(plan.bounds);
         let mut accepted=crate::scene::sources::AcceptedInputs::default();
-        let mut e=Evaluator {class:crate::residency::Class::Visible,accepted:&mut accepted,cache,scene,packet:frame,r,encoder:&mut encoder,region:region.into(),input:plan,tiled:false,
+        let mut e=Evaluator {class:crate::residency::Class::Visible,accepted:&mut accepted,cache,scene,packet:frame,r,encoder:&mut encoder,region:region.into(),declared:region.into(),input:plan,tiled:false,
             unit:&mut unit,previous_motion:None,retained:0,approximate:false,preview:false};
         let value=|image:&Image|Value::Image {view:image.view.clone(),slot:None,opacity:1.,plan:image.plan,preview:None,encode:false};
         e.draw(value(&images[0]),value(&images[1]),layer_core::LayerBlend::Normal,0,Some(Target {view:root.clone(),slot:Some(Slot::Root),plan})).unwrap();
@@ -72,7 +72,7 @@ fn root_deferred_rejects_unretained_and_changed_coordinate_inputs() {
         }
         let mut frame=packet(doc.scene(),doc.composition().size);frame.blend_space=doc.composition().blend;
         let mut accepted=crate::scene::sources::AcceptedInputs::default();
-        let mut e=Evaluator {class:crate::residency::Class::Visible,accepted:&mut accepted,cache:&mut cache,scene:&mut scene,packet:frame,r:&mut r,encoder:&mut encoder,region:PixelRect::new(0,0,12,12).into(),input:plan,tiled:false,unit:&mut unit,previous_motion:None,retained:0,approximate:false,preview:false};
+        let mut e=Evaluator {class:crate::residency::Class::Visible,accepted:&mut accepted,cache:&mut cache,scene:&mut scene,packet:frame,r:&mut r,encoder:&mut encoder,region:PixelRect::new(0,0,12,12).into(),declared:PixelRect::new(0,0,12,12).into(),input:plan,tiled:false,unit:&mut unit,previous_motion:None,retained:0,approximate:false,preview:false};
         e.draw(front,back,if case==8 {layer_core::LayerBlend::Multiply}else{layer_core::LayerBlend::Normal},if case==9 {16}else{0},Some(Target {view:root.clone(),slot:Some(Slot::Root),plan})).unwrap();
         assert_eq!(encoder.pass_count(),0,"case{case} must stage ordinary jobs");assert!(!scene.jobs.is_empty());scene.discard_unencoded_jobs();
     }
@@ -119,7 +119,7 @@ fn root_deferred_flushes_before_placed_root_fallback() {
         let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());let mut unit=Unit::default();{let _pass=encoder.color_pass("ordered root fallback",&root,wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT));}
         let frame=packet(doc.scene(),doc.composition().size);
         let mut accepted=crate::scene::sources::AcceptedInputs::default();
-        let mut e=Evaluator {class:crate::residency::Class::Visible,accepted:&mut accepted,cache:&mut cache,scene:&mut scene,packet:frame,r:&mut r,encoder:&mut encoder,region:PixelRect::new(0,0,12,12).into(),input:plan,tiled:false,unit:&mut unit,previous_motion:None,retained:0,approximate:false,preview:false};
+        let mut e=Evaluator {class:crate::residency::Class::Visible,accepted:&mut accepted,cache:&mut cache,scene:&mut scene,packet:frame,r:&mut r,encoder:&mut encoder,region:PixelRect::new(0,0,12,12).into(),declared:PixelRect::new(0,0,12,12).into(),input:plan,tiled:false,unit:&mut unit,previous_motion:None,retained:0,approximate:false,preview:false};
         let output=Target {view:root.clone(),slot:Some(Slot::Root),plan};
         let value=|image:&Image|Value::Image {view:image.view.clone(),slot:None,opacity:1.,plan:image.plan,preview:None,encode:false};
         e.draw(value(&images[0]),value(&images[1]),layer_core::LayerBlend::Normal,0,Some(output.clone())).unwrap();
@@ -148,7 +148,7 @@ fn composition_jobs_preserve_overlapping_writes_without_a_record_batch_cap() {
             let coordinate=if i==33 {[32%plan.size[0],32/plan.size[0]]}else{[i%plan.size[0],i/plan.size[0]]};let side=1<<plan.level;
             let region=PixelRect::new(coordinate[0]*side,coordinate[1]*side,(coordinate[0]+1)*side,(coordinate[1]+1)*side).intersect(plan.bounds);
             let mut accepted=crate::scene::sources::AcceptedInputs::default();
-        let mut e=Evaluator {class:crate::residency::Class::Visible,accepted:&mut accepted,cache:&mut cache,scene:&mut scene,packet:frame,r:&mut r,encoder:&mut encoder,region:region.into(),input:plan,tiled:false,unit:&mut unit,previous_motion:None,retained:0,approximate:false,preview:false};
+        let mut e=Evaluator {class:crate::residency::Class::Visible,accepted:&mut accepted,cache:&mut cache,scene:&mut scene,packet:frame,r:&mut r,encoder:&mut encoder,region:region.into(),declared:region.into(),input:plan,tiled:false,unit:&mut unit,previous_motion:None,retained:0,approximate:false,preview:false};
             let value=|image:&Image|Value::Image {view:image.view.clone(),slot:None,opacity:1.,plan:image.plan,preview:None,encode:false};
             let order=if i==33 {[1,0]}else{[0,1]};
             e.draw(value(&images[order[0]]),value(&images[order[1]]),layer_core::LayerBlend::Normal,0,Some(Target {view:root.clone(),slot:Some(Slot::Root),plan})).unwrap();

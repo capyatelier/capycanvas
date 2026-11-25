@@ -587,7 +587,7 @@ impl Cache {
                     let mut accepted=declared.accept_query(r,Some(scene),crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh)?;
                     accepted.overlay(&inputs);
                     let input=unit_plan(input,packet.scene,region,tiled,Some(self.graph.objects()));
-                    let mut compositor=Evaluator {cache:&mut *self,scene:&mut *scene,packet,r:&mut *r,encoder:&mut *encoder,region:region.into(),input,tiled,
+                    let mut compositor=Evaluator {cache:&mut *self,scene:&mut *scene,packet,r:&mut *r,encoder:&mut *encoder,region:region.into(),declared:region.into(),input,tiled,
                         unit:&mut unit,accepted:&mut accepted,previous_motion:None,retained,approximate:false,preview:false,class:Class::Visible};
                     compositor.evaluate_root(&root,Root::Window)?;
                     if !compositor.unit.ready(compositor.scene,compositor.r,compositor.encoder,start,Class::Visible)? {return Err(GpuRasterError::NotReady);}

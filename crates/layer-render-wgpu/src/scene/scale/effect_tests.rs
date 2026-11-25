@@ -187,7 +187,7 @@ fn native_level_pointwise_writes_branch_without_materialization_and_initializes_
             let mut accepted=cache.declare_unit(&mut scene,&mut r,frame,held,region,plan,true,false,0,crate::residency::Class::Visible,&mut encoder,
                 |evaluator|evaluator.effect(input,chain,masks,Some(target.clone())).map(drop)).unwrap().accept_query(&mut r,Some(&scene),crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh).unwrap();
             let mut evaluator = Evaluator {class:crate::residency::Class::Visible, accepted:&mut accepted, cache: &mut cache, scene: &mut scene, packet: frame,
-                r: &mut r, encoder: &mut encoder, region: region.into(), input: plan, tiled: true, unit: &mut unit, previous_motion:None,retained:0, approximate:false,preview:false };
+                r: &mut r, encoder: &mut encoder, region: region.into(), declared: region.into(), input: plan, tiled: true, unit: &mut unit, previous_motion:None,retained:0, approximate:false,preview:false };
             let output = evaluator.effect(input, chain, masks, Some(Target { view: destination.view.clone(), slot: None, plan })).unwrap();
             assert_eq!(output.view(), Some(&destination.view));
             let initialized = paint_transform::aligned(region, PAGE_SIZE, extent).intersect(plan.bounds);

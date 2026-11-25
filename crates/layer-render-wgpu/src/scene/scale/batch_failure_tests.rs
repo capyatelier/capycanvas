@@ -58,7 +58,7 @@ fn shared_ready_encode_error_discards_jobs_before_any_unit_state_commits() {
         }).unwrap().accept_query(&mut r,Some(&scene),crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh).unwrap();
         {
             let mut evaluator=Evaluator {class:crate::residency::Class::Visible,accepted:&mut accepted,cache:&mut cache,scene:&mut scene,packet:frame,r:&mut r,
-                encoder:&mut encoder,region:page_rect([page,0]).into(),input:plan,tiled:false,
+                encoder:&mut encoder,region:page_rect([page,0]).into(),declared:page_rect([page,0]).into(),input:plan,tiled:false,
                 unit:&mut unit,previous_motion:None,retained:0,approximate:false,preview:false};
             let output=evaluator.evaluate_root(&root,Root::Store).unwrap();
             evaluator.materialize(output,None).unwrap();
