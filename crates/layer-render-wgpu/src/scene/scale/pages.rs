@@ -225,6 +225,25 @@ impl Cache {
     }
 
     #[cfg(test)]
+    pub(crate) fn fed_cell_current_or_owed(&self,region:PixelRect)->bool {
+        let Some((store,cells,_))=self.cells() else {return false;};
+        let Some(frame)=store.expected() else {return false;};
+        let area=region.intersect(self.plan.bounds);
+        let reached=Cells::reached(self.plan,area);
+        let [index]=reached[..] else {return false;};
+        let cell=&cells.cells[index];
+        if cell.derived {return false;}
+        match &cell.shown {
+            Some(shown) if shown.submission.discarded()=>false,
+            Some(shown) if shown.exact && !cell.queued=>cell.current && shown.recorded.as_ref().is_some_and(|recorded| {
+                recorded.key.level==self.plan.level && recorded.written.intersect(area)==area
+                    && recorded.matches(frame,self.required_input_level())==Some(true)
+            }),
+            Some(shown)=>cell.pending() && (!shown.exact || !cell.current),
+            None=>cell.queued && cell.pending(),
+        }
+    }
+    #[cfg(test)]
     pub(crate) fn exact_cells(&self)->Vec<(PixelRect,bool)> {
         let Some((_store,cells,_))=self.cells() else {return Vec::new();};
         cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level))

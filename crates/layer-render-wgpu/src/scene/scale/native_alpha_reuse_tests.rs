@@ -834,9 +834,16 @@ fn a_stroke_mixing_fed_and_unfed_dabs_writes_only_the_pages_it_feeds() {
         crate::test_support::submit_ready(&mut feeding, FramePacket { dabs: &fed, dab_batches: &[stroke(2, &fed, [true; 2])], ..frame }).unwrap();
         let reached = crate::pixel_rect::pixel_rect(fed[0].bounds().union(fed[1].bounds()), extent);
         for (cell, exact) in cells(&mixing) {
-            assert_eq!(exact, cell.intersect(reached).is_empty(), "{preset:?} only the cell under the fed dabs may lose exactness: {cell:?}");
+            if cell.intersect(reached).is_empty() {
+                assert!(exact, "{preset:?} only the cell under the fed dabs may lose exactness: {cell:?}");
+            } else {
+                assert!(mixing.scale_display.as_ref().unwrap().fed_cell_current_or_owed(cell), "{preset:?} a fed cell must be current exact or owe exact work: {cell:?}");
+            }
         }
-        for r in [&mut mixing, &mut feeding] { crate::test_support::submit_settled(r, frame); }
+        for r in [&mut mixing, &mut feeding] {
+            crate::test_support::submit_settled(r, frame);
+            assert!(r.scale_display.as_ref().unwrap().published() && cells(r).iter().all(|(_, exact)| *exact), "{preset:?} any remaining exact work must settle");
+        }
         assert!(committed_color(&mixing, target, [0, 0]) == unfed_page, "{preset:?} a page under only unfed dabs must keep its name and pixels");
         let painted = committed_color(&mixing, target, [2, 0]);
         assert!(painted.0 != fed_page.0 && painted.1 != fed_page.1, "{preset:?} the fed page must be renamed and repainted");
