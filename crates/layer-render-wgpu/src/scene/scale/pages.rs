@@ -3357,23 +3357,37 @@ pub(super) mod query_tests {
         crate::test_support::submit_settled(&mut fresh,frame);
         let expected=shown_at(&fresh,fresh.scale_display.as_ref().unwrap().pixels.next().unwrap(),changed);
         let mut r=paged(&document);
-        {
+        let (previous,authored)={
             let main=r.scale_display.as_ref().unwrap();
             assert!(main.pixels.committed_next().is_some(),"the view reduces its half level");
+            let root=main.pixels.committed_root().unwrap();
+            let previous=super::super::tests::window_pixels(&r,root.image(),root.image().plan);
+            let authored=root.authored();
             main.evict_window(hole);
-        }
+            (previous,authored)
+        };
         refuse_cell(&r,hole);
         blue_page(&mut r,&document,changed);
         for _ in 0..6 {
             crate::test_support::submit_ready(&mut r,frame).unwrap();crate::test_support::complete(&r);
-            if r.scale_display.as_ref().unwrap().displays(page_rect(changed)) {break;}
+            if r.scale_display.as_ref().unwrap().coverage_snapshot().ready(page_rect(changed),Accuracy::Display) {break;}
         }
         let main=r.scale_display.as_ref().unwrap();
-        assert!(main.displays(page_rect(changed)) && !main.coverage_complete(),"the changed cell composes while the hole defers the half level");
+        assert!(main.coverage_snapshot().ready(page_rect(changed),Accuracy::Display),"the changed cell composes privately");
+        assert!(!main.displays(page_rect(changed)) && !main.coverage_complete(),"the hole defers the authored swap");
+        let root=main.pixels.committed_root().unwrap();
+        assert_eq!(root.authored(),authored);
+        let retained=super::super::tests::window_pixels(&r,root.image(),root.image().plan);
+        assert_eq!(crate::test_support::max_error(&retained,&previous),0.,"the whole previous root stays visible before the swap");
+        let [x,y,w,h]=paint_transform::texel_rect(page_rect(changed).window_local(main.plan.bounds),1<<main.plan.level);
+        let changed_texels=PixelRect::new(x,y,x+w,y+h);
         release_cell(&r,hole);
         r.test.discard_frame=true;
         crate::test_support::submit_ready(&mut r,frame).unwrap();
         assert!(!r.test.discard_frame,"the frame that fills the hole and reduces the half level is dropped");
+        let main=r.scale_display.as_ref().unwrap();
+        assert!(main.pixels.unreduced.taken.iter().any(|(submission,region)|submission.discarded() && !region.intersect(changed_texels).is_empty()),"the discarded reduction took the changed root region");
+        assert!(!main.pixels.unreduced().intersect(changed_texels).is_empty(),"the discarded reduction leaves the change unreduced");
         let mut labelled=false;
         for _ in 0..4 {
             crate::test_support::submit_ready(&mut r,frame).unwrap();crate::test_support::complete(&r);
