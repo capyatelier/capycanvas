@@ -376,7 +376,7 @@ fn an_untouched_drawing_at_fit_refines_empty_paint_without_missing_inputs() {
     crate::test_support::submit_settled(&mut renderer,frame);
     let cache=renderer.scale_display.as_ref().unwrap();
     assert!(cache.pixels.committed_root().is_some());
-    assert!(cache.coverage_snapshot().ready(cache.plan.bounds,pages::Accuracy::Exact));
+    assert!(cache.has_exact_window());
     assert!(renderer.scene.as_ref().unwrap().valid.load(std::sync::atomic::Ordering::Acquire));
     let pixels=renderer.readback_srgb_rgba8().unwrap();
     assert_eq!(pixels.len(),extent[0] as usize*extent[1] as usize*4);

@@ -200,7 +200,7 @@ fn idle_refinement_presents_completion_and_never_holds_new_input() {
         stroke_once(&mut r,frame,source_at(&doc,0),[700.,500.]);
         let cache=r.scale_display.as_ref().unwrap();
         assert!(cache.evaluation==Evaluation::Display);
-        assert!(!retained_root_pages(cache).is_empty());
+        assert!(!cache.window_coverage_snapshot().written.is_empty());
         assert!(cache.pages.lock().unwrap().bytes()<=r.memory.display_owner().grant().gpu_bytes);
         assert!(r.next_frame()==layer_render::FrameDemand::Work,"the stroked display still refines");
         let mut presenter = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba32Float,
@@ -237,7 +237,7 @@ fn idle_refinement_presents_completion_and_never_holds_new_input() {
         }
         assert!(r.next_frame()!=layer_render::FrameDemand::Work);
         let cache=r.scale_display.as_ref().unwrap();
-        assert!(cache.coverage_snapshot().ready(cache.plan.bounds,pages::Accuracy::Display));
+        assert!(cache.window_coverage_snapshot().ready(cache.plan.bounds,pages::Accuracy::Display));
         presenter.present(&r, &target, frame.view, [0.; 4]).unwrap();
         assert!(!presenter.needs_present(&r, frame.view, [0.; 4]));
         let retained = crate::layer_tests::page_bytes(&r, target.texture());

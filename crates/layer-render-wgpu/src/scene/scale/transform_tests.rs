@@ -667,22 +667,25 @@ fn retained_committed_pages_are_independent_of_mutable_source_pixels() {
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
     crate::test_support::submit_settled(&mut r, frame);
     super::prepare_layer_pages(&mut r, frame);
-    let retained = r.scale_display.as_ref().unwrap().pages.clone();
-    let pages = retained.lock().unwrap().retained_pages().into_iter().filter(|page|page.key.source.is_none()).collect::<Vec<_>>();
-    assert!(!pages.is_empty());
-    let before: Vec<_> = pages.iter().map(|page| pixels(&r, &page.texture)).collect();
+    let cache=r.scale_display.as_ref().unwrap();
+    assert!(cache.has_exact_window());
+    let committed=cache.pixels.committed_root().unwrap();
+    assert!(!committed.submission().discarded());
+    let pages=[committed.image().texture.clone()];
+    let before: Vec<_> = pages.iter().map(|page| pixels(&r,page)).collect();
     assert!(before.iter().flatten().flatten().any(|value| *value != 0.));
     let sources: Vec<_> = r.scene.as_ref().unwrap().scale_sources.entries.keys()
         .flat_map(|id| source_textures(&r,*id,None)).collect();
     assert!(!sources.is_empty());
     for source in sources {
-        assert!(pages.iter().all(|page| page.texture != source));
+        assert!(pages.iter().all(|page| *page != source));
         let bytes = texture_bytes(&source) / u64::from(source.width() * source.height());
         r.queue.write_texture(source.as_image_copy(), &vec![0; (u64::from(source.width()*source.height())*bytes) as usize],
             wgpu::TexelCopyBufferLayout {offset:0,bytes_per_row:Some(source.width()*bytes as u32),rows_per_image:None}, source.size());
         assert!(pixels(&r, &source).iter().flatten().all(|value| *value == 0.));
     }
-    for (page, expected) in pages.iter().zip(before) { assert_eq!(pixels(&r, &page.texture), expected); }
+    for (page, expected) in pages.iter().zip(before) { assert_eq!(pixels(&r, page), expected); }
+    assert!(cache.pixels.committed_root().unwrap().submission().same(committed.submission()));
 }
 
 #[test]

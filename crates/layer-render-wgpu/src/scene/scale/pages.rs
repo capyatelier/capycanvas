@@ -2018,6 +2018,31 @@ impl Cache {
         Some((store,cells,template))
     }
     #[cfg(test)]
+    pub(crate) fn has_exact_window(&self)->bool {
+        self.window_coverage_snapshot().ready(self.plan.bounds,Accuracy::Exact)
+    }
+    #[cfg(test)]
+    pub(super) fn window_coverage_snapshot(&self)->Coverage {
+        let mut coverage=Coverage::new(self.plan.level);
+        let Some(root)=self.pixels.committed_root() else {return coverage;};
+        let Some(published)=crate::test_support::published_coverage(crate::test_support::coverage_hash(&self.geometry)) else {return coverage;};
+        if published.plan!=self.plan || published.receipt!=root.submission.observation_id() {return coverage;}
+        let Some((store,cells,_))=self.cells() else {return coverage;};
+        let Some(frame)=store.expected() else {return coverage;};
+        for (index,(cell,coordinate)) in cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level)).enumerate() {
+            if !published.written.get(index/32).is_some_and(|word|word&(1<<(index%32))!=0) || !cell.written() {continue;}
+            coverage.written.entries.insert(coordinate);
+            let area=bounds(coordinate,self.plan.level,self.plan.extent).intersect(self.plan.bounds);
+            let Some(shown)=cell.shown.as_ref().filter(|shown|!shown.submission.discarded()) else {continue;};
+            if !cell.queued && cell.current {
+                let matches=shown.recorded.as_ref().filter(|recorded|recorded.written.intersect(area)==area)
+                    .and_then(|recorded|recorded.matches(frame,self.required_input_level()));
+                coverage.include(coordinate,matches,shown.exact);
+            }
+        }
+        coverage
+    }
+    #[cfg(test)]
     pub(super) fn coverage_snapshot(&self)->Coverage {
         let mut coverage=Coverage::new(self.plan.level);
         let Some((store,_cells,template))=self.cells() else {return coverage;};

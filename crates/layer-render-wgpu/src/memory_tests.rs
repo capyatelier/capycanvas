@@ -3022,7 +3022,8 @@ fn a_single_layer_photo_settles_with_no_retained_level_zero_exact_pages() {
     let doc=single_layer_document(8);
     let mut r=renderer(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(8<<30),..Default::default()}).unwrap();
     settle_observing(&mut r,fit_view(&doc,512),|_|{});
-    assert!(crate::scene::scale::composite_pages_at(&r,1)>0,"the photo settles exact at the reduced levels");
+    let cache=r.scale_display.as_ref().unwrap();
+    assert!(cache.plan.level>0 && cache.has_exact_window(),"the photo settles exact at the reduced view level");
     assert_eq!(crate::scene::scale::composite_pages_at(&r,0),0,"a single-layer photo keeps no level-0 exact pages once its cells reduce");
 }
 
