@@ -189,6 +189,9 @@ pub(crate) struct NativeJob {
 impl NativeJob {
     const TIMING_PASSES: usize = 4;
     pub fn complete(&self) -> bool { self.started && self.encoded == self.inputs.len() }
+    pub fn publishes(&self, target: SourceTarget, revision: u64) -> bool {
+        self.frame.publications.iter().any(|publication| publication.id == target && publication.revision.identity() == revision)
+    }
     fn remaining(&self) -> (u64, u64) {
         self.inputs[self.encoded..].iter().map(|(_,tile,_)|tile_output_bytes(tile)).fold((0,0),|(bytes,largest),size|(bytes.saturating_add(size),largest.max(size)))
     }

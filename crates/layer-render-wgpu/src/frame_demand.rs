@@ -175,7 +175,9 @@ impl WgpuRasterizer {
             ("effect analysis", self.analysis_dirty.then_some(Runnable)),
             ("transform damage", (!self.transform_damage.is_empty()).then_some(Runnable)),
             ("document damage", (!self.document_damage.is_empty()).then_some(Runnable)),
-            ("settling", self.settling.is_some().then_some(if self.settling_ready() { Runnable } else { Blocked(Input::Gpu) })),
+            ("settling", self.settling.as_ref().map(|pending| if !self.settling_ready() { Blocked(Input::Gpu) }
+                else if self.retouch.as_ref().is_some_and(|retouch| retouch.heal_pending()) || pending.capture.as_ref().is_some_and(|capture| !capture.complete()) { Runnable }
+                else { Outstanding::either(self.held_frame.as_ref().and_then(|wait| wait.demand(self)), self.restore_preparation()).unwrap_or(Runnable) })),
             ("retouch sources", self.retouch.as_ref().and_then(|retouch| Outstanding::either(retouch.refused_room(self), gated(retouch.pending())))),
             ("navigator", self.navigator.outstanding(self).map(|state| match objects { Some(Blocked(input)) => Blocked(input), _ => state })),
             ("floor", crate::scene::scale::Floor::demand(self)),

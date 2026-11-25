@@ -4540,12 +4540,17 @@ impl WgpuRasterizer {
             self.telemetry.submitted(&self.queue);
             self.settling = Some(pending);
         } else {
-            let mut packet = pending.frame.packet(self.document_extent);
+            let frame = pending.frame.clone();
+            let mut packet = frame.packet(self.document_extent);
             packet.view = view;
             packet.composite_all = pending.capture.is_none();
+            self.settling = Some(pending);
+            if !self.raster_dependencies_ready(packet, None) || self.lane_exhausted() { return Ok(()); }
+            let Some(mut pending) = self.settling.take() else { return Ok(()); };
             let native = pending.capture.take().map(|capture| capture.frame);
-            self.begin_frame_memory(packet);
-            self.submit_frame(packet, native)?;
+            let result = self.submit_frame(packet, native);
+            debug_assert!(!result.as_ref().is_err_and(GpuRasterError::is_preparation_pending), "a ready settlement must not defer preparation during submission");
+            result?;
             self.release_unused_retouch();
         }
         Ok(())
@@ -4605,7 +4610,7 @@ impl WgpuRasterizer {
         self.fill_preview_shown.as_ref().filter(|(_,receipt)|!receipt.discarded()).map(|(key,_)|*key)
     }
     fn retained_transition_frame(&self, packet: FramePacket<'_>, preview: Option<&layer_render::TransformPreview>) -> bool {
-        self.canvas_transition.drawing.is_some() && self.presentation.showing && self.presentation.navigator && !self.analysis_dirty
+        self.settling.is_none() && self.canvas_transition.drawing.is_some() && self.presentation.showing && self.presentation.navigator && !self.analysis_dirty
             && self.empty_artwork_frame(packet, preview)
             && self.document_damage.is_empty()
     }

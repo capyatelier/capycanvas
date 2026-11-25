@@ -1047,6 +1047,75 @@ fn abandoned_native_frame_fails_roots_and_tile_waiters_without_submitting_edits(
 }
 
 #[test]
+fn a_settlement_keeps_its_completed_capture_until_its_frame_restores_and_then_publishes_once() {
+    let color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
+    let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
+    let mut layers = paint_document([PAGE_SIZE * 4, PAGE_SIZE], "settled capture");
+    set_color(&mut layers, color);
+    let id = target(&layers);
+    let descriptor = RasterPlane::Color.descriptor(color);
+    let tiles = (0..4u32).map(|x| {
+        let bytes: Vec<u8> = (0..PAGE_SIZE.pow(2)).flat_map(|pixel| (0..descriptor.channels).flat_map(move |channel|
+            (if channel == 3 { 17 } else { pixel.wrapping_mul(11 + x + channel as u32) } as u16).to_le_bytes())).collect();
+        (TileKey { plane: RasterPlane::Color, coordinate: [x, 0] }, RasterTile::backed(TileBlob::encode(descriptor, &bytes).unwrap()))
+    }).collect();
+    paint_mut(&mut layers).raster = RasterRevision::backed(RasterData { tiles, watercolor: None });
+    let before = backing(&paint(&layers).raster);
+    crate::test_support::submit_ready(&mut r, packet(&layers, true)).unwrap();
+    let dab = |page: u32| layer_render::Dab { center: layer_core::Point { x: (page * PAGE_SIZE + PAGE_SIZE / 2) as f32, y: (PAGE_SIZE / 2) as f32 },
+        ..crate::layer_tests::dab([0.25, 0.5, 0.75, 1.]) };
+    let preview = |dab: &layer_render::Dab| DabBatch { kind: DabBatchKind::Preview, stroke_id: layer_core::StrokeId(2), stroke_end: false,
+        ..crate::test_support::dab_batch(id, crate::tests::test_style(BrushExecution::Dry), dab.bounds()) };
+    let near = [dab(0)];
+    let near_preview = [preview(&near[0])];
+    crate::test_support::submit_ready(&mut r, FramePacket { dabs: &near, dab_batches: &near_preview, ..packet(&layers, false) }).unwrap();
+    rewrite_native_inputs(&mut r, id);
+    paint_mut(&mut layers).raster = RasterRevision::pending();
+    let root = paint(&layers).raster.clone();
+    while !r.raster_ready() { std::thread::yield_now(); }
+    reconcile(&mut r, packet(&layers, false), &[]);
+    let far = [dab(3)];
+    let far_preview = [preview(&far[0])];
+    let frame = FramePacket { dabs: &far, dab_batches: &far_preview, ..packet(&layers, false) };
+    let (entered, entered_rx) = std::sync::mpsc::channel();
+    let (release, release_rx) = std::sync::mpsc::channel::<()>();
+    r.compilation.enqueue(crate::startup::DOCUMENT, move || { entered.send(()).unwrap(); let _ = release_rx.recv(); Ok(()) });
+    entered_rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+    r.scene_pipelines.source = crate::scene::Pipelines::new(&r.device).source;
+    r.set_preparation_wake(Arc::new(|| {}));
+    r.wait_idle().unwrap();
+    r.settling = Some(crate::artwork::PendingFrame { frame: Arc::new(crate::artwork::Frame::new(frame, Default::default())), view: frame.view,
+        operation: layer_core::StrokeId(1), capture: None });
+    let submissions = r.metrics.submissions;
+    let captured = |r: &WgpuRasterizer| r.settling.as_ref().and_then(|pending| pending.capture.as_ref()).is_some_and(|capture| capture.complete());
+    wait_until("the settlement completes its capture", || {
+        r.poll_pending(frame.view).unwrap();
+        r.wait_idle().unwrap();
+        if captured(&r) { Ok(()) } else { Err(()) }
+    });
+    for _ in 0..3 {
+        r.poll_pending(frame.view).unwrap();
+        r.wait_idle().unwrap();
+        assert!(captured(&r), "the waiting settlement keeps its completed capture");
+        assert_eq!(r.metrics.submissions, submissions, "the waiting settlement submits nothing");
+        assert!(root.try_data().is_none(), "the waiting settlement keeps its authored root pending");
+    }
+    assert_eq!(r.restore_preparation(), Some(crate::frame_demand::Outstanding::Blocked(crate::frame_demand::Input::Compile)),
+        "the settlement waits on its frame's restore");
+    assert_ne!(r.next_frame(), layer_render::FrameDemand::Work, "the waiting settlement sleeps on its restore instead of asking for frames");
+    release.send(()).unwrap();
+    wait_until("the settlement publishes", || {
+        r.poll_pending(frame.view).unwrap();
+        r.wait_idle().unwrap();
+        if r.settling.is_none() { Ok(()) } else { Err(()) }
+    });
+    assert_eq!(r.metrics.submissions, submissions + 1, "the settlement publishes once");
+    assert!(r.restore_preflight.as_ref().is_some_and(|restore| restore.native.is_none()), "the completed capture is admitted instead of a second one");
+    assert!(r.take_refused_stroke().is_none(), "the settlement refuses no stroke");
+    assert_eq!(backing(&root), before, "the published root keeps every authored tile");
+}
+
+#[test]
 fn srgb8_codes_and_coverage_are_independent_through_native_publication() {
     use layer_core::color::{AlphaAssociation, TransferEncoding};
     let color = DocumentColor::default();

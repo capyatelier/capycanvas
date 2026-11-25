@@ -388,6 +388,7 @@ pub(crate) struct RestorePreflight {
     key:Key,
     commit:Option<paint_transform::PreparedTransformCommit>,
     pub(crate) native:Option<super::native_edit::NativeAdmission>,
+    awaits_capture:bool,
     targets:Vec<Option<TargetRestore>>,
     failure:Option<GpuRasterError>,
     consumed:bool,
@@ -412,6 +413,7 @@ impl RestorePreflight {
     }
     fn new(r:&mut WgpuRasterizer,key:Key,requests:Vec<Request>,originals:Vec<TargetRestore>,commit:Option<paint_transform::PreparedTransformCommit>,transforms:Vec<((SourceTarget,u32),paint_transform::Plan)>)->Self {
         let mut targets=Vec::new();let mut failure=None;
+        let awaits_capture=matches!(&key,Key::Frame {roots,..} if r.roots_await_capture(roots));
         let restored=match &key {Key::Frame {restored,..}=>restored.as_slice(),Key::Originals {..}|Key::Direct {..}=>&[]};
         for request in requests {
             match TargetRestore::new(r,request,commit.as_ref(),restored) {
@@ -421,7 +423,7 @@ impl RestorePreflight {
         }
         if let Key::Frame {outputs,fresh_starts,reset,clear_starts,..}=&key {for target in targets.iter_mut().flatten() {target.add_outputs(r,outputs,fresh_starts,*reset,*clear_starts,commit.as_ref(),restored);}}
         targets.extend(originals.into_iter().map(Some));
-        Self {key,commit,native:None,targets,failure,consumed:false,starts:Vec::new(),transforms,preview:None,originals:None,refused:None,wait:Default::default(),prefix:None,footprint:0}
+        Self {key,commit,native:None,awaits_capture,targets,failure,consumed:false,starts:Vec::new(),transforms,preview:None,originals:None,refused:None,wait:Default::default(),prefix:None,footprint:0}
     }
     fn complete(&self)->bool {self.failure.is_some() || self.targets.iter().flatten().all(TargetRestore::complete)}
     fn waiting(&self)->bool {!self.complete() || self.failure.is_none() && self.refused.is_some()}
@@ -767,8 +769,7 @@ impl WgpuRasterizer {
     }
     fn closing_footprint(&self,scene:SceneView<'_>,finishes:bool)->u64 {
         let Some(restore)=&self.restore_preflight else {return 0;};
-        let pending=matches!(&restore.key,Key::Frame {roots,..} if roots.iter().any(|root|root.published.is_none()));
-        let capture=if self.native_edit.is_some() && restore.native.is_none() && pending {self.closing_capture(scene,restore.outputs())}else {0};
+        let capture=if self.native_edit.is_some() && restore.native.is_none() && restore.awaits_capture {self.closing_capture(scene,restore.outputs())}else {0};
         if !finishes {return capture;}
         let projected=self.projected_restore_bytes();
         if projected==u64::MAX {return capture;}
@@ -1203,7 +1204,7 @@ impl WgpuRasterizer {
             self.refresh_memory_limits();return self.restore_ready();}
         self.retire_restore();
         let commit=match self.transforms.as_ref().unwrap().prepare_commit(self,packet) {
-            Ok(commit)=>commit,Err(error)=>{self.restore_preflight=Some(RestorePreflight {key,commit:None,native:None,targets:Vec::new(),failure:Some(error),consumed:false,starts:Vec::new(),transforms,preview:None,originals:None,refused:None,wait:Default::default(),prefix:None,footprint:0});return true;},
+            Ok(commit)=>commit,Err(error)=>{self.restore_preflight=Some(RestorePreflight {key,commit:None,native:None,awaits_capture:false,targets:Vec::new(),failure:Some(error),consumed:false,starts:Vec::new(),transforms,preview:None,originals:None,refused:None,wait:Default::default(),prefix:None,footprint:0});return true;},
         };
         let mut requests=Vec::new();
         for (target,scene) in retained {
@@ -1250,9 +1251,8 @@ impl WgpuRasterizer {
         self.restore_preflight.as_ref().is_some_and(|restore|restore.failure.is_some())
     }
     fn prepare_native_admission_for_frame(&mut self,packet:FramePacket<'_>)->bool {
-        if self.native_edit.is_none() || self.restore_preflight.as_ref().is_some_and(|restore|restore.native.is_some()) {return true;}
+        if self.native_edit.is_none() || self.restore_preflight.as_ref().is_some_and(|restore|restore.native.is_some() || !restore.awaits_capture) {return true;}
         let outputs=match self.restore_preflight.as_ref().map(|restore|&restore.key) {
-            Some(Key::Frame {roots,..}) if roots.iter().all(|root|root.published.is_some())=>return true,
             Some(Key::Frame {outputs,..})=>outputs.clone(),_=>return true,
         };
         match self.prepare_native_admission(packet.scene,&outputs) {
@@ -1260,6 +1260,10 @@ impl WgpuRasterizer {
             Err(error) if error.is_preparation_pending()=>false,
             Err(error)=>{self.restore_preflight.as_mut().unwrap().failure=Some(error);true},
         }
+    }
+    fn roots_await_capture(&self,roots:&[FrameRoot])->bool {
+        let settled=self.settling.as_ref().and_then(|pending|pending.capture.as_ref());
+        roots.iter().any(|root|root.published.is_none() && !settled.is_some_and(|job|job.publishes(root.target,root.revision)))
     }
     pub(crate) fn has_transform_commit(&self)->bool {self.restore_preflight.as_ref().is_some_and(|restore|restore.commit.is_some())}
     pub(crate) fn take_transform_commit(&mut self)->Option<paint_transform::PreparedTransformCommit> {self.restore_preflight.as_mut()?.commit.take()}
