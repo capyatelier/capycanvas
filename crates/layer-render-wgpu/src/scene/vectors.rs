@@ -285,10 +285,10 @@ fn derive_together(paths: &[&PathItem], frame: &Frame, geometry: &mut [LevelGeom
     if paths.len() <= lane { return derive(paths, geometry); }
     std::thread::scope(|scope| for (paths, geometry) in paths.chunks(lane).zip(geometry.chunks_mut(lane)) { scope.spawn(move || derive(paths, geometry)); });
 }
-fn derive_off_thread(paths: Vec<(u32, PathItem)>, frame: Frame) -> std::sync::mpsc::Receiver<Baked> {
+fn derive_off_thread(paths: Vec<(u32, PathItem)>, frame: Frame, wake: Option<crate::residency::Wake>) -> std::sync::mpsc::Receiver<Baked> {
     let (send, results) = std::sync::mpsc::channel();
     let lanes = derive_lanes();
-    std::thread::Builder::new().name("capy-vector-bake".into()).spawn(move || std::thread::scope(|scope| {
+    std::thread::Builder::new().name("capy-vector-bake".into()).spawn(move || { std::thread::scope(|scope| {
         for lane in paths.chunks(paths.len().div_ceil(lanes).max(1)) {
             let send = send.clone();
             scope.spawn(move || {
@@ -303,7 +303,7 @@ fn derive_off_thread(paths: Vec<(u32, PathItem)>, frame: Frame) -> std::sync::mp
                 }
             });
         }
-    })).expect("vector bake worker");
+    }); drop(send); if let Some(wake) = wake { wake(); } }).expect("vector bake worker");
     results
 }
 /// The paths a motion moves, compared by identity.
@@ -395,7 +395,7 @@ impl Vectors {
     /// Whether every path baking `owner` within `extent` draws has its
     /// full-resolution geometry. The rest is derived off the canvas thread, or
     /// within the frame's derivation time where there are no threads.
-    pub fn bake_ready(&mut self, scene: SceneView<'_>, owner: OccurrenceHandle, extent: [u32; 2], palette: (layer_core::color::RgbSpace, layer_core::BlendSpace)) -> bool {
+    pub fn bake_ready(&mut self, scene: SceneView<'_>, owner: OccurrenceHandle, extent: [u32; 2], palette: (layer_core::color::RgbSpace, layer_core::BlendSpace), wake: Option<&crate::residency::Wake>) -> bool {
         let (Some(handle), Some(object)) = (scene.vector_handle(owner), scene.vector_layer(owner)) else { return true };
         let offset = scene.occurrence_offset64(owner);
         let integer = offset.map(|v| v as i64);
@@ -430,10 +430,12 @@ impl Vectors {
         if cfg!(target_arch = "wasm32") {
             let deadline = web_time::Instant::now() + DERIVE_TIME;
             let LayerCache { items, derived_bytes, derived_paths, .. } = layer;
-            return missing.into_iter().all(|(slot, _)| web_time::Instant::now() < deadline
+            let derived = missing.into_iter().all(|(slot, _)| web_time::Instant::now() < deadline
                 && { items[slot as usize].as_mut().unwrap().derived_at(0, integer, &frame, derived_bytes, derived_paths); true });
+            self.deferred |= !derived;
+            return derived;
         }
-        self.baking.push(Baking { key, results: derive_off_thread(missing, frame) });
+        self.baking.push(Baking { key, results: derive_off_thread(missing, frame, wake.cloned()) });
         false
     }
     /// Paths the canvas thread derived or waited for.
@@ -926,7 +928,7 @@ impl WgpuRasterizer {
     /// Whether the vector layers of the drawing's pending bakes have the
     /// geometry their full-resolution tiles draw.
     pub(crate) fn bake_vectors_ready(&mut self, packet: FramePacket<'_>) -> bool {
-        let working = self.device.working_space();
+        let (working, wake) = (self.device.working_space(), self.preparation_wake.clone());
         let Some(scene) = self.scene.as_mut() else { return true };
         let mut ready = true;
         for target in crate::source_access::placed_targets(packet.scene) {
@@ -936,7 +938,7 @@ impl WgpuRasterizer {
                 let view = snapshot.view().with_scope(scope).with_offset(*offset);
                 let extent = packet.scene.target_extent(target);
                 for &owner in view.order().iter().filter(|owner| view.vector_layer(**owner).is_some() && view.visible(**owner)) {
-                    ready &= scene.vectors.bake_ready(view, owner, extent, (working, view.composition().blend));
+                    ready &= scene.vectors.bake_ready(view, owner, extent, (working, view.composition().blend), wake.as_ref());
                 }
             }
         }

@@ -8,9 +8,7 @@ pub(super) struct BrushStamps {
     layout: wgpu::BindGroupLayout,
     pipeline_layout: wgpu::PipelineLayout,
     pipelines: Vec<(u32, Deferred<wgpu::ComputePipeline>)>,
-    pending: Option<wgpu::Buffer>,
-    tx: mpsc::Sender<Result<ReadbackImage, GpuRasterError>>,
-    rx: crate::frame_demand::Delivery<Result<ReadbackImage, GpuRasterError>>,
+    pending: Option<(wgpu::Buffer, crate::frame_demand::Delivery<ReadbackImage>)>,
 }
 
 fn shader_source(flags:u32) -> Cow<'static,str> {
@@ -28,8 +26,7 @@ impl BrushStamps {
         let pipeline_layout=r.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label:Some("brush stamp"),bind_group_layouts:&[Some(&layout),Some(&r.advanced_texture_layout)],immediate_size:0,
         });
-        let (tx,rx)=crate::frame_demand::Delivery::channel();
-        Self {layout,pipeline_layout,pipelines:Vec::new(),pending:None,tx,rx}
+        Self {layout,pipeline_layout,pipelines:Vec::new(),pending:None}
     }
 
     fn request(&mut self,r:&mut WgpuRasterizer,id:u64,request:&BrushStampRequest)->Result<bool,GpuRasterError> {
@@ -101,10 +98,10 @@ impl BrushStamps {
         }
         encoder.copy_buffer_to_buffer(&output,0,&readback,0,size);
         r.last_submission=encoder.submit(&r.queue);
-        let tx=self.tx.clone();
+        let (tx,delivery)=crate::frame_demand::Delivery::channel(r.device.loss());
         raster::map_then(&r.device,None,&readback,size,move|data|Ok(ReadbackImage {request_id:id,width,height,stride:width,bytes:data.to_vec()}),
             move|result|{let _=tx.send(result);});
-        self.pending=Some(readback);
+        self.pending=Some((readback,delivery));
         Ok(true)
     }
 }
@@ -115,10 +112,10 @@ impl WgpuRasterizer {
         let result=stamps.request(self,id,request);self.brush_stamps=Some(stamps);result
     }
     pub(super) fn brush_stamp_pending(&self)->bool {self.brush_stamps.as_ref().is_some_and(|stamps|stamps.pending.is_some())}
-    pub(super) fn brush_stamp_ready(&self)->bool {self.brush_stamps.as_ref().is_some_and(|stamps|stamps.pending.is_some() && stamps.rx.arrived())}
+    pub(super) fn brush_stamp_ready(&self)->bool {self.brush_stamps.as_ref().is_some_and(|stamps|stamps.pending.as_ref().is_some_and(|(_,delivery)|delivery.arrived()))}
     pub(super) fn poll_brush_stamp(&mut self)->Option<Result<ReadbackImage,GpuRasterError>> {
         let stamps=self.brush_stamps.as_mut()?;
-        let result=stamps.rx.try_recv().ok()?;stamps.pending=None;Some(result)
+        let result=stamps.pending.as_ref()?.1.take()?;stamps.pending=None;Some(result)
     }
 }
 

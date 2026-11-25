@@ -30,6 +30,7 @@ impl Drop for Factory {
 pub(crate) fn fixture_factory(hardware: &RendererFactory, budget: layer_core::MemoryBudget, facts: layer_core::DeviceMemoryFacts) -> RendererFactory {
     let memory_device = budget.register_device(facts);
     let mut shared = hardware.0.shared.clone();
+    shared.loss = Default::default();
     shared.transient_memory = Some(budget.register_owner(layer_core::MemoryOwnerKind::Other, layer_core::MemoryClass::Pinned, Some(memory_device)));
     #[cfg(not(target_arch = "wasm32"))]
     let memory=Arc::new(crate::memory_sample::fixture_sampler(budget.clone(), memory_device));
@@ -88,6 +89,7 @@ impl RendererFactory {
     pub fn adapter(&self) -> &wgpu::Adapter { &self.0.adapter }
     pub(super) fn adapter_summary(&self) -> Arc<layer_render::GpuAdapter> { self.0.adapter_summary.clone() }
     pub fn device(&self) -> &wgpu::Device { &self.0.device }
+    pub fn on_device_lost(&self) -> impl Fn(String) + Send + Sync + 'static { let loss = self.0.shared.loss.clone(); move |message| loss.report(message) }
     pub fn memory_device(&self) -> layer_core::MemoryDevice { self.0.memory_device }
     pub fn queue(&self) -> &wgpu::Queue { &self.0.queue }
     pub fn submit(&self,commands:impl IntoIterator<Item=wgpu::CommandBuffer>)->Option<wgpu::SubmissionIndex> {

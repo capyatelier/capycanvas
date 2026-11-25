@@ -246,12 +246,11 @@ impl Scene {
         use crate::frame_demand::Input;
         if self.vectors_deferred() { return Some(crate::frame_demand::Outstanding::Runnable); }
         let compiling = || !r.scene_pipelines.objects.pipelines().into_iter().chain([&r.scene_pipelines.constant.2]).all(|pipeline| pipeline.ready());
-        let waits = |input, since| match input {
+        let waits = |input| match input {
             Input::Compile => compiling(),
-            Input::Residency | Input::Name => !r.arrived_since(since),
             input => r.waits_on(input),
         };
-        crate::frame_demand::Outstanding::either(self.object_results.demand(waits), self.exact_object_results.demand(waits))
+        crate::frame_demand::Outstanding::either(self.object_results.demand(r, waits), self.exact_object_results.demand(r, waits))
     }
     pub(crate) fn objects_in_flight(&self) -> bool { self.object_results.in_flight() || self.exact_object_results.in_flight() }
     pub(crate) fn object_edit_damage(before: SceneView<'_>, after: SceneView<'_>, extent: [u32; 2]) -> Option<scale::Damage> {
@@ -455,7 +454,7 @@ pub(crate) fn decode_prepared_for(r:&mut WgpuRasterizer,encoder:&mut crate::subm
     source:&Arc<SourceImage>,coordinate:[u32;2],pixels:sources::PreparedSourcePixels,use_:sources::SourceUse,class:Class,
 )->Result<crate::source_access::RawTile,GpuRasterError> {
     let mut requested=sources::Inputs::default();requested.image_for(source,coordinate,r.document_color().space,use_);
-    let inputs=requested.accept_query(r,None)?;
+    let inputs=requested.accept_query(r,None,crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh)?;
     let read=sources::accepted_image(&inputs,source,coordinate)?;
     encode_prepared(r,encoder,inputs,read,pixels,class)
 }
@@ -465,7 +464,7 @@ pub(crate) fn decode_prepared_raster(r: &mut WgpuRasterizer, encoder: &mut crate
     pixels: sources::PreparedSourcePixels, class: Class,
 ) -> Result<crate::source_access::RawTile, GpuRasterError> {
     let mut requested=sources::Inputs::default();requested.raster_for(blob.clone(),space,destination,sources::SourceUse::Native);
-    let inputs=requested.accept_query(r,None)?;
+    let inputs=requested.accept_query(r,None,crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh)?;
     let read=sources::accepted_raster(&inputs,blob,space,destination)?;
     encode_prepared(r,encoder,inputs,read,pixels,class)
 }

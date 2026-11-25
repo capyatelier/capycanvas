@@ -196,10 +196,12 @@ impl RegionTools {
         self.cancel();
         self.pending = false;
     }
-    pub fn busy(&self) -> bool {
-        self.trace.is_some() || self.pending || self.queued.is_some() || self.reveal.is_some() || self.rollback.is_some() || self.preview_active && self.gesture.is_none()
+    pub fn busy(&self) -> bool { self.pending || self.runnable() }
+    pub fn runnable(&self) -> bool {
+        self.trace.is_some() || self.queued.is_some() && !self.pending || self.reveal.is_some() || self.rollback.is_some() || self.preview_active && self.gesture.is_none()
             || self.gesture.as_ref().is_some_and(|gesture|!gesture.released && !gesture.holding() && gesture.tool!=layer_engine::ToolKind::Finger)
     }
+    pub fn requesting(&self) -> bool { self.pending || self.queued.is_some() }
     pub fn publishing_edit(&self) -> bool {
         self.trace.is_some() || self.gesture.is_some() || self.target.as_ref().is_some_and(|t| matches!(t.purpose, Purpose::Region { .. }|Purpose::Trace {..}|Purpose::FlatAreas))
     }

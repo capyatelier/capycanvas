@@ -45,17 +45,17 @@ fn scratch_cap_and_idle_trim_preserve_leased_pages_and_format_reuse() {
     let first = scene.own(first);
     let second = scene.reserve(&r).unwrap();
     let second = scene.own(second);
-    assert!(matches!(scene.reserve(&r), Err(GpuRasterError::NotReady)));
+    assert!(matches!(scene.reserve(&r), Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
     let texture = scene.pool[first.index].texture.clone();
     let reusable = second.index;
     drop(second);
     let reused = scene.reserve(&r).unwrap();
     assert_eq!(reused, reusable);
     scene.free(reused);
-    assert!(matches!(scene.reserve_format(&r, true), Err(GpuRasterError::NotReady)));
+    assert!(matches!(scene.reserve_format(&r, true), Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
     let retired = scene.trim_scratch(1);
     assert_eq!(retired.len(), 1);
-    assert!(matches!(scene.reserve_format(&r, true), Err(GpuRasterError::NotReady)), "a retiring page stays charged until it drops");
+    assert!(matches!(scene.reserve_format(&r, true), Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))), "a retiring page stays charged until it drops");
     drop(retired);
     let scalar = scene.reserve_format(&r, true).unwrap();
     let scalar = scene.own(scalar);
@@ -79,7 +79,7 @@ fn display_scratch_rejects_an_unadmitted_image_before_allocation() {
     let (mut cache,_) = Cache::select(None, &r, frame, request);
     let mut oversized = plan;
     oversized.size = [8192;2];
-    assert!(matches!(cache.allocate(&r, oversized), Err(GpuRasterError::NotReady)));
+    assert!(matches!(cache.allocate(&r, oversized), Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
     assert!(cache.output.is_empty());
 }
 
@@ -168,7 +168,7 @@ fn exhausted_overview_scratch_retires_incompatible_capacity_before_resuming() {
     drop(cache.allocate(&r, small).unwrap());
     let mut next = small;
     next.size[0] *= 2;
-    assert!(matches!(cache.allocate(&r, next), Err(GpuRasterError::NotReady)));
+    assert!(matches!(cache.allocate(&r, next), Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
     let (mut outer,_) = Cache::select(None, &r, frame, Request {plan,evaluation:Evaluation::Native});
     outer.overview = Some(Box::new(cache));
     r.scale_display = Some(outer);
@@ -177,7 +177,7 @@ fn exhausted_overview_scratch_retires_incompatible_capacity_before_resuming() {
     assert!(r.scale_display.as_ref().unwrap().overview.as_ref().unwrap().output.is_empty());
     assert_eq!(r.retired_display_bytes.used(), crate::memory::CACHE_BYTES - page_bytes);
     let mut cache = r.scale_display.take().unwrap().overview.take().unwrap();
-    assert!(matches!(cache.allocate(&r, next), Err(GpuRasterError::NotReady)));
+    assert!(matches!(cache.allocate(&r, next), Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
     r.last_submission = encoder.submit(&r.queue);
     r.wait_idle().unwrap();
     assert_eq!(r.retired_display_bytes.used(), crate::memory::CACHE_BYTES - 2 * page_bytes);

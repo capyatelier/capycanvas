@@ -145,7 +145,7 @@ impl WgpuRasterizer {
         assert!(N<=SOURCE_SLOTS);
         let declaration=scene::sources::Declaration::raw(preview,expected.cloned(),Some(encoder.submission()));
         let accepted=scene::sources::declare(Default::default(),declaration,|declaring|
-            self.raw_layer_neighborhood(declaring,layer,coordinate,offsets,None,encoder).map(drop))?.accept_query(self,None)?;
+            self.raw_layer_neighborhood(declaring,layer,coordinate,offsets,None,encoder).map(drop))?.accept_query(self,None,crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh)?;
         if !accepted.prepare(self)? {return Err(GpuRasterError::NotReady);}
         accepted.clone().track(encoder);
         Ok(accepted)
@@ -229,12 +229,14 @@ impl WgpuRasterizer {
         &mut self,
         layer: SourceTarget,
         coordinate: [u32; 2],
+        class: crate::residency::Class,
+        allowance: crate::frame_demand::Allowance,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<Option<Sampled<RawTile>>, GpuRasterError> {
         let read=|r:&WgpuRasterizer,accepted:&mut scene::sources::AcceptedInputs|if layer.is_coverage() {accepted.raw_scalar(r,layer,RasterPlane::Mask,coordinate)}
             else {accepted.raw_color(r,layer,coordinate).map(|[base,_]|base)};
         let declaration=scene::sources::Declaration::raw(None,None,Some(encoder.submission()));
-        let mut accepted=scene::sources::declare(Default::default(),declaration,|declaring|read(self,declaring).map(drop))?.accept_query(self,None)?;
+        let mut accepted=scene::sources::declare(Default::default(),declaration,|declaring|read(self,declaring).map(drop))?.accept_query(self,None,class,allowance)?;
         if !accepted.prepare(self)? {return Err(GpuRasterError::NotReady);}
         let read=read(self,&mut accepted)?;
         accepted.clone().track(encoder);
@@ -315,7 +317,7 @@ mod tests {
         let base = PaintBase {image:source.clone().into(),offset:[17,31],policy:Default::default()};
         let mut requested=scene::sources::Inputs::default();
         requested.base(&base,[1,1],r.document_color().space);
-        let inputs=requested.accept_query(&mut r,None).unwrap();
+        let inputs=requested.accept_query(&mut r,None,crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh).unwrap();
         let plan=scene::sources::accepted_base(&inputs,&base,[1,1]).unwrap().unwrap();
         assert_eq!(plan.pending.len(),4);
         drop((plan,inputs));

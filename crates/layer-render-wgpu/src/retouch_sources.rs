@@ -35,7 +35,7 @@ impl Page {
     }
     fn new(r:&WgpuRasterizer,held:residency::Reservation,label:&'static str)->Self {
         let (texture,view)=create_color_target(&r.device,[PAGE_SIZE;2],label);
-        let _charge=held.charge(texture_bytes(&texture));
+        let _charge=held.charge();
         Self {pixels:resident::Resident::unwritten(PageStorage {texture,view,_charge})}
     }
     fn read(&self,expected:&layer_core::raster::ContentVersion,consumer:Option<&submission::Submission>)->Result<resident::Read<'_,PageStorage>,GpuRasterError> {
@@ -136,7 +136,7 @@ impl ReferenceKey {
         let reference=reference_frame(frame,members);let packet=reference.packet(extent);
         let mut versions=crate::IdMap::default();
         for target in source_access::placed_targets(packet.scene) {match r.raster_versions(packet.scene,target) {
-            Ok(value)=>{versions.insert(target,value);},Err(GpuRasterError::NotReady)=>{},Err(error)=>return Err(error),
+            Ok(value)=>{versions.insert(target,value);},Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))=>{},Err(error)=>return Err(error),
         }}
         let input=scene::Input::from_declared(packet,versions.clone())?;
         Ok(Self {input,versions,members:members.clone(),extent,blend_space:frame.blend_space,scene:frame.scene.clone(),
@@ -172,6 +172,7 @@ struct ReferenceCache {
     clock: u64,
     analysis_job: Option<crate::effect_analysis::Job>,
     analyses: Option<Result<crate::effect_analysis::Candidate, String>>,
+    wait: crate::frame_demand::UnitWait,
 }
 impl ReferenceCache {
     fn validate(&mut self,r:&WgpuRasterizer,frame:&artwork::Frame,members:&Arc<BTreeSet<OccurrenceHandle>>,extent:[u32;2])->Result<(),GpuRasterError> {
@@ -214,19 +215,22 @@ impl ReferenceCache {
         self.slots[index].used = self.clock;
         Some(index)
     }
-    fn claim(&mut self, r: &WgpuRasterizer, coordinate: [u32; 2]) -> Result<usize, GpuRasterError> {
+    fn claim(&mut self, r: &WgpuRasterizer, coordinate: [u32; 2]) -> Result<Option<usize>, GpuRasterError> {
         self.clock += 1;
         let free = self.slots.iter().position(|s| s.coordinate.is_none() && !s.bound);
         let oldest = (0..self.slots.len()).filter(|&i| !self.slots[i].bound).min_by_key(|i| self.slots[*i].used);
         let index = match free {
             Some(index) => index,
-            None if self.slots.len() < REFERENCE_PAGES => match (Page::admit(r, residency::Class::Visible), oldest) {
-                (Err(_), Some(index)) => index,
-                (held, _) => {
-                    let page = Page::new(r, held.unwrap_or_else(residency::Blocked::overcommit), "retouch reference page");
+            None if self.slots.len() < REFERENCE_PAGES => match (self.wait.eligible(r).map(|_| Page::admit(r, residency::Class::Visible)), oldest) {
+                (Some(Ok(held)), _) => {
+                    self.wait = Default::default();
+                    let page = Page::new(r, held, "retouch reference page");
                     self.slots.push(Slot { page, coordinate: None, used: 0, bound: false });
                     self.slots.len() - 1
                 }
+                (_, Some(index)) => index,
+                (Some(Err(need)), None) => { self.wait = crate::frame_demand::UnitWait::parked(need, crate::frame_demand::Allowance::Fresh); return Ok(None); }
+                (None, None) => return Ok(None),
             },
             None => oldest.ok_or(GpuRasterError::Invariant("every reference page awaits its draw"))?,
         };
@@ -235,7 +239,7 @@ impl ReferenceCache {
         }
         self.slots[index].used = self.clock;
         self.pages.insert(coordinate,(index,layer_core::raster::ContentName::fresh().into()));
-        Ok(index)
+        Ok(Some(index))
     }
     fn room(&self, mapping: &Mapping) -> bool {
         let waiting = self.slots.iter().filter(|slot| slot.bound).count();
@@ -398,6 +402,10 @@ impl RetouchSources {
         self.pending || self.missed.is_some()
     }
 
+    pub fn refused_room(&self, r: &WgpuRasterizer) -> Option<crate::frame_demand::Outstanding> {
+        self.cache.wait.refusing().then(|| self.cache.wait.demand(r)).flatten()
+    }
+
     pub fn uncharged_bytes(&self) -> u64 {
         self.capture.storage_bytes() + self.heal.storage_bytes() + PARAMETER_BYTES
     }
@@ -527,7 +535,7 @@ impl RetouchSources {
         if blocking && !wait {
             return Ok(None);
         }
-        let slot = self.cache.claim(r, coordinate)?;
+        let Some(slot) = self.cache.claim(r, coordinate)? else { return Ok(None); };
         let (texture,_,encoding)=self.cache.slots[slot].page.destination(self.cache.pages[&coordinate].1.clone(),true,&encoder.submission())?;
         let previous = self.cache.analyses.as_ref().and_then(|result| result.as_ref().ok())
             .map(|candidate| std::mem::replace(&mut r.effect_analyses, candidate.entries.clone()));
@@ -562,7 +570,7 @@ impl RetouchSources {
             .is_ok_and(|current|current.matches(&expected)==Some(true)) {
             let packet=frame.packet(r.document_extent);let region=page_rect(coordinate).intersect(PixelRect::full(r.document_extent));
             if !wait && self.capture.would_block(r,packet,region) {return Ok(None);}
-            let slot=self.cache.claim(r,coordinate)?;
+            let Some(slot)=self.cache.claim(r,coordinate)? else {return Ok(None);};
             let (texture,_,encoding)=self.cache.slots[slot].page.destination(self.cache.pages[&coordinate].1.clone(),true,&encoder.submission())?;
             let mut complete=true;
             match self.capture.region_into(r,packet,region,&texture,encoder) {
@@ -579,7 +587,7 @@ impl RetouchSources {
         };
         let mut complete=true;
         let view=view.map(|view|view.take(&mut complete));
-        let slot = self.cache.claim(r, coordinate)?;
+        let Some(slot) = self.cache.claim(r, coordinate)? else { return Ok(None); };
         let (_,destination,encoding)=self.cache.slots[slot].page.destination(self.cache.pages[&coordinate].1.clone(),complete,&encoder.submission())?;
         match view {
             Some(view) => {
@@ -799,6 +807,7 @@ impl RetouchSources {
         }
         self.cache.validate(r,frame,&members,r.document_extent)?;
         if !self.cache.analysis_ready(r)? { self.pending = true; return Ok(()); }
+        if self.cache.wait.eligible(r).is_none() { return Ok(()); }
         if let Some((stroke, pages)) = self.waiting.take() {
             let mut missing = std::collections::BTreeSet::new();
             for coordinate in pages {
@@ -808,7 +817,7 @@ impl RetouchSources {
             }
             if !missing.is_empty() {
                 self.waiting = Some((stroke, missing));
-                self.pending = true;
+                self.pending = !self.cache.wait.refusing();
                 return Ok(());
             }
             self.missed = Some(stroke);
@@ -821,7 +830,7 @@ impl RetouchSources {
         for &coordinate in wanted.iter().take(if quiet { PREFETCH_PAGES } else { 0 }) {
             if self.capture_reference(r, coordinate, true, encoder)?.is_none() { break; }
         }
-        self.pending = wanted
+        self.pending = !self.cache.wait.refusing() && wanted
             .iter()
             .any(|c| !self.cache.pages.contains_key(c));
         if !self.pending {

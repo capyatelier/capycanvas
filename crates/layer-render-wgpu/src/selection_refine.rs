@@ -384,20 +384,16 @@ impl SelectionRefiner {
             }
         }
     }
-    pub fn prepare_bounds(&self, compiler: &compile::Scope) -> bool {
-        compiler.require([&self.pipelines[BOUNDS]], startup::BRUSH);
-        self.pipelines[BOUNDS].ready()
+    pub fn bounds_pipeline(&self) -> &Deferred<wgpu::ComputePipeline> {
+        &self.pipelines[BOUNDS]
     }
-    pub fn prepare<'a>(&self, compiler: &compile::Scope, stages: impl IntoIterator<Item = &'a Stage>, downsample: bool) -> bool {
+    pub fn stage_pipelines<'a>(&self, stages: impl IntoIterator<Item = &'a Stage>, downsample: bool) -> impl Iterator<Item = &Deferred<wgpu::ComputePipeline>> {
         let mut needed = [false, true, false, true, downsample];
         for stage in stages {
             needed[FEATHER] |= stage.feather > 0.;
             needed[RESIZE] |= stage.resize != 0;
         }
-        compiler.require(
-            self.pipelines.iter().zip(needed).filter(|(_, n)| *n).map(|(p, _)| p),
-            startup::BRUSH,
-        )
+        self.pipelines.iter().zip(needed).filter(|(_, n)| *n).map(|(p, _)| p)
     }
     /// A tonal mask is already antialiased byte coverage in document space.
     /// With no feather/combination it needs bounds, not another image allocation

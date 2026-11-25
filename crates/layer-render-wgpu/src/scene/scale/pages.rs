@@ -90,6 +90,28 @@ impl<'a> PresentedPage<'a> {
     pub fn stand_in_scale(&self)->f32 {self.stand_in.map_or(0.,|image|(1u32<<image.image.plan.level) as f32)}
     pub fn stand_in_perceptual(&self)->bool {self.stand_in.and_then(CommittedImage::whole)==Some(layer_core::BlendSpace::Perceptual)}
     pub fn geometry(&self)->&'a wgpu::Buffer {self.geometry}
+    #[cfg(test)]
+    pub(crate) fn storm_coverage(&self,view:layer_render::ViewState,stand_in_drawn:bool)->crate::test_support::StormCoverage {
+        let extent=self.images().next().map_or([0;2],|image|image.image.plan.extent);
+        let total=crate::test_support::storm_surface_area(PixelRect::full(extent),view);
+        let unknown=crate::test_support::StormCoverage {root:0.,presented:0.,total,known:false};
+        let root=match self.detail {
+            None=>0.,
+            Some([root,_])=>{
+                let Some(published)=crate::test_support::published_coverage(crate::test_support::coverage_hash(self.geometry)) else {return unknown;};
+                if published.receipt!=root.submission.observation_id() || published.pages!=root.pages.iter().map(|page|Arc::as_ptr(page.image()) as usize).collect::<Vec<_>>() {return unknown;}
+                coordinates(published.plan.bounds,published.plan.level).enumerate()
+                    .filter(|(index,_)|published.written.get(index/32).is_some_and(|word|word&(1<<(index%32))!=0))
+                    .map(|(_,coordinate)|crate::test_support::storm_surface_area(bounds(coordinate,published.plan.level,published.plan.extent).intersect(published.plan.bounds),view)).sum()
+            }
+        };
+        let presented=match self.stand_in.filter(|_|self.holes && stand_in_drawn) {
+            None=>root,
+            Some(stand_in) if stand_in.whole.is_some() && !stand_in.submission.discarded()=>total,
+            Some(_)=>return unknown,
+        };
+        crate::test_support::StormCoverage {root,presented,total,known:true}
+    }
 }
 impl Pixels {
     pub fn root(&self) -> Option<&Image> { self.root.as_ref().map(|window|&window.image) }
@@ -196,32 +218,16 @@ impl Cache {
             .map(|page|(crate::test_support::coverage_hash(&page.key),[page.written,page.current,page.exact])).collect::<Vec<_>>();
         state.sort_by_key(|(key,_)|*key);state
     }
-    #[cfg(test)]
-    pub(crate) fn storm_visible_coverage(&self,view:layer_render::ViewState)->[f64;4] {
-        let total=crate::test_support::storm_surface_area(PixelRect::full(self.plan.extent),view);
-        let Some(selected)=self.presentable() else {return [0.,total,0.,1.];};
-        let Some(root)=selected.pixels.committed_root() else {return [0.,total,0.,1.];};
-        let Some(published)=crate::test_support::published_coverage(crate::test_support::coverage_hash(&selected.geometry)) else {return [0.,total,0.,0.];};
-        if published.receipt!=root.submission.observation_id() || published.pages!=root.pages.iter().map(|page|Arc::as_ptr(page.image()) as usize).collect::<Vec<_>>() {return [0.,total,0.,0.];}
-        let mut covered=0.;
-        for (index,coordinate) in coordinates(published.plan.bounds,published.plan.level).enumerate() {
-            if published.written.get(index/32).is_some_and(|word|word&(1<<(index%32))!=0) {
-                let region=bounds(coordinate,published.plan.level,published.plan.extent).intersect(published.plan.bounds);
-                covered+=crate::test_support::storm_surface_area(region,view);
-            }
-        }
-        [covered,total,if total>0. {covered/total}else {0.},1.]
-    }
 
     #[cfg(test)]
     pub(crate) fn exact_cells(&self)->Vec<(PixelRect,bool)> {
-        let Some((cells,_store,_))=self.cells() else {return Vec::new();};
+        let Some((_store,cells,_))=self.cells() else {return Vec::new();};
         cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level))
             .map(|(cell,coordinate)|(bounds(coordinate,self.plan.level,self.plan.extent),!cell.queued && cell.shown.as_ref().is_some_and(|shown|shown.exact))).collect()
     }
     #[cfg(test)]
     pub(crate) fn shown_cells(&self)->Vec<([u32;2],Option<bool>)> {
-        let Some((cells,_store,_))=self.cells() else {return Vec::new();};
+        let Some((_store,cells,_))=self.cells() else {return Vec::new();};
         cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level)).map(|(cell,coordinate)| {
             let owed=!cell.derived && (cell.queued || !cell.current) || !cell.written();
             (coordinate,(!owed).then(||cell.derived || cell.shown.as_ref().is_some_and(|shown|shown.exact)))
@@ -229,7 +235,7 @@ impl Cache {
     }
     #[cfg(test)]
     pub(crate) fn mislabelled_cells(&self)->Vec<[u32;2]> {
-        let Some((cells,store,_))=self.cells() else {return Vec::new();};
+        let Some((store,cells,_))=self.cells() else {return Vec::new();};
         let Some(frame)=store.expected().cloned() else {return Vec::new();};
         let level=self.required_input_level();
         cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level))
@@ -239,14 +245,14 @@ impl Cache {
     }
     #[cfg(test)]
     pub(crate) fn shows_reduced(&self,region:PixelRect)->bool {
-        let Some((cells,_store,_))=self.cells() else {return false;};
+        let Some((_store,cells,_))=self.cells() else {return false;};
         let reached=Cells::reached(self.plan,region);
         !reached.is_empty() && reached.into_iter().all(|index|cells.cells[index].shown.as_ref().is_some_and(|shown|!shown.exact))
     }
     #[cfg(test)]
     pub(crate) fn storm_view_settled(&self,view:layer_render::ViewState)->Result<(),String> {
         let visible=display_mips::view_bounds(view,self.plan.extent,0).unwrap_or(PixelRect::EMPTY).intersect(self.plan.bounds);
-        let Some((cells,_store,_))=self.cells() else {return Err(String::from("the view has no cells"));};
+        let Some((_store,cells,_))=self.cells() else {return Err(String::from("the view has no cells"));};
         for coordinate in coordinates(visible,self.plan.level) {
             let cell=&cells.cells[Cells::index(self.plan,coordinate)];
             let exact=self.presented!=Accuracy::Exact || cell.shown.as_ref().is_some_and(|shown|shown.exact);
@@ -260,7 +266,7 @@ impl Cache {
     pub(crate) fn view_cells(&self)->u64 {coordinates(self.plan.bounds,self.plan.level).count() as u64}
     #[cfg(test)]
     pub(crate) fn presentable_pages(&self) -> usize {
-        usize::from(self.pixels.committed_root().is_some())*self.cells().map_or(0,|(cells,_,_)|cells.cells.iter().filter(|cell|cell.written()).count())
+        usize::from(self.pixels.committed_root().is_some())*self.cells().map_or(0,|(_,cells,_)|cells.cells.iter().filter(|cell|cell.written()).count())
             +self.overview.as_ref().map_or(0,|cache|cache.presentable_pages())
     }
     #[cfg(test)]
@@ -667,8 +673,61 @@ pub(in crate::scene) struct Store {
     moving:Vec<crate::scene::vectors::Moving>,
     #[cfg(not(target_arch="wasm32"))]
     retirement:Option<Retirement>,
+    #[cfg(not(target_arch="wasm32"))]
+    search:Option<crate::residency::Hold>,
+    retired:Retired,
+}
+#[cfg(not(target_arch="wasm32"))]
+#[derive(Default)]
+struct Retired(Option<crate::device_poll::RetirementHandle>,Vec<(Arc<Image>,crate::present_transition::Charge,crate::residency::Charge,Option<crate::residency::Hold>)>);
+#[cfg(not(target_arch="wasm32"))]
+impl Drop for Retired {
+    fn drop(&mut self) {
+        let pages=std::mem::take(&mut self.1);
+        if let Some(sender)=self.0.take().filter(|_|!pages.is_empty()) {
+            pages[0].1.report();
+            sender.run(move||for (image,charge,retiring,search) in pages {image.texture.destroy();drop((image,charge,retiring,search));});
+        }
+    }
+}
+#[cfg(target_arch="wasm32")]
+#[derive(Default)]
+struct Retired(Vec<Arc<Image>>);
+#[cfg(target_arch="wasm32")]
+impl Drop for Retired {
+    fn drop(&mut self) {for image in std::mem::take(&mut self.0) {image.texture.destroy();}}
+}
+#[derive(Clone,Default)]
+pub(in crate::scene) struct Pages(Arc<std::sync::Mutex<Store>>);
+pub(in crate::scene) struct Locked<'a>(Option<std::sync::MutexGuard<'a,Store>>);
+impl Pages {
+    pub(in crate::scene) fn new(store:Store)->Self {Self(Arc::new(std::sync::Mutex::new(store)))}
+    pub(in crate::scene) fn lock(&self)->std::sync::LockResult<Locked<'_>> {
+        self.0.lock().map(|store|Locked(Some(store))).map_err(|poisoned|std::sync::PoisonError::new(Locked(Some(poisoned.into_inner()))))
+    }
+    pub(in crate::scene) fn same(&self,other:&Self)->bool {Arc::ptr_eq(&self.0,&other.0)}
+}
+impl std::ops::Deref for Locked<'_> {type Target=Store;fn deref(&self)->&Store {self.0.as_ref().unwrap()}}
+impl std::ops::DerefMut for Locked<'_> {fn deref_mut(&mut self)->&mut Store {self.0.as_mut().unwrap()}}
+impl Drop for Locked<'_> {
+    fn drop(&mut self) {
+        let retired=self.0.as_mut().map(|store|std::mem::take(&mut store.retired));
+        drop(self.0.take());
+        drop(retired);
+    }
 }
 impl Store {
+    pub(super) fn search(&mut self,trim:impl FnOnce(&mut Self))->Option<crate::residency::Batch> {
+        #[cfg(not(target_arch="wasm32"))]
+        {
+            let search=crate::residency::Search::open([]);
+            self.search=Some(search.hold());trim(self);self.search=None;
+            let batch=search.seal();
+            (!batch.settled()).then_some(batch)
+        }
+        #[cfg(target_arch="wasm32")]
+        {trim(self);None}
+    }
     pub(super) fn within(display:&Arc<crate::residency::Tier>)->Self {Self {total:crate::residency::Tier::within(display),..Default::default()}}
     pub(super) fn tier(&self)->Arc<crate::residency::Tier> {self.total.clone()}
     pub(in crate::scene) fn set_expected(&mut self,frame:Arc<SignatureFrame>) {self.set_expected_within(frame,None);}
@@ -819,7 +878,7 @@ impl Store {
     pub(super) fn claim_reserved(&mut self,r:&WgpuRasterizer,key:Key,window:WindowId,class:Class,reservation:&mut crate::residency::Reservation)->Result<Held,GpuRasterError> {
         if let Some(image)=self.allocated(&key,class) {return Ok(image);}
         let bytes=key.bytes();
-        let charge=reservation.split(bytes).ok_or(GpuRasterError::Invariant("Store allocation exceeds its accepted reservation"))?.charge(bytes);
+        let charge=reservation.split(bytes).ok_or(GpuRasterError::Invariant("Store allocation exceeds its accepted reservation"))?.charge();
         Ok(self.insert(r,key,window,charge))
     }
     fn insert(&mut self,r:&WgpuRasterizer,key:Key,window:WindowId,charge:crate::residency::Charge)->Held {
@@ -1020,16 +1079,17 @@ impl Store {
             if inputs.is_empty() {self.inputs.remove(&key);}
         }
     }
-    fn retire(&self,image:Arc<Image>) {
+    fn retire(&mut self,image:Arc<Image>) {
         #[cfg(not(target_arch="wasm32"))]
         {
             let retirement=self.retirement.as_ref().expect("allocated Store retirement owner");
             let retiring=retirement.retiring.charge(image.bytes());
-            let charge=crate::present_transition::Charge::new(image.bytes(),&retirement.total,retirement.memory.clone());
-            retirement.sender.run(move|| {image.texture.destroy();drop(image);drop(charge);drop(retiring);});
+            let charge=crate::present_transition::Charge::detached(retirement.total.charge(image.bytes()),retirement.memory.clone());
+            self.retired.0.get_or_insert_with(||retirement.sender.clone());
+            self.retired.1.push((image,charge,retiring,self.search.clone()));
         }
         #[cfg(target_arch="wasm32")]
-        image.texture.destroy();
+        self.retired.0.push(image);
     }
     fn remove(&mut self,key:&Key)->Page {
         let page=self.pages.remove(key).unwrap();
@@ -1202,7 +1262,8 @@ mod tests {
         use std::time::Duration;
         let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         for unwritten in [false,true] {
-            let mut store=Store::default();let key=indexed_key([0;2],0);
+            let pages=Pages::default();let key=indexed_key([0;2],0);
+            let mut store=pages.lock().unwrap();
             let before=r.device.transient_display.used();
             let image=store.claim(&r,key,u64::MAX,WindowId::default(),crate::residency::Class::Visible).unwrap();let bytes=image.bytes();
             let alive=Arc::downgrade(image.image());drop(image);
@@ -1211,7 +1272,8 @@ mod tests {
             actor.run(move || {let _=entered.send(());held.recv_timeout(crate::READBACK_TIMEOUT).unwrap();});
             ready.recv_timeout(Duration::from_secs(2)).unwrap();
             if unwritten {store.retain_work(&[]);}else {store.trim(0,crate::residency::Class::Visible);}
-            let logical=store.bytes();let retained=alive.upgrade().is_some();
+            let logical=store.bytes();drop(store);
+            let retained=alive.upgrade().is_some();
             let charged=r.device.transient_display.used();
             release.send(()).unwrap();r.device.retirement_handle().flush().unwrap();
             assert_eq!(logical,0);assert!(retained,"removed physical texture escaped the actor (unwritten={unwritten})");
@@ -1354,7 +1416,7 @@ mod tests {
         assert_eq!(display.yielding(),0);
         assert!(!blocked.fits(),"pinned optional pages hold the room");
         let (send,woken)=mpsc::channel();
-        blocked.clone().wake_on_release(&edge,Arc::new(move||{let _=send.send(());}));
+        edge.on_release(&blocked,&(Arc::new(move||{let _=send.send(());}) as crate::residency::Wake));
         held[1]=store.allocated(&released,Class::Visible);held[1]=None;
         woken.recv_timeout(Duration::from_secs(1)).expect("unpinning an optional page wakes the refused claim");
         assert!(blocked.fits() && display.yielding()==page);
@@ -1465,7 +1527,7 @@ impl Asked {
     fn no_higher_than(self,earlier:Self)->bool {self.view==earlier.view && (self.moving || !earlier.moving)}
 }
 #[derive(Default)]
-struct Cell {shown:Option<Shown>,current:bool,blocked:Option<crate::frame_demand::Input>,arrivals:crate::frame_demand::ArrivalToken,name:Option<ContentVersion>,refusal:Option<(crate::residency::Blocked,Option<crate::frame_demand::ArrivalToken>)>,queued:bool,derived:bool,reduced:bool,reduced_from:Option<layer_core::raster::ContentStamp>,waits:Vec<super::super::object_cache::ObjectWait>,lag:Option<PixelRect>}
+struct Cell {shown:Option<Shown>,current:bool,wait:Option<crate::frame_demand::UnitWait>,refusal:Option<crate::residency::Blocked>,queued:bool,derived:bool,reduced:bool,reduced_from:Option<layer_core::raster::ContentStamp>,waits:Vec<super::super::object_cache::ObjectWait>,lag:Option<PixelRect>}
 impl Cell {
     fn showing(shown:Shown)->Self {Self {shown:Some(shown),current:true,lag:Some(PixelRect::EMPTY),..Self::default()}}
     fn queue(&mut self) {if !self.derived {self.queued=true;}}
@@ -1480,31 +1542,30 @@ impl Cell {
     fn owed(&self,area:PixelRect,changed:PixelRect)->PixelRect {if !self.derived {PixelRect::EMPTY}else if self.reduced {area.intersect(changed)}else {area}}
     fn keyed(&self,area:PixelRect)->Option<&Recorded> {self.shown.as_ref()?.recorded.as_ref().filter(|recorded|recorded.written.intersect(area)==area)}
     fn pending(&self)->bool {!self.derived && (self.queued || self.shown.as_ref().is_none_or(|shown|!shown.exact))}
-    fn refusal_applies(&self,refusal:&crate::residency::Blocked)->bool {
-        refusal.class()!=Class::Refinement || self.current && self.shown.as_ref().is_some_and(|shown|!shown.exact)
+    fn parked_by(&self,class:Class)->bool {class!=Class::Refinement || self.current && self.shown.as_ref().is_some_and(|shown|!shown.exact)}
+    fn refusal_applies(&self,refusal:&crate::residency::Blocked)->bool {self.parked_by(refusal.class())}
+    fn applied_refusal(&self)->Option<&crate::residency::Blocked> {self.refusal.as_ref().filter(|refusal|self.refusal_applies(refusal))}
+    fn refused(&self,r:&WgpuRasterizer)->bool {
+        self.applied_refusal().is_some() && self.wait.as_ref().is_some_and(|wait|wait.refusing() && !matches!(wait.observe(r),crate::frame_demand::Turn::Enter(_)))
     }
-    fn refused(&self,r:&WgpuRasterizer,now:crate::frame_demand::ArrivalToken)->bool {
-        self.refusal.as_ref().is_some_and(|(refusal,since)|since.is_none_or(|since|since==now) && self.refusal_applies(refusal) && r.refuses(refusal))
-    }
-    fn parked(&self,r:&WgpuRasterizer)->bool {self.refused(r,r.arrival_token()) && self.refusal.as_ref().is_some_and(|(refusal,_)|!refusal.class().floor_reserved())}
+    fn parked(&self,r:&WgpuRasterizer)->bool {self.refused(r) && self.refusal.as_ref().is_some_and(|refusal|!refusal.class().floor_reserved())}
     fn waiting(&self,r:&WgpuRasterizer,held:bool)->Option<crate::frame_demand::Input> {
-        if held && self.refused(r,r.arrival_token()) {return Some(crate::frame_demand::Input::Residency);}
-        self.blocked.filter(|input|match input {
-            crate::frame_demand::Input::Name=>self.naming(r),
-            input=>waits(r,*input,self.arrivals),
-        })
+        use crate::frame_demand::Turn;
+        let wait=self.wait.as_ref()?;
+        if wait.refusing() && self.refusal.is_some() && !(held && self.applied_refusal().is_some()) {return None;}
+        match wait.observe(r) {Turn::Sleep(input)=>Some(input),Turn::Dormant=>Some(crate::frame_demand::Input::Residency),Turn::Enter(_)|Turn::Deliver=>None}
     }
     fn naming(&self,r:&WgpuRasterizer)->bool {
-        self.blocked==Some(crate::frame_demand::Input::Name)
-            && self.name.as_ref().map_or_else(||waits(r,crate::frame_demand::Input::Name,self.arrivals),|name|name.resolved().is_none())
+        self.wait.as_ref().is_some_and(|wait|wait.naming() && matches!(wait.observe(r),crate::frame_demand::Turn::Sleep(_)))
+    }
+    fn allowance(&self,r:&WgpuRasterizer)->crate::frame_demand::Allowance {self.wait.as_ref().and_then(|wait|wait.eligible(r)).unwrap_or(crate::frame_demand::Allowance::Fresh)}
+    fn release(&mut self) {
+        if self.refusal.take().is_some() && self.wait.as_ref().is_some_and(crate::frame_demand::UnitWait::refusing) {self.wait=None;}
     }
     fn derive(&mut self,derived:bool) {
         if derived==self.derived {return;}
         *self=if derived {Self {current:true,derived:true,..Self::default()}}else {Self {queued:true,..Self::default()}};
     }
-}
-pub(super) fn waits(r:&WgpuRasterizer,input:crate::frame_demand::Input,since:crate::frame_demand::ArrivalToken)->bool {
-    match input {crate::frame_demand::Input::Residency|crate::frame_demand::Input::Name=>!r.arrived_since(since),input=>r.waits_on(input)}
 }
 #[derive(Default)]
 pub(super) struct Cells {cells:Vec<Cell>,template:Option<Key>,input_level:u32,position:u64,frames:u64,unconfirmed:Vec<(submission::Submission,usize,Option<Shown>)>,unconfirmed_reductions:Vec<(submission::Submission,usize)>}
@@ -1695,8 +1756,8 @@ impl Cache {
         if copies.iter().any(|copy|copy.image.texture.format()!=self.precision.format()) && !commands.projection_ready(r,self.precision.format()) {return Ok(());}
         if self.above.root().is_none_or(|image|image.plan!=plan || image.texture.format()!=self.precision.format()) {
             let bytes=plan.size.map(u64::from).into_iter().product::<u64>()*u64::from(self.precision.format().block_copy_size(None).unwrap());
-            let Ok(reservation)=self.reserve_window(r,scene,bytes) else {return Ok(());};
-            let window=reservation.charge(bytes);
+            let Ok(reservation)=self.reserve_window(r,scene,bytes,crate::frame_demand::Allowance::Fresh) else {return Ok(());};
+            let window=reservation.charge();
             let old=self.above.take();let bytes=old.iter().map(Image::bytes).sum();
             let charge=crate::DisplayRetirement {_charge:r.retired_display_bytes.charge(bytes),
                 #[cfg(not(target_arch="wasm32"))] _scratch:(Vec::new(),old)};
@@ -1714,23 +1775,26 @@ impl Cache {
         self.above_revision=Some((above,revision));
         Ok(())
     }
-    pub(super) fn select_cells(&self,r:&WgpuRasterizer,visible:PixelRect,presented:Accuracy,class:&dyn Fn(PixelRect)->Class,since:crate::frame_demand::ArrivalToken)->Result<Selection,GpuRasterError> {
+    pub(super) fn select_cells(&self,r:&WgpuRasterizer,visible:PixelRect,presented:Accuracy,class:&dyn Fn(PixelRect)->Class)->Result<Selection,GpuRasterError> {
         let mut selection=Selection {copies:Vec::new(),composes:Vec::new(),transition:false,waiting:false};
-        let Some((mut cells,mut store,template))=self.cells() else {return Ok(selection);};
+        let Some((mut store,mut cells,template))=self.cells() else {return Ok(selection);};
         let frame=store.expected().cloned().ok_or(GpuRasterError::Invariant("signature frame is missing or inconsistent"))?;
         selection.transition=self.pixels.committed_root().is_some_and(|root|root.authored()!=frame.authored_revision(&template.expression).ok());
         let (plan,input_level)=(self.plan,self.required_input_level());
         let exact_input_level=super::refinement::exact_input_level(frame.scene(),input_level);
         for (index,coordinate) in coordinates(plan.bounds,plan.level).enumerate() {
-            if !cells.cells[index].queued || cells.cells[index].refused(r,since) {continue;}
+            if !cells.cells[index].queued || cells.cells[index].refused(r) {continue;}
             let region=bounds(coordinate,plan.level,plan.extent);
             if cells.cells[index].sleeping() {for (lease,_) in &cells.cells[index].waits {lease.stamp(class(region));}continue;}
             let key=Key {coordinate,..template.clone()};
             let cell=&mut cells.cells[index];
             match frame.expected_key(&key,region,input_level) {
-                Ok(expected) if expected.version().resolved().is_some()=>cell.blocked=None,
-                Ok(expected)=>{cell.blocked=Some(crate::frame_demand::Input::Name);cell.name=Some(expected.into_version());selection.waiting|=!region.intersect(visible).is_empty();continue;},
-                Err(GpuRasterError::NotReady)=>{cell.blocked=Some(crate::frame_demand::Input::Name);cell.name=None;cell.arrivals=since;selection.waiting|=!region.intersect(visible).is_empty();continue;},
+                Ok(expected) if expected.version().resolved().is_some()=>if cell.wait.as_ref().is_some_and(|wait|!wait.refusing()) {cell.wait=None;},
+                Ok(expected)=>{cell.wait=Some(crate::frame_demand::UnitWait::input(crate::frame_demand::Producer::Name(expected.into_version())));selection.waiting|=!region.intersect(visible).is_empty();continue;},
+                Err(error@(GpuRasterError::NotReady|GpuRasterError::Waiting(_)))=>{
+                    cell.wait=Some(crate::frame_demand::UnitWait::pending(&error,crate::frame_demand::Producer::Declaration(frame.declarations())));
+                    selection.waiting|=!region.intersect(visible).is_empty();continue;
+                },
                 Err(error)=>return Err(error),
             }
             let current=cell.shown.as_ref().filter(|shown|shown.recorded.as_ref().is_some_and(|recorded|Key {expression:key.expression.clone(),format:key.format,..recorded.key.clone()}==key
@@ -1752,8 +1816,8 @@ impl Cache {
         let format=self.precision.format();
         if self.pixels.root().is_some_and(|image|image.texture.format()==format) {return true;}
         let bytes=self.plan.size.map(u64::from).into_iter().product::<u64>()*u64::from(format.block_copy_size(None).unwrap());
-        let Ok(reservation)=self.reserve_window(r,scene,bytes) else {return false;};
-        let charge=reservation.charge(bytes);
+        let Ok(reservation)=self.reserve_window(r,scene,bytes,crate::frame_demand::Allowance::Fresh) else {return false;};
+        let charge=reservation.charge();
         self.end_contact(encoder);
         let retired=self.pixels.take();
         if !retired.is_empty() {
@@ -1802,7 +1866,7 @@ impl Cache {
         cells.unconfirmed.push((submission,index,previous));
     }
     pub(super) fn commit_window(&mut self,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder)->Result<(),GpuRasterError> {
-        let Some((cells,store,template))=self.cells() else {return Ok(());};
+        let Some((store,cells,template))=self.cells() else {return Ok(());};
         let frame=store.expected().cloned().ok_or(GpuRasterError::Invariant("signature frame is missing or inconsistent"))?;
         let authored=frame.authored_revision(&template.expression)?;
         let mut written=vec![0u32;(self.geometry.size() as usize-32)/4];
@@ -1842,13 +1906,13 @@ impl Cache {
         let Some(window)=self.pixels.committed_root().map(|root|root.image().clone()) else {return Ok(());};
         let Some(frame)=self.pages.lock().unwrap().expected().cloned() else {return Ok(());};
         let side=1<<self.plan.level;
-        let mut cells=self.cells.lock().unwrap();
+        let cells=self.cells.get_mut().unwrap();
         for cell in &mut cells.cells {
             let Some(shown)=cell.shown.as_mut().filter(|shown|shown.direct && !shown.submission.discarded()) else {continue;};
             let Some(recorded)=&shown.recorded else {continue;};
             if recorded.region!=recorded.key.plan().bounds || recorded.matches(&frame,recorded.input_level)!=Some(true) {continue;}
             let tier=self.pages.lock().unwrap().tier();
-            let Ok(mut reservation)=r.admit_tier(Some(scene),&tier,Class::Visible,recorded.key.bytes()) else {continue;};
+            let Ok(mut reservation)=r.admit_tier(Some(scene),&tier,Class::Visible,recorded.key.bytes(),crate::frame_demand::Allowance::Fresh) else {continue;};
             let mut store=self.pages.lock().unwrap();
             let Ok(image)=store.claim_reserved(r,recorded.key.clone(),self.window,Class::Visible,&mut reservation) else {continue;};
             let [x,y,width,height]=paint_transform::texel_rect(recorded.region.window_local(window.plan.bounds),side);
@@ -1865,17 +1929,21 @@ impl Cache {
         Ok(())
     }
 }
+fn lock_cells<'a>(cells:&'a std::sync::Mutex<Cells>,pages:&'a Pages)->(Locked<'a>,std::sync::MutexGuard<'a,Cells>) {
+    let cells=cells.lock().unwrap();
+    (pages.lock().unwrap(),cells)
+}
 impl Cache {
-    fn cells(&self)->Option<(std::sync::MutexGuard<'_,Cells>,std::sync::MutexGuard<'_,Store>,Key)> {
+    fn cells(&self)->Option<(Locked<'_>,std::sync::MutexGuard<'_,Cells>,Key)> {
         let template=self.page_key(self.graph.root.clone()?,self.plan.bounds);
-        let mut cells=self.cells.lock().unwrap();let mut store=self.pages.lock().unwrap();
+        let (mut store,mut cells)=lock_cells(&self.cells,&self.pages);
         cells.sync(&mut store,&template,self.plan,self.required_input_level());
-        Some((cells,store,template))
+        Some((store,cells,template))
     }
     #[cfg(test)]
     pub(super) fn coverage_snapshot(&self)->Coverage {
         let mut coverage=Coverage::new(self.plan.level);
-        let Some((_cells,store,template))=self.cells() else {return coverage;};
+        let Some((store,_cells,template))=self.cells() else {return coverage;};
         for coordinate in coordinates(self.plan.bounds,self.plan.level) {
             let region=bounds(coordinate,self.plan.level,self.plan.extent).intersect(self.plan.bounds);let key=Key {coordinate,..template.clone()};
             if Coverage::covers(&store.written(&key,region),region) {coverage.written.entries.insert(coordinate);}
@@ -1884,7 +1952,7 @@ impl Cache {
         coverage
     }
     pub(super) fn coverage_complete(&self)->bool {
-        self.cells().is_some_and(|(cells,_,_)|cells.cells.iter().all(Cell::written))
+        self.cells().is_some_and(|(_,cells,_)|cells.cells.iter().all(Cell::written))
     }
     pub(crate) fn published(&self)->bool {self.presented_matches_expected()==Some(true) && self.coverage_complete()}
     pub(crate) fn refused_bytes(&self)->u64 {
@@ -1894,18 +1962,18 @@ impl Cache {
     }
     fn collect_refusals(&self,refusals:&mut Vec<crate::residency::Blocked>) {
         let cells=self.cells.lock().unwrap();
-        for refusal in cells.cells.iter().filter(|cell|cell.pending()).filter_map(|cell|cell.refusal.as_ref().map(|(refusal,_)|refusal).filter(|refusal|cell.refusal_applies(refusal))) {
+        for refusal in cells.cells.iter().filter(|cell|cell.pending()).filter_map(Cell::applied_refusal) {
             if !refusals.iter().any(|seen|seen.same(refusal)) {refusals.push(refusal.clone());}
         }
         drop(cells);
         if let Some(overview)=&self.overview {overview.collect_refusals(refusals);}
     }
     pub(super) fn output_complete(&self)->bool {
-        self.cells().is_some_and(|(cells,_,_)|cells.cells.iter().all(|cell|cell.derived || !cell.queued && cell.current && cell.shown.as_ref().is_some_and(|shown|shown.exact)))
+        self.cells().is_some_and(|(_,cells,_)|cells.cells.iter().all(|cell|cell.derived || !cell.queued && cell.current && cell.shown.as_ref().is_some_and(|shown|shown.exact)))
     }
     pub(super) fn cells_demand(&self,r:&WgpuRasterizer,refining:bool)->Option<crate::frame_demand::Outstanding> {
         use crate::frame_demand::Outstanding::{Blocked,Runnable};
-        let (cells,_store,_)=self.cells()?;
+        let (_store,cells,_)=self.cells()?;
         let held=self.refusals_hold(r);
         let mut blocked=None;
         for cell in cells.cells.iter().filter(|cell|cell.pending() && !(held && cell.parked(r)) && !cell.sleeping() && (refining || cell.queued)) {
@@ -1916,16 +1984,28 @@ impl Cache {
         }
         blocked
     }
-    pub(super) fn block(&self,since:crate::frame_demand::ArrivalToken,region:PixelRect,input:Option<crate::frame_demand::Input>) {
-        let Some((mut cells,_store,_))=self.cells() else {return;};
+    pub(super) fn block(&self,region:PixelRect,wait:Option<crate::frame_demand::UnitWait>) {
+        let Some((_store,mut cells,_))=self.cells() else {return;};
         for index in Cells::reached(self.plan,region) {
             let cell=&mut cells.cells[index];
-            if cell.pending() {cell.blocked=input;cell.name=None;cell.arrivals=since;cell.queued=true;}
+            if cell.pending() {
+                #[cfg(test)] if crate::test_support::destination_wait_changed(cell.wait.as_ref(),wait.as_ref()) {crate::test_support::PassCounts {destination_wait_transitions:1,..Default::default()}.record();}
+                cell.wait.clone_from(&wait);cell.queued=true;
+            }
         }
+    }
+    pub(super) fn awaits_compose(&self,region:PixelRect)->bool {
+        let cells=self.cells.lock().unwrap();
+        Cells::reached(self.plan,region).into_iter().filter_map(|index|cells.cells.get(index)).any(|cell|cell.pending() && !cell.parked_by(Class::Refinement))
+    }
+    pub(super) fn cell_allowance(&self,r:&WgpuRasterizer,region:PixelRect)->crate::frame_demand::Allowance {
+        let cells=self.cells.lock().unwrap();
+        let spent=Cells::reached(self.plan,region).into_iter().filter_map(|index|cells.cells.get(index)).any(|cell|cell.allowance(r)==crate::frame_demand::Allowance::Spent);
+        if spent {crate::frame_demand::Allowance::Spent}else {crate::frame_demand::Allowance::Fresh}
     }
     pub(super) fn sleep(&self,region:PixelRect,waits:Vec<super::super::object_cache::ObjectWait>) {
         if !waits.iter().any(|(_,waiter)|waiter.is_some()) {return;}
-        let Some((mut cells,_store,_))=self.cells() else {return;};
+        let Some((_store,mut cells,_))=self.cells() else {return;};
         for index in Cells::reached(self.plan,region) {
             let cell=&mut cells.cells[index];
             if cell.pending() {cell.waits.clone_from(&waits);}
@@ -1933,7 +2013,7 @@ impl Cache {
     }
     pub(super) fn residual_demand(&self,r:&WgpuRasterizer)->Option<crate::frame_demand::Outstanding> {
         use crate::frame_demand::{Input,Outstanding};
-        let Some((cells,_store,_))=self.cells() else {return Some(Outstanding::Runnable);};
+        let Some((_store,cells,_))=self.cells() else {return Some(Outstanding::Runnable);};
         let mut pending=cells.cells.iter().filter(|cell|cell.pending()).peekable();
         if self.refusals_hold(r) && pending.clone().any(|cell|cell.parked(r)) {Some(Outstanding::Blocked(Input::Residency))}
         else if pending.peek().is_some() && pending.all(Cell::sleeping) {None}
@@ -1941,7 +2021,7 @@ impl Cache {
     }
     pub(super) fn ask(&mut self,asked:Asked) {
         if !self.asked.replace(asked).is_some_and(|earlier|asked.no_higher_than(earlier)) {
-            for cell in &mut self.cells.lock().unwrap().cells {cell.refusal=None;cell.waits.clear();}
+            for cell in &mut self.cells.lock().unwrap().cells {cell.release();cell.waits.clear();}
         }
     }
     pub(super) fn refusals_hold(&self,r:&WgpuRasterizer)->bool {
@@ -1951,10 +2031,10 @@ impl Cache {
     pub(super) fn refused(&self,r:&WgpuRasterizer,region:PixelRect)->bool {
         let cells=self.cells.lock().unwrap();
         let reached=Cells::reached(self.plan,region);
-        !reached.is_empty() && reached.into_iter().all(|index|cells.cells.get(index).is_some_and(|cell|cell.refused(r,r.arrival_token())))
+        !reached.is_empty() && reached.into_iter().all(|index|cells.cells.get(index).is_some_and(|cell|cell.refused(r)))
     }
     pub(super) fn shown_from(&self,bounds:PixelRect,frame:&SignatureFrame)->BTreeSet<[u32;2]> {
-        let Some((cells,_store,template))=self.cells() else {return BTreeSet::new();};
+        let Some((_store,cells,template))=self.cells() else {return BTreeSet::new();};
         let input_level=self.required_input_level();
         page_coordinates(bounds).filter(|coordinate| {
             let page=page_rect(*coordinate).intersect(bounds);
@@ -1964,59 +2044,63 @@ impl Cache {
     }
     #[cfg(test)]
     pub(super) fn evict_window(&self,area:PixelRect) {
-        let Some((mut cells,_store,_))=self.cells() else {return;};
+        let Some((_store,mut cells,_))=self.cells() else {return;};
         for index in Cells::reached(self.plan,area) {cells.cells[index].shown=None;cells.cells[index].invalidate();}
     }
-    pub(super) fn refuse(&self,since:Option<crate::frame_demand::ArrivalToken>,region:PixelRect,refusal:&crate::residency::Blocked) {
-        if let Some((mut cells,_store,_))=self.cells() {
+    pub(super) fn refuse(&self,region:PixelRect,refusal:&crate::residency::Blocked,allowance:crate::frame_demand::Allowance) {
+        if let Some((_store,mut cells,_))=self.cells() {
             for index in Cells::reached(self.plan,region) {
                 let cell=&mut cells.cells[index];
-                if cell.pending() && cell.refusal_applies(refusal) {cell.refusal=Some((refusal.clone(),since));cell.queued=true;}
+                if cell.pending() && cell.refusal_applies(refusal) {
+                    #[cfg(test)] let previous=cell.wait.clone();
+                    (cell.refusal,cell.wait)=(Some(refusal.clone()),Some(crate::frame_demand::UnitWait::parked(refusal.clone(),allowance)));cell.queued=true;
+                    #[cfg(test)] if crate::test_support::destination_wait_changed(previous.as_ref(),cell.wait.as_ref()) {crate::test_support::PassCounts {destination_wait_transitions:1,..Default::default()}.record();}
+                }
             }
         }
-        if refusal.class()==Class::Refinement && let Some(overview)=&self.overview {overview.refuse(since,region,refusal);}
+        if refusal.class()==Class::Refinement && let Some(overview)=&self.overview {overview.refuse(region,refusal,allowance);}
     }
     #[cfg(test)]
     pub(super) fn release(&self,region:PixelRect) {
-        let Some((mut cells,_store,_))=self.cells() else {return;};
-        for index in Cells::reached(self.plan,region) {cells.cells[index].refusal=None;}
+        let Some((_store,mut cells,_))=self.cells() else {return;};
+        for index in Cells::reached(self.plan,region) {cells.cells[index].release();}
     }
     pub(super) fn owe_exact(&self) {
         let mut cells=self.cells.lock().unwrap();
         for cell in cells.cells.iter_mut().filter(|cell|!cell.derived && cell.shown.as_ref().is_some_and(|shown|!shown.exact)) {cell.queued=true;cell.lag=None;}
     }
     pub(super) fn displays(&self,region:PixelRect)->bool {
-        self.cells().is_some_and(|(cells,_,_)|coordinates(region,self.plan.level).all(|coordinate|
+        self.cells().is_some_and(|(_,cells,_)|coordinates(region,self.plan.level).all(|coordinate|
             cells.cells.get(Cells::index(self.plan,coordinate)).is_some_and(|cell|cell.current && cell.shown.is_some())))
     }
     pub(super) fn waiting_cells(&self,r:&WgpuRasterizer)->bool {
-        self.cells().is_some_and(|(cells,_,_)|cells.cells.iter().any(|cell|cell.naming(r)))
+        self.cells().is_some_and(|(_,cells,_)|cells.cells.iter().any(|cell|cell.naming(r)))
     }
     pub(super) fn keyless(&self,region:PixelRect)->bool {self.keyless_where(region,|_|true)}
     pub(super) fn keyless_unrefused(&self,region:PixelRect)->bool {self.keyless_where(region,|shown|!shown.refused)}
     fn keyless_where(&self,region:PixelRect,accept:impl Fn(&Shown)->bool)->bool {
-        self.cells().is_some_and(|(cells,_,_)|coordinates(region,self.plan.level).all(|coordinate|
+        self.cells().is_some_and(|(_,cells,_)|coordinates(region,self.plan.level).all(|coordinate|
             cells.cells.get(Cells::index(self.plan,coordinate)).is_some_and(|cell|cell.shown.as_ref().is_some_and(|shown|shown.recorded.is_none() && accept(shown)))))
     }
     pub(super) fn shown_writes(&self,regions:&[PixelRect])->Vec<(Option<submission::Submission>,Option<PixelRect>)> {
-        let Some((cells,_store,_))=self.cells() else {return vec![(None,None);regions.len()];};
+        let Some((_store,cells,_))=self.cells() else {return vec![(None,None);regions.len()];};
         regions.iter().map(|region|match Cells::reached(self.plan,*region)[..] {
             [index]=>(cells.cells[index].shown.as_ref().filter(|shown|shown.unnamed()).map(|shown|shown.submission.clone()),cells.cells[index].lag),
             _=>(None,None),
         }).collect()
     }
     pub(super) fn contact_cells(&self)->Vec<PixelRect> {
-        let Some((cells,_store,_))=self.cells() else {return Vec::new();};
+        let Some((_store,cells,_))=self.cells() else {return Vec::new();};
         cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level)).filter(|(cell,_)|cell.queued && !cell.derived)
             .map(|(_,coordinate)|bounds(coordinate,self.plan.level,self.plan.extent)).collect()
     }
     pub(super) fn contact_ready(&self,scope:&[PixelRect])->bool {
-        self.cells().is_some_and(|(cells,_,_)|cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level))
+        self.cells().is_some_and(|(_,cells,_)|cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level))
             .filter(|(_,coordinate)|scope.contains(&bounds(*coordinate,self.plan.level,self.plan.extent)))
             .all(|(cell,_)|cell.written()))
     }
     pub(super) fn cell_reads(&self,target:SourceTarget,regions:&[PixelRect])->crate::IdMap<[u32;2],Arc<[PixelRect]>> {
-        let Some((_cells,store,template))=self.cells() else {return Default::default();};
+        let Some((store,_cells,template))=self.cells() else {return Default::default();};
         let Some(frame)=store.expected() else {return Default::default();};
         let (plan,input_level)=(self.plan,self.required_input_level());
         let cells=regions.iter().flat_map(|region|coordinates(region.intersect(plan.bounds),plan.level)).map(|coordinate|(coordinate,bounds(coordinate,plan.level,plan.extent))).collect::<Vec<_>>();
@@ -2024,7 +2108,7 @@ impl Cache {
         frame.cell_reads(target,&template.expression,plan.level,input_level,&cells)
     }
     pub(super) fn key_contact_cells(&self,frame:&SignatureFrame,proven:&dyn Fn(Option<&super::contact::Witness>)->Result<(),Option<PixelRect>>) {
-        let Some((mut cells,_store,template))=self.cells() else {return;};
+        let Some((_store,mut cells,template))=self.cells() else {return;};
         let (plan,input_level)=(self.plan,self.required_input_level());
         for (cell,coordinate) in cells.cells.iter_mut().zip(coordinates(plan.bounds,plan.level)) {
             let Some(shown)=cell.shown.as_mut().filter(|shown|shown.unnamed()) else {continue;};
@@ -2037,7 +2121,7 @@ impl Cache {
     }
     pub(super) fn reached_cells(&self,region:DocRect)->Vec<usize> {Cells::reached(self.plan,region.in_frame(self.plan.extent))}
     pub(super) fn invalidate_cells(&self,indices:Vec<usize>,bound:Option<PixelRect>) {
-        let Some((mut cells,_store,template))=self.cells() else {return;};
+        let Some((_store,mut cells,template))=self.cells() else {return;};
         for index in indices {if let Some(cell)=cells.cells.get_mut(index) {cell.reach(bound,&template);}}
     }
     #[cfg(test)]
@@ -2057,12 +2141,12 @@ impl Cache {
     pub(crate) fn hole_area(&self,visible:PixelRect)->PixelRect {
         let outside=if self.plan.bounds.intersect(visible)==visible {PixelRect::EMPTY}else {visible};
         if self.pixels.committed_root().is_none() {return visible;}
-        let Some((cells,_store,_))=self.cells() else {return visible;};
+        let Some((_store,cells,_))=self.cells() else {return visible;};
         cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level)).filter(|(cell,_)|!cell.written())
             .map(|(_,coordinate)|bounds(coordinate,self.plan.level,self.plan.extent).intersect(visible)).fold(outside,PixelRect::union)
     }
     pub(super) fn holes(&self,visible:PixelRect)->bool {
-        self.cells().is_some_and(|(cells,_,_)|cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level))
+        self.cells().is_some_and(|(_,cells,_)|cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level))
             .any(|(cell,coordinate)|!cell.written() && !bounds(coordinate,self.plan.level,self.plan.extent).intersect(visible).is_empty()))
     }
     pub(super) fn derive_cells(&self,finer:Option<(&Cache,PixelRect)>) {
@@ -2081,7 +2165,7 @@ impl Cache {
                 if derived {cell.written()}else {cell.current && cell.shown.is_some()}
             })
         };
-        let Some((mut cells,_store,_))=self.cells() else {return;};
+        let Some((_store,mut cells,_))=self.cells() else {return;};
         for (cell,coordinate) in cells.cells.iter_mut().zip(coordinates(self.plan.bounds,self.plan.level)) {
             let (area,derived)=(bounds(coordinate,self.plan.level,self.plan.extent).intersect(self.plan.bounds),cell.derived);
             cell.derive(presented(area,derived));
@@ -2097,7 +2181,7 @@ impl Cache {
         if finer_cells.cells.len()!=coordinates(finer.plan.bounds,finer.plan.level).count() {return Vec::new();}
         let written=|area:PixelRect|!area.is_empty() && finer.plan.bounds.intersect(area)==area
             && coordinates(area,finer.plan.level).all(|coordinate|finer_cells.cells[Cells::index(finer.plan,coordinate)].written());
-        let Some((mut cells,_store,_))=self.cells() else {return Vec::new();};
+        let Some((_store,mut cells,_))=self.cells() else {return Vec::new();};
         let mut parts=Vec::new();
         for (cell,coordinate) in cells.cells.iter_mut().zip(coordinates(self.plan.bounds,self.plan.level)) {
             if cell.derived || cell.current {continue;}
@@ -2146,7 +2230,7 @@ impl Cache {
     pub(in crate::scene) fn retained_ready(&self)->bool {self.ready_at(Accuracy::Display)}
     #[cfg(test)]
     pub(in crate::scene) fn ready_at(&self,accuracy:Accuracy)->bool {
-        self.cells().is_some_and(|(cells,_,_)|cells.cells.iter().all(|cell|cell.derived
+        self.cells().is_some_and(|(_,cells,_)|cells.cells.iter().all(|cell|cell.derived
             || !cell.queued && cell.current && (accuracy==Accuracy::Display || cell.shown.as_ref().is_some_and(|shown|shown.exact))))
     }
 }
@@ -2334,7 +2418,6 @@ pub(super) mod query_tests {
         let display=r.scene_tiers.display.clone();
         let held=display.charge(display.grant().saturating_sub(display.used()));
         let refused=display.blocked(Class::Refinement,1).expect("the held grant refuses optional refinement");
-        r.wait_for_release(refused.clone());
         (r,frame,held,refused)
     }
 
@@ -2347,12 +2430,12 @@ pub(super) mod query_tests {
             let (mut r,frame,_held,refused)=refinement_pressure_view(&document);
             let cache=r.scale_display.as_ref().unwrap();let area=bounds(coordinates(cache.plan.bounds,cache.plan.level).next().unwrap(),cache.plan.level,cache.plan.extent);
             let expected=crate::test_support::float_pixels(&r,&cache.pixels.committed_root().unwrap().image.texture);
-            cache.refuse(None,cache.plan.bounds,&refused);
+            cache.refuse(cache.plan.bounds,&refused,crate::frame_demand::Allowance::Fresh);
             {
                 let mut cells=table(cache);let cell=&mut cells.cells[0];cell.invalidate();
                 if absent {cell.shown=None;}
             }
-            cache.refuse(None,area,&refused);
+            cache.refuse(area,&refused,crate::frame_demand::Allowance::Fresh);
             assert_eq!(cache.cells_demand(&r,true),Some(Runnable),"a refinement refusal cannot stop required visible work: absent={absent}");
             assert_eq!(r.next_frame(),layer_render::FrameDemand::Work,"required visible work requests a frame: absent={absent}");
             for _ in 0..2 {
@@ -2375,9 +2458,8 @@ pub(super) mod query_tests {
         let refused=r.scene_tiers.display.blocked(Class::Refinement,1).expect("the held grant refuses optional refinement");
         let (wake,woken)=std::sync::mpsc::channel();
         r.set_preparation_wake(Arc::new(move||{let _=wake.send(());}));
-        r.wait_for_release(refused.clone());
         let main=r.scale_display.as_ref().unwrap();
-        for cache in std::iter::once(main).chain(main.overview.as_deref()) {cache.refuse(None,cache.plan.bounds,&refused);}
+        for cache in std::iter::once(main).chain(main.overview.as_deref()) {cache.refuse(cache.plan.bounds,&refused,crate::frame_demand::Allowance::Fresh);}
         assert!(std::iter::once(main).chain(main.overview.as_deref()).any(|cache|table(cache).cells.iter().any(|cell|cell.parked(&r))),"the fixture parks refused exactness");
         assert!(r.outstanding_terms().is_empty(),"parked optional work is not outstanding: {:?}",r.outstanding_terms());
         assert_eq!(r.next_frame(),layer_render::FrameDemand::Wait,"an idle renderer with parked refinement requests no frame");
@@ -2409,14 +2491,13 @@ pub(super) mod query_tests {
             let [parked,composed]=[[1,0],[1,1]].map(|coordinate|bounds(coordinate,cache.plan.level,extent));
             assert!(parked.intersect(onscreen(start)).is_empty() && !parked.intersect(onscreen(moved)).is_empty(),"the parked cell enters the view");
             let refused=r.scene_tiers.display.blocked(Class::Prefetch,2<<30).expect("the prefetch does not fit");
-            let since=if refused_in_motion {
+            if refused_in_motion {
                 cache.evict_window(composed);
                 crate::test_support::submit_ready(&mut r,moved).unwrap();crate::test_support::complete(&r);
-                Some(r.arrival_token())
-            } else {None};
+            }
             let cache=r.scale_display.as_ref().unwrap();
             cache.evict_window(parked);
-            cache.refuse(since,parked,&refused);
+            cache.refuse(parked,&refused,crate::frame_demand::Allowance::Fresh);
             if !refused_in_motion {
                 assert_eq!(r.next_frame(),Wait,"an offscreen cell refused at Prefetch asks for no frame");
                 crate::test_support::submit_ready(&mut r,moved).unwrap();crate::test_support::complete(&r);
@@ -2442,11 +2523,11 @@ pub(super) mod query_tests {
         assert!(room>0,"the fixture holds room the refused cell needs");
         let bytes=display.limit()-display.used().saturating_sub(display.yielding())+1;
         let refused=display.blocked(Class::Visible,bytes).expect("the held room refuses the visible unit").alone();
-        r.wait_for_release(refused.clone());
         let main=r.scale_display.as_ref().unwrap();let overview=main.overview.as_deref().unwrap();
-        overview.refuse(None,overview.plan.bounds,&refinement);
+        overview.refuse(overview.plan.bounds,&refinement,crate::frame_demand::Allowance::Fresh);
         table(main).cells[0].invalidate();
-        main.refuse(None,main.plan.bounds,&refused);
+        main.refuse(main.plan.bounds,&refused,crate::frame_demand::Allowance::Fresh);
+        assert_eq!(r.next_frame(),layer_render::FrameDemand::Wait,"reading the refused cell's demand registers its release wake");
         let edge=r.device.retirement_handle();
         drop(held);edge.flush().unwrap();
         woken.try_recv().expect("the release wakes the refused cell");
@@ -2467,7 +2548,7 @@ pub(super) mod query_tests {
         for main_required in [false,true] {
             let (r,_frame,_held,refused)=refinement_pressure_view(&document);
             let main=r.scale_display.as_ref().unwrap();let overview=main.overview.as_deref().unwrap();
-            main.refuse(None,overview.plan.bounds,&refused);
+            main.refuse(overview.plan.bounds,&refused,crate::frame_demand::Allowance::Fresh);
             assert_eq!(main.outstanding(&r),None,"refused optional exactness is parked, not outstanding");
             let (required,waiting)=if main_required {(main,overview)}else {(overview,main)};
             table(required).cells[0].invalidate();
@@ -2591,7 +2672,7 @@ pub(super) mod query_tests {
         {let mut cells=table(&cache);cells.cells[index].shown=None;cells.cells[index].invalidate();}
         let mut commands=RegionRecords::new(&r);
         let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
-        let selection=cache.select_cells(&r,cache.plan.bounds,Accuracy::Display,&|_|Class::Visible,r.arrival_token()).unwrap();
+        let selection=cache.select_cells(&r,cache.plan.bounds,Accuracy::Display,&|_|Class::Visible).unwrap();
         assert_eq!(selection.copies.len(),1,"the unshown cell copies its current Store page");
         assert!(!cache.copy_cells(&mut r,&mut encoder,&mut commands,selection.copies).unwrap().is_empty(),"the interrupted frame copies the cell");
         cache.commit_window(&mut r,&mut encoder).unwrap();
@@ -3047,7 +3128,7 @@ pub(super) mod query_tests {
     fn refuse_cell(r:&WgpuRasterizer,area:PixelRect) {
         let main=r.scale_display.as_ref().unwrap();let display=r.scene_tiers.display.clone();
         main.invalidate_cells(main.reached_cells(DocRect::from(area)),None);
-        main.refuse(None,area,&display.blocked(Class::Visible,display.limit()+1).expect("a unit larger than the display grant is refused"));
+        main.refuse(area,&display.blocked(Class::Visible,display.limit()+1).expect("a unit larger than the display grant is refused"),crate::frame_demand::Allowance::Fresh);
     }
     fn release_cell(r:&WgpuRasterizer,area:PixelRect) {r.scale_display.as_ref().unwrap().release(area);}
     fn changed_overview(document:&layer_core::Document,page:[u32;2])->[f32;4] {
@@ -3573,6 +3654,88 @@ pub(super) mod query_tests {
     }
 
     #[test]
+    fn a_store_trim_reports_its_retired_pages_only_after_releasing_the_store() {
+        thread_local! {static TRIMMING:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}
+        let budget=layer_core::MemoryBudget::new();
+        let r=crate::memory::memory_tests::renderer_in_budget(Default::default(),layer_core::DeviceMemoryFacts {budget_bytes:Some(1<<30),..Default::default()},budget.clone()).unwrap();
+        let key=Key {source:None,expression:Arc::new(graph::Expression::Color([0;4])),extent:[PAGE_SIZE;2],color:r.document_color(),
+            blend_space:layer_core::BlendSpace::Linear,level:0,coordinate:[0;2],format:wgpu::TextureFormat::Rgba32Float};
+        let document=super::super::tests::document_at(key.extent);
+        for closed in [false,true] {
+            let unreported=r.device.transient_display.charge(1<<(20+u32::from(closed)));
+            let transient=r.device.transient_display.used();
+            let store=Pages::new(fixture_store(crate::test_support::packet(document.scene(),key.extent)));
+            drop(store.lock().unwrap().claim(&r,key.clone(),u64::MAX,WindowId::default(),crate::residency::Class::Visible).unwrap());
+            if closed {store.lock().unwrap().retirement.as_mut().unwrap().sender=crate::device_poll::Binding::Recipe(std::sync::Weak::new()).handle(&r.device);}
+            let reentered=Arc::new(std::sync::atomic::AtomicU32::new(0));
+            let (watched,observed)=(Arc::downgrade(&store.0),reentered.clone());
+            let _watch=budget.watch(Arc::new(move|| {
+                if TRIMMING.with(std::cell::Cell::get) && watched.upgrade().is_some_and(|store|store.try_lock().is_err()) {observed.fetch_add(1,std::sync::atomic::Ordering::Relaxed);}
+            }));
+            TRIMMING.with(|trimming|trimming.set(true));
+            {
+                let mut held=store.lock().unwrap();
+                held.trim(0,crate::residency::Class::Authored);
+                assert_eq!(held.bytes(),0);
+            }
+            TRIMMING.with(|trimming|trimming.set(false));
+            r.device.retirement_handle().flush().unwrap();
+            assert_eq!(reentered.load(std::sync::atomic::Ordering::Relaxed),0,"a memory watcher ran while the trimming thread held the page store, closed sink {closed}");
+            assert_eq!(r.device.transient_display.used(),transient,"the retired page leaves the transient display after disposal, closed sink {closed}");
+            drop(unreported);
+        }
+    }
+
+    #[test]
+    fn a_page_in_retirement_stays_reported_to_the_ledger_until_it_is_disposed() {
+        let budget=layer_core::MemoryBudget::new();
+        let r=crate::memory::memory_tests::renderer_in_budget(Default::default(),layer_core::DeviceMemoryFacts {budget_bytes:Some(1<<30),..Default::default()},budget).unwrap();
+        let key=Key {source:None,expression:Arc::new(graph::Expression::Color([0;4])),extent:[PAGE_SIZE;2],color:r.document_color(),
+            blend_space:layer_core::BlendSpace::Linear,level:0,coordinate:[0;2],format:wgpu::TextureFormat::Rgba32Float};
+        let document=super::super::tests::document_at(key.extent);
+        let store=Pages::new(fixture_store(crate::test_support::packet(document.scene(),key.extent)));
+        drop(store.lock().unwrap().claim(&r,key.clone(),u64::MAX,WindowId::default(),crate::residency::Class::Visible).unwrap());
+        let (sender,memory,total)={let held=store.lock().unwrap();let retirement=held.retirement.as_ref().unwrap();
+            (retirement.sender.clone(),retirement.memory.clone().expect("retiring pages report to the transient owner"),retirement.total.clone())};
+        let (release,gate)=std::sync::mpsc::channel::<()>();
+        sender.run(move||{let _=gate.recv();});
+        store.lock().unwrap().trim(0,crate::residency::Class::Authored);
+        assert_eq!(memory.reported().pinned_gpu_bytes,total.used(),"a page handed to retirement stays reported as occupied until its disposal");
+        release.send(()).unwrap();
+        sender.flush().unwrap();
+        assert_eq!(memory.reported().pinned_gpu_bytes,total.used(),"its disposal reports the release");
+    }
+
+    #[test]
+    fn a_page_retired_while_the_display_cells_are_held_is_disposed_only_after_they_release() {
+        thread_local! {static TRIMMING:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}
+        let budget=layer_core::MemoryBudget::new();
+        let r=crate::memory::memory_tests::renderer_in_budget(Default::default(),layer_core::DeviceMemoryFacts {budget_bytes:Some(1<<30),..Default::default()},budget.clone()).unwrap();
+        let key=Key {source:None,expression:Arc::new(graph::Expression::Color([0;4])),extent:[PAGE_SIZE;2],color:r.document_color(),
+            blend_space:layer_core::BlendSpace::Linear,level:0,coordinate:[0;2],format:wgpu::TextureFormat::Rgba32Float};
+        let document=super::super::tests::document_at(key.extent);
+        let unreported=r.device.transient_display.charge(1<<21);
+        let store=Pages::new(fixture_store(crate::test_support::packet(document.scene(),key.extent)));
+        drop(store.lock().unwrap().claim(&r,key.clone(),u64::MAX,WindowId::default(),crate::residency::Class::Visible).unwrap());
+        store.lock().unwrap().retirement.as_mut().unwrap().sender=crate::device_poll::Binding::Recipe(std::sync::Weak::new()).handle(&r.device);
+        let cells=Arc::new(std::sync::Mutex::new(Cells::default()));
+        let reentered=Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let (watched,observed)=(Arc::downgrade(&cells),reentered.clone());
+        let _watch=budget.watch(Arc::new(move|| {
+            if TRIMMING.with(std::cell::Cell::get) && watched.upgrade().is_some_and(|cells|cells.try_lock().is_err()) {observed.fetch_add(1,std::sync::atomic::Ordering::Relaxed);}
+        }));
+        TRIMMING.with(|trimming|trimming.set(true));
+        {
+            let (mut held,_cells)=lock_cells(&cells,&store);
+            held.trim(0,crate::residency::Class::Authored);
+            assert_eq!(held.bytes(),0);
+        }
+        TRIMMING.with(|trimming|trimming.set(false));
+        assert_eq!(reentered.load(std::sync::atomic::Ordering::Relaxed),0,"a closed sink disposed a retired page while the display cells were locked");
+        drop(unreported);
+    }
+
+    #[test]
     fn keyed_pages_stay_physical_until_submission_and_read_leases_finish() {
         use crate::submission::ColorPass;
         let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
@@ -3805,8 +3968,8 @@ pub(super) mod query_tests {
             let mut cache=Cache::new(&r,Request {plan:display_mips::Plan::at(extent,0),evaluation:Evaluation::Display},document.scene().order().len());
             cache.prepare_graph(&r,frame,&scene).unwrap();
             match update {
-                "block"=>cache.block(r.arrival_token(),cache.plan.bounds,None),
-                "refuse"=>cache.refuse(None,cache.plan.bounds,&refused),
+                "block"=>cache.block(cache.plan.bounds,None),
+                "refuse"=>cache.refuse(cache.plan.bounds,&refused,crate::frame_demand::Allowance::Fresh),
                 "shown"=>assert!(cache.shown_from(cache.plan.bounds,&cache.expected_frame().unwrap()).is_empty()),
                 "evict"=>cache.evict_window(cache.plan.bounds),
                 _=>unreachable!(),
@@ -3817,10 +3980,11 @@ pub(super) mod query_tests {
     }
 
     #[test]
-    fn a_residency_cell_blocked_before_its_decode_is_drained_wakes_when_the_drain_lands() {
-        use crate::frame_demand::{Input,Outstanding};
+    fn a_cell_blocked_on_a_declaration_wakes_on_a_publication_after_its_frame_was_captured() {
+        use crate::frame_demand::{Input,Outstanding,Producer,UnitWait};
         let extent=[1024,512];let document=super::super::tests::document_at(extent);
         let mut r=crate::memory::memory_tests::legacy_scene_renderer(document.composition().color);
+        r.set_preparation_wake(Arc::new(||{}));
         r.ensure_document_metadata(extent,document.scene()).unwrap();
         let frame=display_frame(&document,0);
         crate::memory::memory_tests::legacy_scene_frame(&mut r,frame);
@@ -3828,24 +3992,19 @@ pub(super) mod query_tests {
         crate::scene::scale::tests::prepare_fixture_frame(&r,frame,&scene);
         let mut cache=Cache::new(&r,Request {plan:display_mips::Plan::at(extent,0),evaluation:Evaluation::Display},document.scene().order().len());
         cache.prepare_graph(&r,frame,&scene).unwrap();
-        let slot=Arc::new(std::sync::Mutex::new(crate::object_image_mips::CoordinateSlot::new(&Default::default())));
-        let decoded=|r:&mut WgpuRasterizer|r.source_results.push_back((r.device.working_space(),crate::object_image_mips::PreparedImageWork::Coordinates {
-            destination:Arc::downgrade(&slot),pixels:Ok(Arc::new(vec![0;8]))},r.scene_tiers.ram.charge(0)));
-        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        decoded(&mut r);
-        cache.block(r.arrival_token(),cache.plan.bounds,Some(Input::Residency));
-        assert_eq!(cache.cells_demand(&r,true),Some(Outstanding::Blocked(Input::Residency)),"the undrained decode leaves the cell waiting");
-        r.drain_image_decodes(&mut encoder).unwrap();
-        assert_eq!(cache.cells_demand(&r,true),Some(Outstanding::Runnable),"draining the decoded input left the cell parked on an arrival it had already counted");
-        let pass=r.arrival_token();
-        decoded(&mut r);
-        r.drain_image_decodes(&mut encoder).unwrap();
-        cache.block(pass,cache.plan.bounds,Some(Input::Residency));
-        assert_eq!(cache.cells_demand(&r,true),Some(Outstanding::Runnable),"an input that arrived after the pass began must wake the cell the pass blocks");
+        let publish=r.raster_name_waker().expect("the raster runtime publishes declarations");
+        cache.block(cache.plan.bounds,Some(UnitWait::input(Producer::Declaration(r.raster_declarations()))));
+        assert_eq!(cache.cells_demand(&r,true),Some(Outstanding::Blocked(Input::Name)),"the cell sleeps until a declaration is published");
+        publish.wake_by_ref();
+        assert_eq!(cache.cells_demand(&r,true),Some(Outstanding::Runnable),"the publication wakes the cell");
+        let captured=r.raster_declarations();
+        publish.wake_by_ref();
+        cache.block(cache.plan.bounds,Some(UnitWait::input(Producer::Declaration(captured))));
+        assert_eq!(cache.cells_demand(&r,true),Some(Outstanding::Runnable),"a publication after the frame was captured wakes the cell the frame blocks");
     }
 
     #[test]
-    fn a_cell_refused_its_object_windows_retries_after_an_arrival_although_the_refusal_never_fits() {
+    fn a_cell_refused_its_object_windows_stays_parked_through_an_unrelated_arrival_and_revives_on_room() {
         use crate::frame_demand::Outstanding;
         let extent=[1024,512];let document=super::super::tests::document_at(extent);
         let mut r=crate::memory::memory_tests::legacy_scene_renderer(document.composition().color);
@@ -3855,19 +4014,21 @@ pub(super) mod query_tests {
         let mut scene=Scene::new(&r).unwrap();scene.scale_sources.prepare(&r,frame,&[]);
         crate::scene::scale::tests::prepare_fixture_frame(&r,frame,&scene);
         let display=r.scene_tiers.display.clone();
-        let _held=display.charge(display.limit().saturating_sub(display.used()));
-        let refused=display.blocked(Class::Navigator,1).expect("the constrained tier refuses navigator object windows");
+        let held=display.charge(display.limit().saturating_sub(display.used()));
+        let refused=display.blocked(Class::Navigator,1).expect("the constrained tier refuses navigator object windows").alone();
         let mut cache=Cache::new(&r,Request {plan:display_mips::Plan::at(extent,0),evaluation:Evaluation::Display},document.scene().order().len());
         cache.prepare_graph(&r,frame,&scene).unwrap();
-        cache.refuse(Some(r.arrival_token()),cache.plan.bounds,&refused);
+        cache.refuse(cache.plan.bounds,&refused,crate::frame_demand::Allowance::Fresh);
         assert_eq!(cache.residual_demand(&r),Some(Outstanding::Blocked(crate::frame_demand::Input::Residency)),"the cell refused its object windows parks on residency");
         let slot=Arc::new(std::sync::Mutex::new(crate::object_image_mips::CoordinateSlot::new(&Default::default())));
         r.source_results.push_back((r.device.working_space(),crate::object_image_mips::PreparedImageWork::Coordinates {
             destination:Arc::downgrade(&slot),pixels:Ok(Arc::new(vec![0;8]))},r.scene_tiers.ram.charge(0)));
         r.drain_image_decodes(&mut crate::submission::CommandEncoder::new(&r.device,&Default::default())).unwrap();
         assert!(!refused.fits(),"the stored refusal still cannot fit");
-        assert_eq!(cache.residual_demand(&r),Some(Outstanding::Runnable),"an arrival after the refusal unparks the cell");
-        assert_eq!(cache.cells_demand(&r,false),Some(Outstanding::Runnable),"the cell retries its admission instead of waiting on a refusal whose release no one will signal");
+        assert_eq!(cache.residual_demand(&r),Some(Outstanding::Blocked(crate::frame_demand::Input::Residency)),"an unrelated arrival leaves the parked cell parked");
+        drop(held);display.set_grant(u64::MAX);display.set_floor(0);
+        assert!(refused.fits(),"the release and the raised grant give the navigator room");
+        assert_eq!(cache.residual_demand(&r),Some(Outstanding::Runnable),"the room a release returns revives the parked cell");
     }
 
     #[test]
@@ -3903,9 +4064,9 @@ pub(super) mod query_tests {
             let window_bytes=cache.plan.size.map(u64::from).into_iter().product::<u64>()*16
                 +cache.plan.level_size(cache.plan.level+1).map(u64::from).into_iter().product::<u64>()*16;
             let initial_scene=r.memory.display_grant();let initial_display=r.memory.display_owner().grant().gpu_bytes;
-            let reservation=cache.reserve_window(&r,&scene,window_bytes).unwrap_or_else(|_|panic!("projection setup: Scene={initial_scene} Display={initial_display} window_bytes={window_bytes}"));
+            let reservation=cache.reserve_window(&r,&scene,window_bytes,crate::frame_demand::Allowance::Fresh).unwrap_or_else(|_|panic!("projection setup: Scene={initial_scene} Display={initial_display} window_bytes={window_bytes}"));
             let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
-            cache.pixels.ensure_root(&r,cache.plan,wgpu::TextureFormat::Rgba32Float,"composition window",reservation.charge(window_bytes));
+            cache.pixels.ensure_root(&r,cache.plan,wgpu::TextureFormat::Rgba32Float,"composition window",reservation.charge());
             cache.pixels.ensure(&r,cache.plan,wgpu::TextureFormat::Rgba32Float,r.scene_tiers.windows.charge(0));
             for image in [cache.pixels.root().unwrap(),cache.pixels.next().unwrap()] {
                 drop(encoder.color_pass("initialized retained projection",&image.view,wgpu::LoadOp::Clear(wgpu::Color::WHITE)));
@@ -3978,7 +4139,7 @@ pub(super) mod query_tests {
                         report.gpu_bytes,report.pinned_gpu_bytes,cache.pages.lock().unwrap().bytes(),cache.window_bytes()));
                     break;
                 }
-                assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady)),"{result:?}");
+                assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"{result:?}");
             }
             drop(held);
         }
@@ -4010,12 +4171,12 @@ pub(super) mod query_tests {
             let mut encoder=submission::CommandEncoder::new(&renderer.device,&Default::default());
             let result={let mut work=crate::test_support::work(false);scene.refine_display(&mut renderer,frame,&mut encoder,&mut work)};
             renderer.scene=Some(scene);
-            assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady)),"{result:?}");
+            assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"{result:?}");
             renderer.uploads.finish(&encoder);encoder.submit(&renderer.queue);renderer.wait_idle().unwrap();
             if store.lock().unwrap().get(&key,page_rect([0;2]),Accuracy::Exact,0,crate::residency::Class::Visible).is_some() {break;}
             assert!(std::time::Instant::now()<deadline,"approximate pages must remain owed exact refinement");
         }
-        assert!(Arc::ptr_eq(&store,&renderer.scale_display.as_ref().unwrap().pages));
+        assert!(store.same(&renderer.scale_display.as_ref().unwrap().pages));
     }
 }
 
@@ -4249,7 +4410,7 @@ mod freshness_tests {
         let SourceTarget::Paint(handle)=target else {unreachable!()};
         document.artwork.paint.get_mut(handle).unwrap().raster=RasterRevision::pending();
         let expected=frame(&document);
-        assert!(matches!(expected.expected_key(&key,key.plan().bounds,0),Err(GpuRasterError::NotReady)));
+        assert!(matches!(expected.expected_key(&key,key.plan().bounds,0),Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
         let coverage=coverage(&written,&expected);
         assert!(coverage.pending.is_empty(),"missing expected inputs are not an in-flight packing comparison");
         assert!(coverage.needs(key.plan().bounds,Accuracy::Display));

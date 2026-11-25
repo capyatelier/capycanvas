@@ -1373,8 +1373,8 @@ fn render_recorded(
             continuation.packet()
         };
         renderer.poll_pending(packet.view).unwrap();
-        if renderer.can_submit() && renderer.raster_dependencies_ready(packet, None) {
-            renderer.submit(packet).unwrap();
+        if renderer.can_submit() && let std::task::Poll::Ready(result) = renderer.submit_when_ready(packet, None) {
+            result.unwrap();
             first = false;
         }
         renderer.wait_idle().unwrap();

@@ -217,7 +217,7 @@ fn coverage_prediction_prepares_bake_and_erase_before_binding() {
                 let predicted: Vec<_> = r.scene_pipelines.for_scene(&r, document.scene(), &[]).cloned().collect();
                 assert!(predicted.iter().any(|pipeline| pipeline.identity() == scene.pipeline[2].identity()));
                 let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
-                assert!(matches!(scene.encode_query_jobs(&mut r, &mut encoder, None), Err(GpuRasterError::NotReady)));
+                assert!(matches!(scene.encode_query_jobs(&mut r, &mut encoder, None), Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
                 assert_eq!(encoder.pass_count(), 0);
                 assert!(scene.pending_pipelines.render.iter().any(|pipeline| pipeline.identity() == scene.pipeline[2].identity()));
                 pollster::block_on(r.compilation.prepare_all(&predicted)).unwrap();

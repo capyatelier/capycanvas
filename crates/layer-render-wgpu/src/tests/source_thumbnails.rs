@@ -112,7 +112,7 @@ fn photo_thumbnail_batches_survive_interleaved_layers_edits_and_discarded_comman
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         let ready = crate::test_support::wait_until("thumbnail batch preparation must complete", || match gpu.prepare(r, id, &mut encoder, 1) {
             Ok(ready) => Ok(ready),
-            Err(pending @ (GpuRasterError::NotReady|GpuRasterError::NotPublished)) => {
+            Err(pending @ (GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished)) => {
                 crate::test_support::submit_encoded(r, |r, worker| { r.drain_image_decodes(worker).unwrap(); });
                 crate::test_support::complete(r);
                 Err(pending)

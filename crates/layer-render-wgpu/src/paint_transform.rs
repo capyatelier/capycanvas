@@ -272,6 +272,9 @@ impl PaintTransforms {
     pub fn has_preview(&self) -> bool {
         self.0.iter().any(ImageTransformState::has_preview)
     }
+    pub(crate) fn previews(&self, target: SourceTarget) -> bool {
+        self.0.iter().any(|state| state.preview.as_ref().is_some_and(|preview| preview.target == target))
+    }
 
     pub fn discard_preview(&mut self) {
         for t in &mut self.0 {
@@ -1742,7 +1745,7 @@ impl ImageTransformState {
             let sources: Vec<_> = copies.iter().flat_map(|window| &window.jobs).flat_map(|(job, _)| job.sources.iter().copied())
                 .collect::<std::collections::BTreeSet<_>>().into_iter().collect();
             let _leases = match snapshot.prepare_pages(r, &sources, encoder) {
-                Err(GpuRasterError::NotReady) => {
+                Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)) => {
                     waiting = true;
                     if r.decode_queue_has_room() { continue; }
                     break;
@@ -2249,7 +2252,7 @@ impl ImageTransformState {
             let snapshot=self.sources[0].as_ref().unwrap();
             let _leases=match snapshot.prepare_pages(r,std::slice::from_ref(&coordinate),encoder) {
                 Ok(leases)=>leases,
-                Err(GpuRasterError::NotReady)=>{pending=true;continue;},
+                Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))=>{pending=true;continue;},
                 Err(error)=>return Err(error),
             };
             let input=self.reduced.as_mut().unwrap();

@@ -47,8 +47,23 @@ pub struct CanonicalName {
     wakers: Mutex<Vec<Waker>>,
 }
 
+#[derive(Debug)]
+pub struct CanonicalWriter(pub(super) Arc<CanonicalName>);
+
+impl CanonicalWriter {
+    pub fn new(before: impl Into<ContentVersion>) -> Self { Self(CanonicalName::new(before)) }
+
+    pub fn version(&self) -> ContentVersion { self.0.version() }
+
+    pub fn resolve(self, changed: bool) -> Result<(), &'static str> { self.0.resolve(changed) }
+}
+
+impl Drop for CanonicalWriter {
+    fn drop(&mut self) { let _ = self.0.resolve(true); }
+}
+
 impl CanonicalName {
-    pub fn new(before: impl Into<ContentVersion>) -> Arc<Self> {
+    fn new(before: impl Into<ContentVersion>) -> Arc<Self> {
         Arc::new(Self { before: before.into(), after: ContentName::fresh(), outcome: AtomicU8::new(0), wakers: Mutex::new(Vec::new()) })
     }
 
@@ -74,7 +89,7 @@ impl CanonicalName {
         }
     }
 
-    pub fn resolve(&self, changed: bool) -> Result<(), &'static str> {
+    fn resolve(&self, changed: bool) -> Result<(), &'static str> {
         self.outcome.compare_exchange(0, if changed { 2 } else { 1 }, Ordering::Release, Ordering::Relaxed)
             .map_err(|_| "Canonical content name was already resolved")?;
         let wakers = std::mem::take(&mut *self.wakers.lock().unwrap());
@@ -764,6 +779,22 @@ mod tests {
         let resolved = ContentVersion::derive(17, &[changed.version(), other.into()]);
         assert_eq!(resolved.matches(&pending), Some(true));
         assert_eq!(resolved.authored(), original.authored());
+    }
+
+    #[test]
+    fn an_abandoned_comparison_writer_declines_its_predecessor_and_wakes_its_readers() {
+        struct Woken(AtomicUsize);
+        impl std::task::Wake for Woken { fn wake(self: Arc<Self>) { self.0.fetch_add(1, Ordering::Relaxed); } }
+        let before = ContentName::fresh();
+        let descriptor = crate::color::DocumentColor::default().paint_descriptor();
+        let (tile, writer) = RasterTile::pending_from_live(descriptor, before.into());
+        let reader = tile.content_version();
+        let woken = Arc::new(Woken(AtomicUsize::new(0)));
+        assert!(reader.register_waker(&Waker::from(woken.clone())));
+        drop(writer);
+        assert_eq!(woken.0.load(Ordering::Relaxed), 1, "readers of an abandoned comparison are woken");
+        assert_eq!(reader.resolved(), Some(reader.identity()), "an abandoned comparison resolves to its fresh name");
+        assert_eq!(reader.matches(&before.into()), Some(false), "an abandoned comparison never claims equality");
     }
 
     #[test]

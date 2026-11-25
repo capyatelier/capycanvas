@@ -58,6 +58,20 @@ pub(crate) fn renderer_in_budget(color: layer_core::color::DocumentColor, facts:
     WgpuRasterizer::new_native_headless_in(color, facts, budget).map(|renderer| *renderer)
 }
 
+pub(crate) fn pin_every_free_byte(r: &mut WgpuRasterizer) -> Vec<crate::residency::Reservation> {
+    let (mut pinned, mut chunk) = (Vec::new(), 1u64 << 32);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while chunk >= 64 << 10 {
+        assert!(std::time::Instant::now() < deadline, "the free room must drain");
+        match r.admit_raster_working(chunk, crate::frame_demand::Allowance::Fresh) {
+            Ok(held) => pinned.push(held),
+            Err(_) if r.lane_waits() => { r.refresh_memory_limits(); complete(r); r.device.retirement_handle().flush().unwrap(); },
+            Err(_) => chunk /= 2,
+        }
+    }
+    pinned
+}
+
 pub(crate) fn lower_memory_to_floor(r: &mut WgpuRasterizer) {
     let budget = r.factory.memory_budget().clone();
     while budget.ram_limit_bytes() > 384 << 20 {
@@ -344,13 +358,14 @@ fn device_bytes_after_the_lane_and_authored_display_work(waits: bool) -> (u64, u
     crate::test_support::submit_settled(&mut r, frame);
     let unit = r.memory.working_limit();
     if waits {
-        assert!(r.admit_raster_working(u64::MAX / 2).is_err(), "the lane cannot fit the device");
+        assert!(r.admit_raster_working(u64::MAX / 2,crate::frame_demand::Allowance::Fresh).is_err(), "the lane cannot fit the device");
     }
-    let display = r.admit_display(None, crate::residency::Class::Authored, unit);
-    assert_eq!(display.is_ok(), !waits, "a waiting lane holds every display admission back, so nothing draws on the reservations it borrows");
+    let stopped = r.memory.stop().is_some();
+    let display = r.admit_display(None, crate::residency::Class::Authored, unit,crate::frame_demand::Allowance::Fresh);
+    assert_eq!(display.is_ok(), !stopped, "a waiting lane holds every display admission back, so nothing draws on the reservations it borrows");
     r.publish_memory(); budget.flush_reports(); r.sync_raster_report();
     let room = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used());
-    let raster = r.admit_raster_working(room).expect("the lane takes the room its ledger shows");
+    let raster = r.admit_raster_working(room,crate::frame_demand::Allowance::Fresh).expect("the lane takes the room its ledger shows");
     r.publish_memory(); budget.flush_reports();
     let device = budget.snapshot().devices[0];
     let detail = format!("unit {unit} room {room} display used {} raster used {} physical {} limit {}", r.scene_tiers.display.used(), r.raster_tiers.raster.used(), device.physical_bytes, device.limit_bytes);
@@ -371,36 +386,339 @@ fn a_lane_admitted_after_it_waited_leaves_the_displays_working_reservations_back
 }
 
 #[test]
-fn a_lane_that_no_release_can_wake_asks_for_its_own_frame_until_room_returns() {
+fn a_lane_that_no_release_can_wake_refuses_its_edit_once_instead_of_polling() {
     let mut r = renderer(Default::default(), layer_core::DeviceMemoryFacts {budget_bytes: Some(1 << 30), ..Default::default()}).unwrap();
     r.publish_memory(); r.factory.memory_budget().flush_reports(); r.refresh_memory_limits(); r.sync_raster_report();
+    r.live_stroke = Some(layer_core::StrokeId(1)); r.memory.claim(r.live_stroke);
     let room = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used()) + lendable(&r);
-    let held = r.raster_tiers.admitted.admit(crate::residency::Class::Authored, 64 * MIB).unwrap();
-    assert!(r.admit_raster_working(room).is_err(), "the lane needs the room the held bytes take");
-    assert!(layer_render::CanvasRenderer::stroke_waits_for_memory(&r), "the stroke follows the waiting lane");
-    assert!(matches!(r.next_frame(), layer_render::FrameDemand::WaitUntil(_)), "with no release edge to wake it, as on the Web, a waiting lane asks for a frame of its own");
-    drop(held);
-    assert!(r.admit_raster_working(room).is_ok(), "the frame it asked for retries the lane once room returns");
-    assert_eq!(r.next_frame(), layer_render::FrameDemand::Wait, "an admitted lane asks for no more frames");
+    let _held = r.raster_tiers.admitted.admit(crate::residency::Class::Authored, 64 * MIB).unwrap();
+    assert!(r.admit_raster_working(room,crate::frame_demand::Allowance::Fresh).is_err(), "the lane needs the room the held bytes take");
+    assert!(!r.lane_waits(), "a caller's own reservation has no release to wait for");
+    assert!(!matches!(r.next_frame(), layer_render::FrameDemand::WaitUntil(_)), "the lane asks for no polling frame");
+    assert_eq!(r.take_lane_failure(layer_core::StrokeId(1)), Some(GpuRasterError::StrokeMemory), "the edit is refused at once");
+    assert_eq!(r.take_lane_failure(layer_core::StrokeId(1)), None, "and only once");
 }
 
 #[test]
-fn a_lane_that_display_bytes_still_retiring_would_cover_is_woken_when_they_drain() {
+fn a_refused_lane_keeps_its_refusal_until_it_is_delivered_without_admitting_again() {
+    let mut r = renderer(Default::default(), layer_core::DeviceMemoryFacts {budget_bytes: Some(1 << 30), ..Default::default()}).unwrap();
+    r.publish_memory(); r.factory.memory_budget().flush_reports(); r.refresh_memory_limits(); r.sync_raster_report();
+    r.live_stroke = Some(layer_core::StrokeId(1)); r.memory.claim(r.live_stroke);
+    let room = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used()) + lendable(&r);
+    let _held = r.raster_tiers.admitted.admit(crate::residency::Class::Authored, 64 * MIB).unwrap();
+    assert!(r.admit_raster_working(room,crate::frame_demand::Allowance::Fresh).is_err(), "the lane needs the room the held bytes take");
+    let before = crate::test_support::PassCounts::snapshot();
+    assert!(r.admit_raster_working(room,crate::frame_demand::Allowance::Fresh).is_err(), "an undelivered refusal answers the next request");
+    r.end_frame_memory(); r.end_frame_memory();
+    assert_eq!(crate::test_support::PassCounts::snapshot().delta(before).raster_admissions, 0, "a refused lane is not admitted again before its refusal is delivered");
+    assert_eq!(r.take_lane_failure(layer_core::StrokeId(1)), Some(GpuRasterError::StrokeMemory), "frames that do not deliver the refusal keep it");
+    assert_eq!(r.take_lane_failure(layer_core::StrokeId(1)), None, "and it is delivered once");
+}
+
+#[test]
+fn a_lane_waits_on_the_victims_its_search_retires_and_rechecks_once_when_they_drain() {
     let mut r = renderer(Default::default(), layer_core::DeviceMemoryFacts {budget_bytes: Some(1 << 30), ..Default::default()}).unwrap();
     let (send, woken) = std::sync::mpsc::channel();
     r.set_preparation_wake(Arc::new(move || { let _ = send.send(()); }));
-    let retiring = r.retired_display_bytes.charge(64 * MIB);
+    r.live_stroke = Some(layer_core::StrokeId(1)); r.memory.claim(r.live_stroke);
+    let notice = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let victim = r.scene_tiers.display.heap().lease(&notice);
+    let charge = r.scene_tiers.display.charge(64 * MIB);
+    victim.offer(64 * MIB, 0);
     r.publish_memory(); r.factory.memory_budget().flush_reports(); r.refresh_memory_limits(); r.sync_raster_report();
     let wanted = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used()) + lendable(&r) + 16 * MIB;
-    let Err(refused) = r.admit_raster_working(wanted) else { panic!("the lane needs room the display holds while it retires") };
-    let edge = r.device.retirement_handle();
-    edge.flush().unwrap();
+    let refused = r.admit_raster_working(wanted,crate::frame_demand::Allowance::Fresh).err().expect("the lane needs room the display victim holds");
+    assert!(victim.evicted(), "the lane's search marks the display victim");
+    assert!(refused.waiting().is_some_and(|batch| !batch.settled()), "the refusal names the batch its search started");
+    assert!(r.lane_waits(), "the stopped stroke sleeps on its own reclaim");
+    assert_eq!(r.take_lane_failure(layer_core::StrokeId(1)), None, "a pending reclaim is no refusal");
+    let other = r.admit_display(None, crate::residency::Class::Visible, 1,crate::frame_demand::Allowance::Fresh).err().expect("other work waits behind the stopped lane");
+    assert!(other.external() && other.waiting().is_some_and(|batch| !batch.settled()), "other work waits on the lane's end, not on its reclaim");
+    assert!(r.admit_raster_working(wanted,crate::frame_demand::Allowance::Fresh).is_err() && victim.evicted(), "the stopped lane does not search again while its reclaim is pending");
+    let query = crate::scene::sources::Inputs::default().accept_query(&mut r, None,crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh).err().expect("a query waits behind the stopped lane");
+    assert!(matches!(&query, GpuRasterError::Waiting(waiting) if waiting.need().external() && waiting.need().waiting().is_some_and(|end| !end.settled())),
+        "a refused query carries the lane end it waits on: {query:?}");
     while woken.try_recv().is_ok() {}
-    edge.run(move || drop(retiring));
+    let hold = victim.take_batch().expect("the marked victim carries its batch");
+    let edge = r.device.retirement_handle();
+    edge.run(move || drop((charge, hold)));
     edge.flush().unwrap();
-    let (woke, stale) = (woken.try_recv().is_ok(), refused.fits());
-    r.publish_memory(); r.factory.memory_budget().flush_reports();
-    assert!(woke, "64 MiB drained from the display covers the 16 MiB the lane lacks, so the drain wakes it (fits before the display republishes: {stale}, after: {})", refused.fits());
+    assert!(woken.try_recv().is_ok(), "the drained victim wakes the lane once its charge has dropped");
+    assert!(woken.try_recv().is_err(), "the lane is woken once");
+    assert!(!r.lane_waits(), "a settled reclaim leaves the stroke runnable for one recheck");
+    let rechecked = r.admit_raster_working(wanted,crate::frame_demand::Allowance::Fresh).map(drop);
+    let refused = r.take_lane_failure(layer_core::StrokeId(1));
+    assert!(rechecked.is_ok() != refused.is_some(), "the recheck either grants the lane or refuses its edit once: {rechecked:?} {refused:?}");
+    assert!(!r.lane_waits() && r.take_lane_failure(layer_core::StrokeId(1)).is_none(), "the recheck ends the wait");
+    assert!(other.waiting().is_some_and(crate::residency::Batch::settled), "the lane's end releases the work its stop held back");
+}
+
+#[test]
+fn a_private_capture_refused_beside_a_live_stroke_leaves_the_strokes_lane_alone() {
+    let mut r = renderer(Default::default(), layer_core::DeviceMemoryFacts {budget_bytes: Some(1 << 30), ..Default::default()}).unwrap();
+    r.publish_memory(); r.factory.memory_budget().flush_reports(); r.refresh_memory_limits(); r.sync_raster_report();
+    r.live_stroke = Some(layer_core::StrokeId(1)); r.memory.claim(r.live_stroke);
+    let full = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used()) + lendable(&r) + 64 * MIB;
+    let _held = r.raster_tiers.admitted.charge(full);
+    let texture = crate::test_support::page_texture(&r, wgpu::TextureFormat::Rgba32Float);
+    let tile = layer_core::raster::RasterTile::pending(layer_core::raster::RasterPlane::Color.descriptor(r.document_color()));
+    let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
+    let refused = r.encode_private_tiles(vec![(texture, tile, layer_core::color::LayerColorMode::FullColor)], &mut encoder);
+    assert!(refused.is_err(), "the private capture finds no room");
+    assert!(!r.lane_exhausted() && !r.lane_waits(), "a private capture's miss neither ends nor holds the live stroke's lane");
+}
+
+#[test]
+fn a_lane_rechecking_after_its_reclaim_drains_spends_the_search_its_wait_saved() {
+    let mut r = renderer(Default::default(), layer_core::DeviceMemoryFacts {budget_bytes: Some(1 << 30), ..Default::default()}).unwrap();
+    r.live_stroke = Some(layer_core::StrokeId(1)); r.memory.claim(r.live_stroke);
+    let notice = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let first = r.scene_tiers.display.heap().lease(&notice);
+    let charge = r.scene_tiers.display.charge(8 * MIB);
+    first.offer(8 * MIB, 0);
+    r.publish_memory(); r.factory.memory_budget().flush_reports(); r.refresh_memory_limits(); r.sync_raster_report();
+    let wanted = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used()) + lendable(&r) + 16 * MIB;
+    assert!(r.admit_raster_working(wanted, crate::frame_demand::Allowance::Fresh).is_err() && first.evicted() && r.lane_waits(), "the lane's one search marks the only victim and waits on it");
+    let later = r.scene_tiers.display.heap().lease(&notice);
+    let held = r.scene_tiers.display.charge(64 * MIB);
+    later.offer(64 * MIB, 0);
+    let hold = first.take_batch().expect("the marked victim carries its batch");
+    let edge = r.device.retirement_handle();
+    edge.run(move || drop((charge, hold)));
+    edge.flush().unwrap();
+    assert!(!r.lane_waits(), "the drained reclaim leaves the lane one recheck");
+    let _ = r.admit_raster_working(wanted, crate::frame_demand::Allowance::Fresh);
+    assert!(!later.evicted(), "a recheck after the reclaim it waited on spends no second search, whatever allowance its caller passes");
+    drop(held);
+}
+
+#[test]
+fn a_frame_held_on_its_lane_reclaim_neither_prepares_nor_submits_when_the_host_forces_a_draw() {
+    let doc = document();
+    let mut r = renderer(Default::default(), layer_core::DeviceMemoryFacts {budget_bytes: Some(1 << 30), ..Default::default()}).unwrap();
+    r.resize_surface(512, 512).unwrap();
+    r.live_stroke = Some(layer_core::StrokeId(1)); r.memory.claim(r.live_stroke);
+    let notice = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let victim = r.scene_tiers.display.heap().lease(&notice);
+    let charge = r.scene_tiers.display.charge(64 * MIB);
+    victim.offer(64 * MIB, 0);
+    r.publish_memory(); r.factory.memory_budget().flush_reports(); r.refresh_memory_limits(); r.sync_raster_report();
+    let wanted = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used()) + lendable(&r) + 16 * MIB;
+    assert!(r.admit_raster_working(wanted,crate::frame_demand::Allowance::Fresh).is_err() && r.lane_waits(), "the stroke's lane sleeps on its reclaim");
+    let mut attached = crate::AttachedRenderer(Some(Box::new(r)));
+    let frame = packet(doc.scene(), [512; 2]);
+    let (before, submissions) = (crate::test_support::PassCounts::snapshot(), attached.0.as_ref().unwrap().metrics.submissions);
+    for _ in 0..3 { assert!(attached.submit_when_ready(frame, None).is_pending(), "a forced draw does not take the held frame's turn"); }
+    let r = attached.0.as_mut().unwrap();
+    assert_eq!((crate::test_support::PassCounts::snapshot().delta(before).display_rooms, r.metrics.submissions), (0, submissions), "the held frame is neither prepared again nor submitted");
+    drop(r.admit_capture_window(u64::MAX / 4, u64::MAX / 4, 0, crate::frame_demand::Allowance::Fresh));
+    assert!(r.lane_waits(), "a capture window refused behind the held lane leaves the stroke's wait in place");
+    let hold = victim.take_batch().expect("the marked victim carries its batch");
+    let edge = r.device.retirement_handle();
+    edge.run(move || drop((charge, hold)));
+    edge.flush().unwrap();
+    assert!(!r.lane_waits(), "the drained reclaim ends the hold");
+    let before = crate::test_support::PassCounts::snapshot();
+    let _ = attached.submission_turn(frame, None);
+    assert_ne!(crate::test_support::PassCounts::snapshot().delta(before).display_rooms, 0, "the next draw takes the frame's turn once the reclaim settles");
+}
+
+#[test]
+fn a_close_passes_its_room_only_for_the_stroke_that_drew_and_within_its_closing_footprint() {
+    let doc = document();
+    let mut r = renderer(Default::default(), layer_core::DeviceMemoryFacts {budget_bytes: Some(1 << 30), ..Default::default()}).unwrap();
+    let presented = crate::present_transition::Charge::new(8 * MIB, &r.device.transient_display, r.device.transient_memory.clone());
+    r.publish_memory(); r.factory.memory_budget().flush_reports(); r.refresh_memory_limits(); r.sync_raster_report();
+    let wanted = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used()) + lendable(&r) + 4 * MIB;
+    let batch = dab_batch(doc.active_target().unwrap(), crate::tests::test_style(BrushExecution::Liquify), layer_core::Rect::EMPTY);
+    let ink = DabBatch {stroke_id: layer_core::StrokeId(1), stroke_start: true, dab_count: 1, ..batch.clone()};
+    r.drawn.record(FramePacket {dab_batches: std::slice::from_ref(&ink), ..packet(doc.scene(), [512; 2])});
+    for (stroke, case) in [(layer_core::StrokeId(2), "a stroke that drew nothing"), (layer_core::StrokeId(1), "the drawn stroke asking past its closing footprint")] {
+        let end = DabBatch {stroke_id: stroke, stroke_start: false, stroke_end: true, dab_count: 0, ..batch.clone()};
+        r.memory.claim(Some(stroke));
+        r.begin_frame_memory(FramePacket {dab_batches: std::slice::from_ref(&end), ..packet(doc.scene(), [512; 2])});
+        assert!(r.admit_raster_working(wanted, crate::frame_demand::Allowance::Fresh).is_err(), "{case}: a close is not admitted past its room");
+        r.end_frame_memory();
+        let _ = r.take_lane_failure(stroke);
+        r.memory.claim(None);
+    }
+    drop(presented);
+}
+
+#[test]
+fn a_shown_fill_or_transform_commit_whose_capture_window_misses_with_nothing_evictable_completes_within_its_footprint() {
+    use layer_core::{Affine, RasterOperation, RasterOperationKind};
+    use layer_engine::{CanvasEngine, ViewTransform, input_queue};
+    const EXTENT: [u32; 2] = [1024, 1024];
+    fn settle(engine: &mut CanvasEngine<WgpuRasterizer>, target: SourceTarget) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while engine.has_pending_input() || engine.has_pending_document_edits() || engine.document().scene().raster(target).unwrap().try_data().is_none() {
+            assert!(std::time::Instant::now() < deadline, "the commit lands: {:?}", engine.backend().outstanding_terms());
+            engine.render_frame().unwrap();
+            engine.backend_mut().wait_idle().unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+    fn show(engine: &mut CanvasEngine<WgpuRasterizer>, shown: impl Fn(&WgpuRasterizer) -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !shown(engine.backend()) {
+            assert!(std::time::Instant::now() < deadline, "the preview is presented");
+            engine.render_frame().unwrap();
+            engine.backend_mut().wait_idle().unwrap();
+        }
+    }
+    for (apply, scale) in [(false, 0.5), (true, 0.5), (true, 1.)] {
+        let document = layer_core::Document::new(layer_core::PortableId::random(), EXTENT[0], EXTENT[1],
+            layer_core::DocumentNames {paint: "Ink".into(), paper: "Paper".into()});
+        let target = document.active_target().unwrap();
+        let mut gpu = renderer(document.composition().color, layer_core::DeviceMemoryFacts {budget_bytes: Some(1 << 30), ..Default::default()}).unwrap();
+        gpu.finish_startup_catalog();
+        gpu.prepare_startup(&document, &layer_core::default_brush(layer_core::DefaultBrushPreset::GPen), true).unwrap();
+        crate::test_support::wait_startup(&mut gpu, std::time::Instant::now() + std::time::Duration::from_secs(60), |progress| progress.complete, format_args!("fill and transform startup"));
+        let view = layer_render::ViewState {width_px: 512, height_px: 512, document_to_surface: [scale, 0., 0., scale, 0., 0.]};
+        let mut engine = CanvasEngine::new(gpu, document, input_queue(8).1, view, ViewTransform {revision: 0, surface_to_document: [1. / scale, 0., 0., 1. / scale, 0., 0.]}).unwrap();
+        let fill = |engine: &mut CanvasEngine<WgpuRasterizer>, color: [f32; 4]| RasterOperation {placement: Affine::IDENTITY,
+            coverage: layer_core::CoverageSnapshot::reveal_all(engine.allocate_coverage_handle(), EXTENT, [0; 2]),
+            kind: RasterOperationKind::Fill {color, texture: Default::default(), alpha_locked: false, edges: None, underfill: None}};
+        let first = fill(&mut engine, [0., 0., 1., 1.]);
+        engine.append_raster_operation(target, first).unwrap();
+        settle(&mut engine, target);
+        let shown = fill(&mut engine, [1., 0., 0., 1.]);
+        if apply {
+            engine.set_transform_preview(Some(layer_render::TransformPreview {transaction: 1, target, moving: false, selection: None,
+                transform: layer_core::ImageTransform::affine(Affine([0.5, 0., 0., 1., 256., 0.]))})).unwrap();
+            show(&mut engine, |r| r.transforms.as_ref().is_some_and(|transforms| transforms.has_preview()));
+        } else {
+            engine.set_fill_preview(Some(layer_render::FillPreview {transaction: 1, revision: 0, target, operation: shown.clone()}));
+            show(&mut engine, |r| r.fill_preview_ready().is_some());
+        }
+        let case = format!("{} at {}%", if apply { "transform Apply" } else { "fill" }, scale * 100.);
+        let (checkpoint, refusals, before) = (engine.checkpoint(), engine.metrics().stroke_memory_refusals, engine.document().artwork.clone());
+        let pinned = pin_every_free_byte(engine.backend_mut());
+        if apply { assert!(engine.commit_transform(None).unwrap()); } else { engine.set_fill_preview(None); engine.append_raster_operation(target, shown).unwrap(); }
+        settle(&mut engine, target);
+        assert_eq!(engine.metrics().stroke_memory_refusals, refusals, "{case}: a commit whose capture window misses is never refused, so the painter is not told");
+        assert!(engine.document().artwork != before && engine.document().scene().raster(target).unwrap().wait_data().is_ok(), "{case}: the commit publishes its pixels");
+        assert!(engine.undo().unwrap() && engine.checkpoint() == checkpoint, "{case}: the commit is one history entry");
+        drop(pinned);
+    }
+}
+
+#[test]
+fn a_close_whose_lane_waits_on_its_own_reclaim_takes_its_turn_while_the_reclaim_drains() {
+    let doc = document();
+    let mut r = renderer(Default::default(), layer_core::DeviceMemoryFacts {budget_bytes: Some(1 << 30), ..Default::default()}).unwrap();
+    r.resize_surface(512, 512).unwrap();
+    let stroke = layer_core::StrokeId(1);
+    let batch = dab_batch(doc.active_target().unwrap(), crate::tests::test_style(BrushExecution::Dry), layer_core::Rect::EMPTY);
+    let ink = DabBatch {stroke_id: stroke, stroke_start: true, dab_count: 1, ..batch.clone()};
+    r.drawn.record(FramePacket {dab_batches: std::slice::from_ref(&ink), ..packet(doc.scene(), [512; 2])});
+    let notice = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let victim = r.scene_tiers.display.heap().lease(&notice);
+    let charge = r.scene_tiers.display.charge(64 * MIB);
+    victim.offer(64 * MIB, 0);
+    r.publish_memory(); r.factory.memory_budget().flush_reports(); r.refresh_memory_limits(); r.sync_raster_report();
+    let wanted = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used()) + lendable(&r) + 16 * MIB;
+    r.memory.claim(Some(stroke));
+    assert!(r.admit_raster_working(wanted, crate::frame_demand::Allowance::Fresh).is_err() && r.lane_waits(), "the stroke's lane sleeps on its own reclaim");
+    r.memory.claim(None);
+    let end = DabBatch {stroke_id: stroke, stroke_start: false, stroke_end: true, dab_count: 0, ..batch};
+    let close = FramePacket {dab_batches: std::slice::from_ref(&end), ..packet(doc.scene(), [512; 2])};
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let ready = loop {
+        match r.submission_turn(close, None) {
+            layer_render::SubmissionTurn::Ready(ready) => break ready,
+            layer_render::SubmissionTurn::Refused(refusal, error) => panic!("the close is refused: {refusal:?} {error:?}"),
+            layer_render::SubmissionTurn::Held => {},
+        }
+        assert!(std::time::Instant::now() < deadline, "a close whose lane waits on its own reclaim takes its turn instead of waiting for the reclaim");
+        complete(&r);
+    };
+    assert!(victim.evicted() && victim.take_batch().is_some_and(|hold| { let edge = r.device.retirement_handle(); edge.run(move || drop((charge, hold))); edge.flush().is_ok() }),
+        "the reclaim the close stepped past is still draining and finishes in the background");
+    r.submit_ready(ready, close).unwrap();
+    assert!(r.take_refused_stroke().is_none() && !r.lane_waits() && r.take_lane_failure(stroke).is_none(), "the close is never refused and leaves the lane free");
+}
+
+#[test]
+fn a_permit_from_an_earlier_turn_cannot_submit_the_packet_that_replaced_it() {
+    let doc = document();
+    let mut attached = crate::AttachedRenderer(Some(Box::new(renderer(Default::default(), Default::default()).unwrap())));
+    attached.resize_surface(512, 512).unwrap();
+    let (first, replacement) = (packet(doc.scene(), [512; 2]), FramePacket {composite_all: true, ..packet(doc.scene(), [512; 2])});
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let stale = loop {
+        if let layer_render::SubmissionTurn::Ready(ready) = attached.submission_turn(first, None) { break ready; }
+        assert!(std::time::Instant::now() < deadline, "the first packet becomes ready");
+        complete(attached.0.as_ref().unwrap());
+    };
+    let _ = attached.submission_turn(replacement, None);
+    let submissions = attached.0.as_ref().unwrap().metrics.submissions;
+    assert!(attached.submit_ready(stale, replacement).is_err(), "a permit outlived by a later turn is refused");
+    assert_eq!(attached.0.as_ref().unwrap().metrics.submissions, submissions, "the replacement is not submitted on the stale permit");
+}
+
+#[test]
+fn a_permit_for_one_packet_cannot_submit_another_in_the_same_turn() {
+    let doc = document();
+    let mut attached = crate::AttachedRenderer(Some(Box::new(renderer(Default::default(), Default::default()).unwrap())));
+    attached.resize_surface(512, 512).unwrap();
+    let (prepared, other) = (packet(doc.scene(), [512; 2]), FramePacket {reset_layers: true, ..packet(doc.scene(), [512; 2])});
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let ready = loop {
+        if let layer_render::SubmissionTurn::Ready(ready) = attached.submission_turn(prepared, None) { break ready; }
+        assert!(std::time::Instant::now() < deadline, "the prepared packet becomes ready");
+        complete(attached.0.as_ref().unwrap());
+    };
+    let submissions = attached.0.as_ref().unwrap().metrics.submissions;
+    assert!(attached.submit_ready(ready, other).is_err(), "a permit names the packet its turn prepared");
+    assert_eq!(attached.0.as_ref().unwrap().metrics.submissions, submissions, "another packet is not submitted on that permit");
+}
+
+#[test]
+fn a_detached_renderer_never_offers_a_turn_it_cannot_submit() {
+    let doc = document();
+    let mut detached = crate::AttachedRenderer(None);
+    assert!(!matches!(detached.submission_turn(packet(doc.scene(), [512; 2]), None), layer_render::SubmissionTurn::Ready(_)), "a renderer without a device holds or refuses the frame instead of granting a turn");
+}
+
+#[test]
+fn a_lost_device_refuses_the_stroke_at_its_next_turn_once_with_the_loss() {
+    let doc = document();
+    let mut attached = crate::AttachedRenderer(Some(Box::new(renderer(Default::default(), Default::default()).unwrap())));
+    attached.resize_surface(512, 512).unwrap();
+    let frame = packet(doc.scene(), [512; 2]);
+    attached.0.as_mut().unwrap().live_stroke = Some(layer_core::StrokeId(1));
+    attached.0.as_ref().unwrap().renderer_factory().on_device_lost()("Canvas GPU stopped (Unknown): test".into());
+    attached.poll_pending(frame.view).unwrap();
+    let lost = GpuRasterError::WaitFailed("Canvas GPU stopped (Unknown): test".into());
+    assert!(matches!(attached.submission_turn(frame, None), layer_render::SubmissionTurn::Refused(_, error) if error == lost), "the stroke waiting at its turn is refused with the loss");
+    attached.poll_pending(frame.view).unwrap();
+    assert!(!matches!(attached.submission_turn(frame, None), layer_render::SubmissionTurn::Refused(..)), "the loss is delivered once");
+}
+
+#[test]
+fn a_capture_window_on_a_spent_allowance_misses_without_a_second_search_and_refuses_only_its_operation() {
+    let mut r = renderer(Default::default(), layer_core::DeviceMemoryFacts {budget_bytes: Some(1 << 30), ..Default::default()}).unwrap();
+    r.publish_memory(); r.factory.memory_budget().flush_reports(); r.refresh_memory_limits();
+    r.live_stroke = Some(layer_core::StrokeId(1)); r.memory.claim(r.live_stroke);
+    let before = crate::test_support::PassCounts::snapshot();
+    drop(r.admit_capture_window(u64::MAX / 4, u64::MAX / 4, 0, crate::frame_demand::Allowance::Spent));
+    assert_eq!(crate::test_support::PassCounts::snapshot().delta(before).raster_admissions, 1, "a window whose owner spent its reclaim tries once without searching");
+    assert_eq!(r.take_lane_failure(layer_core::StrokeId(2)), None, "another operation is not refused for this capture window");
+    assert_eq!(r.take_lane_failure(layer_core::StrokeId(1)), Some(GpuRasterError::StrokeMemory), "a window that is not a funded close is refused as its operation's own outcome");
+}
+
+#[test]
+fn a_capture_window_refused_behind_an_ended_lane_leaves_the_edit_refusal_to_be_delivered() {
+    let mut r = renderer(Default::default(), layer_core::DeviceMemoryFacts {budget_bytes: Some(1 << 30), ..Default::default()}).unwrap();
+    r.publish_memory(); r.factory.memory_budget().flush_reports(); r.refresh_memory_limits();
+    r.live_stroke = Some(layer_core::StrokeId(1)); r.memory.claim(r.live_stroke);
+    assert!(r.admit_raster_working(u64::MAX / 2, crate::frame_demand::Allowance::Fresh).is_err());
+    assert!(r.lane_exhausted(), "nothing can free the room, so the edit's lane ends");
+    drop(r.admit_capture_window(u64::MAX / 4, u64::MAX / 4, 0, crate::frame_demand::Allowance::Fresh));
+    assert_eq!(r.take_lane_failure(layer_core::StrokeId(1)), Some(GpuRasterError::StrokeMemory), "a private capture window cannot clear the refusal the edit has not been told about");
+    assert_eq!(r.take_lane_failure(layer_core::StrokeId(1)), None, "the refusal is delivered once");
 }
 
 #[test]
@@ -409,34 +727,58 @@ fn a_stroke_lane_that_nothing_can_free_refuses_its_edit_once_and_ends_the_wait()
     let (send, woken) = std::sync::mpsc::channel();
     r.set_preparation_wake(Arc::new(move || { let _ = send.send(()); }));
     r.publish_memory(); r.factory.memory_budget().flush_reports(); r.refresh_memory_limits();
-    let wait = |r: &mut WgpuRasterizer, bytes: u64| r.admit_raster_working(bytes).map(drop);
+    let wait = |r: &mut WgpuRasterizer, bytes: u64| r.admit_raster_working(bytes,crate::frame_demand::Allowance::Fresh).map(drop);
     assert!(wait(&mut r, u64::MAX / 2).is_err());
-    assert_eq!(r.take_lane_failure(), None, "only an edit's lane is refused");
+    assert_eq!(r.take_lane_failure(layer_core::StrokeId(1)), None, "only an edit's lane is refused");
     r.end_frame_memory(); r.end_frame_memory();
-    r.live_stroke = Some(layer_core::StrokeId(1));
-    let transient = crate::present_transition::Charge::new(8 * MIB, &r.device.transient_display, r.device.transient_memory.clone());
+    r.live_stroke = Some(layer_core::StrokeId(1)); r.memory.claim(r.live_stroke);
+    let presented = crate::present_transition::Charge::new(8 * MIB, &r.device.transient_display, r.device.transient_memory.clone());
     r.publish_memory(); r.factory.memory_budget().flush_reports(); r.sync_raster_report();
     let wanted = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used()) + lendable(&r) + 4 * MIB;
     assert!(wait(&mut r, wanted).is_err());
-    assert_eq!(r.take_lane_failure(), None, "bytes still draining can free the room the lane lacks, so it waits");
-    let edge = r.device.retirement_handle();
-    edge.flush().unwrap();
+    assert_eq!(r.take_lane_failure(layer_core::StrokeId(1)), Some(GpuRasterError::StrokeMemory), "a presented canvas stays charged while it is shown and frees nothing the lane could wait for, so the edit is refused");
+    drop(presented);
+    r.publish_memory(); r.factory.memory_budget().flush_reports(); r.sync_raster_report();
     while woken.try_recv().is_ok() {}
-    edge.run(move || drop(transient));
-    edge.flush().unwrap();
-    assert!(woken.try_recv().is_ok(), "the drained bytes wake the waiting lane");
-    wait(&mut r, wanted).expect("the drained bytes make room for the lane");
-    drop(r.admit_capture_window(MIB, u64::MAX / 2, 0));
-    assert_eq!(r.take_lane_failure(), None, "a window that fits after its larger first try refuses nothing");
-    for refusals in 1..3 {
+    drop(r.admit_capture_window(MIB, u64::MAX / 2, 0, crate::frame_demand::Allowance::Fresh));
+    assert_eq!(r.take_lane_failure(layer_core::StrokeId(1)), None, "a window that fits after its larger first try refuses nothing");
+    for _ in 1..3 {
         assert!(wait(&mut r, u64::MAX / 2).is_err());
-        assert!(r.lane_exhausted() && layer_render::CanvasRenderer::stroke_waits_for_memory(&r));
+        assert!(r.lane_exhausted() && !r.lane_waits(), "a refused lane is delivered, not waited on");
         while woken.try_recv().is_ok() {}
-        assert_eq!(r.take_lane_failure(), Some(GpuRasterError::StrokeMemory), "with nothing left to free, the edit is refused");
-        assert_eq!(r.memory.stroke_memory_refusals(), refusals, "each refused edit tells the person once");
+        assert_eq!(r.take_lane_failure(layer_core::StrokeId(1)), Some(GpuRasterError::StrokeMemory), "with nothing left to free, the edit is refused");
         assert!(woken.try_recv().is_ok(), "ending the wait wakes the work its stop held back");
-        assert!(r.take_lane_failure().is_none() && !layer_render::CanvasRenderer::stroke_waits_for_memory(&r), "the refusal ends the wait");
+        assert!(r.take_lane_failure(layer_core::StrokeId(1)).is_none() && !r.lane_waits(), "the refusal ends the wait");
     }
+}
+
+#[test]
+fn a_stroke_lane_waits_on_a_held_canvas_already_retiring_and_is_granted_once_it_lands() {
+    let mut r = renderer(Default::default(), layer_core::DeviceMemoryFacts {budget_bytes: Some(1 << 30), ..Default::default()}).unwrap();
+    let (send, woken) = std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move || { let _ = send.send(()); }));
+    r.live_stroke = Some(layer_core::StrokeId(1)); r.memory.claim(r.live_stroke);
+    let (format, size) = (wgpu::TextureFormat::Rgba8Unorm, [2048, 2048]);
+    let encoder = r.device.create_command_encoder(&Default::default());
+    let held = crate::HeldCanvas::new(&r.device, size, format, crate::SdrSurfaceColor::Srgb, Some(crate::HeldCanvas::texture(&r.device, size, format)), None);
+    held.retain_until_complete(&r.device, &encoder);
+    r.publish_memory(); r.factory.memory_budget().flush_reports(); r.refresh_memory_limits(); r.sync_raster_report();
+    let wanted = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used()) + lendable(&r) + 4 * MIB;
+    assert!(r.admit_raster_working(wanted,crate::frame_demand::Allowance::Fresh).is_err());
+    assert_eq!(r.take_lane_failure(layer_core::StrokeId(1)), Some(GpuRasterError::StrokeMemory), "a canvas that is still shown frees nothing, so the edit is refused at once");
+    drop(held);
+    let refused = r.admit_raster_working(wanted,crate::frame_demand::Allowance::Fresh).err().expect("the retiring canvas still holds the room the lane needs");
+    assert!(refused.waiting().is_some_and(|batch| !batch.settled()), "the refusal waits on the canvas retirement already in flight");
+    assert!(r.lane_waits());
+    assert_eq!(r.take_lane_failure(layer_core::StrokeId(1)), None, "bytes about to free refuse no stroke");
+    while woken.try_recv().is_ok() {}
+    r.queue.submit([encoder.finish()]);
+    r.device.wait_queue().unwrap();
+    r.device.retirement_handle().flush().unwrap();
+    assert!(woken.try_recv().is_ok(), "the landed retirement wakes the lane");
+    assert!(!r.lane_waits());
+    assert!(r.admit_raster_working(wanted,crate::frame_demand::Allowance::Fresh).is_ok(), "the recheck grants the lane the bytes the canvas freed");
+    assert_eq!(r.take_lane_failure(layer_core::StrokeId(1)), None);
 }
 
 #[test]
@@ -754,7 +1096,7 @@ fn a_restore_is_refused_or_admitted_after_one_budget_rebalance() {
     assert_eq!(r.memory.preparation.get(), 0);
     drop(import);
     let first = r.admit_preparation_bytes(restore, 0);
-    assert!(first.is_ok() || matches!(first, Err(GpuRasterError::NotReady)), "the released restore must publish its need: {first:?}");
+    assert!(first.is_ok() || matches!(first, Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))), "the released restore must publish its need: {first:?}");
     assert!(r.admit_preparation_bytes(restore, 0).is_ok());
 }
 
@@ -1070,17 +1412,21 @@ fn preview_outputs_the_raster_cannot_hold_keep_the_frame_unready_instead_of_defe
     let dabs=(0..64).map(|n|crate::tests::test_dab([(n%32*PAGE_SIZE+128) as f32,(n/32*PAGE_SIZE+PAGE_SIZE+128) as f32],
         [1.,0.,1.,1.],1.)).collect::<Vec<_>>();
     let batches=[preview(&dabs)];
-    let frame=frame(&dabs,&batches);
-    r.begin_frame_memory(frame);
+    let pressured=frame(&dabs,&batches);
+    r.begin_frame_memory(pressured);
     let budget=r.factory.memory_budget().clone();budget.set_ram_override(Some(384*MIB));
     r.refresh_storage_metrics();r.publish_memory();budget.flush_reports();r.refresh_memory_limits();
     let pressure=budget.admit_import(budget.import_headroom_bytes()).unwrap();r.refresh_memory_limits();
-    if r.raster_dependencies_ready(frame,None) {
-        assert!(!r.submit(frame).is_err_and(|error|error.is_preparation_pending()),"a ready frame deferred its preview outputs during submission");
-    }
+    assert!(!r.raster_dependencies_ready(pressured,None),"the preview that cannot fit must hold for its terminal result");
     assert_eq!(r.preview_pages.len(),held,"a refused preview allocates no pages");
+    let error=crate::test_support::submit_ready(&mut r,pressured).unwrap_err();
+    assert_eq!(error,GpuRasterError::StrokeMemory,"a prepared terminal result must not defer during submission");
+    assert_eq!(r.take_refused_stroke(),Some(layer_render::Refusal {stroke:pressured.operation(),drawn:0}));
+    assert!(r.take_refused_stroke().is_none(),"the refused operation delivers one notice");
+    assert_eq!(r.preview_pages.len(),held,"the terminal refusal allocates no pages");
     drop(pressure);budget.set_ram_override(Some(2<<30));budget.flush_reports();r.refresh_memory_limits();
-    crate::test_support::submit_ready(&mut r,frame).unwrap();
+    let batches=[DabBatch {stroke_id:layer_core::StrokeId(2),..preview(&dabs)}];
+    crate::test_support::submit_ready(&mut r,frame(&dabs,&batches)).unwrap();
     assert!(r.preview_pages.len()>=64,"the released raster holds the preview");
 }
 
@@ -1133,7 +1479,7 @@ fn a_memory_pass_walks_the_paint_pages_once() {
         let before=crate::test_support::PassCounts::snapshot();pass(r);crate::test_support::PassCounts::snapshot().delta(before).pinned_walks
     };
     let held=std::cell::RefCell::new(None);
-    let admission=walks(&mut r,&|r|*held.borrow_mut()=Some(r.admit_raster_working(MIB).unwrap()));
+    let admission=walks(&mut r,&|r|*held.borrow_mut()=Some(r.admit_raster_working(MIB,crate::frame_demand::Allowance::Fresh).unwrap()));
     let commit=walks(&mut r,&|r|r.commit_raster_working(held.borrow_mut().take().unwrap()));
     let refresh=walks(&mut r,&|r|{r.memory.invalidate_limits();r.refresh_memory_limits();});
     assert_eq!([admission,commit,refresh],[1;3],"an admission, a commit and a grant pass each walk the paint pages once");
@@ -1209,7 +1555,7 @@ fn a_raster_admission_evicts_retained_buffers_before_it_is_refused() {
     let headroom=r.memory.raster.handle.gpu_working_limit().saturating_sub(r.raster_tiers.raster.used());
     r.raster_buffers.put(r.raster_buffers.take(&r.device,8*MIB));
     assert_eq!(r.raster_buffers.retained.used(),8*MIB);
-    assert!(r.admit_raster_working(headroom).is_ok(),"the retained buffer must make room for authored working memory");
+    assert!(r.admit_raster_working(headroom,crate::frame_demand::Allowance::Fresh).is_ok(),"the retained buffer must make room for authored working memory");
     assert_eq!(r.raster_buffers.retained.used(),0);
 }
 
@@ -1248,7 +1594,7 @@ fn display_working_admission_uses_device_headroom_instead_of_a_retention_share()
     let share=r.memory.display.handle.grant().gpu_bytes;
     r.refresh_memory_limits();
     let bytes=share.saturating_add(r.scene_tiers.display.used()).saturating_add(1);
-    assert!(r.admit_display(None,crate::residency::Class::Visible,bytes).is_ok(),
+    assert!(r.admit_display(None,crate::residency::Class::Visible,bytes,crate::frame_demand::Allowance::Fresh).is_ok(),
         "a retention share of {share} must not refuse required work with free device headroom");
 }
 
@@ -1257,7 +1603,7 @@ fn an_over_grant_display_admission_shrinks_the_raster_limit_before_the_raster_ad
     let mut r=legacy_scene_renderer(Default::default());
     r.memory.display.handle.report(MemoryReport {demand_gpu_bytes:1,..Default::default()});
     let headroom=r.memory.raster.handle.gpu_working_limit();
-    let held=r.admit_display(None,crate::residency::Class::Visible,64*MIB).expect("required work may exceed the grant");
+    let held=r.admit_display(None,crate::residency::Class::Visible,64*MIB,crate::frame_demand::Allowance::Fresh).expect("required work may exceed the grant");
     let covered=r.scene_tiers.display.used();
     assert!(r.memory.raster.handle.gpu_working_limit().saturating_add(covered)<=headroom,
         "the ledger must take the {covered} display bytes above the grant from the raster before the raster admits");
@@ -1271,7 +1617,7 @@ fn an_over_grant_display_admission_shrinks_the_raster_limit_before_the_raster_ad
 #[test]
 fn a_ledger_refused_display_admission_waits_without_frames_and_wakes_once_when_the_raster_releases() {
     let mut r=renderer(Default::default(),layer_core::DeviceMemoryFacts {budget_bytes:Some(1<<30),..Default::default()}).unwrap();
-    let raster=r.admit_raster_working(512*MIB).expect("the raster holds most of the device");
+    let raster=r.admit_raster_working(512*MIB,crate::frame_demand::Allowance::Fresh).expect("the raster holds most of the device");
     r.memory.display.handle.report(MemoryReport {demand_gpu_bytes:1,..Default::default()});
     r.scene_tiers.display.set_limit(u64::MAX,0);
     let (send,woken)=std::sync::mpsc::channel();
@@ -1282,13 +1628,16 @@ fn a_ledger_refused_display_admission_waits_without_frames_and_wakes_once_when_t
         let resident=r.telemetry().resident_bytes;
         assert!(resident<=grants+64*MIB,"physical {resident} exceeds grants {grants} + 64 MiB");
     };
-    assert!(r.admit_display(None,crate::residency::Class::Visible,384*MIB).is_err(),"the ledger refuses what the device cannot hold");
+    let refused=r.admit_display(None,crate::residency::Class::Visible,384*MIB,crate::frame_demand::Allowance::Fresh).err().expect("the ledger refuses what the device cannot hold");
     physical(&r);
+    let wait=crate::frame_demand::UnitWait::parked(refused,crate::frame_demand::Allowance::Fresh);
+    assert!(wait.eligible(&r).is_none(),"the refused unit waits and registers for the release it needs");
     assert!(woken.recv_timeout(std::time::Duration::from_millis(200)).is_err(),"a refused unit requests no frame before a release");
     r.commit_raster_working(raster);
     woken.recv_timeout(std::time::Duration::from_secs(1)).expect("the raster release wakes the refused unit");
     assert!(woken.recv_timeout(std::time::Duration::from_millis(200)).is_err(),"one release wakes the unit once");
-    let held=r.admit_display(None,crate::residency::Class::Visible,384*MIB).expect("the woken unit fits");
+    let allowance=wait.eligible(&r).expect("the woken unit is eligible again");
+    let held=r.admit_display(None,crate::residency::Class::Visible,384*MIB,allowance).expect("the woken unit fits");
     physical(&r);
     drop(held);
 }
@@ -1300,7 +1649,7 @@ fn a_held_raster_head_whose_room_drains_on_the_poll_thread_is_woken() {
     r.set_preparation_wake(Arc::new(move||{let _=send.send(());}));
     let transient=crate::present_transition::Charge::new(768*MIB,&r.device.transient_display,r.device.transient_memory.clone());
     r.publish_memory();r.factory.memory_budget().flush_reports();r.refresh_memory_limits();
-    assert!(r.admit_raster_working(512*MIB).is_err(),"the retiring display bytes hold the room the raster head needs");
+    assert!(r.admit_raster_working(512*MIB,crate::frame_demand::Allowance::Fresh).is_err(),"the retiring display bytes hold the room the raster head needs");
     assert_eq!(r.next_frame(),layer_render::FrameDemand::Wait,"the renderer waits for the retiring bytes to drain");
     let edge=r.device.retirement_handle();
     edge.flush().unwrap();
@@ -1319,38 +1668,47 @@ fn a_refused_authored_raster_head_stops_lower_display_admissions_and_takes_the_d
     r.scene_tiers.display.set_limit(u64::MAX,0);
     let notice=Arc::new(std::sync::atomic::AtomicBool::new(false));
     let retained=r.scene_tiers.display.heap().lease(&notice);
-    let mut held=Some(r.admit_display(None,crate::residency::Class::Visible,640*MIB).expect("required work may exceed the grant"));
+    let mut held=Some(r.admit_display(None,crate::residency::Class::Visible,640*MIB,crate::frame_demand::Allowance::Fresh).expect("required work may exceed the grant"));
     retained.offer(640*MIB,0);
     let frame=|r:&mut WgpuRasterizer|{r.publish_memory();r.factory.memory_budget().flush_reports();r.refresh_memory_limits();};
     frame(&mut r);
-    assert!(r.admit_raster_working(512*MIB).is_err(),"the display overdraft holds the room the raster head needs");
-    assert!(r.admit_display(None,crate::residency::Class::Visible,MIB).is_err(),"a lower class is not admitted while a higher head is blocked on memory");
+    assert!(r.admit_raster_working(512*MIB,crate::frame_demand::Allowance::Fresh).is_err(),"the display overdraft holds the room the raster head needs");
+    assert!(r.admit_display(None,crate::residency::Class::Visible,MIB,crate::frame_demand::Allowance::Fresh).is_err(),"a lower class is not admitted while a higher head is blocked on memory");
     let mut admitted=None;
     for _ in 0..4 {
         frame(&mut r);
-        if retained.evicted() {held=None;}
-        if let Ok(reservation)=r.admit_raster_working(512*MIB) {admitted=Some(reservation);break;}
+        if retained.evicted() {held=None;drop(retained.take_batch());}
+        if let Ok(reservation)=r.admit_raster_working(512*MIB,crate::frame_demand::Allowance::Fresh) {admitted=Some(reservation);break;}
     }
     assert!(admitted.is_some(),"the refused authored head takes the room of display bytes above the grant, evicted={}",retained.evicted());
-    assert!(r.admit_display(None,crate::residency::Class::Visible,MIB).is_ok(),"the stop ends once the head is admitted");
+    assert!(r.admit_display(None,crate::residency::Class::Visible,MIB,crate::frame_demand::Allowance::Fresh).is_ok(),"the stop ends once the head is admitted");
     drop(held);
 }
 
 #[test]
-fn refused_display_admissions_search_for_room_once_until_the_refusal_fits() {
+fn a_refused_display_unit_searches_for_room_once_per_batch_and_rechecks_without_searching() {
     use crate::residency::Class;
+    use crate::frame_demand::UnitWait;
     let r=renderer(Default::default(),layer_core::DeviceMemoryFacts {budget_bytes:Some(1<<30),..Default::default()}).unwrap();
     r.scene_tiers.display.set_limit(64*MIB,0);
-    let held=r.admit_display(None,Class::Prefetch,48*MIB).expect("the first unit fits");
     let scans=|admit:&mut dyn FnMut()|{let before=crate::test_support::PassCounts::snapshot();admit();crate::test_support::PassCounts::snapshot().delta(before).room_scans};
-    assert_eq!(scans(&mut ||for _ in 0..16 {assert!(r.admit_display(None,Class::Prefetch,32*MIB).is_err());}),1,"refused units of one class search for room once");
-    assert_eq!(scans(&mut ||assert_eq!(r.admit_display(None,Class::Refinement,32*MIB).err().map(|refusal|refusal.class()),Some(Class::Refinement),"a lower class is refused at its own class")),0);
-    assert_eq!(scans(&mut ||assert!(r.admit_display(None,Class::Refinement,24*MIB).is_err())),1,"a smaller unit still searches for room");
-    assert_eq!(scans(&mut ||drop(r.admit_display(None,Class::Prefetch,8*MIB).expect("a smaller unit that fits is admitted"))),1);
-    assert_eq!(scans(&mut ||assert!(r.admit_display(None,Class::Refinement,24*MIB).is_err())),0,"the smallest refused search is remembered");
-    assert_eq!(scans(&mut ||drop(r.admit_display(None,Class::Visible,MIB))),1,"a higher class still looks for room");
-    drop(held);
-    assert_eq!(scans(&mut ||assert!(r.admit_display(None,Class::Prefetch,32*MIB).is_ok(),"the search runs again once the refusal fits")),1);
+    let attempt=|wait:&mut UnitWait|->Option<crate::residency::Reservation> {
+        let allowance=wait.eligible(&r)?;
+        r.admit_display(None,Class::Prefetch,32*MIB,allowance).map_err(|need|*wait=UnitWait::parked(need,allowance)).ok()
+    };
+    for victims in [false,true] {
+        let notice=Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let victim=r.scene_tiers.display.heap().lease(&notice);
+        let held=r.admit_display(None,Class::Prefetch,48*MIB,crate::frame_demand::Allowance::Fresh).expect("the first unit fits");
+        if victims {victim.offer(48*MIB,0);}
+        let mut wait=UnitWait::default();
+        assert_eq!(scans(&mut ||for _ in 0..16 {assert!(attempt(&mut wait).is_none());}),1,"a refused unit searches once and then waits on what that search found: victims={victims}");
+        assert_eq!(matches!(wait,UnitWait::Reclaim(..)),victims,"a search that marks victims waits on their batch, and one that finds none parks");
+        drop(held);drop(victim.take_batch());
+        let mut admitted=None;
+        assert_eq!(scans(&mut ||admitted=attempt(&mut wait)),0,"the release revives the unit for one check that does not search again: victims={victims}");
+        assert!(admitted.is_some(),"the revived unit is admitted: victims={victims}");
+    }
 }
 
 #[test]
@@ -1359,7 +1717,7 @@ fn an_over_grant_display_admission_marks_undemanded_victims_before_its_overdraft
     r.memory.display.handle.report(MemoryReport {demand_gpu_bytes:1,..Default::default()});
     let notice=Arc::new(std::sync::atomic::AtomicBool::new(false));
     let victim=r.scene_tiers.display.heap().lease(&notice);victim.offer(8*MIB,0);
-    let held=r.admit_display(None,crate::residency::Class::Visible,64*MIB).expect("required work may exceed the grant");
+    let held=r.admit_display(None,crate::residency::Class::Visible,64*MIB,crate::frame_demand::Allowance::Fresh).expect("required work may exceed the grant");
     assert!(victim.evicted(),"an over-grant admission evicts what no current demand protects before it takes the overdraft");
     drop(held);
 }
@@ -1367,7 +1725,7 @@ fn an_over_grant_display_admission_marks_undemanded_victims_before_its_overdraft
 #[test]
 fn display_bytes_above_the_grant_keep_their_ledger_reservation_across_the_grant_pass() {
     let mut r=legacy_scene_renderer(Default::default());
-    let held=r.admit_display(None,crate::residency::Class::Visible,2<<30).expect("required work may exceed the grant");
+    let held=r.admit_display(None,crate::residency::Class::Visible,2<<30,crate::frame_demand::Allowance::Fresh).expect("required work may exceed the grant");
     r.refresh_memory_limits();
     let grants=r.factory.memory_budget().snapshot().devices.iter().map(|device|device.granted_bytes).sum::<u64>();
     let resident=r.telemetry().resident_bytes;
@@ -1379,8 +1737,8 @@ fn display_bytes_above_the_grant_keep_their_ledger_reservation_across_the_grant_
 fn an_optional_display_admission_stays_within_the_grant() {
     let r=legacy_scene_renderer(Default::default());
     r.memory.display.handle.report(MemoryReport {demand_gpu_bytes:1,..Default::default()});
-    assert!(r.admit_display(None,crate::residency::Class::Prefetch,MIB).is_err(),"prefetch took device headroom beyond the display grant");
-    assert!(r.admit_display(None,crate::residency::Class::Visible,MIB).is_ok());
+    assert!(r.admit_display(None,crate::residency::Class::Prefetch,MIB,crate::frame_demand::Allowance::Fresh).is_err(),"prefetch took device headroom beyond the display grant");
+    assert!(r.admit_display(None,crate::residency::Class::Visible,MIB,crate::frame_demand::Allowance::Fresh).is_ok());
 }
 
 #[test]
@@ -1426,8 +1784,8 @@ fn the_display_floor_holds_across_frames_without_a_required_request() {
     r.begin_frame_memory(frame);
     r.begin_frame_memory(frame);
     let bytes = optional_headroom(&r, presented_floor(frame));
-    assert!(r.admit_display(None, crate::residency::Class::Prefetch, bytes).is_err(), "prefetch took the presented and held cells' floor");
-    assert!(r.admit_display(None, crate::residency::Class::Visible, bytes).is_ok(), "required work may use the floor");
+    assert!(r.admit_display(None, crate::residency::Class::Prefetch, bytes,crate::frame_demand::Allowance::Fresh).is_err(), "prefetch took the presented and held cells' floor");
+    assert!(r.admit_display(None, crate::residency::Class::Visible, bytes,crate::frame_demand::Allowance::Fresh).is_ok(), "required work may use the floor");
 }
 
 #[test]
@@ -1437,9 +1795,9 @@ fn the_display_floor_follows_the_view_rather_than_the_largest_request() {
     let mut frame = packet(doc.scene(), [512; 2]);
     frame.view = crate::test_support::view([1024, 768]);
     r.begin_frame_memory(frame);
-    let _authored = r.admit_display(None, crate::residency::Class::Authored, MIB).unwrap();
+    let _authored = r.admit_display(None, crate::residency::Class::Authored, MIB,crate::frame_demand::Allowance::Fresh).unwrap();
     let bytes = optional_headroom(&r, presented_floor(frame));
-    assert!(r.admit_display(None, crate::residency::Class::Prefetch, bytes).is_err(), "a small authored request shrank the floor below the view's cells");
+    assert!(r.admit_display(None, crate::residency::Class::Prefetch, bytes,crate::frame_demand::Allowance::Fresh).is_err(), "a small authored request shrank the floor below the view's cells");
 }
 
 #[test]
@@ -1465,9 +1823,91 @@ fn refused_display_admission_is_woken_by_a_released_charge() {
     r.scene_tiers.display.set_limit(r.scene_tiers.display.used()+8,0);
     let held=r.scene_tiers.display.charge(8);
     while receive.try_recv().is_ok() {}
-    assert!(r.admit_display(None,crate::residency::Class::Visible,1).is_err());
+    let refused=r.admit_display(None,crate::residency::Class::Visible,1,crate::frame_demand::Allowance::Fresh).err().expect("the full tier refuses the unit");
+    let wait=crate::frame_demand::UnitWait::parked(refused,crate::frame_demand::Allowance::Fresh);
+    assert!(wait.eligible(&r).is_none(),"the refused unit's wait registers for the release");
     drop(held);
-    receive.recv_timeout(std::time::Duration::from_secs(1)).expect("the refused display unit must subscribe to release");
+    receive.recv_timeout(std::time::Duration::from_secs(1)).expect("the refused display unit's wait subscribes to release");
+    assert!(wait.eligible(&r).is_some(),"the released charge revives the unit");
+}
+
+#[test]
+fn an_import_s_reclaim_is_answered_only_once_the_pass_that_served_it_has_released_its_retirements() {
+    use std::{future::Future, task::{Context, Waker}};
+    let doc = crate::scene::scale::tests::document_at([2048, 1536]);
+    let mut r = renderer(doc.composition().color, layer_core::DeviceMemoryFacts { unified: true, ..Default::default() }).unwrap();
+    let mut frame = packet(doc.scene(), doc.composition().size);
+    frame.view = crate::test_support::view([512, 384]);
+    frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+    submit_settled(&mut r, frame);
+    r.set_preparation_wake(Arc::new(|| {}));
+    let budget = r.factory.memory_budget().clone();
+    let retained = r.scene_tiers.display.charge(64 * MIB);
+    r.publish_memory();
+    budget.flush_reports();
+    let ledger = budget.snapshot();
+    let import = budget.admit_import(ledger.ram_limit_bytes - ledger.ram_physical_bytes + MIB).unwrap();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let mut waiting = Box::pin(import.covering(&cancel));
+    let mut context = Context::from_waker(Waker::noop());
+    assert!(waiting.as_mut().poll(&mut context).is_pending(), "the import waits on the display's reclaim");
+    assert!(r.memory.reclaim_unanswered(), "the import asks the display to reclaim");
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    r.apply_frame_grants(&mut encoder);
+    assert!(r.memory.reclaim_unanswered(), "the reclaim is not answered while the encoder carrying its retirements is unsubmitted");
+    encoder.submit(&r.queue);
+    complete(&r);
+    r.device.retirement_handle().flush().unwrap();
+    r.refresh_memory_limits();
+    assert!(!r.memory.reclaim_unanswered(), "the reclaim is answered once its retirements are released");
+    drop(retained);
+}
+
+#[test]
+fn a_reclaim_settled_before_a_grant_pass_is_answered_with_the_display_store_the_pass_holds() {
+    let doc = crate::scene::scale::tests::document_at([2048, 1536]);
+    let mut r = renderer(doc.composition().color, layer_core::DeviceMemoryFacts { unified: true, ..Default::default() }).unwrap();
+    let mut frame = packet(doc.scene(), doc.composition().size);
+    frame.view = crate::test_support::view([512, 384]);
+    frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+    submit_settled(&mut r, frame);
+    assert!(r.scene.as_ref().unwrap().store_metadata_bytes() > 0, "the shown display keeps an indexed store");
+    let budget = r.factory.memory_budget().clone();
+    let shown = |r: &WgpuRasterizer| { budget.flush_reports(); r.memory.display.handle.reported().ram_bytes };
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    r.apply_frame_grants(&mut encoder);
+    r.memory.reclaiming.replace(Some((r.memory.display.handle.reclaim_epoch(), crate::residency::Search::open([]).seal())));
+    r.apply_frame_grants(&mut encoder);
+    assert!(r.memory.reclaiming.borrow().is_none(), "the pass answers the settled reclaim");
+    let answered = shown(&r);
+    r.publish_memory();
+    assert_eq!(answered, shown(&r), "the answer to the reclaim published a display report without the store the grant pass had taken out");
+}
+
+#[test]
+fn a_unit_whose_room_returns_between_its_refusal_and_its_park_enters_without_another_release() {
+    let r=legacy_scene_renderer(Default::default());
+    r.scene_tiers.display.set_limit(r.scene_tiers.display.used()+8,0);
+    let held=r.scene_tiers.display.charge(8);
+    let refused=r.admit_display(None,crate::residency::Class::Visible,1,crate::frame_demand::Allowance::Spent).err().expect("the full tier refuses the unit");
+    drop(held);
+    let wait=crate::frame_demand::UnitWait::parked(refused,crate::frame_demand::Allowance::Spent);
+    assert_eq!(wait.observe(&r),crate::frame_demand::Turn::Enter(crate::frame_demand::Allowance::Spent),
+        "the release that landed after the failed attempt is the gain the parked unit waits for");
+}
+
+#[test]
+fn a_joint_need_limited_by_its_second_tier_enters_when_only_that_tier_releases() {
+    let r=legacy_scene_renderer(Default::default());
+    let [first,second]=[0;2].map(|_|{let tier=Arc::new(crate::residency::Tier::default());tier.set_limit(8,0);tier});
+    let held=second.charge(8);
+    let class=crate::residency::Class::Prefetch;
+    let need=first.wanting(class,4).with(second.blocked(class,4).expect("the second tier is full"));
+    let wait=crate::frame_demand::UnitWait::parked(need,crate::frame_demand::Allowance::Spent);
+    assert_eq!(wait.observe(&r),crate::frame_demand::Turn::Dormant,"the joint need waits while its second tier is full");
+    drop(held);
+    assert_eq!(wait.observe(&r),crate::frame_demand::Turn::Enter(crate::frame_demand::Allowance::Spent),
+        "room on the limiting second tier revives the joint need");
 }
 
 fn raster_headroom(r: &WgpuRasterizer) -> u64 {
@@ -1484,14 +1924,14 @@ fn raster_admission_counts_pages_and_retained_buffers_from_creation() {
     let mut r = legacy_scene_renderer(Default::default());
     let headroom = raster_headroom(&r);
     let page = r.create_page([0, 0], "unpublished raster page");
-    assert!(r.admit_raster_working(headroom + lendable(&r)).is_err(), "a page counts from its creation, before any layer holds it");
+    assert!(r.admit_raster_working(headroom + lendable(&r),crate::frame_demand::Allowance::Fresh).is_err(), "a page counts from its creation, before any layer holds it");
     let headroom = raster_headroom(&r);
     r.refresh_memory_limits();
     let held = r.raster_tiers.raster.used();
     r.raster_buffers.put(r.device.create_buffer(&wgpu::BufferDescriptor { label: Some("retained raster buffer"), size: 64 << 10,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false }));
     assert_eq!(r.raster_tiers.raster.used() - held, 64 << 10, "a retained buffer counts while the pool holds it");
-    assert!(r.admit_raster_working(headroom).is_ok(), "the retained buffer yields to authored working memory");
+    assert!(r.admit_raster_working(headroom,crate::frame_demand::Allowance::Fresh).is_ok(), "the retained buffer yields to authored working memory");
     assert_eq!(r.raster_buffers.retained.used(), 0);
     drop(page);
 }
@@ -1505,7 +1945,7 @@ fn refused_raster_admission_is_woken_by_a_released_page() {
     r.set_preparation_wake(Arc::new(move || { let _ = send.send(()); }));
     while receive.try_recv().is_ok() {}
     let room = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used());
-    assert!(r.admit_raster_working(room + lendable(&r) + 1).is_err());
+    assert!(r.admit_raster_working(room + lendable(&r) + 1,crate::frame_demand::Allowance::Fresh).is_err());
     drop(page);
     receive.recv_timeout(std::time::Duration::from_secs(1)).expect("a release that makes the refused raster unit fit must wake it");
 }
@@ -1797,7 +2237,7 @@ fn decode_at(r: &mut WgpuRasterizer, source: &Arc<layer_core::color::source::Sou
     requested.image(source, tile(x), r.document_color().space);
     let ((), accepted) = requested.accept(r, &mut (), |_, r, inputs| {
         let bytes = inputs.additional_bytes(&r.source_tiles.borrow());
-        r.admit_display(None, class, bytes).ok()
+        r.admit_display(None, class, bytes,crate::frame_demand::Allowance::Fresh).ok()
     }, |_, _| Ok(()), |_, _, _| Ok(())).unwrap().expect("the decode fits the display grant");
     let read = scene::sources::accepted_image(&accepted, source, tile(x)).unwrap();
     if !read.pending.is_empty() {
@@ -1895,13 +2335,13 @@ fn a_navigator_admission_at_a_full_grant_evicts_undemanded_decodes_while_a_visib
     let mut requested = scene::sources::Inputs::default();
     requested.image(&source, [8, 0], r.document_color().space);
     let bytes = requested.additional_bytes(&r.source_tiles.borrow());
-    assert!(r.admit_display(None, crate::residency::Class::Navigator, bytes).is_err(), "the grant is full for optional work");
+    assert!(r.admit_display(None, crate::residency::Class::Navigator, bytes,crate::frame_demand::Allowance::Fresh).is_err(), "the grant is full for optional work");
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     r.retire_victims(None, &mut encoder);
     encoder.submit(&r.queue);
     complete(&r);
     r.device.retirement_handle().flush().unwrap();
-    assert!(r.admit_display(None, crate::residency::Class::Navigator, bytes).is_ok(), "the miss evicted undemanded decodes for the navigator");
+    assert!(r.admit_display(None, crate::residency::Class::Navigator, bytes,crate::frame_demand::Allowance::Fresh).is_ok(), "the miss evicted undemanded decodes for the navigator");
     assert!(resident(&r, &source, 0), "the Visible-demanded slot is not a navigator victim");
     assert!((1..8).any(|x| !resident(&r, &source, x)), "an undemanded decode went instead");
 }
@@ -2392,12 +2832,13 @@ fn a_display_blocked_while_ram_is_exhausted_completes_once_another_owner_release
     let class = crate::residency::Class::Navigator;
     let bytes = r.scene_tiers.display.headroom(class) + r.scene_tiers.display.yielding() + MIB;
     let blocked = r.scene_tiers.display.blocked(class, bytes).expect("with the RAM taken by another owner the display has no room for optional work");
-    assert!(r.refuses(&blocked));
+    let wait = crate::frame_demand::UnitWait::parked(blocked, crate::frame_demand::Allowance::Spent);
+    assert_eq!(wait.observe(&r), crate::frame_demand::Turn::Dormant);
     while woken.try_recv().is_ok() {}
     drop(pressure);
     assert!(woken.recv_timeout(std::time::Duration::from_secs(10)).is_ok(), "the room another owner returns wakes the renderer");
-    assert!(!r.refuses(&blocked), "without a frame, the blocked request is judged against the room the ledger now gives the display");
-    assert!(r.admit_display(None, class, bytes).is_ok(), "and the request is admitted");
+    let Some(allowance) = wait.eligible(&r) else { panic!("without a frame, the parked request is judged against the room the ledger now gives the display") };
+    assert!(r.admit_display(None, class, bytes, allowance).is_ok(), "and the request is admitted");
 }
 
 #[test]

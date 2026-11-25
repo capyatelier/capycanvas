@@ -54,14 +54,16 @@ fn a_refusal_behind_this_frames_claims_waits_for_room_beyond_them() {
     let earlier = tier.charge(3);
     let blocked = tier.admit(Class::Prefetch, 3).err().expect("the frame's earlier claim leaves no room");
     let (send, woken) = mpsc::channel();
-    blocked.clone().wake_on_release(&edge, Arc::new(move || { let _ = send.send(()); }));
+    let wake: crate::residency::Wake = Arc::new(move || { let _ = send.send(()); });
+    edge.on_release(&blocked, &wake);
     drop(earlier);
     tier.end_frame();
-    assert!(!blocked.fits(), "the next frame claims the same room before this unit");
-    assert!(woken.recv_timeout(Duration::from_millis(50)).is_err(), "releasing the frame's own claim does not wake the unit");
+    woken.recv_timeout(Duration::from_secs(1)).expect("a release posts the parked unit's wake");
+    assert!(!blocked.fits(), "the next frame claims the same room before this unit, so its wake finds it still parked");
+    edge.on_release(&blocked, &wake);
     drop(resident);
+    woken.recv_timeout(Duration::from_secs(1)).expect("the re-armed unit is posted again");
     assert!(blocked.fits(), "room beyond the frame's claims fits the unit");
-    woken.recv_timeout(Duration::from_secs(1)).expect("room beyond the frame's claims wakes the unit");
     drop(owner);
 }
 
@@ -99,19 +101,19 @@ fn a_capacity_refusal_wakes_once_on_release_without_polling() {
     let held = tier.charge(8);
     let blocked = tier.admit(Class::Visible, 4).err().expect("a full tier refuses");
     let (send, woken) = mpsc::channel();
-    blocked.wake_on_release(&edge, Arc::new(move || { let _ = send.send(()); }));
+    edge.on_release(&blocked, &(Arc::new(move || { let _ = send.send(()); }) as crate::residency::Wake));
     assert!(woken.recv_timeout(Duration::from_millis(20)).is_err(), "woken before any release");
     let release = std::thread::spawn(move || drop(held));
     woken.recv_timeout(Duration::from_secs(1)).expect("a Charge release must wake the refused unit");
     release.join().unwrap();
-    let admitted = tier.admit(Class::Visible, 4).unwrap().charge(4);
+    let admitted = tier.admit(Class::Visible, 4).unwrap().charge();
     drop(tier.charge(1));
     assert!(woken.recv_timeout(Duration::from_millis(20)).is_err(), "a consumed wake must not repeat");
     let full = tier.admit(Class::Visible, 8).err().unwrap();
     drop(admitted);
-    let (send, woken) = mpsc::channel();
-    full.wake_on_release(&edge, Arc::new(move || { let _ = send.send(()); }));
-    woken.recv_timeout(Duration::from_secs(1)).expect("a release before registration must be found by the recheck");
+    let (send, _woken) = mpsc::channel::<()>();
+    edge.on_release(&full, &(Arc::new(move || { let _ = send.send(()); }) as crate::residency::Wake));
+    assert!(full.fits(), "a release before registration is found by the recheck that follows arming");
     drop(owner);
 }
 
@@ -133,9 +135,10 @@ fn a_prefetch_reservation_cannot_take_the_floor() {
 #[test]
 fn two_background_admits_before_any_charge_cannot_share_the_same_free_space() {
     let tier = tier(16, 4);
-    let first = tier.admit(Class::Prefetch, 7).unwrap();
+    let mut first = tier.admit(Class::Prefetch, 7).unwrap();
     assert!(tier.admit(Class::Prefetch, 7).is_err(), "the second admit saw the first one's bytes as free");
-    let charge = first.charge(5);
+    let charge = first.split(5).unwrap().charge();
+    drop(first);
     assert_eq!(tier.used(), 5);
     let second = tier.admit(Class::Prefetch, 7).unwrap();
     drop((charge, second));
@@ -147,13 +150,14 @@ fn a_reservation_within_a_renderer_tier_counts_in_the_renderer_tier_until_its_ch
     let renderer = tier(16,0);
     let scene = Tier::within(&renderer);
     scene.set_limit(16, 0);
-    let reservation = scene.admit(Class::Visible, 12).unwrap();
+    let mut reservation = scene.admit(Class::Visible, 12).unwrap();
     assert_eq!(renderer.used(), 12, "the reservation is invisible to the renderer tier");
-    let charge = reservation.charge(5);
+    let charge = reservation.split(5).unwrap().charge();
+    drop(reservation);
     assert_eq!((scene.used(), renderer.used()), (5, 5));
-    let grown = scene.admit(Class::Visible, 2).unwrap().charge(9);
+    let second = scene.admit(Class::Visible, 9).unwrap().charge();
     assert_eq!((scene.used(), renderer.used()), (14, 14));
-    drop((charge, grown));
+    drop((charge, second));
     assert_eq!((scene.used(), renderer.used()), (0, 0));
 }
 
@@ -174,7 +178,7 @@ fn consuming_a_child_reservation_never_charges_its_parent_twice() {
     let parent=tier(16,0);let child=Tier::within(&parent);
     let mut reserved=child.admit(Class::Visible,16).unwrap();
     let mut allocation=child.charge(0);
-    allocation.merge(reserved.split(6).unwrap().charge(6));
+    allocation.merge(reserved.split(6).unwrap().charge());
     assert_eq!((parent.used(),child.used()),(16,16));
     drop(reserved);
     assert_eq!((parent.used(),child.used()),(6,6));
@@ -204,7 +208,7 @@ fn seeded_optional_admissions_never_evict_an_entry_a_higher_class_used_this_fram
             if let Ok(reservation) = tier.admit(class, bytes) {
                 let lease = tier.heap().lease(&notice);
                 lease.stamp(class);lease.offer(bytes, roll >> 40);
-                entries.push((lease, reservation.charge(bytes), vec![(epoch, class)]));
+                entries.push((lease, reservation.charge(), vec![(epoch, class)]));
             }
             entries.retain(|(lease, _, uses)| {
                 if !lease.evicted() { return true; }
@@ -216,4 +220,29 @@ fn seeded_optional_admissions_never_evict_an_entry_a_higher_class_used_this_fram
         }
     }
     assert!(evicted > 1000, "the run evicted only {evicted} entries");
+}
+
+#[test]
+fn a_charge_shrinks_by_splitting_and_refuses_to_grow_past_its_admission() {
+    let tier = tier(4 << 20, 0);
+    let mut charge = tier.admit(Class::Authored, 2 << 20).unwrap().charge();
+    assert!(charge.shrink_to(1 << 20));
+    assert_eq!((charge.bytes(), tier.used()), (1 << 20, 1 << 20), "shrinking returns the excess to its tier");
+    assert!(!charge.shrink_to(3 << 20), "a charge never grows past the storage it was admitted for");
+    assert_eq!((charge.bytes(), tier.used()), (1 << 20, 1 << 20), "a refused growth leaves the charge and its tier unchanged");
+}
+
+#[test]
+fn a_fit_check_behind_unapplied_ledger_reports_runs_no_ledger_callback() {
+    use layer_core::{MemoryBudget, MemoryClass, MemoryOwnerKind, MemoryReport};
+    let budget = MemoryBudget::new();
+    let tier = Tier::limited_by(budget.register_owner(MemoryOwnerKind::Other, MemoryClass::Visible, None));
+    let other = budget.register_owner(MemoryOwnerKind::Other, MemoryClass::Visible, None);
+    assert!(other.publish(MemoryReport { gpu_bytes: 1 << 20, ..Default::default() }));
+    let called = Arc::new(AtomicU64::new(0));
+    let _watch = budget.watch({ let called = called.clone(); Arc::new(move || { called.fetch_add(1, Ordering::SeqCst); }) });
+    let _ = tier.wanting(Class::Visible, 1 << 20).fits();
+    assert_eq!(called.load(Ordering::SeqCst), 0, "a fit check applied pending reports and notified ledger watchers inside the check");
+    budget.flush_reports();
+    assert_eq!(called.load(Ordering::SeqCst), 1, "the notice a fit check owes is delivered by the next flush");
 }

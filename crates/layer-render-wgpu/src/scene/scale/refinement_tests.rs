@@ -1155,9 +1155,8 @@ fn an_overview_refused_before_it_shows_a_cell_waits_for_the_release_instead_of_r
     r.set_preparation_wake(Arc::new(move||{let _=send.send(());}));
     let objects=Arc::new(crate::residency::Tier::default());
     let refusal=objects.blocked(crate::residency::Class::Prefetch,1).expect("a full tier refuses a prefetch unit");
-    r.wait_for_release(refusal.clone());
     let overview=r.scale_display.as_mut().unwrap().overview.as_mut().expect("the zoomed view keeps an overview");
-    overview.pixels.take();overview.evict_window(overview.plan.bounds);overview.refuse(None,overview.plan.bounds,&refusal);
+    overview.pixels.take();overview.evict_window(overview.plan.bounds);overview.refuse(overview.plan.bounds,&refusal,crate::frame_demand::Allowance::Fresh);
     let committed=|r:&WgpuRasterizer|r.scale_display.as_ref().unwrap().overview.as_ref().unwrap().pixels.committed_root().is_some();
     let mut audit=crate::frame_demand::DemandAudit::default();
     for step in 0..4 {
@@ -1172,6 +1171,63 @@ fn an_overview_refused_before_it_shows_a_cell_waits_for_the_release_instead_of_r
     woken.recv_timeout(std::time::Duration::from_secs(1)).expect("the release wakes the parked overview");
     crate::test_support::submit_settled(&mut r,frame);
     assert!(committed(&r),"the woken overview shows its cells and commits its window");
+}
+
+#[cfg(not(target_arch="wasm32"))]
+fn owe_the_overview_its_compose_behind_a_full_store(r:&mut WgpuRasterizer,frame:FramePacket<'_>,source:SourceTarget)->Arc<crate::residency::Tier> {
+    crate::test_support::submit_settled(r,frame);
+    let cache=r.scale_display.as_ref().unwrap();
+    let overview=cache.overview.as_deref().expect("the zoomed view keeps an overview");
+    pages::evict_composite_pages_where(overview,&[overview.plan.bounds],|key|key.level==overview.plan.level);
+    overview.evict_window(overview.plan.bounds);
+    let mut store=cache.pages.lock().unwrap();
+    for level in 0..=overview.plan.level {store.remove_source_level(source,level);}
+    let tier=store.tier();tier.update_limit(0);
+    tier
+}
+
+#[cfg(not(target_arch="wasm32"))]
+#[test]
+fn an_overview_cell_whose_source_is_refused_waits_on_that_refusal_instead_of_requesting_frames() {
+    let extent=[2304;2];let doc=document_at(extent);
+    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;
+    frame.view.width_px=512;frame.view.height_px=512;
+    frame.view.document_to_surface=[1.,0.,0.,1.,-896.,-896.];
+    let store=owe_the_overview_its_compose_behind_a_full_store(&mut r,frame,source_at(&doc,0));
+    let (send,woken)=std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move||{let _=send.send(());}));
+    for _ in 0..32 {
+        crate::test_support::submit_ready(&mut r,frame).unwrap();crate::test_support::complete(&r);r.device.retirement_handle().flush().unwrap();
+        if r.next_frame()!=layer_render::FrameDemand::Work {break;}
+    }
+    assert_ne!(r.next_frame(),layer_render::FrameDemand::Work,"an overview whose sources are refused asks for frames: {:?}",r.outstanding_terms());
+    let cache=r.scale_display.as_ref().unwrap().overview.as_deref().unwrap();
+    assert!(cache.refused(&r,cache.plan.bounds),"an overview cell whose source is refused waits on that refusal");
+    while woken.try_recv().is_ok() {}
+    store.update_limit(u64::MAX);
+    woken.recv_timeout(std::time::Duration::from_secs(1)).expect("the release wakes the refused overview");
+    crate::test_support::submit_settled(&mut r,frame);
+    let cache=r.scale_display.as_ref().unwrap().overview.as_deref().unwrap();
+    assert!(cache.displays(cache.plan.bounds),"the woken overview composes its cells");
+}
+
+#[cfg(not(target_arch="wasm32"))]
+#[test]
+fn refinement_makes_no_search_for_a_cell_still_owed_its_compose() {
+    let extent=[2304;2];let doc=document_at(extent);
+    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;
+    frame.view.width_px=512;frame.view.height_px=512;
+    frame.view.document_to_surface=[1.,0.,0.,1.,-896.,-896.];
+    let _store=owe_the_overview_its_compose_behind_a_full_store(&mut r,frame,source_at(&doc,0));
+    let counts=crate::test_support::PassCounts::snapshot();
+    let mut scene=r.scene.take().unwrap();
+    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    {let mut work=crate::test_support::work(false);scene.refine_display(&mut r,frame,&mut encoder,&mut work).unwrap();}
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);r.scene=Some(scene);
+    let delta=crate::test_support::PassCounts::snapshot().delta(counts);
+    assert_eq!([delta.destination_units,delta.room_scans],[0,0],"refinement searched for overview cells whose compose is still owed");
 }
 
 #[test]
@@ -1270,7 +1326,7 @@ fn fit_exact_producer_survives_shared_preparation_while_its_store_read_waits() {
         scene.begin_frame();commands.begin();
         let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
         let result=attempt(&mut cache,&mut scene,&mut r,frame,&mut encoder,&mut commands);
-        assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady|GpuRasterError::SourceWorkingSetExceeded)),"{result:?}");
+        assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::SourceWorkingSetExceeded)),"{result:?}");
         assert!(cache.pages.lock().unwrap().accepted(&key,region,0),"a delayed exact native producer must have accepted its input");
         prepare_fixture_frame(&r,frame,&scene);cache.prepare_graph(&r,frame,&scene).unwrap();
         cache.retain_shared_work(&r,frame,&scene,&r.navigator);
@@ -1559,7 +1615,7 @@ fn a_half_unit_in_flight_is_driven_to_its_commit_while_a_sibling_refusal_is_park
     assert!(!admitted.is_empty(),"the spent frame leaves a half unit in flight");
     let display=r.scene_tiers.display.clone();
     let refusal=display.blocked(crate::residency::Class::Refinement,u64::MAX/2).expect("a sibling's refusal that cannot fit");
-    r.scale_display.as_mut().unwrap().pivot_refusal=Some(refusal);
+    r.scale_display.as_mut().unwrap().pivot_refusal=Some(crate::frame_demand::UnitWait::parked(refusal,crate::frame_demand::Allowance::Fresh));
     assert!(r.scale_display.as_ref().unwrap().outstanding(&r).is_some(),"a parked refusal hides the half unit in flight: {:?}",r.outstanding_terms());
     let (send,woken)=std::sync::mpsc::channel();
     r.set_preparation_wake(Arc::new(move||{let _=send.send(());}));

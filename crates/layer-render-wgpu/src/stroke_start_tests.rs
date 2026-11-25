@@ -131,3 +131,28 @@ fn a_page_painted_earlier_in_the_stroke_keeps_reading_its_zero_start() {
     }
     assert_matches_copied_starts(&mut shared, &mut copied, &[([0, 1], true), ([1, 1], true), ([2, 1], true)]);
 }
+
+#[test]
+fn a_frame_held_on_its_brush_compile_sleeps_on_the_compile_instead_of_asking_for_destinations_it_cannot_enter() {
+    let mut canvas = Canvas::new(false);
+    let Canvas { document, r, target } = &mut canvas;
+    r.set_preparation_wake(Arc::new(|| {}));
+    let dabs = [crate::layer_tests::dab([1., 0., 1., 1.])];
+    let batch = |preset, start| DabBatch { stroke_start: start, stroke_end: false, ..dab_batch(*target, crate::layer_tests::preset_style(preset), dabs[0].bounds()) };
+    let (drawn, held) = (batch(DefaultBrushPreset::GPen, true), batch(DefaultBrushPreset::Airbrush, false));
+    let base = FramePacket { dabs: &dabs, commit_rasters: false, composite_all: false, ..packet(document.scene(), [SIDE; 2]) };
+    crate::test_support::submit_ready(r, FramePacket { dab_batches: std::slice::from_ref(&drawn), ..base }).unwrap();
+    r.wait_idle().unwrap();
+    assert_eq!(r.frame_demand(), layer_render::FrameDemand::Work, "the stroke leaves work that its next frame enters: {:?}", r.outstanding_terms());
+    let mut needs = compile::Needs::default();
+    needs.style(r, &held.style, crate::dry_material::Reach::of_dabs(&dabs), false, false);
+    let paused = r.compilation.batch();
+    assert!(!needs.ready(), "the second brush needs a pipeline the first one did not compile");
+    let next = FramePacket { dab_batches: std::slice::from_ref(&held), ..base };
+    assert!(matches!(layer_render::CanvasRenderer::submission_turn(r, next, None), layer_render::SubmissionTurn::Held), "the frame waits for its brush to compile");
+    assert_ne!(r.frame_demand(), layer_render::FrameDemand::Work, "a frame held on its brush compile asks for frames its destinations cannot enter: {:?}", r.outstanding_terms());
+    assert!(r.outstanding_terms().contains(&("held frame", frame_demand::Outstanding::Blocked(frame_demand::Input::Compile))), "the held frame sleeps on its compile: {:?}", r.outstanding_terms());
+    drop(paused);
+    crate::test_support::submit_ready(r, next).unwrap();
+    assert!(!r.outstanding_terms().iter().any(|(term, _)| *term == "held frame"), "the submitted frame holds no demand: {:?}", r.outstanding_terms());
+}

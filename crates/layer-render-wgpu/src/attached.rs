@@ -61,11 +61,13 @@ impl CanvasRenderer for AttachedRenderer {
     fn paint_ready(&self, document: &layer_core::Document, brush: &layer_core::BrushSnapshot, transform: bool) -> bool {
         self.0.as_ref().is_none_or(|gpu| gpu.paint_ready(document, brush, transform))
     }
-    fn raster_dependencies_ready(&mut self, packet: FramePacket<'_>, preview: Option<&layer_render::TransformPreview>) -> bool {
-        self.0
-            .as_mut()
-            .is_none_or(|gpu| gpu.raster_dependencies_ready(packet, preview))
+    fn submission_turn(&mut self, packet: FramePacket<'_>, preview: Option<&layer_render::TransformPreview>) -> layer_render::SubmissionTurn<Self::Error> {
+        self.0.as_mut().map_or(layer_render::SubmissionTurn::Refused(layer_render::Refusal { stroke: packet.operation(), drawn: 0 }, GpuRasterError::AdapterUnavailable), |gpu| gpu.submission_turn(packet, preview))
     }
+    fn submit_ready(&mut self, ready: layer_render::ReadySubmission, packet: FramePacket<'_>) -> Result<(), Self::Error> {
+        self.gpu()?.submit_ready(ready, packet)
+    }
+    fn take_refused_stroke(&mut self) -> Option<layer_render::Refusal> { self.0.as_mut()?.take_refused_stroke() }
     fn can_capture_raster(&self) -> bool {
         self.0.as_ref().is_none_or(|gpu| gpu.can_capture_raster())
     }
@@ -79,8 +81,6 @@ impl CanvasRenderer for AttachedRenderer {
     }
     fn next_frame(&self) -> layer_render::FrameDemand { self.0.as_ref().map_or(layer_render::FrameDemand::Wait, |gpu| gpu.next_frame()) }
     fn waits_for_frame_slot(&self) -> bool { self.0.as_ref().is_some_and(|gpu| gpu.waits_for_frame_slot()) }
-    fn stroke_waits_for_memory(&self) -> bool { self.0.as_ref().is_some_and(|gpu| gpu.stroke_waits_for_memory()) }
-    fn stroke_memory_refusals(&self) -> u64 { self.0.as_ref().map_or(0, |gpu| gpu.stroke_memory_refusals()) }
     fn skipped_filter_previews(&self) -> u64 { self.0.as_ref().map_or(0, |gpu| gpu.skipped_filter_previews()) }
     fn refused_filter_bakes(&self) -> u64 { self.0.as_ref().map_or(0, |gpu| gpu.refused_filter_bakes()) }
     fn prepare_moving_layer(&mut self, layer: Option<layer_core::authored::OccurrenceHandle>) {

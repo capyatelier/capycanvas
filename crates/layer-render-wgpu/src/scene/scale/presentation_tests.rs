@@ -1005,7 +1005,7 @@ fn a_24mp_fit_reshow_finishes_within_two_frames_once_its_real_inputs_are_residen
     let wanted=crate::scene::sources::declare_colors(&r,show.scene,expected,None,id,area).unwrap();
     let ((),resident)=wanted.accept(&mut r,&mut (),|_,r,inputs| {
         let bytes=inputs.additional_bytes(&r.source_tiles.borrow());
-        r.admit_display(None,crate::residency::Class::Visible,bytes).ok().map(|reservation|(reservation,bytes))
+        r.admit_display(None,crate::residency::Class::Visible,bytes,crate::frame_demand::Allowance::Fresh).ok().map(|reservation|(reservation,bytes))
     },|_,_|Ok(()),|_,_,_|Ok(())).unwrap().expect("Core must admit the ample native-input fixture without overriding a grant");
     assert_eq!(resident.len(),coordinates.len());
     let deadline=std::time::Instant::now()+READBACK_TIMEOUT;
@@ -1213,6 +1213,24 @@ pub(crate) fn crossing_with_stand_in() -> (WgpuRasterizer, ViewState) {
         if r.presentation_page().is_some_and(|page| page.stand_in_scale() != 0.) { return (r, crossing_view(0.6)); }
         assert!(!r.scale_display.as_ref().unwrap().complete && std::time::Instant::now() < deadline, "the crossing presents an incomplete window with a stand-in");
     }
+}
+
+#[test]
+fn the_storm_observer_counts_a_crossing_stand_in_in_the_holes_only_when_the_presenter_draws_it() {
+    let (r, view) = crossing_with_stand_in();
+    let mut cold = crate::test_support::float_presenter(&r);
+    let surround = surround_inside_document(&r, &mut cold, view, CROSSING_EXTENT);
+    let coverage = crate::test_support::storm_coverage(&r, &cold, view, CROSSING_EXTENT);
+    assert!(coverage.known && coverage.root > 0. && coverage.root < coverage.total, "the crossing's window shows written cells and holes: {coverage:?}");
+    assert!(surround > 0 && coverage.presented == coverage.root,
+        "a cold stand-in entry shows the surround at {surround} document pixels, so the holes stay uncovered: {coverage:?}");
+    r.shader_idle(true, true);
+    crate::test_support::warm_presentation(&r, wgpu::TextureFormat::Rgba32Float, crate::SdrSurfaceColor::ExtendedLinearSrgb, view);
+    let mut warm = crate::test_support::float_presenter(&r);
+    let surround = surround_inside_document(&r, &mut warm, view, CROSSING_EXTENT);
+    let coverage = crate::test_support::storm_coverage(&r, &warm, view, CROSSING_EXTENT);
+    assert!(surround == 0 && coverage.presented == coverage.total,
+        "a compiled stand-in fills every hole of the camera once, leaving {surround} surround pixels: {coverage:?}");
 }
 
 #[test]

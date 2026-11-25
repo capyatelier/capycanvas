@@ -93,8 +93,8 @@ pub(crate) struct Recorder {
     pub(crate) vector_motion: Option<layer_render::VectorMotion>,
     pub(crate) vector_motion_paths: Option<std::sync::Arc<[layer_core::authored::vector::PathItem]>>,
     pub(crate) motion_path_updates: usize,
-    pub(crate) memory_refusals: u64,
     pub(crate) memory_refusal_next_frame: bool,
+    pub(crate) memory_refusals: Vec<layer_render::Refusal>,
     pub(crate) filter_limits: [u64; 2],
     pub(crate) capture_failure: Option<&'static str>,
 }
@@ -102,11 +102,11 @@ const MEMORY_REFUSAL: &str = "Not enough memory to finish this edit";
 impl CanvasRenderer for Recorder {
     type Error = BackendError;
     fn is_memory_refusal(error: &Self::Error) -> bool { error.0 == MEMORY_REFUSAL }
-    fn stroke_memory_refusals(&self) -> u64 { self.memory_refusals }
+    fn take_refused_stroke(&mut self) -> Option<layer_render::Refusal> { (!self.memory_refusals.is_empty()).then(|| self.memory_refusals.remove(0)) }
     fn skipped_filter_previews(&self) -> u64 { self.filter_limits[0] }
     fn refused_filter_bakes(&self) -> u64 { self.filter_limits[1] }
     fn poll_pending(&mut self, _view: layer_render::ViewState) -> Result<(), Self::Error> {
-        self.memory_refusals += u64::from(std::mem::take(&mut self.memory_refusal_next_frame));
+        if std::mem::take(&mut self.memory_refusal_next_frame) || !self.memory_refusals.is_empty() { return Err(BackendError(MEMORY_REFUSAL)); }
         match self.capture_failure {
             Some(error) if self.frame_scene.as_ref().is_some_and(|scene| {
                 let scene = scene.view();
@@ -135,8 +135,8 @@ impl CanvasRenderer for Recorder {
     }
     fn prepare_context(&mut self, _document: &Document, _brush: &layer_core::BrushSnapshot, context: layer_render::PreparationContext) { self.contexts.push(context); }
     fn can_submit(&self) -> bool { !self.settling }
-    fn raster_dependencies_ready(&mut self, _packet: FramePacket<'_>, _preview: Option<&layer_render::TransformPreview>) -> bool {
-        !self.raster_dependencies_blocked
+    fn submission_turn(&mut self, packet: FramePacket<'_>, _preview: Option<&layer_render::TransformPreview>) -> layer_render::SubmissionTurn<Self::Error> {
+        if self.raster_dependencies_blocked { layer_render::SubmissionTurn::Held } else { layer_render::SubmissionTurn::Ready(layer_render::ReadySubmission::new(0, packet)) }
     }
     fn set_selection_overlay(&mut self, overlay: Option<layer_render::SelectionOverlay>) {self.overlay=overlay;}
     fn document_color(&self) -> layer_core::color::DocumentColor { self.color }

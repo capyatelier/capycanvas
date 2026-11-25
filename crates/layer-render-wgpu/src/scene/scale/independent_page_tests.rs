@@ -130,7 +130,7 @@ impl Pages {
         let deadline=std::time::Instant::now()+std::time::Duration::from_secs(30);
         while !self.cache.coverage_complete() {
             let result=self.attempt();
-            assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady)),"released page units: {result:?}");
+            assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"released page units: {result:?}");
             assert!(std::time::Instant::now()<deadline,"released page units must complete coverage");
             crate::test_support::settle_decodes(&mut self.r);
         }
@@ -156,7 +156,7 @@ fn a_pending_stored_page_does_not_block_other_ready_page_units() {
     let ready=(1..4).map(|page|[page,0]).collect();
     for attempt in 0..3 {
         let result=pages.attempt();
-        assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady)),"attempt {attempt}: {result:?}");
+        assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"attempt {attempt}: {result:?}");
         pages.stores[0].gate.entered();
         pages.assert_ready(&ready);
     }
@@ -167,7 +167,7 @@ fn a_pending_stored_page_does_not_block_other_ready_page_units() {
 fn cold_stroke_frames_commit_new_ready_pages_outside_the_dab_damage() {
     let mut pages=Pages::new(&[]);
     let result=pages.attempt();
-    assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady)),"{result:?}");
+    assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"{result:?}");
     pages.stores[0].gate.entered();
     assert!(pages.cache.coverage_snapshot().written.is_empty());
     assert!(committed_composite_pages(&pages.cache).is_empty());
@@ -181,7 +181,7 @@ fn cold_stroke_frames_commit_new_ready_pages_outside_the_dab_damage() {
             (coverage.ready(page_rect(*coordinate),pages::Accuracy::Display) || pages.cache.displays(page_rect(*coordinate)))
                 && dirty.intersect(page_rect(*coordinate)).is_empty()).count();
         let result=pages.attempt();
-        assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady)),"frame {page}: {result:?}");
+        assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"frame {page}: {result:?}");
         ready.insert([page,0]);
         pages.assert_ready(&ready);
         assert_eq!(ready.len(),before+1,"each cold stroke frame must publish its newly ready page outside the dab damage");
@@ -205,7 +205,7 @@ fn one_remaining_source_preparation_attempt_does_not_discover_every_cold_page() 
     crate::scene::scale::tests::prepare_fixture_frame(&pages.r,frame,&pages.scene);
     let mut budget=crate::test_support::work(false);let capacity=budget.capacity();budget.spend(capacity-object_cache::PASS_TAPS);
     let unpublished=pages.cache.prepare_source(&mut pages.scene,&mut pages.r,frame,&mut encoder,target,
-        SourceRequest {plan,required:PixelRect::full(extent).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut budget).unwrap().unpublished;
+        SourceRequest {plan,required:PixelRect::full(extent).into(),covered:PixelRect::EMPTY},Class::Prefetch,crate::frame_demand::Allowance::Fresh,&mut budget).unwrap().unpublished;
     assert!(!unpublished,"a cold decode is not an unpublished input");assert_eq!(encoder.pass_count(),0);
     assert_eq!(pages.r.source_tiles.borrow().misses,before_misses);
     assert!(source_chunks(&pages.cache,target,0).is_empty());assert_eq!(pages.scene.scale_sources.entries[&target].updates,0);

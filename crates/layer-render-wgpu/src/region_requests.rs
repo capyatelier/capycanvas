@@ -43,7 +43,11 @@ pub(super) struct RegionRequests {
     readback: Option<wgpu::Buffer>,
     fill_seed:Option<(SourceTarget,layer_core::Point,Option<wgpu::Buffer>)>,
     pending: Option<Region>,
-    waiting: Option<RegionRequest>,
+    waiting: Option<(RegionRequest,frame_demand::UnitWait)>,
+    compiling: Option<compile::Needs>,
+    awaiting: Option<frame_demand::Producer>,
+    latest: Option<crate::submission::Submission>,
+    footprint: u64,
     pace: Arc<Mutex<Pace>>,
     pieces: u32,
     submitted: u64,
@@ -51,11 +55,11 @@ pub(super) struct RegionRequests {
     running: Option<Running>,
     /// Rasterizes a warp mesh for selections resampled through it.
     positions: Option<paint_transform::mesh::Positions>,
-    rx: Option<mpsc::Receiver<Result<(RegionResult,u32), GpuRasterError>>>,
+    rx: Option<frame_demand::Delivery<(RegionResult,u32)>>,
     modify_source: Option<ModifySource>,
     charge: crate::residency::Charge,
 }
-struct Preparation {request:RegionRequest,enclosed:bool,recipes_ready:bool}
+struct Preparation {request:RegionRequest,enclosed:bool,recipes:Arc<compile::Needs>,wait:frame_demand::UnitWait}
 /// The selection Select › Modify refines, prepared at document resolution,
 /// and the levels of its preview pyramid built so far, each halving the last
 /// over `region`.
@@ -107,6 +111,10 @@ impl RegionRequests {
             readback: None,fill_seed:None,
             pending: None,
             waiting: None,
+            compiling: None,
+            awaiting: None,
+            latest: None,
+            footprint: 0,
             areas: None,
             running: None,
             positions: None,
@@ -116,6 +124,9 @@ impl RegionRequests {
         })
     }
     /// Drop the request in progress; a readback already in flight is ignored.
+    pub(super) fn end_waiting_with(&mut self,loss:&GpuRasterError) {
+        if let Some((_,wait))=&mut self.waiting {*wait=frame_demand::UnitWait::End(Some(loss.clone()));}
+    }
     pub(super) fn cancel(&mut self) {
         self.raw.cancel();
         self.scope=None;
@@ -198,7 +209,15 @@ impl RegionRequests {
             Ok((view.clone(),tile.grain(&layer_core::paper::PaperBinding {target_offset:[0;2],..binding.clone()}),tile.grain_radius()))
         }).unwrap_or_else(||Ok((r.empty_paper_view.clone(),paper::Grain::FLAT,1)))
     }
-    fn build_cache(&mut self,r:&mut WgpuRasterizer,request:&RegionRequest,enclosed:bool,encoder:&mut crate::submission::CommandEncoder,grant:Option<&mut crate::scene::WorkBudget>,areas:bool)->Result<(),GpuRasterError> {
+    fn awaited_paper(&mut self,r:&WgpuRasterizer,request:&RegionRequest)->Result<(wgpu::TextureView,paper::Grain,u32),GpuRasterError> {
+        Self::paper(r,request).inspect_err(|error|if matches!(error,GpuRasterError::NotReady) {self.awaiting=Some(frame_demand::Producer::Class(frame_demand::Input::Decode));})
+    }
+    fn await_lines(&mut self)->GpuRasterError {
+        self.awaiting=self.flood.lines_submission().map(frame_demand::Producer::Gpu);
+        GpuRasterError::NotReady
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn build_cache(&mut self,r:&mut WgpuRasterizer,request:&RegionRequest,enclosed:bool,encoder:&mut crate::submission::CommandEncoder,grant:Option<&mut crate::scene::WorkBudget>,areas:bool,admission:region_sources::Admission)->Result<(),GpuRasterError> {
         let demand=grant.is_none();
         let source=cache::source(r,request);
         let base=RegionRequest {source:source.clone(),limit:None,reference_count:None,..request.clone()};
@@ -209,7 +228,7 @@ impl RegionRequests {
             self.cache.as_mut().unwrap().sampling=self.sampling;
         }
         if !self.cache.as_ref().unwrap().ready {
-            if !self.flood.lines_ready(demand)? {return Err(GpuRasterError::NotReady);}
+            if !self.flood.lines_ready(demand)? {return Err(self.await_lines());}
             if !self.cache.as_ref().unwrap().classified {
                 let cache=self.cache.as_ref().unwrap();
                 if !cache.dirty.is_empty() {self.sampling=cache.sampling;}
@@ -228,8 +247,9 @@ impl RegionRequests {
                     if self.sampling==region_sources::Sampling::Retained && !cache.dirty.is_empty() {encoder.copy_buffer_to_buffer(&cache.seeds,0,self.raw.seeds(),0,cache.seeds.size());}
                 }
                 self.raw.tile_limit(Some(CLASSIFIED_TILES*if demand {self.pieces as usize}else{1}));
-                let classified=self.raw.encode_sampling(r,&base,encoder,self.sampling);
+                let classified=self.raw.encode_sampling(r,&base,encoder,self.sampling,admission);
                 self.raw.tile_limit(None);
+                if matches!(classified,Err(GpuRasterError::NotReady)) && !encoder.has_work() {self.awaiting=Some(self.raw.awaiting().unwrap_or(frame_demand::Producer::Class(frame_demand::Input::Decode)));}
                 classified?;
                 let cache=self.cache.as_mut().unwrap();cache.classified=true;cache.source=source;cache.sampling=self.sampling;
                 if cache.dirty.is_empty() {cache.seeded=Some(request.request_id);}
@@ -237,9 +257,12 @@ impl RegionRequests {
                 if let Some(saved)=&cache.mask {encoder.copy_buffer_to_buffer(&classified,0,saved,0,saved.size());}
                 else{cache.mask=Some(Self::copy(&r.device,encoder,&classified,"cached reference classification"));}
             }
-            if !self.flood.prepare_cache(&r.compilation,if demand {startup::BRUSH}else{startup::OTHER}) {return Err(GpuRasterError::NotReady);}
+            if !self.flood.prepare_cache(&r.compilation,if demand {startup::BRUSH}else{startup::OTHER}) {
+                self.compiling=Some(Self::recipes(self.flood.cache_pipelines()));
+                return Err(GpuRasterError::NotReady);
+            }
             let classified=self.raw.mask().ok_or(GpuRasterError::InvalidExtent)?;
-            let (paper,grain,radius)=Self::paper(r,request)?;
+            let (paper,grain,radius)=self.awaited_paper(r,request)?;
             let budget=grant.as_ref().map_or(flood::CHUNK_NANOSECONDS*f64::from(self.pieces),|work|flood::CHUNK_NANOSECONDS.min(work.remaining() as f64*GRANT_TAP_NANOSECONDS));
             if budget<=0. {return Err(GpuRasterError::NotReady);}
             let dirty=self.cache.as_ref().unwrap().dirty.values().flatten().copied().collect::<std::collections::BTreeSet<_>>();
@@ -247,7 +270,7 @@ impl RegionRequests {
             let prepared=!demand && sampling!=region_sources::Sampling::Retained;
             let (ready,spent)=self.flood.build_lines(&flood::Input {device:&r.device,mask:&classified,paper:&paper},encoder,r.document_extent,(grain,radius,request.paper.is_some()),(budget,demand),&dirty,(prepared,sampling==region_sources::Sampling::Transparent))?;
             if let Some(work)=grant {work.spend((spent/GRANT_TAP_NANOSECONDS) as u64);}
-            if !ready {return Err(GpuRasterError::NotReady);}
+            if !ready {return Err(self.await_lines());}
             let cache=self.cache.as_mut().unwrap();
             if !areas {encoder.copy_buffer_to_buffer(self.raw.seeds(),0,&cache.seeds,0,cache.seeds.size());}
             cache.lastwrite=Some(encoder.submission());
@@ -259,10 +282,10 @@ impl RegionRequests {
         }
         Ok(())
     }
-    fn sample_fill_seed(&mut self,r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder)->Result<(),GpuRasterError> {
+    fn sample_fill_seed(&mut self,r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder,(class,allowance):region_sources::Admission)->Result<(),GpuRasterError> {
         let Some((target,position,buffer))=&mut self.fill_seed else {return Ok(());};
         let rect=scene::fill_edges::seed_rect(*position,r.target_extent(*target));
-        let tile=if rect.is_empty() {None}else{r.raw_layer_tile(*target,[rect.min_x()/PAGE_SIZE,rect.min_y()/PAGE_SIZE],encoder)?.map(source_access::Sampled::uncertified)};
+        let tile=if rect.is_empty() {None}else{r.raw_layer_tile(*target,[rect.min_x()/PAGE_SIZE,rect.min_y()/PAGE_SIZE],class,allowance,encoder)?.map(source_access::Sampled::uncertified)};
         let buffer=buffer.get_or_insert_with(||r.device.create_buffer(&wgpu::BufferDescriptor {label:Some("fill seed texel"),size:16,
             usage:wgpu::BufferUsages::COPY_SRC|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false}));
         if let Some(tile)=tile {
@@ -272,19 +295,19 @@ impl RegionRequests {
         }else {encoder.clear_buffer(buffer,0,None);}
         Ok(())
     }
-    fn classify_target(&mut self,r:&mut WgpuRasterizer,request:&RegionRequest,encoder:&mut crate::submission::CommandEncoder)->Result<(),GpuRasterError> {
-        let stop=self.raw.encode_sampling(r,request,encoder,request.fill_areas.map_or(region_sources::Sampling::Target,region_sources::Sampling::Areas))?;
+    fn classify_target(&mut self,r:&mut WgpuRasterizer,request:&RegionRequest,encoder:&mut crate::submission::CommandEncoder,admission:region_sources::Admission)->Result<(),GpuRasterError> {
+        let stop=self.raw.encode_sampling(r,request,encoder,request.fill_areas.map_or(region_sources::Sampling::Target,region_sources::Sampling::Areas),admission)?;
         self.stop_mask=Some(Self::copy(&r.device,encoder,&stop,"Stop target eligibility"));
         Ok(())
     }
-    fn sample_colour_mode(&mut self,r:&mut WgpuRasterizer,request:&RegionRequest,encoder:&mut crate::submission::CommandEncoder)->Result<(),GpuRasterError> {
-        self.raw.encode_sampling(r,request,encoder,region_sources::Sampling::TargetSeed)?;
+    fn sample_colour_mode(&mut self,r:&mut WgpuRasterizer,request:&RegionRequest,encoder:&mut crate::submission::CommandEncoder,admission:region_sources::Admission)->Result<(),GpuRasterError> {
+        self.raw.encode_sampling(r,request,encoder,region_sources::Sampling::TargetSeed,admission)?;
         let mask=self.raw.mask().ok_or(GpuRasterError::InvalidExtent)?;
         let (paper,_,_)=Self::paper(r,request)?;
         self.flood.colour_mode(&flood::Input {device:&r.device,mask:&mask,paper:&paper},encoder,request.colour_mode,Some(self.raw.seed()));
         Ok(())
     }
-    fn classify_lines(&mut self,r:&mut WgpuRasterizer,request:&RegionRequest,encoder:&mut crate::submission::CommandEncoder)->Result<wgpu::Buffer,GpuRasterError> {
+    fn classify_lines(&mut self,r:&mut WgpuRasterizer,request:&RegionRequest,encoder:&mut crate::submission::CommandEncoder,admission:region_sources::Admission)->Result<wgpu::Buffer,GpuRasterError> {
         let target=if let layer_render::RegionColourMode::Target(target)=request.colour_mode {
             let source=match request.source.sources().first() {
                 Some(layer_render::RegionSource::Scene {snapshot,..})=>layer_render::RegionSource::Scene {snapshot:snapshot.clone(),scope:SceneScope::Raw(target)},
@@ -293,15 +316,18 @@ impl RegionRequests {
             Some(RegionRequest {source,reference_count:None,limit:None,..request.clone()})
         }else{None};
         let target_sampled=target.as_ref().is_some_and(|target|self.raw.processing(&target.source,region_sources::Sampling::TargetSeed));
-        if target_sampled {self.sample_colour_mode(r,target.as_ref().unwrap(),encoder)?;}
+        if target_sampled {self.sample_colour_mode(r,target.as_ref().unwrap(),encoder,admission)?;}
 
         if let Some(count)=request.reference_count && count<request.source.sources().len()
             && self.raw.processing(&request.source.sources()[count],request.fill_areas.map_or(region_sources::Sampling::Target,region_sources::Sampling::Areas)) {
             let target=RegionRequest {source:request.source.sources()[count].clone(),reference_count:None,limit:None,..request.clone()};
-            self.classify_target(r,&target,encoder)?;
+            self.classify_target(r,&target,encoder,admission)?;
         }
-        self.build_cache(r,request,request.enclosure.is_some(),encoder,None,false)?;
-        if !self.flood.prepare(&r.compilation,Self::refinement(request),request.enclosure.is_some(),request.contiguous,startup::BRUSH) {return Err(GpuRasterError::NotReady);}
+        self.build_cache(r,request,request.enclosure.is_some(),encoder,None,false,admission)?;
+        if !self.flood.prepare(&r.compilation,Self::refinement(request),request.enclosure.is_some(),request.contiguous,startup::BRUSH) {
+            self.compiling=Some(Self::recipes(self.flood.request_pipelines(Self::refinement(request),request.enclosure.is_some(),request.contiguous,false)));
+            return Err(GpuRasterError::NotReady);
+        }
         let source=cache::source(r,request);
         let base=RegionRequest {source,limit:None,reference_count:None,..request.clone()};
         if self.scope.as_ref().is_some_and(|(id,scope)|*id==request.request_id && !matches!(scope,Scope::Check(_))) {
@@ -316,7 +342,7 @@ impl RegionRequests {
             self.flood.tap_distance(&flood::Input {device:&r.device,mask:&mask,paper:&paper},encoder,request.position,grain);
         }
         let classified={
-            self.raw.encode_sampling(r,&base,encoder,region_sources::Sampling::Seeds)?;
+            self.raw.encode_sampling(r,&base,encoder,region_sources::Sampling::Seeds,admission)?;
             let mask=self.raw.mask().ok_or(GpuRasterError::InvalidExtent)?;
             let (paper,_,_)=Self::paper(r,request)?;
             self.flood.check_seeds(&flood::Input {device:&r.device,mask:&mask,paper:&paper},encoder,&self.cache.as_ref().unwrap().seeds,self.raw.seeds(),request.position,request.tolerance,seeded);
@@ -324,10 +350,10 @@ impl RegionRequests {
         };
         if let Some(count)=request.reference_count && count<request.source.sources().len() && self.stop_mask.is_none() {
             let target=RegionRequest {source:request.source.sources()[count].clone(),reference_count:None,limit:None,..request.clone()};
-            self.classify_target(r,&target,encoder)?;
+            self.classify_target(r,&target,encoder,admission)?;
         }
         if let Some(target)=&target {
-            if !target_sampled {self.sample_colour_mode(r,target,encoder)?;}
+            if !target_sampled {self.sample_colour_mode(r,target,encoder,admission)?;}
         }else{
             let (paper,_,_)=Self::paper(r,request)?;
             self.flood.colour_mode(&flood::Input {device:&r.device,mask:&classified,paper:&paper},encoder,request.colour_mode,None);
@@ -398,10 +424,31 @@ impl RegionRequests {
     fn scoped_lines(&mut self,input:&flood::Input<'_>,encoder:&mut crate::submission::CommandEncoder,paper:(paper::Grain,u32),blocks:Option<std::collections::BTreeSet<[u32;2]>>)->Result<bool,GpuRasterError> {
         Ok(self.flood.build_scope(input,encoder,paper,flood::CHUNK_NANOSECONDS*f64::from(self.pieces),blocks)?.0)
     }
-    fn submit(&mut self,r:&mut WgpuRasterizer,encoder:crate::submission::CommandEncoder) {
+    fn submit(&mut self,r:&mut WgpuRasterizer,mut encoder:crate::submission::CommandEncoder) {
+        if !encoder.has_work() {return;}
         r.uploads.finish(&encoder);
-        if encoder.has_work() {self.submitted+=1;encoder.hold(InFlight::new(&self.pace));}
+        self.latest=Some(encoder.submission());
+        self.submitted+=1;encoder.hold(InFlight::new(&self.pace));
         encoder.submit(&r.queue);
+    }
+    fn recipes<'a>(recipes:impl IntoIterator<Item=&'a Deferred<wgpu::ComputePipeline>>)->compile::Needs {
+        compile::Needs {compute:recipes.into_iter().cloned().collect(),..Default::default()}
+    }
+    fn stopped(&mut self,error:&GpuRasterError,allowance:frame_demand::Allowance)->frame_demand::UnitWait {
+        use frame_demand::{Allowance,Producer,UnitWait};
+        let advanced=self.raw.committed()!=self.footprint;
+        let awaiting=self.awaiting.take();
+        match (error,self.compiling.take()) {
+            (GpuRasterError::Waiting(waiting),_) if !advanced=>UnitWait::refused(waiting.need().clone(),allowance),
+            (GpuRasterError::Waiting(_),_)=>{
+                self.footprint=self.raw.committed();
+                self.latest.clone().map_or(UnitWait::Ready(Allowance::Fresh),|prefix|UnitWait::Input(Producer::Gpu(prefix),Allowance::Fresh))
+            },
+            (_,needs)=>{
+                let allowance=if advanced {Allowance::Fresh}else {allowance};
+                needs.map(|needs|Producer::Compile(Arc::new(needs))).or(awaiting).map_or(UnitWait::Ready(allowance),|producer|UnitWait::Input(producer,allowance))
+            },
+        }
     }
     fn slot_free(&self)->bool {self.pace.lock().unwrap().in_flight<selection_refine::CHUNKS_IN_FLIGHT}
     pub fn changed(&mut self,packet:FramePacket<'_>,restored:&[(SourceTarget,PixelRect)]) {
@@ -426,46 +473,53 @@ impl RegionRequests {
         cache.ready=false;cache.classified=false;
         self.raw.cancel();self.flood.cancel_lines();self.stop_mask=None;
     }
-    pub fn background_pending(&self)->bool {self.preparation.as_ref().is_some_and(|preparation|!preparation.recipes_ready || self.cache.as_ref().is_none_or(|cache|!cache.ready || !cache.submitted()))}
+    pub fn background_pending(&self)->bool {self.preparation.as_ref().is_some_and(|preparation|!preparation.recipes.ready() || self.cache.as_ref().is_none_or(|cache|!cache.ready || !cache.submitted()))}
     fn prewarm_idle(&self,r:&WgpuRasterizer)->bool {
-        self.pending.is_none() && self.waiting.is_none() && self.running.is_none() && self.areas.is_none() && r.compilation.is_idle()
+        self.pending.is_none() && self.waiting.is_none() && self.running.is_none() && self.areas.is_none() && r.compilation.is_idle() && r.compilation.check().is_ok()
             && flood::fits(r.document_extent,&r.device.limits())
+    }
+    fn prewarm_outstanding(&self,r:&WgpuRasterizer)->Option<frame_demand::Outstanding> {
+        self.preparation.as_ref().filter(|_|self.background_pending() && self.prewarm_idle(r)).and_then(|preparation|preparation.wait.demand(r))
     }
     fn prewarm(&mut self,r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder,work:&mut crate::scene::WorkBudget)->Result<(),GpuRasterError> {
         if !self.prewarm_idle(r) {return Ok(());}
-        let Some(preparation)=&self.preparation else {return Ok(());};
-        let (request,enclosed)=(cache::current(r,&preparation.request),preparation.enclosed);
+        use frame_demand::{Allowance,Producer,UnitWait};
+        let Some((preparation,allowance))=self.preparation.as_ref().and_then(|preparation|Some((preparation,preparation.wait.eligible(r)?))) else {return Ok(());};
+        let (request,enclosed,recipes)=(cache::current(r,&preparation.request),preparation.enclosed,preparation.recipes.clone());
         if self.cache.as_ref().is_some_and(|cache|cache.pending()) || (!self.flood.lines_ready(false)? && !self.flood.lines_discarded()) {return Ok(());}
         if let Some(binding)=&request.paper {
             r.prepare_paper_binding(binding,startup::OTHER)?;
             if paper::PaperTile::id_for(binding).is_some_and(|id|r.papers.view(&id).is_none()) {return Ok(());}
         }
-        {
-            let ready=self.raw.prepare(&r.compilation,startup::OTHER);
-            self.flood.prepare_cache(&r.compilation,startup::OTHER);
-            if !ready {return Ok(());}
-        }
-        if self.cache.as_ref().is_none_or(|cache|!cache.matches(r,&request,&cache::source(r,&request),enclosed)) {self.sampling=region_sources::Sampling::Transparent;}
-        match self.build_cache(r,&request,enclosed,encoder,Some(work),false) {
-            Ok(())=>{
-                self.preparation.as_mut().unwrap().recipes_ready=self.flood.prepare(&r.compilation,Self::refinement(&request),enclosed,true,startup::OTHER)
-                    & (!enclosed || r.compilation.require(r.selection_clip.pipelines(),startup::OTHER));
-                Ok(())
-            },
-            Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>Ok(()),Err(error)=>Err(error),
-        }
+        self.compiling=None;
+        self.flood.prepare_cache(&r.compilation,startup::OTHER);
+        let committed=self.raw.committed();
+        let result=if self.raw.prepare(&r.compilation,startup::OTHER) {
+            if self.cache.as_ref().is_none_or(|cache|!cache.matches(r,&request,&cache::source(r,&request),enclosed)) {self.sampling=region_sources::Sampling::Transparent;}
+            self.build_cache(r,&request,enclosed,encoder,Some(work),false,(crate::residency::Class::Prefetch,allowance))
+        } else {self.compiling=Some(Self::recipes(self.raw.pipelines()));Err(GpuRasterError::NotReady)};
+        let allowance=if self.raw.committed()==committed {allowance}else {Allowance::Fresh};
+        self.preparation.as_mut().unwrap().wait=match (self.compiling.take(),&result) {
+            (_,Err(GpuRasterError::Waiting(waiting)))=>UnitWait::parked(waiting.need().clone(),allowance),
+            (Some(needs),_)=>UnitWait::Input(Producer::Compile(Arc::new(needs)),allowance),
+            (None,Ok(())) if !recipes.require(&r.compilation,startup::OTHER)=>UnitWait::Input(Producer::Compile(recipes),allowance),
+            _=>UnitWait::Ready(allowance),
+        };
+        match result {Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished)=>Ok(()),result=>result}
     }
     fn start(
         &mut self,
         r: &mut WgpuRasterizer,
         request: RegionRequest,
+        allowance: frame_demand::Allowance,
     ) -> Result<bool, GpuRasterError> {
         if self.pending.is_some() || self.waiting.is_some() || self.running.is_some() || self.areas.is_some() {
             return Ok(false);
         }
+        self.compiling=None;self.awaiting=None;
         if let layer_render::RegionSource::Modify(modify) = &request.source {
             let modify = modify.clone();
-            return self.start_modify(r, request, &modify);
+            return self.start_modify(r, request, &modify, allowance);
         }
         let extent = match request.source.raw_source() { layer_render::RegionSource::TransformedSelection {target,..} => r.target_extent(*target), _ => r.document_extent };
         let mapped = matches!(
@@ -502,48 +556,48 @@ impl RegionRequests {
         }
         let lines=!mapped && tone.is_none() && !matches!(request.source,layer_render::RegionSource::Selection(_)|layer_render::RegionSource::Coverage(_)|layer_render::RegionSource::ObjectCoverage(_));
         if lines && !flood::fits(extent,&r.device.limits()) { return Err(GpuRasterError::SizeOverflow); }
-        if lines && (self.cache.as_ref().is_some_and(|cache|cache.pending()) || !self.flood.lines_ready(true)? && !self.flood.lines_discarded()) {self.waiting=Some(request);return Ok(true);}
+        if lines && (self.cache.as_ref().is_some_and(|cache|cache.pending()) || !self.flood.lines_ready(true)? && !self.flood.lines_discarded()) {
+            self.awaiting=self.cache.as_ref().filter(|cache|cache.pending()).and_then(|cache|cache.lastwrite.clone()).or_else(||self.flood.lines_submission()).map(frame_demand::Producer::Gpu);
+            self.waiting=Some((request,self.stopped(&GpuRasterError::NotReady,allowance)));return Ok(true);
+        }
         if mapped || request.selection.is_some() {
             self.refiner(r);
         }
         if let Some(binding)=&request.paper {
             r.prepare_paper_binding(binding,startup::BRUSH)?;
-            if paper::PaperTile::id_for(binding).is_some_and(|id|r.papers.view(&id).is_none()) {self.waiting=Some(request);return Ok(true);}
+            if paper::PaperTile::id_for(binding).is_some_and(|id|r.papers.view(&id).is_none()) {self.waiting=Some((request,self.stopped(&GpuRasterError::NotReady,allowance)));return Ok(true);}
         }
         {
             r.compilation.check()?;
-            let mut ready = true;
+            let mut needs = compile::Needs::default();
             if let layer_render::RegionSource::TransformedSelection { map, .. } = &request.source {
                 if map.mesh.is_some() {
-                    ready &= r.compilation.require([&self.positions(r).pipelines.pipeline], startup::BRUSH);
+                    needs.render.push(self.positions(r).pipelines.pipeline.clone());
                 }
-                ready &= r.compilation.require([&r.selection_clip.resample], startup::BRUSH);
-                ready &= self.refiner.as_ref().unwrap().prepare_bounds(&r.compilation);
+                needs.compute.extend([r.selection_clip.resample.clone(), self.refiner.as_ref().unwrap().bounds_pipeline().clone()]);
             } else if tone.is_some() {
-                ready &= self.raw.prepare_tonal(&r.compilation);
+                needs.compute.extend(self.raw.tonal_pipelines().into_iter().cloned());
             } else if !matches!(request.source, layer_render::RegionSource::Selection(_)) {
-                ready &= self.raw.prepare(&r.compilation,startup::BRUSH);
+                needs.compute.extend(self.raw.pipelines().cloned());
                 if !matches!(request.source, layer_render::RegionSource::Coverage(_) | layer_render::RegionSource::ObjectCoverage(_)) {
-                    let prepared=self.flood.prepare(&r.compilation,Self::refinement(&request),request.enclosure.is_some(),request.contiguous,startup::BRUSH);
-                    if !lines || self.cache.as_ref().is_some_and(|cache|cache.ready) {ready &= prepared;}
+                    if !lines || self.cache.as_ref().is_some_and(|cache|cache.ready) {
+                        needs.compute.extend(self.flood.request_pipelines(Self::refinement(&request),request.enclosure.is_some(),request.contiguous,false).cloned());
+                    } else {self.flood.prepare(&r.compilation,Self::refinement(&request),request.enclosure.is_some(),request.contiguous,startup::BRUSH);}
                 }
             }
             if let Some(options) = &request.selection {
-                ready &= self
-                    .refiner
-                    .as_ref()
-                    .unwrap()
-                    .prepare(&r.compilation, [&Stage::refinement(options)], false);
+                needs.compute.extend(self.refiner.as_ref().unwrap().stage_pipelines([&Stage::refinement(options)], false).cloned());
             }
             if request.limit.is_some() || request.enclosure.is_some() || request.selection.is_some() {
-                ready &= r.compilation
-                    .require(r.selection_clip.pipelines(), startup::BRUSH);
+                needs.compute.extend(r.selection_clip.pipelines().into_iter().cloned());
             }
-            if !ready {
-                self.waiting = Some(request);
+            if !needs.require(&r.compilation, startup::BRUSH) {
+                self.compiling = Some(needs);
+                self.waiting = Some((request, self.stopped(&GpuRasterError::NotReady, allowance)));
                 return Ok(true);
             }
         }
+        let admission = (crate::residency::Class::Visible, allowance);
         let mut encoder = crate::submission::CommandEncoder::new(
             &r.device,
             &wgpu::CommandEncoderDescriptor {
@@ -587,10 +641,10 @@ impl RegionRequests {
             }
             r.drain_image_decodes(&mut encoder)?;
             if lines {self.cache_request=Some(request.clone());}
-            let classified = match self.sample_fill_seed(r,&mut encoder).and_then(|()|if lines {self.classify_lines(r,&request,&mut encoder)} else {self.raw.encode(r,&request,&mut encoder)}) {
-                Err(GpuRasterError::NotReady|GpuRasterError::NotPublished) => {
+            let classified = match self.sample_fill_seed(r,&mut encoder,admission).and_then(|()|if lines {self.classify_lines(r,&request,&mut encoder,admission)} else {self.raw.encode(r,&request,&mut encoder,admission)}) {
+                Err(error@(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished)) => {
                     self.submit(r,encoder);
-                    self.waiting = Some(request);
+                    self.waiting = Some((request,self.stopped(&error,allowance)));
                     return Ok(true);
                 },
                 result => match result {
@@ -710,6 +764,7 @@ impl RegionRequests {
         r: &mut WgpuRasterizer,
         request: RegionRequest,
         modify: &Arc<layer_render::SelectionModify>,
+        allowance: frame_demand::Allowance,
     ) -> Result<bool, GpuRasterError> {
         let extent = r.document_extent;
         if !modify.is_valid() || extent.contains(&0) {
@@ -728,10 +783,11 @@ impl RegionRequests {
         let plan = ModifyPlan::new(modify, extent, preview, built);
         {
             r.compilation.check()?;
-            let ready = self.refiner.as_ref().unwrap().prepare(&r.compilation, &plan.stages, plan.level > built)
-                & r.compilation.require(r.selection_clip.pipelines(), startup::BRUSH);
-            if !ready {
-                self.waiting = Some(request);
+            let mut needs = Self::recipes(self.refiner.as_ref().unwrap().stage_pipelines(&plan.stages, plan.level > built));
+            needs.compute.extend(r.selection_clip.pipelines().into_iter().cloned());
+            if !needs.require(&r.compilation, startup::BRUSH) {
+                self.compiling = Some(needs);
+                self.waiting = Some((request, self.stopped(&GpuRasterError::NotReady, allowance)));
                 return Ok(true);
             }
         }
@@ -889,7 +945,7 @@ impl RegionRequests {
         r.metrics.command_passes += encoder.pass_count();
         encoder.submit(&r.queue);
         self.pending = Some(region);
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = frame_demand::Delivery::channel(r.device.loss());
         self.rx = Some(rx);
         selection_readback::capture_selection(
             &r.device,r.factory.memory_budget().clone(),
@@ -906,23 +962,24 @@ impl WgpuRasterizer {
     pub(super) fn prepare_region_cache(&mut self,preparation:Option<&layer_render::RegionPreparation>) {
         let invalid=preparation.is_some_and(|p|!p.is_valid());
         let preparation=preparation.filter(|_|!invalid);
-        let mut regions=match self.regions.take() {
-            Some(regions)=>regions,
-            None if preparation.is_none()=>return,
-            None=>RegionRequests::new(self),
-        };
+        let recipes=preparation.map(|p| {
+            let mut recipes=compile::Needs::default();
+            recipes.regions(self,p.refinement,p.enclosed,true,true);
+            if p.enclosed {recipes.compute.extend(self.selection_clip.pipelines().into_iter().cloned());}
+            recipes.require(&self.compilation,startup::OTHER);
+            Arc::new(recipes)
+        });
+        let Some(mut regions)=self.regions.take() else {return;};
         if regions.areas.is_some() {self.keep_regions(regions);return;}
         if invalid && regions.pending.is_none() && regions.waiting.is_none() && regions.running.is_none() {
             regions.raw.cancel();regions.flood.cancel_lines();
             if regions.cache.as_ref().is_some_and(|cache|!cache.ready) {regions.cache=None;}
         }
-        let previous=regions.preparation.take();
-        regions.preparation=preparation.map(|p|Preparation {request:RegionRequest { fill_areas: None, colour_mode: Default::default(), fill: None,
+        regions.preparation=preparation.zip(recipes).map(|(p,recipes)|Preparation {request:RegionRequest { fill_areas: None, colour_mode: Default::default(), fill: None,
             source:p.source.clone(),reference_count:p.reference_count,paper:p.paper.clone(),tolerance:p.tolerance,
             enclosure:None,
             position:[0;2],request_id:0,refinement:p.refinement,contiguous:true,limit:None,selection:None,
-        },enclosed:p.enclosed,recipes_ready:previous.as_ref().is_some_and(|old|
-            old.recipes_ready && old.enclosed==p.enclosed && old.request.refinement==p.refinement)});
+        },enclosed:p.enclosed,recipes,wait:Default::default()});
         if let Some(preparation)=&regions.preparation {
             let request=cache::current(self,&preparation.request);let source=cache::source(self,&request);
             if regions.cache.as_ref().is_some_and(|cache|!cache.matches(self,&request,&source,preparation.enclosed)) {
@@ -937,8 +994,21 @@ impl WgpuRasterizer {
         let result=regions.prewarm(self,encoder,work);
         self.artwork_frame=old;self.keep_regions(regions);result
     }
-    pub fn region_step_runnable(&self) -> bool {self.regions.as_ref().is_some_and(|regions|regions.areas.is_some())}
-    pub(super) fn region_prewarm_runnable(&self) -> bool {self.regions.as_ref().is_some_and(|regions|regions.background_pending() && regions.prewarm_idle(self))}
+    pub fn region_step_runnable(&self) -> bool {
+        self.regions.as_ref().and_then(|regions|regions.areas.as_ref()).is_some_and(|job|job.demand(self)==Some(frame_demand::Outstanding::Runnable))
+    }
+    pub(super) fn regions_outstanding(&self) -> Option<frame_demand::Outstanding> {
+        let regions=self.regions.as_ref()?;
+        if let Some(job)=&regions.areas {return job.demand(self).filter(|state|*state!=frame_demand::Outstanding::Runnable);}
+        match &regions.waiting {
+            Some((_,wait))=>wait.demand(self).filter(|_|!matches!(wait,frame_demand::UnitWait::Ready(_))),
+            None=>regions.prewarm_outstanding(self),
+        }
+    }
+    pub(super) fn region_results_awaited(&self) -> bool {
+        self.regions.as_ref().is_some_and(|r| r.pending.is_some() || r.running.is_some() || r.areas.as_ref().is_some_and(areas::AreasJob::awaits_result)
+            || r.waiting.as_ref().is_some_and(|(_,wait)|matches!(wait,frame_demand::UnitWait::Ready(_))))
+    }
     pub fn region_pending(&self) -> bool {
         self.regions
             .as_ref()
@@ -973,13 +1043,13 @@ impl WgpuRasterizer {
             required.require(&self.compilation,startup::DOCUMENT);
             regions=self.regions.take().unwrap();
         }
-        regions.fill_seed=None;
+        regions.fill_seed=None;regions.footprint=regions.raw.committed();
         let result = match task {
             RegionTask::Fill {request,target,position}=>{
                 regions.fill_seed=Some((target,position,None));
-                regions.start(self,request)
+                regions.start(self,request,frame_demand::Allowance::Fresh)
             },
-            RegionTask::Mask(request)=>regions.start(self,request),
+            RegionTask::Mask(request)=>regions.start(self,request,frame_demand::Allowance::Fresh),
             RegionTask::FlatAreas(request)=>{regions.areas=Some(areas::AreasJob::new(request));Ok(true)},
         };
         if result.is_err() { regions.cancel(); }
@@ -997,12 +1067,17 @@ impl WgpuRasterizer {
             return result.transpose();
         }
         let regions=self.regions.as_mut()?;regions.pieces=regions.pace.lock().unwrap().pieces;
+        if let Some(failure)=regions.waiting.as_ref().and_then(|(_,wait)|wait.ended()) {
+            regions.cancel();
+            return Some(Err(failure));
+        }
         for _ in 0..selection_refine::CHUNKS_IN_FLIGHT {
-            if self.regions.as_ref()?.waiting.is_none() || !self.regions.as_ref()?.slot_free() {break;}
+            let Some(allowance)=self.regions.as_ref()?.waiting.as_ref().and_then(|(_,wait)|wait.eligible(self)) else {break;};
+            if !self.regions.as_ref()?.slot_free() {break;}
             let mut requests = self.regions.take().unwrap();
-            let request = requests.waiting.take().unwrap();
+            let (request,_) = requests.waiting.take().unwrap();
             let submitted = requests.submitted;
-            let result = requests.start(self, request);
+            let result = requests.start(self, request, allowance);
             if result.is_err() { requests.cancel(); }
             let progressed = requests.submitted != submitted;
             self.keep_regions(requests);
@@ -1033,7 +1108,7 @@ impl WgpuRasterizer {
             return None;
         }
         requests.pending.as_ref()?;
-        let incoming=requests.rx.as_ref()?.try_recv().ok()?;
+        let incoming=requests.rx.as_ref()?.take()?;
         let region=requests.pending.take().unwrap();
         requests.readback=None;
         let result=match incoming {
@@ -1041,7 +1116,7 @@ impl WgpuRasterizer {
                 let request=requests.cache_request.take().unwrap();
                 if stale&1!=0 {requests.reclassify();}else{requests.scope=Some((request.request_id,Scope::Full));}
                 let mut requests=self.regions.take().unwrap();
-                let rebuilt=requests.start(self,request);
+                let rebuilt=requests.start(self,request,frame_demand::Allowance::Fresh);
                 if rebuilt.is_err(){requests.cancel();}
                 self.keep_regions(requests);
                 return rebuilt.err().map(Err);
@@ -1081,7 +1156,7 @@ pub(crate) mod tests {
     use crate::{layer_tests::placement, test_support};
     use layer_render::{CanvasRenderer, RegionPreparation, RegionRefinement, RegionSource, SelectionRefinement, TonalRequest};
 
-    fn prepared_reference() -> (WgpuRasterizer, RegionSource) {
+    fn reference_document() -> (layer_core::Document, RegionSource) {
         let extent = [64, 64];
         let mut document = layer_core::Document::new(layer_core::authored::PortableId::random(),extent[0],extent[1],
             layer_core::DocumentNames {paint:"Reference".into(),paper:"Paper".into()});
@@ -1091,6 +1166,12 @@ pub(crate) mod tests {
             [0, 0, 0, if ink { 255 } else { 0 }]
         }));
         let source = RegionSource::Scene { snapshot: document.snapshot(), scope: SceneScope::Raw(placement::target(&document)) };
+        (document, source)
+    }
+
+    fn prepared_reference() -> (WgpuRasterizer, RegionSource) {
+        let extent = [64, 64];
+        let (document, source) = reference_document();
         let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         test_support::submit_ready(&mut r, test_support::packet(document.scene(), extent)).unwrap();
         r.set_refine_chunk(Some(1_048_576.));
@@ -1317,8 +1398,8 @@ pub(crate) mod tests {
                 test_support::settle_decodes(&mut r);
                 let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
                 r.drain_image_decodes(&mut encoder).unwrap();
-                let result=regions.build_cache(&mut r,&request,false,&mut encoder,None,false);
-                assert!(matches!(result,Ok(())|Err(GpuRasterError::NotReady)),"{result:?}");
+                let result=regions.build_cache(&mut r,&request,false,&mut encoder,None,false,(crate::residency::Class::Visible,frame_demand::Allowance::Fresh));
+                assert!(matches!(result,Ok(())|Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"{result:?}");
                 r.uploads.finish(&encoder);encoder.submit(&r.queue);test_support::complete(&r);
                 if regions.cache.as_ref().unwrap().classified {calls=call;break;}
                 defers+=1;
@@ -1417,6 +1498,82 @@ pub(crate) mod tests {
         check_reference(&result);
     }
     #[test]
+    fn a_tap_waiting_for_its_line_recipes_submits_nothing_and_asks_for_no_frame_until_they_compile() {
+        let (document,source)=reference_document();
+        let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        test_support::submit_settled(&mut r,test_support::packet(document.scene(),[64;2]));
+        r.set_refine_chunk(Some(1_048_576.));
+        r.set_preparation_wake(Arc::new(||{}));
+        pollster::block_on(r.compilation.prepare_all(r.regions.as_ref().unwrap().raw.pipelines())).unwrap();
+        let held=r.compilation.batch();
+        assert!(r.request_region(reference_query(source).into()).unwrap());
+        let deadline=std::time::Instant::now()+READBACK_TIMEOUT;
+        while !r.regions.as_ref().unwrap().cache.as_ref().is_some_and(|cache|cache.classified) {
+            assert!(r.take_region().is_none());test_support::complete(&r);
+            assert!(std::time::Instant::now()<deadline,"the tap must classify its reference while its line recipes wait");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        test_support::complete(&r);
+        let before=test_support::PassCounts::snapshot();
+        for _ in 0..8 {assert!(r.take_region().is_none());test_support::complete(&r);}
+        assert_eq!(test_support::PassCounts::snapshot().delta(before).submissions,0,"a tap whose line recipes are still compiling submitted work");
+        assert!(r.frame_demand()!=layer_render::FrameDemand::Work,"a tap waiting on its line recipes asked for frames: {:?}",r.outstanding_terms());
+        drop(held);
+        let result=test_support::prepare_raster(&mut r,|r|r.take_region().unwrap_or(Err(GpuRasterError::NotReady))).unwrap();
+        check_reference(&test_support::mask_result(result));
+    }
+    #[test]
+    fn a_tap_refused_room_for_its_source_searches_once_and_ends_with_one_memory_refusal() {
+        let (mut document,_)=reference_document();
+        placement::occurrence_mut(&mut document).visible=false;
+        let source=RegionSource::Source(placement::target(&document));
+        let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        test_support::submit_settled(&mut r,test_support::packet(document.scene(),[64;2]));
+        r.set_refine_chunk(Some(1_048_576.));
+        r.set_preparation_wake(Arc::new(||{}));
+        let regions=r.regions.as_ref().unwrap();
+        let recipes:Vec<_>=regions.raw.pipelines().chain(regions.flood.request_pipelines(Default::default(),false,true,true))
+            .chain(regions.flood.cache_pipelines()).cloned().collect();
+        pollster::block_on(r.compilation.prepare_all(recipes.iter())).unwrap();
+        r.scene_tiers.display.set_limit(0,0);
+        let before=test_support::PassCounts::snapshot();
+        assert!(r.request_region(reference_query(source).into()).unwrap());
+        let deadline=std::time::Instant::now()+READBACK_TIMEOUT;
+        let mut results=Vec::new();
+        while results.is_empty() && std::time::Instant::now()<deadline {
+            results.extend(r.take_region());test_support::complete(&r);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        for _ in 0..8 {results.extend(r.take_region());test_support::complete(&r);}
+        let scans=test_support::PassCounts::snapshot().delta(before).room_scans;
+        assert_eq!(scans,1,"a tap refused room for its source searched for room {scans} times");
+        assert!(matches!(results.as_slice(),[Err(error)] if <WgpuRasterizer as CanvasRenderer>::is_memory_refusal(error)),
+            "a tap that still has no room after its one search ends once with a memory refusal: {results:?}");
+        assert!(!r.region_pending() && r.frame_demand()!=layer_render::FrameDemand::Work,"an ended tap leaves nothing to do: {:?}",r.outstanding_terms());
+    }
+    #[test]
+    fn a_selected_wand_requests_its_tap_recipes_and_its_prewarm_sleeps_while_they_compile() {
+        let (document,source)=reference_document();
+        let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        test_support::submit_settled(&mut r,test_support::packet(document.scene(),[64;2]));
+        let held=r.compilation.batch();
+        let preparation=RegionPreparation {source:source.clone(),reference_count:None,paper:None,tolerance:0.,refinement:Default::default(),enclosed:false};
+        r.prepare_regions(Some(&preparation));
+        let regions=r.regions.as_ref().unwrap();
+        assert!(regions.raw.pipelines().chain(regions.flood.request_pipelines(preparation.refinement,false,true,true))
+            .all(|recipe|crate::compile::tests::requested(&r.compilation,recipe,startup::OTHER)),"selecting the Wand must request the recipes its tap needs");
+        r.set_preparation_wake(Arc::new(||{}));
+        let frame=r.artwork_frame.clone().unwrap();
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        r.prefetch_regions(&frame,&mut encoder,&mut test_support::work(false)).unwrap();
+        assert!(!encoder.has_work());
+        assert!(r.frame_demand()!=layer_render::FrameDemand::Work,"a prewarm waiting on its recipes asked for frames: {:?}",r.outstanding_terms());
+        drop((encoder,held));
+        test_support::submit_settled(&mut r,test_support::packet(document.scene(),[64;2]));
+        assert!(!r.regions.as_ref().unwrap().background_pending());
+        check_reference(&test_support::receive_request(&mut r,reference_query(source)));
+    }
+    #[test]
     fn busy_region_chunks_keep_their_encoder_until_submission() {
         let (mut r, source) = prepared_reference();
         let held = hold_reference(&mut r);
@@ -1440,6 +1597,22 @@ pub(crate) mod tests {
         check_reference(&result);
         assert!(!r.region_pending());
         r.prepare_regions(None);
+    }
+    #[test]
+    fn a_tap_behind_a_line_cache_still_building_sleeps_on_that_build_until_it_lands() {
+        let (mut r,source)=prepared_reference();
+        let held=hold_reference(&mut r);
+        assert!(r.request_region(reference_query(source).into()).unwrap());
+        for _ in 0..4 {assert!(r.take_region().is_none());}
+        let regions=r.regions.as_ref().unwrap();
+        assert!(matches!(&regions.waiting,Some((_,frame_demand::UnitWait::Input(frame_demand::Producer::Gpu(build),_)))
+            if regions.flood.lines_submission().is_some_and(|lines|lines.same(build))),"a tap behind its building line cache retries instead of waiting on that build");
+        assert_eq!(r.regions_outstanding(),Some(frame_demand::Outstanding::Blocked(frame_demand::Input::Gpu)));
+        assert!(!r.region_results_awaited(),"a tap asleep on its line build is counted as a result the next completion delivers");
+        held.submit(&r.queue);
+        r.set_refine_chunk(Some(1_048_576.));
+        check_reference(&test_support::mask_result(test_support::prepare_raster(&mut r,|r|r.take_region().unwrap_or(Err(GpuRasterError::NotReady))).unwrap()));
+        assert!(!r.region_pending());
     }
 
     #[test]

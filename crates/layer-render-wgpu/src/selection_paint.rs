@@ -9,9 +9,7 @@ use wgpu::util::DeviceExt;
 pub(super) struct SelectionPainter {
     recipes: Arc<Pipelines>,
     pub active: Option<Painting>,
-    pending: Option<wgpu::Buffer>,
-    tx: mpsc::Sender<Result<SelectionPaintResult, GpuRasterError>>,
-    rx: crate::frame_demand::Delivery<Result<SelectionPaintResult, GpuRasterError>>,
+    pending: Option<(wgpu::Buffer, crate::frame_demand::Delivery<SelectionPaintResult>)>,
     charge: crate::residency::Charge,
 }
 pub(super) struct Pipelines {
@@ -31,7 +29,7 @@ pub(super) struct Painting {
 }
 impl SelectionPainter {
     pub(super) fn storage_bytes(&self) -> u64 {
-        self.pending.as_ref().map_or(0, |b| b.size())
+        self.pending.as_ref().map_or(0, |(buffer, _)| buffer.size())
             + self.active.as_ref().map_or(0, |p| {
                 p.before.size() + p.output.size() + p.pages.values().map(|b| b.size()).sum::<u64>()
             })
@@ -41,8 +39,7 @@ impl SelectionPainter {
         self.charge.resize(bytes);
     }
     pub fn from_pipelines(recipes: Arc<Pipelines>, tier: &Arc<crate::residency::Tier>) -> Self {
-        let (tx, rx) = crate::frame_demand::Delivery::channel();
-        Self { recipes, active: None, pending: None, tx, rx, charge: tier.charge(0) }
+        Self { recipes, active: None, pending: None, charge: tier.charge(0) }
     }
 }
 impl Pipelines {
@@ -372,6 +369,7 @@ impl SelectionPainter {
                 [1, 256],
             );
         }
+        let mut readback_buffer = None;
         if update.finish {
             dispatch(
                 &mut encoder,
@@ -393,22 +391,24 @@ impl SelectionPainter {
                 0,
                 size + 32,
             );
-            self.pending = Some(readback);
+            readback_buffer = Some(readback);
         }
         r.uploads.finish(&encoder);
         r.last_submission = encoder.submit(&r.queue);
-        if let Some(readback) = &self.pending {
+        if let Some(readback) = readback_buffer {
+            let (tx, delivery) = crate::frame_demand::Delivery::channel(r.device.loss());
             selection_readback::capture_selection(
             &r.device,r.factory.memory_budget().clone(),
                 selection_readback::Capture {buffer:readback.clone(),size:size+32,coverage_size:size,underfill_offset:None,seal_records:0,seed_offset:None},
                 extent,true,update.id,false,
-                self.tx.clone(),
+                tx,
                 |result, changed, _| SelectionPaintResult {
                     request_id: result.request_id,
                     pixels: result.pixels,
                     changed: changed != 0,
                 },
             );
+            self.pending = Some((readback, delivery));
         }
         Ok(true)
     }
@@ -452,7 +452,7 @@ impl WgpuRasterizer {
             .is_some_and(|p| p.pending.is_some())
     }
     pub(super) fn selection_paint_ready(&self) -> bool {
-        self.selection_painter.as_ref().is_some_and(|p| p.pending.is_some() && p.rx.arrived())
+        self.selection_painter.as_ref().is_some_and(|p| p.pending.as_ref().is_some_and(|(_, delivery)| delivery.arrived()))
     }
     pub(super) fn update_selection_paint(
         &mut self,
@@ -485,7 +485,7 @@ impl WgpuRasterizer {
         &mut self,
     ) -> Option<Result<SelectionPaintResult, GpuRasterError>> {
         let painter = self.selection_painter.as_mut()?;
-        let result = painter.rx.try_recv().ok()?;
+        let result = painter.pending.as_ref()?.1.take()?;
         painter.pending = None;
         if let Ok(reply) = &result {
             self.selection_clip.remember_pixels(

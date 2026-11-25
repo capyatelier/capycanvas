@@ -13,6 +13,8 @@ struct Binding {
     group: wgpu::BindGroup,
 }
 
+pub(super) type Admission = (crate::residency::Class, crate::frame_demand::Allowance);
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Sampling { Pixels, Seeds, Transparent, Enclosed, Retained, Target, TargetSeed, Areas(layer_core::FillAreas) }
 
@@ -42,6 +44,7 @@ pub(super) struct RawRegions {
     parameters: Vec<u8>,
     bindings: std::collections::VecDeque<Binding>,
     progress: Option<Classification>,
+    committed: u64,
     request_source: Option<(layer_render::RegionSource,Sampling)>,
     tiles_left:Option<usize>,
     pages:Option<Vec<[u32;2]>>,
@@ -189,6 +192,7 @@ impl RawRegions {
             parameters: Vec::new(),
             bindings: Default::default(),
             progress: None,
+            committed: 0,
             request_source:None,tiles_left:None,pages:None,
         }
     }
@@ -198,11 +202,8 @@ impl RawRegions {
     pub fn prepare(&self, compiler: &compile::Scope, priority:startup::Class) -> bool {
         compiler.require(self.pipelines(), priority)
     }
-    pub fn prepare_tonal(&self, compiler: &compile::Scope) -> bool {
-        compiler.require(
-            [&self.tonal_pipeline, &self.tonal_cached_pipeline],
-            startup::BRUSH,
-        )
+    pub fn tonal_pipelines(&self) -> [&Deferred<wgpu::ComputePipeline>; 2] {
+        [&self.tonal_pipeline, &self.tonal_cached_pipeline]
     }
     pub fn storage_bytes(&self) -> u64 {
         self.capture.storage_bytes()
@@ -323,15 +324,18 @@ impl RawRegions {
         r: &mut WgpuRasterizer,
         request: &layer_render::RegionRequest,
         encoder: &mut crate::submission::CommandEncoder,
+        admission: Admission,
     ) -> Result<wgpu::Buffer, GpuRasterError> {
-        self.encode_sampling(r,request,encoder,Sampling::Pixels)
+        self.encode_sampling(r,request,encoder,Sampling::Pixels,admission)
     }
+    pub fn committed(&self)->u64 {self.committed}
+    pub fn awaiting(&self)->Option<crate::frame_demand::Producer> {self.capture.awaiting()}
     pub fn mask(&self)->Option<wgpu::Buffer> {self.mask.clone()}
     pub fn seeds(&self)->&wgpu::Buffer {self.seeds.as_ref().unwrap()}
     pub fn seed(&self)->&wgpu::Buffer {&self.seed}
     fn clear_parameters(&mut self) {self.bindings.clear();self.uniform=None;self.parameters.clear();}
     pub fn encode_sampling(&mut self,r:&mut WgpuRasterizer,request:&layer_render::RegionRequest,
-        encoder:&mut crate::submission::CommandEncoder,sampling:Sampling)->Result<wgpu::Buffer,GpuRasterError> {
+        encoder:&mut crate::submission::CommandEncoder,sampling:Sampling,admission:Admission)->Result<wgpu::Buffer,GpuRasterError> {
         if self.progress.is_none(){
             if self.request_source.as_ref().is_none_or(|(source,mode)|source!=&request.source || *mode!=sampling) {self.clear_parameters();}
             self.request_source=Some((request.source.clone(),sampling));
@@ -346,7 +350,7 @@ impl RawRegions {
             let index = self.progress.as_ref().unwrap().source;
             let sources = request.source.sources();
             let source = layer_render::RegionRequest { source: sources[index].clone(), ..request.clone() };
-            let result = self.encode_source(r, &source, encoder, index > 0,sampling)?;
+            let result = self.encode_source(r, &source, encoder, index > 0,sampling,admission)?;
             if !matches!(sampling,Sampling::Target|Sampling::TargetSeed|Sampling::Areas(_)) {encoder.copy_buffer_to_buffer(&self.seed,0,self.seeds.as_ref().unwrap(),index as u64*16,16);}
             if index + 1 == sources.len() { self.progress = None; self.pages=None; return Ok(result); }
             self.progress = None;
@@ -356,7 +360,7 @@ impl RawRegions {
             self.clear_parameters();
         }
     }
-    fn prepare_batch(r:&mut WgpuRasterizer,frame:Option<&artwork::Frame>,layer:Option<SourceTarget>,tiles:&[[u32;2]])->Result<(),GpuRasterError> {
+    fn prepare_batch(r:&mut WgpuRasterizer,frame:Option<&artwork::Frame>,layer:Option<SourceTarget>,tiles:&[[u32;2]],class:crate::residency::Class)->Result<(),GpuRasterError> {
         let fallback=r.artwork_frame.clone();
         let Some(frame)=frame.or(fallback.as_deref()) else {return Ok(());};
         let scene=frame.scene.view().with_scope(&frame.scope);
@@ -376,10 +380,10 @@ impl RawRegions {
                 if stored.stored()>limit {return Ok(());}
             }
         }
-        if stored.request(r,crate::residency::Class::Visible)? {Ok(())}else {Err(GpuRasterError::NotReady)}
+        if stored.request(r,class)? {Ok(())}else {Err(GpuRasterError::NotReady)}
     }
     fn encode_source(&mut self, r: &mut WgpuRasterizer, request: &layer_render::RegionRequest,
-        encoder: &mut crate::submission::CommandEncoder, combine: bool, sampling:Sampling,
+        encoder: &mut crate::submission::CommandEncoder, combine: bool, sampling:Sampling, (class,allowance):Admission,
     ) -> Result<wgpu::Buffer, GpuRasterError> {
         let [w,h] = self.extent().unwrap();
         let mut layer = match request.source.raw_source() {
@@ -644,7 +648,7 @@ impl RawRegions {
                 self.progress.as_mut().unwrap().batch=1;
                 continue;
             }
-            Self::prepare_batch(r,frame.as_deref(),layer,tiles)?;
+            Self::prepare_batch(r,frame.as_deref(),layer,tiles,class)?;
             let checkpoint=r.source_tiles.borrow().batch_checkpoint();
             let mut views: [wgpu::TextureView; BATCH_TILES] =
                 std::array::from_fn(|_| r.empty_view.clone());
@@ -659,7 +663,7 @@ impl RawRegions {
                             .cloned()
                             .ok_or(GpuRasterError::InvalidExtent)?;
                         r.paint_base_tile(&source, *coordinate, encoder)?.map(|tile| source_access::Sampled::new(tile, true))
-                    } else if placed { Some(self.capture.layer_tile(r,layer,*coordinate,encoder)?) } else { r.raw_layer_tile(layer,*coordinate,encoder)? };
+                    } else if placed { Some(self.capture.layer_tile(r,layer,*coordinate,encoder)?) } else { r.raw_layer_tile(layer,*coordinate,class,allowance,encoder)? };
                     read.map(|read| read.take(&mut complete))
                 } else {
                     let region = page_rect(*coordinate).intersect(PixelRect::full([w, h]));
@@ -757,6 +761,7 @@ impl RawRegions {
             self.bindings.push_back(binding);
             let progress = self.progress.as_mut().unwrap();
             progress.batch += 1;
+            self.committed += 1;
             progress.captured = 0;
             if !seeding {
                 progress.tile += tiles.len();

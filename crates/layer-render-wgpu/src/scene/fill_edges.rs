@@ -187,7 +187,7 @@ impl Scene {
     fn fill_target(&mut self,r:&mut WgpuRasterizer,target:SourceTarget,region:PixelRect,texture:&Texture,encoder:&mut submission::CommandEncoder)->Result<bool,GpuRasterError> {
         let mut tiles=Vec::new();let mut leases=Vec::new();let mut complete=true;
         for coordinate in page_coordinates(region) {
-            let tile=r.raw_layer_tile(target,coordinate,encoder)?.map(|tile|tile.take(&mut complete));
+            let tile=r.raw_layer_tile(target,coordinate,crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh,encoder)?.map(|tile|tile.take(&mut complete));
             if let Some(tile)=&tile {leases.extend(r.source_tiles.borrow().lease(&tile.view));}
             tiles.push((coordinate,tile));
         }
@@ -358,9 +358,10 @@ impl WgpuRasterizer {
                 failure:bytes.is_none().then_some(GpuRasterError::SizeOverflow),unadmitted:bytes.map(|bytes|(bytes,scratch_count)),complete:true}
         };
         if state.pending() {
+            if let Some((bytes,_))=state.unadmitted {self.extend_close(packet,bytes);}
             let mut encoder=submission::CommandEncoder::new(&self.device,&Default::default());
             let result=state.admit(self).and_then(|()|self.drain_image_decodes(&mut encoder)).and_then(|()|state.advance(self,packet,&mut encoder));
-            if let Err(error)=result && !matches!(error,GpuRasterError::NotReady|GpuRasterError::NotPublished) {state.failure=Some(error);}
+            if let Err(error)=result && !matches!(error,GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished) {state.failure=Some(error);}
             if encoder.has_work() {self.uploads.finish(&encoder);self.last_submission=encoder.submit(&self.queue);}
         }
         let ready=!state.pending();self.fill_edges_preflight=Some(state);ready
@@ -520,7 +521,7 @@ mod tests {
         let preview=layer_render::FillPreview {transaction:42,revision:0,target,operation};
         r.set_fill_preview(Some(preview.clone()));
         crate::test_support::prepare_raster(&mut r,|r|if r.prepare_fill_edges(frame){Ok(())}else{Err(GpuRasterError::NotReady)}).unwrap();
-        assert!(matches!(r.submit(frame),Err(GpuRasterError::SourceWorkingSetExceeded|GpuRasterError::NotReady)));
+        assert!(matches!(r.submit(frame),Err(GpuRasterError::SourceWorkingSetExceeded|GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
         drop(pressure);r.refresh_memory_limits();crate::test_support::prepare_raster(&mut r,|r|submit_ready(r,frame)).unwrap();
         let pixels=r.readback_srgb_rgba8().unwrap();
         let mut control=WgpuRasterizer::new_native_headless(Default::default()).unwrap();

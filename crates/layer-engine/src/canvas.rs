@@ -19,9 +19,9 @@ use layer_core::{
 };
 use layer_render::{
     CanvasRenderer, Dab, DabBatch, DabBatchKind, DabStyle, FramePacket, RetouchPreparation,
-    ViewState,
+    SubmissionTurn, ViewState,
 };
-use std::{collections::VecDeque, fmt, sync::Arc, task::Poll};
+use std::{collections::VecDeque, fmt, sync::Arc};
 
 #[path = "corrections.rs"]
 mod corrections;
@@ -34,6 +34,7 @@ struct PreparedFrame {
     reset: bool,
     time: f32,
     steps: Option<frame_steps::FrameSteps>,
+    held: bool,
 }
 
 const TRANSFORM_HISTORY: usize = 16;
@@ -46,6 +47,7 @@ const BATCH_CAPACITY: usize = 64;
 // carried color advance in visible bands.
 pub(crate) const MAX_CONTACT_POINTS: usize = 131_072;
 const CORRECTION_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
+const MEMORY_REFUSAL: &str = "Not enough memory to submit the raster edit";
 const MAX_WET_DABS_PER_BATCH: u32 = 3;
 // Smudge contacts compose into one bounded semi-Lagrangian backtrace. Live
 // input retains an incomplete chunk as replaceable GPU preview work, so these
@@ -63,6 +65,7 @@ pub struct EngineMetrics {
     pub committed_strokes: u64,
     pub input_budget_completions: u64,
     pub saved_tile_refusals: u64,
+    pub stroke_memory_refusals: u64,
     pub platform_prediction_frames: u64,
     pub engine_prediction_frames: u64,
 }
@@ -211,7 +214,10 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     completed_publication: Option<layer_core::raster::RasterRevision>,
     completed_before: Option<layer_core::raster::RasterRevision>,
     completed_clone_start: Option<CloneSource>,
+    late_clone: Option<LateClone>,
     restore_rasters: Vec<(SourceTarget, layer_core::raster::RasterRevision)>,
+    handed_rasters: (Option<(u64, layer_core::Revision)>, Vec<layer_core::raster::RasterRevision>),
+    admitted_samples: Vec<(u64, usize)>,
     pending_frame: Option<PreparedFrame>,
     rebuild_completed: bool,
     estimates: std::collections::BTreeMap<(u64, u64), corrections::EstimatedPoint>,
@@ -297,7 +303,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             completed_publication: None,
             completed_before: None,
             completed_clone_start: None,
+            late_clone: None,
             restore_rasters: Vec::new(),
+            handed_rasters: Default::default(),
+            admitted_samples: Vec::new(),
             pending_frame: None,
             rebuild_completed: false,
             estimates: Default::default(),
@@ -347,7 +356,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let Self {editor,settings:_,used_colors:_,recording:_,backend:_,input:_,queued_contacts:_,contact_settings:_,
             view:_,transforms:_,clone_stroke:_,retouch_points:_,prepared_retouch:_,builder:_,dab_generator:_,
             finalized_real_points:_,active_stroke:_,pending_up:_,frame_clock_ns:_,completed_stroke:_,completed_at:_,completed_publication:_,completed_before:_,
-            completed_clone_start:_,restore_rasters:_,pending_frame:_,rebuild_completed:_,estimates:_,
+            completed_clone_start:_,late_clone:_,restore_rasters:_,handed_rasters:_,admitted_samples:_,pending_frame:_,rebuild_completed:_,estimates:_,
             pending_chunk_dabs:_,dabs:_,batches:_,liquify_preview:_,transform_preview:_,transform_selection:_,selection_display:_,
             scene_preview:_,rebuild_all:_,composite_all:_,raster_dirty:_,animation_origin_ns:_,animation_time:_,
             animation_seed:_,evaluation_context:_,metrics:_,admitted_pen:_}=self;
@@ -1031,7 +1040,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         engine.sooner(self.backend.next_frame())
     }
     fn waits_on_backend(&self) -> bool {
-        self.backend.waits_for_frame_slot() || self.pending_frame.is_some() && self.backend.stroke_waits_for_memory()
+        self.backend.waits_for_frame_slot() || self.pending_frame.as_ref().is_some_and(|frame| frame.held)
+            && !self.input.contains(|event| event.phase == PenPhase::Cancel)
     }
     fn correction_demand(&self) -> layer_render::FrameDemand {
         use layer_render::FrameDemand;
@@ -1655,7 +1665,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.frame_clock_ns = timestamp_ns;
         let view = self.view();
         match self.backend.poll_pending(view) {
-            Err(error) if B::is_memory_refusal(&error) => self.refuse_unsubmitted_edits()?,
+            Err(error) if B::is_memory_refusal(&error) => if !self.refuse_reported_edits()? {
+                self.metrics.stroke_memory_refusals = self.metrics.stroke_memory_refusals.saturating_add(1);
+            },
             result => result.map_err(EngineError::Backend)?,
         }
         if self.can_park() { self.editor.flush_memory(); }
@@ -1664,7 +1676,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         }
         self.begin_completed_correction_window();
         if let Some(frame) = self.pending_frame.take() {
-            return self.submit_prepared_frame(frame);
+            if !frame.held || !self.input.contains(|event| event.phase == PenPhase::Cancel) { return self.submit_prepared_frame(frame); }
+            self.rebuild_all |= frame.reset;
         }
         if self.capture_pending() {
             return Ok(());
@@ -1688,7 +1701,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if !input_limit_finished && !self
             .batches
             .iter()
-            .any(|b| matches!(b.kind, DabBatchKind::RasterOperation(_)))
+            .any(|b| matches!(b.kind, DabBatchKind::RasterOperation(_)) || b.stroke_end)
         {
             self.process_input()?;
         }
@@ -1716,7 +1729,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             self.animation_seed + now.saturating_sub(*self.animation_origin_ns.get_or_insert(now)) as f32 * 1e-9
         });
         let steps = frame_steps::FrameSteps::new(self.document(), &self.batches, &self.dabs);
-        self.submit_prepared_frame(PreparedFrame { reset: rebuilt, time, steps })
+        self.submit_prepared_frame(PreparedFrame { reset: rebuilt, time, steps, held: false })
     }
 
     fn submit_prepared_frame(
@@ -1752,20 +1765,36 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 self.backend
                     .set_transform_preview(self.transform_preview.as_ref())
             });
-        let result = match result {
-            Ok(()) => self.backend.submit_when_ready(packet, self.transform_preview.as_ref()),
-            Err(error) => Poll::Ready(Err(error)),
+        let operation = packet.operation();
+        let result = match result.map(|()| self.backend.submission_turn(packet, self.transform_preview.as_ref())) {
+            Ok(SubmissionTurn::Ready(ready)) => self.backend.submit_ready(ready, packet).map(Some),
+            Ok(SubmissionTurn::Held) => Ok(None),
+            Ok(SubmissionTurn::Refused(refusal, error)) if B::is_memory_refusal(&error) => return self.refuse_operation(refusal),
+            Ok(SubmissionTurn::Refused(_, error)) | Err(error) => Err(error),
         };
         let result = match result {
-            Poll::Pending => { self.pending_frame = Some(frame); return Ok(()); }
-            Poll::Ready(Err(error)) if B::is_memory_refusal(&error) => return self.refuse_unsubmitted_edits(),
-            Poll::Ready(result) => result.map_err(EngineError::Backend),
+            Ok(None) => { self.pending_frame = Some(PreparedFrame { held: true, ..frame }); return Ok(()); }
+            Err(error) if B::is_memory_refusal(&error) => {
+                let drawn = self.admitted_samples.last().filter(|_| self.active_stroke.as_ref().is_some_and(|active| active.id == operation)).map_or(0, |(dabs, _)| *dabs);
+                let refusal = self.backend.take_refused_stroke().unwrap_or(layer_render::Refusal { stroke: operation, drawn });
+                self.refuse_operation(refusal)?;
+                return self.refuse_reported_edits().map(drop);
+            },
+            result => result.map(drop).map_err(EngineError::Backend),
         };
+        if result.is_ok() && let Some(active) = &self.active_stroke {
+            let own = |batch: &&DabBatch| batch.stroke_id == active.id && batch.kind == DabBatchKind::Persistent;
+            if packet.dab_batches.iter().filter(own).any(|batch| batch.stroke_start) { self.admitted_samples.clear(); }
+            let dabs: u64 = packet.dab_batches.iter().filter(own).map(|batch| u64::from(batch.dab_count)).sum();
+            let (total, samples) = self.admitted_samples.last().copied().unwrap_or_default();
+            let consumed = if active.feedback.enabled { self.finalized_real_points } else { self.builder.real_points().len() };
+            if dabs != 0 { self.admitted_samples.push((total + dabs, if commit_rasters { consumed } else { samples })); }
+        }
 
         self.metrics.frames = self.metrics.frames.saturating_add(1);
         if result.is_ok() && !commit_rasters {
             self.restore_rasters.clear();
-            self.pending_frame = Some(PreparedFrame { reset: false, time: frame.time, steps: step.unwrap().1 });
+            self.pending_frame = Some(PreparedFrame { reset: false, time: frame.time, steps: step.unwrap().1, held: false });
             return Ok(());
         }
         self.dabs.clear();
@@ -1779,6 +1808,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             self.composite_all = false;
             self.raster_dirty = false;
             self.editor.finish_raster_submission();
+            let handed = Some((self.document().owner, self.document().revision));
+            if self.handed_rasters.0 != handed { self.handed_rasters = (handed, pending_rasters(self.document()).cloned().collect()); }
         }
         self.begin_completed_correction_window();
         result
@@ -1887,23 +1918,85 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         while self.input.pop().is_some() {}
         self.queued_contacts.clear();
         self.contact_settings = None;
+        self.handed_rasters = Default::default();
         self.fail_unsubmitted_edits("Renderer stopped before raster submission");
     }
 
-    fn refuse_unsubmitted_edits(&mut self) -> Result<(), EngineError<B::Error>> {
-        self.fail_unsubmitted_edits("Not enough memory to submit the raster edit");
-        self.recover_failed_rasters().map_err(EngineError::Document)?;
+    fn refuse_reported_edits(&mut self) -> Result<bool, EngineError<B::Error>> {
+        let mut reported = false;
+        while let Some(refusal) = self.backend.take_refused_stroke() { reported = true; self.refuse_operation(refusal)?; }
+        Ok(reported)
+    }
+
+    fn refuse_operation(&mut self, refusal: layer_render::Refusal) -> Result<(), EngineError<B::Error>> {
+        self.metrics.stroke_memory_refusals = self.metrics.stroke_memory_refusals.saturating_add(1);
+        if refusal.drawn == 0 || !self.close_drawn_stroke(refusal.stroke, refusal.drawn)? { self.withdraw_operation(refusal.stroke); }
+        if let Some(late) = self.late_clone.take_if(|late| late.stroke == refusal.stroke) && self.settings.clone_source.point == late.shown {
+            self.settings.clone_source.point = late.ends.iter().rev().find(|(dabs, _)| *dabs <= refusal.drawn).map_or(late.before, |(_, end)| Some(*end));
+        }
+        let artwork = &self.document().artwork;
+        if artwork.paint.iter().map(|(_, _, source)| &source.raster).chain(artwork.coverage.iter().map(|(_, _, source)| &source.raster)).any(|root| root.failed()) {
+            self.recover_failed_rasters().map_err(EngineError::Document)?;
+        }
         Ok(())
+    }
+
+    fn withdraw_operation(&mut self, stroke: StrokeId) {
+        let completed = stroke.0 != 0 && self.completed_stroke.as_ref().is_some_and(|completed| completed.id == stroke);
+        let owned: Vec<_> = if stroke.0 != 0 { self.completed_publication.iter().filter(|_| completed).cloned().collect() } else {
+            let kept = self.completed_publication.as_ref();
+            pending_rasters(self.document()).filter(|root| !self.handed_rasters.1.contains(root) && kept != Some(root)).cloned().collect()
+        };
+        for root in owned { let _ = root.publish(Err(MEMORY_REFUSAL.into())); }
+        let active = self.active_stroke.as_ref().is_some_and(|active| active.id == stroke);
+        if active { self.cancel_active(); self.liquify_preview = None; }
+        if layer_render::withdraw_stroke(&mut self.batches, &mut self.dabs, stroke, false) || active { self.pending_frame = None; }
+        if stroke.0 == 0 { self.restore_rasters.clear(); return; }
+        self.rebuild_completed &= !completed;
+        if active || completed { self.end_corrections(); }
+    }
+
+    fn late_clone(&self) -> Option<LateClone> {
+        let (stroke, start) = self.completed_stroke.as_ref().zip(self.completed_clone_start)
+            .filter(|_| self.completed_publication.as_ref().is_some_and(|publication| publication.try_data().is_none()))?;
+        let shift = layer_core::offsets::point(self.editor.document().target_offset(stroke.target));
+        let ends = self.admitted_samples.iter().filter(|(_, samples)| (1..=stroke.points.len()).contains(samples)).filter_map(|(dabs, samples)| {
+            let last = stroke.points[samples - 1].position;
+            self.settings.clone_source.source_of(layer_core::Point { x: last.x + shift.x, y: last.y + shift.y }).map(|end| (*dabs, end))
+        }).collect();
+        Some(LateClone { stroke: stroke.id, ends, shown: self.settings.clone_source.point, before: start.point })
+    }
+
+    fn close_drawn_stroke(&mut self, id: StrokeId, drawn: u64) -> Result<bool, EngineError<B::Error>> {
+        let active = self.active_stroke.as_ref().is_some_and(|active| active.id == id);
+        if !active && self.completed_stroke.as_ref().is_none_or(|stroke| stroke.id != id) { return Ok(false); }
+        let samples = self.admitted_samples.iter().rev().find(|(dabs, samples)| *dabs <= drawn && *samples != 0).map_or(usize::MAX, |(_, samples)| *samples);
+        if !active && self.completed_clone_start.is_some()
+            && let Some(stroke) = self.completed_stroke.as_ref().filter(|stroke| samples < stroke.points.len())
+        {
+            let (last, offset) = (stroke.points[samples - 1].position, layer_core::offsets::point(self.editor.document().target_offset(stroke.target)));
+            self.settings.clone_source.end_stroke(layer_core::Point { x: last.x + offset.x, y: last.y + offset.y });
+        }
+        if active || self.batches.iter().any(|batch| batch.stroke_id == id) {
+            (self.pending_frame, self.pending_up, self.liquify_preview) = (None, None, None);
+            self.pending_chunk_dabs.clear();
+            layer_render::withdraw_stroke(&mut self.batches, &mut self.dabs, id, true);
+            if let Some(stroke) = self.active_stroke.as_mut().filter(|_| active) {
+                (stroke.taper, stroke.replay_after_contact) = (None, false);
+                let target = stroke.target;
+                self.builder.truncate_real(samples);
+                self.commit_active(layer_core::offsets::point(self.document().target_offset(target)))?;
+            }
+            self.rebuild_completed = false;
+        }
+        self.end_corrections();
+        Ok(true)
     }
 
     fn fail_unsubmitted_edits(&mut self, cause: &str) {
         self.pending_frame = None;
-        for root in self.document().artwork.paint.iter().map(|(_, _, source)| &source.raster)
-            .chain(self.document().artwork.coverage.iter().map(|(_, _, source)| &source.raster))
-        {
-            if root.try_data().is_none() {
-                let _ = root.publish(Err(cause.into()));
-            }
+        for root in pending_rasters(self.document()).filter(|root| !self.handed_rasters.1.contains(root)) {
+            let _ = root.publish(Err(cause.into()));
         }
         self.dabs.clear();
         self.batches.clear();
@@ -2062,8 +2155,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         transform.surface_to_document[5] -= offset.y;
         match event.phase {
             PenPhase::Down => {
+                self.late_clone = self.late_clone();
                 self.completed_stroke = None;
                 self.completed_publication = None;
+                self.admitted_samples.clear();
                 self.estimates.clear();
                 self.transform_preview = None;
                 let mut tool = self.stroke_tool(&event);
@@ -2279,75 +2374,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                         self.advance_momentum(u32::MAX);
                     }
                 }
-                self.flush_material_chunks(true);
-                self.finish_persistent_stroke();
-                self.record_material_update();
-                self.replay_retouch_misses().map_err(EngineError::Document)?;
-                let active = self.active_stroke.take().expect("checked above");
-                self.recording.end(false);
-                let pen_up = self.builder.ending();
-                let points = self.builder.finish().unwrap_or_default();
-                if self.clone_stroke.take().is_some()
-                    && let Some(last) = points.last()
-                {
-                    self.settings.clone_source
-                        .end_stroke(layer_core::Point { x: last.position.x + offset.x, y: last.position.y + offset.y });
-                }
-                if active.brush.execution == BrushExecution::Liquify && !active.persistent_started {
-                    self.batches.retain(|b| b.stroke_id != active.id);
-                    self.finalized_real_points = 0;
-                    return Ok(());
-                }
-                let replay = active.replay_after_contact;
-                let alpha_locked = active.style.alpha_locked;
-                let mut stroke = Stroke::new(
-                    active.id,
-                    active.target,
-                    active.tool,
-                    active.brush,
-                    points,
-                )
-                .map_err(EngineError::Document)?;
-                stroke.pen_up = pen_up;
-                stroke.alpha_locked = alpha_locked;
-                stroke.blend_space = active.style.blend_space;
-                stroke.barrel_twist = active.barrel_twist;
-                stroke.material_updates = active.material_updates.into();
-                stroke.taper_cuts = active.taper.as_ref().map_or_else(Default::default, |taper| taper.cuts().into());
-                stroke.selection = active.style.selection.clone();
-                stroke.retouch = active.style.retouch.clone();
-                stroke.paper = active.style.paper.clone();
-                self.completed_stroke = Some(stroke);
-                let publication = layer_core::raster::RasterRevision::pending();
-                publication.bound_pending_tiles(active.room.bound(&active.before));
-                self.completed_at = None;
-                self.completed_before = Some(active.before);
-                self.completed_clone_start = active.clone_start;
-                self.editor
-                    .perform(Edit::SetRaster {
-                        target: active.target,
-                        revision: publication.clone(),
-                    })
-                    .map_err(EngineError::Document)?;
-                self.completed_publication = Some(publication);
-                if active.persistent_started
-                    && let Some(color) = active.paint_color
-                {
-                    self.used_colors.retain(|c| *c != color);
-                    if self.used_colors.len() == 64 {
-                        self.used_colors.remove(0);
-                    }
-                    self.used_colors.push(color);
-                }
-                if replay {
-                    // End taper depends on final stroke length, and a retouch
-                    // source missed during contact can wait now. Replay after
-                    // pen-up so the stored stroke and visible result agree.
-                    self.rebuild_all |= !self.backend.supports_raster_damage();
-                    self.rebuild_completed = true;
-                }
-                self.metrics.committed_strokes = self.metrics.committed_strokes.saturating_add(1);
-                self.finalized_real_points = 0;
+                self.commit_active(offset)?;
             }
             PenPhase::Cancel => self.cancel_active(),
             PenPhase::Hover => {}
@@ -2925,9 +2952,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     fn cancel_active(&mut self) {
         self.pending_up = None;
         self.recording.end(true);
-        self.dabs.clear();
-        self.batches.clear();
         if let Some(active) = &self.active_stroke {
+            layer_render::withdraw_stroke(&mut self.batches, &mut self.dabs, active.id, false);
             self.estimates.retain(|_, e| e.stroke != active.id);
         }
         self.builder.cancel();
@@ -2937,6 +2963,79 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.finalized_real_points = 0;
         self.dab_generator.reset();
         self.rebuild_all = true;
+    }
+
+    fn commit_active(&mut self, offset: layer_core::Point) -> Result<(), EngineError<B::Error>> {
+        self.flush_material_chunks(true);
+        self.finish_persistent_stroke();
+        self.record_material_update();
+        self.replay_retouch_misses().map_err(EngineError::Document)?;
+        let active = self.active_stroke.take().expect("stroke is active");
+        self.recording.end(false);
+        let pen_up = self.builder.ending();
+        let points = self.builder.finish().unwrap_or_default();
+        if self.clone_stroke.take().is_some()
+            && let Some(last) = points.last()
+        {
+            self.settings.clone_source
+                .end_stroke(layer_core::Point { x: last.position.x + offset.x, y: last.position.y + offset.y });
+        }
+        if active.brush.execution == BrushExecution::Liquify && !active.persistent_started {
+            self.batches.retain(|b| b.stroke_id != active.id);
+            self.finalized_real_points = 0;
+            return Ok(());
+        }
+        let replay = active.replay_after_contact;
+        let alpha_locked = active.style.alpha_locked;
+        let mut stroke = Stroke::new(
+            active.id,
+            active.target,
+            active.tool,
+            active.brush,
+            points,
+        )
+        .map_err(EngineError::Document)?;
+        stroke.pen_up = pen_up;
+        stroke.alpha_locked = alpha_locked;
+        stroke.blend_space = active.style.blend_space;
+        stroke.barrel_twist = active.barrel_twist;
+        stroke.material_updates = active.material_updates.into();
+        stroke.taper_cuts = active.taper.as_ref().map_or_else(Default::default, |taper| taper.cuts().into());
+        stroke.selection = active.style.selection.clone();
+        stroke.retouch = active.style.retouch.clone();
+        stroke.paper = active.style.paper.clone();
+        self.completed_stroke = Some(stroke);
+        let publication = layer_core::raster::RasterRevision::pending();
+        publication.bound_pending_tiles(active.room.bound(&active.before));
+        self.completed_at = None;
+        self.completed_before = Some(active.before);
+        self.completed_clone_start = active.clone_start;
+        self.editor
+            .perform(Edit::SetRaster {
+                target: active.target,
+                revision: publication.clone(),
+            })
+            .map_err(EngineError::Document)?;
+        self.completed_publication = Some(publication);
+        if active.persistent_started
+            && let Some(color) = active.paint_color
+        {
+            self.used_colors.retain(|c| *c != color);
+            if self.used_colors.len() == 64 {
+                self.used_colors.remove(0);
+            }
+            self.used_colors.push(color);
+        }
+        if replay {
+            // End taper depends on final stroke length, and a retouch
+            // source missed during contact can wait now. Replay after
+            // pen-up so the stored stroke and visible result agree.
+            self.rebuild_all |= !self.backend.supports_raster_damage();
+            self.rebuild_completed = true;
+        }
+        self.metrics.committed_strokes = self.metrics.committed_strokes.saturating_add(1);
+        self.finalized_real_points = 0;
+        Ok(())
     }
 
     fn finish_over_budget_contact(&mut self) -> Result<bool,EngineError<B::Error>> {
@@ -2957,6 +3056,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
 fn clone_mapping(document: &Document, layer: SourceTarget, retouch: Retouch, offset: [f32; 2], flip: [bool; 2]) -> Retouch {
     retouch.cloning(offset, flip, layer_core::offsets::point(document.target_offset(layer)))
 }
+
+struct LateClone { stroke: StrokeId, ends: Vec<(u64, layer_core::Point)>, shown: Option<layer_core::Point>, before: Option<layer_core::Point> }
 
 fn raster_edit_batch(batch: &DabBatch) -> bool {
     matches!(batch.kind, DabBatchKind::RasterOperation(_))
@@ -2987,6 +3088,12 @@ fn replay_tapered(stroke: &Stroke, generator: &mut DabGenerator, style: &DabStyl
     replica.release(generator, &stroke.brush, Release::All, |slice| {
         push_slice(dabs, batches, slice, stroke.id, stroke.target, style, &mut started);
     });
+}
+
+fn pending_rasters(document: &Document) -> impl Iterator<Item = &layer_core::raster::RasterRevision> {
+    document.artwork.paint.iter().map(|(_, _, source)| &source.raster)
+        .chain(document.artwork.coverage.iter().map(|(_, _, source)| &source.raster))
+        .filter(|root| root.try_data().is_none())
 }
 
 fn push_slice(
@@ -3470,7 +3577,7 @@ mod tests {
         assert!(engine.liquify_preview.is_none());
         engine.batches.clear();
 
-        engine.pending_frame = Some(PreparedFrame { reset: false, time: 0., steps: None });
+        engine.pending_frame = Some(PreparedFrame { reset: false, time: 0., steps: None, held: false });
         assert!(engine.preview_liquify(target, &context, alpha_locked, 0.4, &expected).is_err());
         assert!(engine.liquify_preview.is_none());
         engine.pending_frame = None;
@@ -3696,6 +3803,92 @@ mod tests {
     }
 
     #[test]
+    fn a_frame_the_renderer_holds_waits_on_the_renderer_and_a_forced_draw_does_not_submit_it() {
+        let (mut input, mut canvas) = engine("Held frame", 64, 64);
+        canvas.render_frame_at(1_000_000_000).unwrap();
+        canvas.backend_mut().held = true;
+        input.push(event(1, PenPhase::Down, 16.)).unwrap();
+        input.push(event(2, PenPhase::Up, 24.)).unwrap();
+        canvas.render_frame().unwrap();
+        assert!(canvas.pending_frame.is_some(), "the renderer holds the stroke's frame");
+        assert_eq!(canvas.frame_demand(), layer_render::FrameDemand::Wait, "a held frame asks for frames only when the renderer does");
+        for _ in 0..3 { canvas.render_frame().unwrap(); }
+        assert_eq!((canvas.backend().persistent_dabs, canvas.metrics().committed_strokes), (0, 1), "a forced draw does not submit the held frame");
+        canvas.backend_mut().held = false;
+        canvas.render_frame().unwrap();
+        assert!(canvas.pending_frame.is_none() && canvas.backend().persistent_dabs > 0, "the frame submits on the renderer's turn");
+    }
+
+    #[test]
+    fn a_cancel_queued_behind_samples_of_a_held_frame_takes_its_turn_and_ends_the_stroke() {
+        let (mut input, mut canvas) = engine("Held cancel", 64, 64);
+        canvas.render_frame_at(1_000_000_000).unwrap();
+        canvas.backend_mut().held = true;
+        input.push(event(1, PenPhase::Down, 16.)).unwrap();
+        input.push(event(2, PenPhase::Move, 24.)).unwrap();
+        canvas.render_frame_at(2_000_000_000).unwrap();
+        assert!(canvas.pending_frame.is_some() && canvas.has_active_stroke(), "the renderer holds the stroke's frame");
+        input.push(event(3, PenPhase::Move, 32.)).unwrap();
+        input.push(event(4, PenPhase::Cancel, 32.)).unwrap();
+        assert_ne!(canvas.frame_demand(), layer_render::FrameDemand::Wait, "a cancel queued behind other samples asks for its turn while the renderer holds the frame");
+        canvas.render_frame_at(3_000_000_000).unwrap();
+        assert!(!canvas.has_active_stroke(), "the cancel ends the stroke while the renderer still holds its frame");
+        canvas.backend_mut().held = false;
+        for frame in 4..8 { canvas.render_frame_at(frame * 1_000_000_000).unwrap(); }
+        assert!(!canvas.has_pending_input() && !canvas.has_pending_document_edits() && canvas.metrics().committed_strokes == 0, "the cancelled stroke commits nothing");
+    }
+
+    #[test]
+    fn a_stroke_refused_after_it_drew_commits_exactly_what_it_drew_once_with_one_notice() {
+        for lifted in [false, true] {
+            let (mut input, mut canvas) = engine("Refused drawn stroke", 128, 128);
+            canvas.render_frame().unwrap();
+            let checkpoint = canvas.checkpoint();
+            input.push(event(1, PenPhase::Down, 20.)).unwrap();
+            input.push(event(2, PenPhase::Move, 40.)).unwrap();
+            canvas.render_frame_at(1_000_000_000).unwrap();
+            let (drawn, stroke) = (canvas.backend().persistent_dabs, canvas.backend().persistent_batches[0].0);
+            assert!(drawn > 0 && canvas.has_active_stroke(), "lifted {lifted}: the contact's first dabs are drawn");
+            input.push(event(3, PenPhase::Move, 60.)).unwrap();
+            if lifted { input.push(event(4, PenPhase::Up, 90.)).unwrap(); }
+            canvas.backend_mut().refuse_memory = true;
+            canvas.render_frame_at(2_000_000_000).unwrap();
+            canvas.backend_mut().refuse_memory = false;
+            assert!(!canvas.has_active_stroke(), "lifted {lifted}: the refused stroke ends where it was drawn");
+            if !lifted { for (sequence, phase, x) in [(4, PenPhase::Move, 80.), (5, PenPhase::Up, 90.)] { input.push(event(sequence, phase, x)).unwrap(); } }
+            for frame in 3..8 { canvas.render_frame_at(frame * 1_000_000_000).unwrap(); }
+            assert!(!canvas.has_pending_input() && !canvas.has_pending_document_edits() && !canvas.has_active_stroke(), "lifted {lifted}: the rest of the contact is consumed");
+            assert_eq!(canvas.backend().persistent_dabs, drawn, "lifted {lifted}: the close adds no dabs");
+            assert_eq!(canvas.backend().persistent_batches.last().copied(), Some((stroke, false, true, 0)), "lifted {lifted}: the stroke ends at its last drawn dab");
+            assert!(active_paint(canvas.document()).raster.try_data().is_some_and(|data| data.is_ok()), "lifted {lifted}: what was drawn is published");
+            assert_eq!(canvas.metrics().stroke_memory_refusals, 1, "lifted {lifted}: the painter is told once");
+            assert!(canvas.undo().unwrap() && canvas.checkpoint() == checkpoint && !canvas.undo().unwrap(), "lifted {lifted}: history gains exactly one entry");
+        }
+    }
+
+    #[test]
+    fn a_closing_stroke_end_and_the_next_contact_are_never_admitted_in_one_frame() {
+        let (mut input, mut canvas) = engine("Split stroke end", 128, 128);
+        canvas.render_frame().unwrap();
+        let checkpoint = canvas.checkpoint();
+        input.push(event(1, PenPhase::Down, 20.)).unwrap();
+        input.push(event(2, PenPhase::Move, 40.)).unwrap();
+        canvas.render_frame_at(1_000_000_000).unwrap();
+        input.push(event(3, PenPhase::Move, 60.)).unwrap();
+        input.push(event(4, PenPhase::Up, 90.)).unwrap();
+        canvas.backend_mut().refuse_memory = true;
+        canvas.render_frame_at(2_000_000_000).unwrap();
+        canvas.backend_mut().refuse_memory = false;
+        let drawn = canvas.backend().persistent_dabs;
+        for (sequence, phase, x) in [(5, PenPhase::Down, 30.), (6, PenPhase::Move, 50.), (7, PenPhase::Up, 70.)] { input.push(event(sequence, phase, x)).unwrap(); }
+        for frame in 3..10 { canvas.render_frame_at(frame * 1_000_000_000).unwrap(); }
+        assert!(!canvas.backend().mixed_stroke_end, "the closing stroke end is admitted without the next contact's dabs");
+        assert!(canvas.backend().persistent_dabs > drawn && !canvas.has_pending_document_edits(), "the next contact draws in full");
+        assert_eq!(canvas.metrics().committed_strokes, 2);
+        assert!(canvas.undo().unwrap() && canvas.undo().unwrap() && canvas.checkpoint() == checkpoint, "both strokes are in history");
+    }
+
+    #[test]
     fn a_stroke_refused_memory_is_cancelled_and_its_queued_input_is_consumed_in_order() {
         for lifted in [false, true] {
             let (mut input, mut canvas) = engine("Refused stroke", 128, 128);
@@ -3732,6 +3925,54 @@ mod tests {
             assert_eq!(canvas.checkpoint(), checkpoint);
             assert!(canvas.redo().unwrap() && canvas.undo().unwrap() && canvas.undo().unwrap() && !canvas.undo().unwrap());
         }
+    }
+
+    #[test]
+    fn a_refused_contact_fails_only_its_own_roots_and_an_earlier_capture_in_flight_lands() {
+        let (mut input, mut canvas) = engine("Refused beside a capture", 128, 128);
+        canvas.render_frame().unwrap();
+        let checkpoint = canvas.checkpoint();
+        canvas.backend_mut().hold_captures = true;
+        input.push(event(1, PenPhase::Down, 20.)).unwrap();
+        input.push(event(2, PenPhase::Up, 80.)).unwrap();
+        canvas.render_frame().unwrap();
+        let landing = active_paint(canvas.document()).raster.clone();
+        assert!(landing.try_data().is_none() && canvas.metrics().committed_strokes == 1, "the first stroke's capture is in flight");
+        canvas.backend_mut().refuse_memory = true;
+        input.push(event(3, PenPhase::Down, 30.)).unwrap();
+        canvas.render_frame_at(1_000_000_000).unwrap();
+        canvas.backend_mut().refuse_memory = false;
+        assert!(!canvas.has_active_stroke() && canvas.metrics().stroke_memory_refusals == 1, "the refused contact is withdrawn once");
+        assert!(landing.try_data().is_none(), "the refusal leaves the earlier capture in flight");
+        canvas.backend_mut().hold_captures = false;
+        for (sequence, phase) in [(4, PenPhase::Move), (5, PenPhase::Up)] { input.push(event(sequence, phase, 60.)).unwrap(); }
+        for frame in 2..8 { canvas.render_frame_at(frame * 1_000_000_000).unwrap(); }
+        assert!(landing.try_data().is_some_and(|data| data.is_ok()) && !canvas.has_pending_document_edits(), "the earlier capture lands");
+        assert!(canvas.undo().unwrap() && canvas.checkpoint() == checkpoint && !canvas.undo().unwrap(), "the earlier stroke stays one history entry");
+    }
+
+    #[test]
+    fn a_refusal_the_renderer_reports_for_a_settled_stroke_leaves_the_live_contact_drawing() {
+        let (mut input, mut canvas) = engine("Refused settled stroke", 128, 128);
+        canvas.render_frame().unwrap();
+        let checkpoint = canvas.checkpoint();
+        canvas.backend_mut().hold_captures = true;
+        input.push(event(1, PenPhase::Down, 20.)).unwrap();
+        input.push(event(2, PenPhase::Up, 80.)).unwrap();
+        canvas.render_frame().unwrap();
+        input.push(event(3, PenPhase::Down, 30.)).unwrap();
+        input.push(event(4, PenPhase::Move, 50.)).unwrap();
+        canvas.render_frame_at(1_000_000_000).unwrap();
+        assert!(canvas.has_active_stroke() && canvas.metrics().committed_strokes == 1, "the first stroke settles while the next contact draws");
+        canvas.backend_mut().refuse_queued = true;
+        canvas.render_frame_at(2_000_000_000).unwrap();
+        assert!(canvas.has_active_stroke(), "a refusal the renderer reports for the settled stroke leaves the live contact drawing");
+        canvas.backend_mut().hold_captures = false;
+        input.push(event(5, PenPhase::Up, 70.)).unwrap();
+        for frame in 3..8 { canvas.render_frame_at(frame * 1_000_000_000).unwrap(); }
+        assert!(!canvas.has_pending_input() && !canvas.has_pending_document_edits() && !canvas.has_active_stroke(), "the live contact finishes");
+        assert_eq!(canvas.metrics().stroke_memory_refusals, 1, "the painter is told once");
+        assert!(canvas.undo().unwrap() && canvas.checkpoint() == checkpoint && !canvas.undo().unwrap(), "the live contact commits and the stroke whose capture failed leaves history");
     }
 
     #[test]
@@ -3829,12 +4070,15 @@ mod tests {
         fail_submit: bool,
         refuse_memory: bool,
         refuse_queued: bool,
+        hold_captures: bool,
         pending_preparation: bool,
+        held: bool,
         fail_resize: bool,
         size: [u32; 2],
         persistent_dabs: usize,
         persistent: Vec<Dab>,
         persistent_batches: Vec<(StrokeId, bool, bool, u32)>,
+        mixed_stroke_end: bool,
         material_page_jobs: u32,
         material_batches: Vec<(u32, u32)>,
         operation_batches: Vec<(SourceTarget, u32, layer_core::Rect, bool)>,
@@ -3849,6 +4093,10 @@ mod tests {
         retouch_misses: Vec<StrokeId>,
         retouch_waiting: Option<StrokeId>,
         retired_sources: usize,
+        drawn: layer_render::DrawnInk,
+        operation: StrokeId,
+        settling: Option<(layer_render::Refusal, Vec<layer_core::raster::RasterRevision>)>,
+        refusals: Vec<layer_render::Refusal>,
     }
 
     impl CanvasRenderer for RecordingRenderer {
@@ -3874,15 +4122,22 @@ mod tests {
         }
         fn poll_pending(&mut self, _view: ViewState) -> Result<(), Self::Error> {
             self.unrelated_submission = false;
-            if std::mem::take(&mut self.refuse_queued) { return Err(BackendError(MEMORY_REFUSED)); }
-            Ok(())
+            if !std::mem::take(&mut self.refuse_queued) { return Ok(()); }
+            let refusal = match self.settling.take() {
+                Some((refusal, roots)) => { for root in roots { let _ = root.publish(Err("settled capture refused".into())); } refusal },
+                None => layer_render::Refusal { stroke: self.operation, drawn: 0 },
+            };
+            self.refusals.push(refusal);
+            Err(BackendError(MEMORY_REFUSED))
         }
+        fn take_refused_stroke(&mut self) -> Option<layer_render::Refusal> { (!self.refusals.is_empty()).then(|| self.refusals.remove(0)) }
         fn has_pending_submission(&self) -> bool { self.unrelated_submission }
         fn can_submit(&self) -> bool { !self.slot_full }
         fn waits_for_frame_slot(&self) -> bool { self.slot_full }
-        fn stroke_waits_for_memory(&self) -> bool { self.restore_blocked }
-        fn raster_dependencies_ready(&mut self, _packet: FramePacket<'_>, _preview: Option<&layer_render::TransformPreview>) -> bool {
-            !std::mem::take(&mut self.pending_preparation) && !self.restore_blocked
+        fn submission_turn(&mut self, packet: FramePacket<'_>, _preview: Option<&layer_render::TransformPreview>) -> SubmissionTurn<Self::Error> {
+            if std::mem::take(&mut self.pending_preparation) || self.restore_blocked || self.held { return SubmissionTurn::Held; }
+            if self.refuse_memory { return SubmissionTurn::Refused(self.drawn.refusal(packet.operation()), BackendError(MEMORY_REFUSED)); }
+            SubmissionTurn::Ready(layer_render::ReadySubmission::new(0, packet))
         }
         fn can_capture_raster(&self) -> bool {
             !self.capture_blocked
@@ -3927,7 +4182,6 @@ mod tests {
 
         fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
             if self.fail_submit { return Err(BackendError("submission failed")); }
-            if self.refuse_memory { return Err(BackendError(MEMORY_REFUSED)); }
             self.restored_rasters = packet.restore_rasters.iter().map(|(target, raster)| (*target, raster.identity())).collect();
             self.time_seconds = packet.time_seconds;
             self.bake_members = packet.dab_batches.iter().filter_map(|batch| {
@@ -3960,7 +4214,7 @@ mod tests {
             }
             for (revision, plane) in packet.scene.artwork().paint.iter().map(|(_, _, source)| (&source.raster, layer_core::raster::RasterPlane::Color))
                 .chain(packet.scene.artwork().coverage.iter().map(|(_, _, source)| (&source.raster, layer_core::raster::RasterPlane::Mask)))
-                .filter(|_| packet.commit_rasters)
+                .filter(|_| packet.commit_rasters && !self.hold_captures)
             {
                 if revision.try_data().is_none() {
                     use layer_core::raster::*;
@@ -3974,6 +4228,8 @@ mod tests {
             self.preview.clear();
             self.styles.clear();
             self.material_page_jobs = frame_steps::material_page_jobs(packet.dab_batches);
+            self.mixed_stroke_end |= packet.dab_batches.iter().any(|end| end.stroke_end
+                && packet.dab_batches.iter().any(|batch| batch.stroke_id != end.stroke_id));
             for batch in packet.dab_batches {
                 self.styles.push(batch.style.clone());
                 let start = batch.first_dab as usize;
@@ -3999,6 +4255,11 @@ mod tests {
                 }
             }
             self.saw_reset |= packet.reset_layers;
+            let held: Vec<_> = packet.scene.artwork().paint.iter().map(|(_, _, source)| source.raster.clone())
+                .filter(|root| self.hold_captures && packet.commit_rasters && root.try_data().is_none()).collect();
+            if !held.is_empty() && self.settling.is_none() { self.settling = Some((self.drawn.refusal(packet.operation()), held)); }
+            self.drawn.record(packet);
+            self.operation = packet.operation();
             Ok(())
         }
     }
@@ -4317,6 +4578,74 @@ mod tests {
         let mapping = flipped.retouch.unwrap();
         assert_eq!(mapping.flip, [true, false]);
         assert_eq!(mapping.offset, [40. + first.x - 8., 30. - first.y], "layer pixels map through the layer's position");
+    }
+
+    #[test]
+    fn a_clone_stroke_refused_after_it_drew_records_only_the_samples_it_drew() {
+        for (lifted, feedback) in [(false, false), (true, false), (false, true), (true, true)] {
+            let (mut input, mut engine) = engine_with(RecordingRenderer::default(), retouch_document(), view(64, 64), TRANSFORM);
+            engine.apply_edit(references(engine.document(), [photo_handle()].into())).unwrap();
+            let mut brush = default_brush(DefaultBrushPreset::CloneStamp);
+            brush.stabilization.strength = 0.;
+            engine.set_brush(brush).unwrap();
+            engine.set_retouch(Some(RetouchSource::References));
+            engine.set_instant_feedback(InstantFeedbackConfig { enabled: feedback, ..InstantFeedbackConfig::default() }).unwrap();
+            engine.set_clone_source(CloneSource { point: Some(Point { x: 40., y: 30. }), ..CloneSource::default() });
+            let at = |sequence: u64, phase, x, y| PenEvent { surface_position: Point { x, y }, ..event(sequence, phase, x) };
+            let mut inked = 0;
+            for (sequence, phase, x, y) in [(1, PenPhase::Down, 8., 16.), (40, PenPhase::Move, 20., 44.), (80, PenPhase::Move, 32., 16.), (120, PenPhase::Move, 44., 44.)] {
+                let before = engine.backend().persistent_dabs;
+                input.push(at(sequence, phase, x, y)).unwrap();
+                engine.render_frame().unwrap();
+                if engine.backend().persistent_dabs > before { inked = if feedback { engine.finalized_real_points } else { engine.builder.real_points().len() }; }
+            }
+            assert!(inked > usize::from(!feedback), "lifted {lifted}, feedback {feedback}: ink lands up to sample {inked}");
+            let (drawn, last) = (engine.backend().persistent_dabs, engine.builder.real_points()[inked - 1].position);
+            let offset = engine.clone_source().offset.unwrap();
+            input.push(at(160, PenPhase::Move, 56., 16.)).unwrap();
+            if lifted { input.push(at(161, PenPhase::Up, 58., 20.)).unwrap(); }
+            engine.backend_mut().refuse_memory = true;
+            engine.render_frame().unwrap();
+            engine.backend_mut().refuse_memory = false;
+            assert!(!engine.has_active_stroke() && engine.backend().persistent_dabs == drawn, "lifted {lifted}, feedback {feedback}: the refused stroke closes at what it drew");
+            assert_eq!(engine.clone_source().point, Some(Point { x: last.x + offset[0], y: last.y + offset[1] }),
+                "lifted {lifted}, feedback {feedback}: an aligned source follows the stroke only as far as it drew");
+        }
+    }
+
+    #[test]
+    fn a_clone_stroke_refused_after_the_next_contact_began_returns_the_source_to_what_it_drew() {
+        let (mut input, mut engine) = engine_with(RecordingRenderer::default(), retouch_document(), view(64, 64), TRANSFORM);
+        engine.apply_edit(references(engine.document(), [photo_handle()].into())).unwrap();
+        let mut brush = default_brush(DefaultBrushPreset::CloneStamp);
+        brush.stabilization.strength = 0.;
+        engine.set_brush(brush).unwrap();
+        engine.set_retouch(Some(RetouchSource::References));
+        engine.set_instant_feedback(InstantFeedbackConfig { enabled: false, ..InstantFeedbackConfig::default() }).unwrap();
+        engine.set_clone_source(CloneSource { point: Some(Point { x: 40., y: 30. }), ..CloneSource::default() });
+        let at = |sequence: u64, phase, x, y| PenEvent { surface_position: Point { x, y }, ..event(sequence, phase, x) };
+        let mut inked = 0;
+        for (sequence, phase, x, y) in [(1, PenPhase::Down, 8., 16.), (40, PenPhase::Move, 20., 44.), (80, PenPhase::Move, 32., 16.), (120, PenPhase::Move, 44., 44.)] {
+            let before = engine.backend().persistent_dabs;
+            input.push(at(sequence, phase, x, y)).unwrap();
+            engine.render_frame().unwrap();
+            if engine.backend().persistent_dabs > before { inked = engine.builder.real_points().len(); }
+        }
+        assert!(inked > 1, "ink lands up to sample {inked}");
+        let (last, offset) = (engine.builder.real_points()[inked - 1].position, engine.clone_source().offset.unwrap());
+        engine.backend_mut().hold_captures = true;
+        input.push(at(160, PenPhase::Move, 56., 16.)).unwrap();
+        input.push(at(161, PenPhase::Up, 58., 20.)).unwrap();
+        engine.render_frame().unwrap();
+        assert_ne!(engine.clone_source().point, Some(Point { x: last.x + offset[0], y: last.y + offset[1] }), "the lifted stroke moved the source to its full end");
+        input.push(at(200, PenPhase::Down, 12., 20.)).unwrap();
+        engine.render_frame().unwrap();
+        assert!(engine.has_active_stroke(), "the next contact began before the renderer refused the first stroke's last frame");
+        engine.backend_mut().refuse_queued = true;
+        engine.render_frame().unwrap();
+        assert_eq!(engine.clone_source().point, Some(Point { x: last.x + offset[0], y: last.y + offset[1] }),
+            "the source follows the refused stroke only as far as it drew, even after the next contact began");
+        assert!(engine.has_active_stroke() && engine.metrics().stroke_memory_refusals == 1, "the next contact keeps drawing and the painter is told once");
     }
 
     #[test]

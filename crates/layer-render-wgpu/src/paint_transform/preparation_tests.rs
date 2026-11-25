@@ -21,7 +21,7 @@ fn cold_reduced_preview_retains_its_cursor_across_more_than_sixty_four_sources()
         backing:None,bounds:PixelRect::full(extent)});
     crate::test_support::wait_until("the reduced preview finishes preparing",||
         match crate::test_support::submit_encoded(&mut r,|r,encoder|state.prepare_reduced(r,encoder,None,None,extent,1)) {
-            Err(pending@GpuRasterError::NotReady)=>{
+            Err(pending@(GpuRasterError::NotReady|GpuRasterError::Waiting(_)))=>{
                 assert!(state.reduced.as_ref().unwrap().pending.is_some());
                 r.wait_idle().unwrap();Err(pending)
             },
@@ -59,7 +59,7 @@ fn preview_pixels(r: &mut WgpuRasterizer, state: &mut ImageTransformState, previ
 
 fn reduce_until_ready(r: &mut WgpuRasterizer, message: &str, mut step: impl FnMut(&mut WgpuRasterizer, &mut submission::CommandEncoder) -> Result<(), GpuRasterError>) {
     crate::test_support::wait_until(message, || match crate::test_support::submit_encoded(r, &mut step) {
-        Err(GpuRasterError::NotReady) => { crate::test_support::complete(r); Err(GpuRasterError::NotReady) },
+        Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)) => { crate::test_support::complete(r); Err(GpuRasterError::NotReady) },
         result => { assert!(result.is_ok(), "{message}: {result:?}"); Ok(()) },
     });
 }

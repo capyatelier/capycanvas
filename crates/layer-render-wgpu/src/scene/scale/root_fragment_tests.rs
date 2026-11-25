@@ -211,7 +211,7 @@ fn a_capture_admission_refusal_waits_for_the_working_reservation_release() {
     let pressure=owner.admit_working(layer_core::MemoryGrant {ram_bytes:0,gpu_bytes:budget.import_headroom_bytes()}).unwrap();
     let window=Image::new(&r,display_mips::Plan::at(extent,0),"declared capture window");
     let requested=scene.declare_capture(&mut r,frame,&window,&[PixelRect::full(extent)],scene::Output::Artwork(None),None,None).unwrap();
-    assert!(matches!(requested.accept_query(&mut r,Some(&scene)),Err(GpuRasterError::NotReady)),"the working reservation must refuse the cold capture's actual input admission");
+    assert!(matches!(requested.accept_query(&mut r,Some(&scene),crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh),Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"the working reservation must refuse the cold capture's actual input admission");
     let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
     let released=Arc::new(std::sync::atomic::AtomicBool::new(false));let release=released.clone();
     encoder.on_submitted_work_done(move|| {drop(pressure);release.store(true,std::sync::atomic::Ordering::Release);});

@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 mod decoded_cache;
 pub use decoded_cache::{DecodedTileCache, DecodedTileCacheStats};
 mod contents;
-pub use contents::{CanonicalName, ContentName, ContentStamp, ContentTree, ContentVersion, RasterTiles};
+pub use contents::{CanonicalName, CanonicalWriter, ContentName, ContentStamp, ContentTree, ContentVersion, RasterTiles};
 use std::time::Duration;
 use std::{
     sync::{
@@ -437,9 +437,9 @@ impl RasterTile {
             canonical: None,
         }))
     }
-    pub fn pending_from_live(descriptor: PixelDescriptor, before: ContentVersion) -> (Self, Arc<CanonicalName>) {
-        let canonical = CanonicalName::new(before);
-        (Self(Arc::new(TilePublication { data: Publication::default(), descriptor, canonical: Some(canonical.clone()) })), canonical)
+    pub fn pending_from_live(descriptor: PixelDescriptor, before: ContentVersion) -> (Self, CanonicalWriter) {
+        let writer = CanonicalWriter::new(before);
+        (Self(Arc::new(TilePublication { data: Publication::default(), descriptor, canonical: Some(writer.0.clone()) })), writer)
     }
     pub fn content_version(&self) -> ContentVersion {
         self.0.canonical.as_ref().map_or_else(|| ContentName::captured(self).into(), |name| name.version())

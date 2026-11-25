@@ -119,10 +119,9 @@ impl ColorCanvas {
             composite_all: !self.submitted,
             blend_space: document.composition().blend,
         };
-        if !renderer.can_submit() || !renderer.raster_dependencies_ready(packet, None) {
-            return Ok(false);
-        }
-        renderer.submit(packet)?;
+        if !renderer.can_submit() { return Ok(false); }
+        let std::task::Poll::Ready(result) = renderer.submit_when_ready(packet, None) else { return Ok(false); };
+        result?;
         self.submitted = true;
         if renderer.has_presentable_frame() {
             let finished = Arc::new(std::sync::atomic::AtomicU8::new(0));

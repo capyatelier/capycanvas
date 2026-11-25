@@ -26,10 +26,10 @@ pub(crate) use floor::Floor;
 pub(crate) use sources::Sources;
 #[cfg(test)]
 pub(crate) use pages::{composite_pages_at,layer_pages};
-pub(super) type Pages=Arc<std::sync::Mutex<pages::Store>>;
-pub(super) fn pages_within(display:&Arc<crate::residency::Tier>)->Pages {Arc::new(std::sync::Mutex::new(pages::Store::within(display)))}
-pub(super) fn trim_pages_by(pages:&Pages,deficit:u64,class:Class) {let mut store=pages.lock().unwrap();let bytes=store.bytes();store.trim(bytes.saturating_sub(deficit),class);}
-pub(super) fn release_pages_by(pages:&Pages,deficit:u64) {let mut store=pages.lock().unwrap();let bytes=store.bytes();store.release_undemanded(bytes.saturating_sub(deficit));}
+pub(super) use pages::Pages;
+pub(super) fn pages_within(display:&Arc<crate::residency::Tier>)->Pages {Pages::new(pages::Store::within(display))}
+pub(super) fn trim_pages_by(pages:&Pages,deficit:u64,class:Class)->Option<crate::residency::Batch> {let mut store=pages.lock().unwrap();let bytes=store.bytes();store.search(|store|store.trim(bytes.saturating_sub(deficit),class))}
+pub(super) fn release_pages_by(pages:&Pages,deficit:u64)->Option<crate::residency::Batch> {let mut store=pages.lock().unwrap();let bytes=store.bytes();store.search(|store|store.release_undemanded(bytes.saturating_sub(deficit)))}
 
 #[derive(Clone, Default)]
 pub(crate) struct Damage {
@@ -315,9 +315,9 @@ pub(crate) struct Cache {
     presented: pages::Accuracy,
     asked: Option<pages::Asked>,
     streaming: refinement::Streaming,
-    pivot_waiting: Option<(crate::frame_demand::Input,crate::frame_demand::ArrivalToken)>,
-    pivot_refusal: Option<crate::residency::Blocked>,
-    reduction_refusal: Option<crate::residency::Blocked>,
+    pivot_waiting: Option<crate::frame_demand::UnitWait>,
+    pivot_refusal: Option<crate::frame_demand::UnitWait>,
+    reduction_wait: Option<crate::frame_demand::UnitWait>,
     pivot_pending: bool,
     pivot_edit: Option<(OccurrenceHandle,layer_core::raster::ContentStamp,bool)>,
     pointer: Option<[f32;2]>,
@@ -484,9 +484,14 @@ fn view_plan(packet: FramePacket<'_>, level: u32) -> Option<display_mips::Plan> 
     Some(display_mips::Plan::window(extent, level, bounds))
 }
 
-pub(super) fn waiting_input(scene: &Scene, r: &WgpuRasterizer, unpublished: bool) -> Option<crate::frame_demand::Input> {
-    use crate::frame_demand::Input;
-    if unpublished {Some(Input::Name)} else if scene.compiling() {Some(Input::Compile)} else {r.image_decode_waiting().then_some(Input::Decode)}
+pub(super) fn waiting_on(scene: &Scene, r: &WgpuRasterizer, declarations: u64, error: &GpuRasterError) -> Option<crate::frame_demand::UnitWait> {
+    use crate::frame_demand::{Allowance, Input, Producer, UnitWait};
+    match error {
+        GpuRasterError::Waiting(waiting) => Some(UnitWait::parked(waiting.need().clone(), Allowance::Fresh)),
+        GpuRasterError::NotPublished => Some(UnitWait::input(Producer::Declaration(declarations))),
+        _ if scene.compiling() => Some(UnitWait::input(Producer::Class(Input::Compile))),
+        _ => r.image_decode_waiting().then(|| UnitWait::input(Producer::Class(Input::Decode))),
+    }
 }
 
 pub(super) fn bounded(scene: SceneView<'_>) -> bool {
@@ -716,7 +721,7 @@ impl Cache {
             layer_count: layers,
             overview, preparing: false, declaring: false, exact_tile: None,
             graph: Default::default(), transform: r.transform_preview.clone(), retired: None, previous: None, standing: None, complete: false, contact: false, gesture: None, stroked: None, presented: pages::Accuracy::Display, asked: None,
-            streaming: Default::default(), pivot_waiting: None, pivot_refusal: None, reduction_refusal: None, pivot_pending: false, pivot_edit: None, pointer: None, underived: Default::default(), unabsorbed: Default::default(),
+            streaming: Default::default(), pivot_waiting: None, pivot_refusal: None, reduction_wait: None, pivot_pending: false, pivot_edit: None, pointer: None, underived: Default::default(), unabsorbed: Default::default(),
         }
     }
     fn geometry(r: &WgpuRasterizer, plan: display_mips::Plan) -> wgpu::Buffer {
@@ -756,7 +761,7 @@ impl Cache {
     }
 
     pub fn prepare_graph(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, scene: &Scene) -> Result<(), GpuRasterError> {
-        if !Arc::ptr_eq(&self.pages,&scene.scale_pages) {
+        if !self.pages.same(&scene.scale_pages) {
             self.pages=scene.scale_pages.clone();
             if let Some(overview)=&mut self.overview {overview.pages=self.pages.clone();}
         }
@@ -901,14 +906,15 @@ impl Cache {
     fn claim_page(&self,scene:&Scene,r:&WgpuRasterizer,key:pages::Key,class:Class)->Result<Result<pages::Held,crate::residency::Blocked>,GpuRasterError> {
         if let Some(image)=self.pages.lock().unwrap().allocated(&key,class) {return Ok(Ok(image));}
         let tier=self.pages.lock().unwrap().tier();
-        let mut reservation=match r.admit_tier(Some(scene),&tier,class,key.bytes()) {Ok(reservation)=>reservation,Err(blocked)=>return Ok(Err(blocked))};
+        let mut reservation=match r.admit_tier(Some(scene),&tier,class,key.bytes(),crate::frame_demand::Allowance::Fresh) {Ok(reservation)=>reservation,Err(blocked)=>return Ok(Err(blocked))};
         let image=self.pages.lock().unwrap().claim_reserved(r,key.clone(),self.window,class,&mut reservation)?;
         if key.source.is_none() && self.graph.content.as_ref()!=Some(&key.expression) {self.pages.lock().unwrap().set_optional(&key);}
         Ok(Ok(image))
     }
-    fn reserve_window(&self,r:&WgpuRasterizer,scene:&Scene,bytes:u64)->Result<crate::residency::Reservation,crate::residency::Blocked> {
-        r.admit_tier(Some(scene),&r.scene_tiers.windows,Class::Visible,bytes)
+    fn reserve_window(&self,r:&WgpuRasterizer,scene:&Scene,bytes:u64,allowance:crate::frame_demand::Allowance)->Result<crate::residency::Reservation,crate::residency::Blocked> {
+        r.admit_tier(Some(scene),&r.scene_tiers.windows,Class::Visible,bytes,allowance)
     }
+    pub(super) fn declarations(&self)->u64 {self.pages.lock().unwrap().expected().map_or(0,|frame|frame.declarations())}
     pub(crate) fn frame_memory(&self,r:&WgpuRasterizer,retained:u64)->[u64;2] {
         let other=r.scale_display.as_ref().map_or(0,Cache::window_memory);
         let pages=self.pages.lock().unwrap();
@@ -989,9 +995,9 @@ impl Cache {
         let slot = self.used.iter().enumerate().position(|(index, used)| !used.occupied() && self.output[index].plan.size == plan.size).unwrap_or(self.output.len());
         if slot == self.output.len() {
             let bytes=plan.size.map(u64::from).into_iter().product::<u64>()*u64::from(r.device.working_format().block_copy_size(None).unwrap());
-            let mut charge=match reservation {Some(reservation)=>reservation.split(bytes).ok_or(GpuRasterError::Invariant("display scratch exceeds its accepted reservation"))?.charge(bytes),
+            let mut charge=match reservation {Some(reservation)=>reservation.split(bytes).ok_or(GpuRasterError::Invariant("display scratch exceeds its accepted reservation"))?.charge(),
                 None if self.declaring=>self.output_charge.tier().charge(bytes),
-                None=>r.admit_tier(None,self.output_charge.tier(),Class::Visible,bytes).map_err(|_|GpuRasterError::NotReady)?.charge(bytes)};
+                None=>r.admit_tier(None,self.output_charge.tier(),Class::Visible,bytes,crate::frame_demand::Allowance::Fresh).map_err(|blocked|crate::frame_demand::Waiting::error(blocked))?.charge()};
             let image=if self.declaring { Image { texture: r.declared_scratch[0].texture.clone(), view: r.declared_scratch[0].view.clone(), plan } }
                 else { Image::new(r, plan, "display composition level") };
             charge.resize(image.bytes());
@@ -1012,8 +1018,8 @@ impl Cache {
         let result = self.render_graph(scene, r, packet, encoding, Destination::Preview);
         self.release_previous(r);
         match result {
-            Err(GpuRasterError::NotReady|GpuRasterError::NotPublished) if !scene.pending_pipelines.ready()=>Err(GpuRasterError::NotReady),
-            Ok(_) | Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>Ok(self.coverage_complete()),
+            Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished) if !scene.pending_pipelines.ready()=>Err(GpuRasterError::NotReady),
+            Ok(_) | Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished)=>Ok(self.coverage_complete()),
             Err(error)=>Err(error),
         }
     }
@@ -1035,7 +1041,7 @@ impl Cache {
     ) -> Result<PixelRect, GpuRasterError> {
         let retained=encoding.retained;
         let with=|memory:u64|retained+memory;
-        let rendered=|scene:&mut Scene,result|match result {Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>{scene.clear_unencoded_jobs();Ok(PixelRect::EMPTY)},result=>result};
+        let rendered=|scene:&mut Scene,result|match result {Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished)=>{scene.clear_unencoded_jobs();Ok(PixelRect::EMPTY)},result=>result};
         let mut stand_in=PixelRect::EMPTY;
         if first && let Some(overview)=overview.as_deref_mut() {
             encoding.retained=with(self.window_memory());
@@ -1060,7 +1066,7 @@ impl Cache {
     fn presented(&self,view:PixelRect,stand_in:PixelRect)->PixelRect {if self.complete && self.pixels.committed_root().is_some() {view} else {view.union(stand_in)}}
 
     fn render_graph(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>, encoding: &mut Encoding<'_>, destination: Destination<'_>) -> Result<PixelRect, GpuRasterError> {
-        let arrivals=r.arrival_token();
+        let declarations=self.declarations();
         let Encoding { encoder, commands, retained, budget } = encoding;
         scene.placement_display=true;
         let finer=match destination {Destination::Overview(finer,changed)=>Some((finer,changed)),_=>None};
@@ -1086,8 +1092,8 @@ impl Cache {
         let lane=if view && stroking {self.lane_halves(packet)}else {Vec::new()};
         if !lane.is_empty() {
             let exact=self.exact_units(scene,r,packet,encoder,commands,budget,lane,&|_|Class::Authored,true)?;
-            for (key,input) in exact.blocks {self.block(arrivals,key.plan().bounds,input);}
-            for (region,refusal) in exact.refusals {self.refuse(None,region,&refusal);}
+            for (key,wait) in exact.blocks {self.block(key.plan().bounds,wait);}
+            for (region,refusal,allowance) in exact.refusals {self.refuse(region,&refusal,allowance);}
         }
         if let Some(reached)=reached.filter(|_|live) && !self.grow_contact(scene,r,packet,encoder,*retained,budget,&reached,from)? {
             self.end_held_frame(r,packet)?;self.end_contact(encoder);self.commit_window(r,encoder)?;
@@ -1100,7 +1106,7 @@ impl Cache {
         if std::mem::replace(&mut self.presented,presented)==pages::Accuracy::Display && presented==pages::Accuracy::Exact {self.owe_exact();}
         let selected=|region:PixelRect|if region.intersect(visible).is_empty() {deferred}else {Class::Visible};
         let selection=if live {pages::Selection {copies:Vec::new(),composes:self.contact_composes(),transition:false,waiting:false}}
-            else {self.select_cells(r,served,presented,&selected,arrivals)?};
+            else {self.select_cells(r,served,presented,&selected)?};
         let transition=selection.transition;
         let direct=if view {self.stroke_only(packet)}else {stroking};
         let pages::Selection {mut copies,mut composes,..}=selection;
@@ -1126,7 +1132,7 @@ impl Cache {
             }
             shown=done.iter().filter(|(_,changed)|!changed.is_empty()).fold(PixelRect::EMPTY,|shown,(_,changed)|shown.union(texels(*changed)));
             if !written.is_empty() || self.pixels.committed_root().is_none() {self.commit_window(r,encoder)?;}
-            for region in blocked {self.block(arrivals,region,waiting_input(scene,r,false));}
+            for region in blocked {self.block(region,waiting_on(scene,r,declarations,&GpuRasterError::NotReady));}
             composed=done.into_iter().map(|(region,_)|region).collect();
         } else if !composes.is_empty() || !copies.is_empty() || !streamed.is_empty() || !halves.is_empty() || self.graph.prepared.is_some() || transition {
             let root = self.graph.root.clone().expect("prepared composition graph");
@@ -1140,7 +1146,7 @@ impl Cache {
             for (cells,class) in [(halves,&(|_|Class::Refinement) as &dyn Fn(PixelRect)->Class),(cells,&class)].into_iter().filter(|(cells,_)|!cells.is_empty()) {
                 let exact=self.exact_units(scene,r,packet,encoder,commands,budget,cells,class,false)?;
                 blocks.extend(exact.blocks.into_iter().map(|(key,input)|(key.plan().bounds,input)));
-                refusals.extend(exact.refusals.into_iter().map(|(region,refusal)|(region,refusal,None)));
+                refusals.extend(exact.refusals);
             }
             let prepared = self.prepared_regions(scene, packet, &destination, budget);
             let halves:Vec<_>=self.graph.prepared.clone().into_iter().flatten().filter(|half|self.graph.caches(half)).collect();
@@ -1150,24 +1156,32 @@ impl Cache {
                 if !own.is_empty() && if own.contains(&region) {self.pivot_missing(region)}else {self.keyless_unrefused(region)} {continue;}
                 if !budget.fits(class(region),!accepted.is_empty(),object_cache::PASS_TAPS) {break;}
                 let requests=self.region_sources(scene,r,packet,region,tiled);
-                let mut unpublished=false;
-                for (id,request) in requests.iter().cloned() {unpublished|=self.prepare_source(scene,r,packet,encoder,id,request,class(region),budget)?.unpublished;}
+                let allowance=self.cell_allowance(r,region);
+                let (mut unpublished,mut refused)=(false,None);
+                for (id,request) in requests.iter().cloned() {
+                    let prepared=self.prepare_source(scene,r,packet,encoder,id,request,class(region),allowance,budget)?;
+                    unpublished|=prepared.unpublished;refused=refused.or(prepared.refusal);
+                }
                 if !requests.iter().all(|(id,request)|self.source_ready(scene,r,*id,request)) {
                     #[cfg(test)] crate::test_support::PassCounts {destination_units:1,..Default::default()}.record();
-                    blocks.push((region,waiting_input(scene,r,unpublished)));continue;
+                    match refused {
+                        Some(refusal)=>refusals.push((region,refusal,allowance)),
+                        None=>blocks.push((region,waiting_on(scene,r,declarations,if unpublished {&GpuRasterError::NotPublished}else {&GpuRasterError::NotReady}))),
+                    }
+                    continue;
                 }
-                let handle=match self.accept_parent(scene,r,packet,region,&requests,*retained,tiled,std::slice::from_ref(&root),target,preview,class(region),if budget.required(class(region)) {class(region)} else {Class::Prefetch},encoder) {
+                let handle=match self.accept_parent(scene,r,packet,region,&requests,*retained,tiled,std::slice::from_ref(&root),target,preview,class(region),if budget.required(class(region)) {class(region)} else {Class::Prefetch},allowance,encoder) {
                     Ok(Ok(handle))=>handle,
-                    Ok(Err(Some(refusal)))=>{refusals.push((region,refusal,None));continue;},
-                    Ok(Err(None))=>{blocks.push((region,waiting_input(scene,r,false)));continue;},
-                    Err(GpuRasterError::NotPublished)=>{blocks.push((region,waiting_input(scene,r,true)));continue;},
+                    Ok(Err(Some(refusal)))=>{refusals.push((region,refusal,allowance));continue;},
+                    Ok(Err(None))=>{blocks.push((region,waiting_on(scene,r,declarations,&GpuRasterError::NotReady)));continue;},
+                    Err(error@GpuRasterError::NotPublished)=>{blocks.push((region,waiting_on(scene,r,declarations,&error)));continue;},
                     Err(error)=>return Err(error),
                 };
                 r.image_decode_queue(r.device.working_space())?.prioritize(packet.view,region);
                 budget.spend(object_cache::PASS_TAPS);
                 let sources=self.pages.lock().unwrap().take_inputs(&handle)?;
                 if let Some(refusal)=sources.objects_refusal() {
-                    refusals.push((region,refusal.clone(),Some(arrivals)));
+                    refusals.push((region,refusal.clone(),crate::frame_demand::Allowance::Fresh));
                     if self.displays(region) {
                         if class(region).demanded() {self.pages.lock().unwrap().hold_inputs(&handle,sources)?;}else {self.pages.lock().unwrap().finish_inputs(&handle);}
                         continue;
@@ -1192,8 +1206,8 @@ impl Cache {
                     scene.jobs = jobs;scene.source_jobs = source_jobs;
                     scene.placement_display = true;
                     if let Err(error) = result {
-                        if matches!(error,GpuRasterError::NotReady|GpuRasterError::NotPublished) {
-                            blocks.push((region,waiting_input(scene,r,error==GpuRasterError::NotPublished)));
+                        if matches!(error,GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished) {
+                            blocks.push((region,waiting_on(scene,r,declarations,&error)));
                             if class(region).demanded() {self.pages.lock().unwrap().hold_inputs(&handle,sources)?;}else {self.pages.lock().unwrap().finish_inputs(&handle);}
                             continue;
                         }
@@ -1229,8 +1243,8 @@ impl Cache {
                         budget.spend(work);unit.work=work;
                         completed.push(ReadyUnit {unit,handle,publish:true});
                     },
-                    Err(error@(GpuRasterError::NotReady|GpuRasterError::NotPublished)) => {
-                        blocks.push((region,waiting_input(scene,r,error==GpuRasterError::NotPublished)));
+                    Err(error@(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished)) => {
+                        blocks.push((region,waiting_on(scene,r,declarations,&error)));
                         sleeping.push((region,std::mem::take(&mut unit.waits)));
                         self.pages.lock().unwrap().hold_inputs(&handle,std::mem::take(&mut unit.sources))?;
                         scene.discard_jobs_from(start);
@@ -1248,9 +1262,9 @@ impl Cache {
                 for region in prepared {
                     if !budget.fits(Class::Prefetch,!completed.is_empty(),object_cache::PASS_TAPS) {self.preparing=true;break;}
                     let requests=self.region_sources(scene,r,packet,region,tiled);
-                    for (id,request) in requests.iter().cloned() {self.prepare_source(scene,r,packet,encoder,id,request,Class::Prefetch,budget)?;}
+                    for (id,request) in requests.iter().cloned() {self.prepare_source(scene,r,packet,encoder,id,request,Class::Prefetch,crate::frame_demand::Allowance::Fresh,budget)?;}
                     if !requests.iter().all(|(id,request)|self.source_ready(scene,r,*id,request)) {self.preparing=true;continue;}
-                    let handle=match self.accept_parent(scene,r,packet,region,&requests,*retained,tiled,&halves,Root::Store,preview,Class::Prefetch,Class::Prefetch,encoder) {
+                    let handle=match self.accept_parent(scene,r,packet,region,&requests,*retained,tiled,&halves,Root::Store,preview,Class::Prefetch,Class::Prefetch,crate::frame_demand::Allowance::Fresh,encoder) {
                         Ok(Ok(handle))=>handle,
                         Ok(Err(_))|Err(GpuRasterError::NotPublished)=>{self.preparing=true;continue;},
                         Err(error)=>return Err(error),
@@ -1280,7 +1294,7 @@ impl Cache {
                             completed.push(ReadyUnit {unit,handle,publish:false});
                         },
                         Ok(false)|Err(GpuRasterError::SourceWorkingSetExceeded) => {self.pages.lock().unwrap().finish_inputs(&handle);scene.discard_jobs_from(start);self.preparing=true;},
-                        Err(GpuRasterError::NotReady|GpuRasterError::NotPublished) if !completed.is_empty() => {
+                        Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished) if !completed.is_empty() => {
                             self.pages.lock().unwrap().finish_inputs(&handle);scene.discard_jobs_from(start);self.preparing=true;
                         }
                         Err(error) => {scene.discard_unencoded_jobs();return Err(error);}
@@ -1296,10 +1310,10 @@ impl Cache {
             }
             if target==Root::Window {shown=composed.iter().zip(lags).fold(shown,|shown,(region,(_,lag))|shown.union(texels(lag.map_or(*region,|lag|region.intersect(lag)))));}
             let held=target==Root::Store && {
-                let selection=self.select_cells(r,served,presented,&selected,arrivals)?;
+                let selection=self.select_cells(r,served,presented,&selected)?;
                 let complete=!transition || selection.complete(served);
-                let input=blocks.iter().find_map(|(_,input)|*input);
-                if !complete {blocks.extend(selection.copies.iter().map(|(_,copy,_)|(copy.region,input)));}
+                let wait=blocks.iter().find_map(|(_,wait)|wait.clone());
+                if !complete {blocks.extend(selection.copies.iter().map(|(_,copy,_)|(copy.region,wait.clone())));}
                 copies=if complete {selection.copies}else {Vec::new()};
                 !complete
             };
@@ -1311,10 +1325,10 @@ impl Cache {
             shown=shown.union(texels(copied));
             if !held && (!written.is_empty() || transition || self.pixels.committed_root().is_none())
                 && !(written.is_empty() && self.current_authored().is_some_and(|(frame,authored)|self.pixels.restamp(&frame,authored))) {self.commit_window(r,encoder)?;}
-            if presented==pages::Accuracy::Exact {blocks.extend(composed.iter().map(|region|(*region,waiting_input(scene,r,false))));}
-            for (region,input) in blocks {self.block(arrivals,region,input);}
+            if presented==pages::Accuracy::Exact {blocks.extend(composed.iter().map(|region|(*region,waiting_on(scene,r,declarations,&GpuRasterError::NotReady))));}
+            for (region,wait) in blocks {self.block(region,wait);}
             if !matches!(destination,Destination::Navigator) {for (region,waits) in sleeping {self.sleep(region,waits);}}
-            for (region,refusal,since) in refusals {self.refuse(since,region,&refusal);}
+            for (region,refusal,allowance) in refusals {self.refuse(region,&refusal,allowance);}
         }
         if view && !live && !stroking {self.pivot_pending=self.pivot_inputs_pending(scene,r,packet);}
         if view && live && self.ends_contact(packet) {self.end_contact(encoder);}
@@ -1362,7 +1376,7 @@ impl Cache {
 
     fn copy_level(&mut self,scene:&Scene,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,commands:&mut RegionRecords)->Result<PixelRect,GpuRasterError> {
         if !self.ensure_window(r,scene,encoder) {return Err(GpuRasterError::NotReady);}
-        let selection=self.select_cells(r,self.plan.bounds,pages::Accuracy::Display,&|_|Class::Visible,r.arrival_token())?;
+        let selection=self.select_cells(r,self.plan.bounds,pages::Accuracy::Display,&|_|Class::Visible)?;
         if selection.transition && !selection.complete(self.plan.bounds) {return Ok(PixelRect::EMPTY);}
         let copied=self.copy_cells(r,encoder,commands,selection.copies)?;
         if !copied.is_empty() {self.commit_window(r,encoder)?;}
@@ -1416,8 +1430,8 @@ impl Cache {
         let format=self.precision.format();
         if self.pixels.root().is_none_or(|image|image.texture.format()!=format) {
             let bytes=self.plan.size.map(u64::from).into_iter().product::<u64>()*u64::from(format.block_copy_size(None).unwrap());
-            let Ok(reservation)=self.reserve_window(r,scene,bytes) else {return Ok(None);};
-            let charge=reservation.charge(bytes);
+            let Ok(reservation)=self.reserve_window(r,scene,bytes,crate::frame_demand::Allowance::Fresh) else {return Ok(None);};
+            let charge=reservation.charge();
             let retired=self.pixels.take();
             let bytes=retired.iter().map(Image::bytes).sum();
             encoder.retire(crate::DisplayRetirement {_charge:r.retired_display_bytes.charge(bytes),
@@ -1443,12 +1457,13 @@ impl Cache {
         if !self.coverage_complete() {return self.write_projection_scales(r,encoder);}
         if self.pixels.next().is_none() {
             let bytes=self.owed_window_bytes();
-            let reservation=match self.reserve_window(r,scene,bytes) {
+            let Some(allowance)=self.reduction_wait.as_ref().map_or(Some(crate::frame_demand::Allowance::Fresh),|wait|wait.eligible(r)) else {return self.write_projection_scales(r,encoder);};
+            let reservation=match self.reserve_window(r,scene,bytes,allowance) {
                 Ok(reservation)=>reservation,
-                Err(refusal)=>{self.reduction_refusal=Some(refusal);return self.write_projection_scales(r,encoder);},
+                Err(refusal)=>{self.reduction_wait=Some(crate::frame_demand::UnitWait::parked(refusal,allowance));return self.write_projection_scales(r,encoder);},
             };
-            self.reduction_refusal=None;
-            self.pixels.ensure(r,self.plan,self.precision.format(),reservation.charge(bytes));
+            self.reduction_wait=None;
+            self.pixels.ensure(r,self.plan,self.precision.format(),reservation.charge());
         }
         let levels = [self.pixels.root().unwrap().clone(), self.pixels.next().unwrap().clone()];
         let mut changed = region;

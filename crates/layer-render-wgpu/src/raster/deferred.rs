@@ -40,11 +40,14 @@ impl Drop for RasterPresentation {
     fn drop(&mut self) {
         let mut active = self.0.active.lock().unwrap();
         *active -= 1;
-        if *active == 0 {
-            #[cfg(not(target_arch = "wasm32"))]
-            self.0.wake.notify_all();
-            #[cfg(target_arch = "wasm32")]
-            if let Some(wake) = self.0.wake.lock().unwrap().take() { wake.wake(); }
+        if *active != 0 { return; }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.0.wake.notify_all();
+        #[cfg(target_arch = "wasm32")]
+        {
+            let wake = self.0.wake.lock().unwrap().take();
+            drop(active);
+            if let Some(wake) = wake { wake.wake(); }
         }
     }
 }
@@ -82,7 +85,14 @@ pub(crate) struct NativeCapture {
     pub queue: wgpu::Queue,
     pub(super) readback:Option<Readback>,
     pub(super) allocation:crate::residency::Reservation,
+    pub(super) returning:Option<std::sync::Weak<Mutex<crate::residency::Reservation>>>,
     pub(super) owner:layer_core::MemoryOwner,
+}
+fn return_storage(pool:&BufferPool,returned:Option<&Mutex<crate::residency::Reservation>>,resource:pool::Resource,charge:crate::residency::Charge) {
+    match returned {
+        Some(returned)=>{drop(resource);returned.lock().unwrap().absorb(charge);},
+        None=>pool.put_charged(resource,charge),
+    }
 }
 impl NativeCapture {
     pub(super) fn prepare_readback(&mut self,bytes:u64) {
@@ -91,14 +101,16 @@ impl NativeCapture {
         self.readback=Some(Readback {buffer,charge:self.pool.charge(bytes)});
     }
     fn recycle(&mut self,count:usize) {
-        for output in self.outputs.drain(..count) {self.pool.put_charged(output.resource.retire(),output.charge);}
+        let returned=self.returning.as_ref().and_then(std::sync::Weak::upgrade);
+        for output in self.outputs.drain(..count) {return_storage(&self.pool,returned.as_deref(),output.resource.retire(),output.charge);}
     }
     fn recycle_readback(&mut self) {
-        if let Some(readback)=self.readback.take() {self.pool.put_charged(pool::Resource::Buffer(readback.buffer),readback.charge);}
+        let returned=self.returning.as_ref().and_then(std::sync::Weak::upgrade);
+        if let Some(readback)=self.readback.take() {return_storage(&self.pool,returned.as_deref(),pool::Resource::Buffer(readback.buffer),readback.charge);}
     }
-    pub(super) fn take_window(&mut self)->Self {
+    pub(super) fn take_window(&mut self,returning:std::sync::Weak<Mutex<crate::residency::Reservation>>)->Self {
         Self {outputs:std::mem::take(&mut self.outputs),pool:self.pool.clone(),device:self.device.clone(),queue:self.queue.clone(),
-            readback:self.readback.take(),allocation:self.allocation.split(0).unwrap(),owner:self.owner.clone()}
+            readback:self.readback.take(),allocation:self.allocation.split(0).unwrap(),returning:Some(returning),owner:self.owner.clone()}
     }
     pub fn append(&mut self,mut other:Self) {
         if self.readback.as_ref().map_or(0,|readback|readback.buffer.size())<other.readback.as_ref().map_or(0,|readback|readback.buffer.size()) {
@@ -109,7 +121,7 @@ impl NativeCapture {
     pub fn storage_bytes(&self) -> u64 {
         self.outputs.iter().map(NativeOutput::bytes).sum::<u64>()
     }
-    fn next_transfer(&self, label: &str) -> Result<(usize, PreparedCapture, wgpu::CommandBuffer), String> {
+    fn next_transfer(&mut self, label: &str) -> Result<(usize, PreparedCapture, wgpu::CommandBuffer), String> {
         let readback=&self.readback.as_ref().ok_or("Native readback was not admitted")?.buffer;
         let mut count = 0;
         let mut size = 0;
@@ -121,15 +133,11 @@ impl NativeCapture {
             count += 1;
             size += bytes;
         }
+        let comparisons=self.outputs[..count].iter_mut().map(|output|output.comparison.take()).collect::<Vec<_>>();
         let copies = self.outputs[..count].iter().map(NativeOutput::capture).collect::<Result<Vec<_>, _>>()?;
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
         let buffer=|bytes| {assert!(bytes<=readback.size());readback.clone()};
-        let capture=if self.outputs[..count].iter().all(|output|output.comparison.is_none()) {
-            prepare_capture(&self.pool,&mut encoder,&copies,buffer)
-        }else {
-            let comparisons=self.outputs[..count].iter().map(|output|output.comparison.clone()).collect::<Vec<_>>();
-            prepare_capture_compared(&self.pool,&mut encoder,&copies,&comparisons,buffer)
-        }.map_err(|e|e.to_string())?;
+        let capture=prepare_capture_compared(&self.pool,&mut encoder,&copies,comparisons,buffer).map_err(|e|e.to_string())?;
         Ok((count, capture, encoder.finish()))
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -181,12 +189,12 @@ impl WgpuRasterizer {
 impl PresentationPriority {
     async fn wait_browser(&self) {
         std::future::poll_fn(|cx| {
-            if *self.active.lock().unwrap() == 0 {
-                std::task::Poll::Ready(())
-            } else {
-                *self.wake.lock().unwrap() = Some(cx.waker().clone());
-                std::task::Poll::Pending
-            }
+            let active = self.active.lock().unwrap();
+            if *active == 0 { return std::task::Poll::Ready(()); }
+            let previous = self.wake.lock().unwrap().replace(cx.waker().clone());
+            drop(active);
+            drop(previous);
+            std::task::Poll::Pending
         }).await
     }
 }
@@ -311,6 +319,24 @@ mod tests {
         assert_eq!(ready.recv_timeout(std::time::Duration::from_secs(10)).unwrap(),(true,true,0,0));
         assert!(!r.raster_publication_pending());
         assert!(unused.try_recv().is_err(),"the callback installed after worker creation replaces the earlier callback");
+    }
+
+    #[test]
+    fn a_capture_still_landing_keeps_a_refused_edit_waiting_until_it_lands() {
+        let (mut r,capture)=capture_fixture(17);
+        let (landed,woken)=mpsc::channel();
+        r.set_preparation_wake(Arc::new(move|| {let _=landed.send(());}));
+        r.prepare_source_backing().unwrap();
+        let presentation=r.prioritize_raster_presentation();
+        r.raster.as_ref().unwrap().worker.as_ref().unwrap().submit_batch(capture).unwrap();
+        r.live_stroke=Some(layer_core::StrokeId(1));r.memory.claim(r.live_stroke);
+        assert!(r.admit_raster_working(u64::MAX/2,crate::frame_demand::Allowance::Fresh).is_err());
+        assert_eq!(r.take_lane_failure(layer_core::StrokeId(1)),None,"the pages a capture in flight still pins become evictable when it lands, so the edit waits for it");
+        assert!(r.lane_waits(),"the refused edit sleeps on the capture's landing");
+        drop(presentation);
+        while r.lane_waits() {woken.recv_timeout(std::time::Duration::from_secs(10)).expect("the landing capture wakes the waiting edit");}
+        assert!(r.admit_raster_working(u64::MAX/2,crate::frame_demand::Allowance::Fresh).is_err());
+        assert_eq!(r.take_lane_failure(layer_core::StrokeId(1)),Some(GpuRasterError::StrokeMemory),"with no capture left to land, nothing else can free the room");
     }
 
     #[test]
@@ -439,7 +465,7 @@ mod tests {
                     let before=ContentName::fresh();
                     let (tile,name)=RasterTile::pending_from_live(descriptor,before.into());
                     assert_eq!(tile.content_version().resolved(),None);
-                    let mut allocation=r.admit_raster_working(CanonicalComparisons::bytes(1).unwrap()).unwrap();
+                    let mut allocation=r.admit_raster_working(CanonicalComparisons::bytes(1).unwrap(),crate::frame_demand::Allowance::Fresh).unwrap();
                     let comparison=CanonicalComparisons::reserved(&mut r,1,&mut allocation).unwrap();
                     let result=comparison.result(0,name);
                     let transfer=r.prepare_native_transfer(color.space).unwrap();
@@ -462,7 +488,7 @@ mod tests {
                         let mut pass=commands.begin_compute_pass(&Default::default());encoder.encode(&mut pass,&batch);
                     }
                     let source=match (&packed,&encoded) {(Some(buffer),_)=>CaptureSource::Packed(buffer),(_,Some(texture))=>CaptureSource::Texture(texture),_=>unreachable!()};
-                    let capture=prepare_capture_compared(&r.raster_buffers,&mut commands,&[TileCapture {source,tile:tile.clone()}],&[Some(result)],
+                    let capture=prepare_capture_compared(&r.raster_buffers,&mut commands,&[TileCapture {source,tile:tile.clone()}],vec![Some(result)],
                         |bytes|r.raster_buffers.take(&r.device,bytes)).unwrap();
                     assert_eq!(tile.content_version().resolved(),None,"encoding must not guess GPU comparison outcome");
                     r.queue.submit([commands.finish()]);
@@ -488,7 +514,7 @@ mod tests {
         let color=DocumentColor {space:RgbSpace::Srgb,depth:SampleDepth::U8};
         let mut r=WgpuRasterizer::new_native_headless(color).unwrap();
         let descriptor=RasterPlane::Mask.descriptor(color);
-        let mut allocation=r.admit_raster_working(CanonicalComparisons::bytes(2).unwrap()).unwrap();
+        let mut allocation=r.admit_raster_working(CanonicalComparisons::bytes(2).unwrap(),crate::frame_demand::Allowance::Fresh).unwrap();
         let comparisons=CanonicalComparisons::reserved(&mut r,2,&mut allocation).unwrap();
         let tiles=[0,1].map(|index| {
             let (tile,name)=RasterTile::pending_from_live(descriptor,layer_core::raster::ContentName::fresh().into());
@@ -504,14 +530,15 @@ mod tests {
             entries:&[wgpu::BindGroupEntry {binding:0,resource:comparisons.buffer().as_entire_binding()}]});
         let mut commands=r.device.create_command_encoder(&Default::default());
         {let mut pass=commands.begin_compute_pass(&Default::default());pass.set_pipeline(&pipeline);pass.set_bind_group(0,&bind,&[]);pass.dispatch_workgroups(1,1,1);}
-        let copies=tiles.iter().map(|(tile,_)|TileCapture {source:CaptureSource::Packed(&packed),tile:tile.clone()}).collect::<Vec<_>>();
-        let results=tiles.iter().map(|(_,result)|Some(result.clone())).collect::<Vec<_>>();
-        let capture=prepare_capture_compared(&r.raster_buffers,&mut commands,&copies,&results,|bytes|r.raster_buffers.take(&r.device,bytes)).unwrap();
+        let (tiles,results):(Vec<_>,Vec<_>)=tiles.into_iter().map(|(tile,result)|(tile,Some(result))).unzip();
+        let copies=tiles.iter().map(|tile|TileCapture {source:CaptureSource::Packed(&packed),tile:tile.clone()}).collect::<Vec<_>>();
+        let capture=prepare_capture_compared(&r.raster_buffers,&mut commands,&copies,results,|bytes|r.raster_buffers.take(&r.device,bytes)).unwrap();
         r.queue.submit([commands.finish()]);
         assert_eq!(capture.submitted_device(&r.device).finish(),Err("Invalid canonical comparison result".into()));
-        for (index,(tile,_)) in tiles.iter().enumerate() {
+        for (index,tile) in tiles.iter().enumerate() {
             assert!(matches!(tile.try_backing(),Some(Err(_))),"tile {index} of the failed transfer keeps an unverified backing");
-            assert_eq!(tile.content_version().resolved(),None,"tile {index} of the failed transfer resolved its name");
+            let version=tile.content_version();
+            assert_eq!(version.resolved(),Some(version.identity()),"tile {index} of the failed transfer shares a predecessor's name");
         }
     }
 

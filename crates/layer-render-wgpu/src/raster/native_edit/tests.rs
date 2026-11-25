@@ -671,7 +671,7 @@ fn rewrite_native_inputs(r:&mut WgpuRasterizer,id:SourceTarget) {
         let format=source.format();
         let temporary=scratch.entry(format).or_insert_with(|| {
             let bytes=u64::from(format.block_copy_size(None).unwrap())*u64::from(PAGE_SIZE).pow(2);
-            allocations.push(r.admit_raster_working(bytes).unwrap());
+            allocations.push(r.admit_raster_working(bytes,crate::frame_demand::Allowance::Fresh).unwrap());
             r.device.create_texture(&wgpu::TextureDescriptor {
                 label:Some("native publication fixture rewrite"),size:source.size(),mip_level_count:1,sample_count:1,
                 dimension:wgpu::TextureDimension::D2,format,
@@ -902,7 +902,7 @@ fn mixed_tracking_marks_only_actual_canonical_changes() {
         for expected in [1u32,0u32] {
             let inputs:Vec<_>=pages.iter().map(|page|(page.clone(),RasterTile::pending(color.paint_descriptor()),LayerColorMode::FullColor)).collect();
             let count=inputs.len();
-            let mut job=r.native_capture_job(NativeFrame {capture:None,publications:Vec::new(),canonical_pages:Vec::new()},inputs,vec![None;count],vec![None;count],vec![None;count]).unwrap();
+            let mut job=r.native_capture_job(NativeFrame {capture:None,publications:Vec::new(),canonical_pages:Vec::new()},inputs,(0..count).map(|_|None).collect(),vec![None;count],vec![None;count]).unwrap();
             job.changes=vec![None,Some(flags.clone())];
             submit_encoded(&mut r,|r,commands| {
                 commands.clear_buffer(&flags,16,None);
@@ -1725,7 +1725,7 @@ fn a_capture_without_room_still_publishes_the_painted_revision() {
 }
 
 #[test]
-fn a_native_capture_larger_than_the_raster_room_publishes_in_windows_within_the_limit() {
+fn a_native_capture_larger_than_the_raster_room_rolls_over_onto_the_window_its_worker_returns() {
     let extent = [8192; 2];
     let mut doc = Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
     let target = doc.active_target().unwrap();
@@ -1738,34 +1738,56 @@ fn a_native_capture_larger_than_the_raster_room_publishes_in_windows_within_the_
     let renderer = || crate::memory::memory_tests::renderer(doc.composition().color, layer_core::DeviceMemoryFacts { budget_bytes: Some(4 << 30), ..Default::default() }).unwrap();
     let ready = |r: &mut WgpuRasterizer| wait_until("the frame becomes ready", || r.raster_dependencies_ready(frame, None).then_some(()).ok_or(()));
     let mut whole = renderer();
+    let base = whole.raster_tiers.raster.used();
     ready(&mut whole);
     let admission = whole.restore_preflight.as_ref().unwrap().native.as_ref().unwrap();
-    let (outputs, readback, held) = (admission.bytes, admission.readback, whole.raster_tiers.raster.used());
+    let (outputs, readback, full, held) = (admission.bytes, admission.readback, admission.allocation.bytes(), whole.raster_tiers.raster.used());
     assert!(admission.whole() && outputs >= readback, "the unconstrained fixture admits a whole capture of many outputs: outputs {outputs}, readback {readback}");
+    let largest = outputs / admission.capacity as u64;
+    let window = outputs / 2 + capture_readback(largest, largest, 0);
     drop(whole);
     let mut r = renderer();
     let budget = r.factory.memory_budget().clone();
     let other = budget.register_owner(layer_core::MemoryOwnerKind::Other, layer_core::MemoryClass::Pinned, Some(budget.snapshot().devices[0].device));
     let limit = |r: &WgpuRasterizer| r.memory.raster_owner().gpu_working_limit();
-    let room = held.saturating_sub(outputs / 2);
+    let room = (held - base - full).saturating_add(window);
     let pin = limit(&r).saturating_sub(r.raster_tiers.raster.used()).saturating_sub(room);
     other.report(layer_core::MemoryReport { gpu_bytes: pin, pinned_gpu_bytes: pin, ..Default::default() });
     budget.flush_reports();
     let revision = doc.artwork.paint.get(paint).unwrap().raster.clone();
-    let mut submitted = false;
+    let worker_holds_window = |r: &WgpuRasterizer| r.raster.as_ref().and_then(|runtime| runtime.worker.as_ref()).is_some_and(|worker| worker.pending.used() != 0);
+    let settle_sleeps = ("settling", crate::frame_demand::Outstanding::Blocked(crate::frame_demand::Input::Gpu));
+    let mut presentation = Some(r.prioritize_raster_presentation());
+    let (mut submitted, mut held_rollover, mut window_admissions) = (false, false, 0);
     wait_until(format_args!("a capture of {outputs} bytes never published within a {room} byte raster room (submitted, settling, terms)"), || {
         if revision.try_data().is_some() { return Ok(()); }
+        let (before, settling) = (crate::test_support::PassCounts::snapshot(), r.settling.is_some());
         r.poll_pending(frame.view).unwrap();
+        if settling && r.settling.is_some() { window_admissions += crate::test_support::PassCounts::snapshot().delta(before).raster_admissions; }
         if r.can_submit() && let std::task::Poll::Ready(result) = r.submit_when_ready(if submitted { FramePacket { dabs: &[], dab_batches: &[], ..frame } } else { frame }, None) { result.unwrap(); submitted = true; }
         let physical = r.telemetry().resident_bytes;
         let device = budget.snapshot().devices[0].limit_bytes;
         assert!(physical.saturating_add(pin) <= device, "the capture exceeded the device limit: physical {physical} beside a {pin} byte pin, limit {device}");
+        let raster = &r.raster_tiers.raster;
+        assert!(raster.used() <= raster.limit(), "a capture window rolled over past the raster limit while the worker held its predecessor: used {} of {}", raster.used(), raster.limit());
+        if presentation.is_some() && worker_holds_window(&r) && r.outstanding_terms().contains(&settle_sleeps) {
+            held_rollover = true; presentation = None;
+            let returned = r.settling.as_ref().and_then(|pending| pending.capture.as_ref()).unwrap().returned.clone();
+            returned.lock().unwrap().merge(r.raster_tiers.admitted.wanting(crate::residency::Class::Authored, 1).overcommit());
+            r.poll_pending(frame.view).unwrap();
+            assert_eq!(returned.lock().unwrap().bytes(), 1, "a forced poll admits no window that demand holds asleep on its worker");
+            drop(returned.lock().unwrap().split(1));
+        }
         r.wait_idle().unwrap();
         Err((submitted, r.settling.is_some(), r.outstanding_terms()))
     });
+    drop(presentation);
+    assert_eq!(window_admissions, 0, "a capture window rolls over onto the storage its predecessor returned, never a fresh raster admission");
+    assert!(held_rollover, "the rollover never slept on the worker while it held the previous window");
     let data = revision.wait_data().unwrap();
     assert_eq!(data.tiles.keys().filter(|key| key.plane == RasterPlane::Color).count(), 64, "the windowed capture published every painted tile");
-    assert!(data.tiles.values().all(|tile| tile.wait_backing().is_ok()), "every windowed output reached its backing");
+    let failures = data.tiles.values().filter_map(|tile| tile.wait_backing().err()).collect::<BTreeSet<_>>();
+    assert!(failures.is_empty(), "every windowed output reached its backing: {failures:?}");
     drop(other);
 }
 

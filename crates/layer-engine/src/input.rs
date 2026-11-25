@@ -286,14 +286,14 @@ pub struct InputProducer<T> {
 
 /// The engine-owner half of a bounded, allocation-free SPSC queue.
 pub struct InputConsumer<T> {
-    inner: Consumer<T>,
+    inner: std::cell::RefCell<Consumer<T>>,
 }
 
 pub fn input_queue<T>(capacity: usize) -> (InputProducer<T>, InputConsumer<T>) {
     let (producer, consumer) = RingBuffer::new(capacity.max(2));
     (
         InputProducer { inner: producer },
-        InputConsumer { inner: consumer },
+        InputConsumer { inner: consumer.into() },
     )
 }
 
@@ -308,13 +308,18 @@ impl<T> InputProducer<T> {
 
 impl<T> InputConsumer<T> {
     pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        self.inner.borrow().is_empty()
     }
     pub fn pop(&mut self) -> Option<T> {
-        self.inner.pop().ok()
+        self.inner.get_mut().pop().ok()
     }
-    pub fn peek(&self) -> Option<&T> {
-        self.inner.peek().ok()
+    pub fn peek(&self) -> Option<std::cell::Ref<'_, T>> {
+        std::cell::Ref::filter_map(self.inner.borrow(), |inner| inner.peek().ok()).ok()
+    }
+    pub fn contains(&self, found: impl Fn(&T) -> bool) -> bool {
+        let mut inner = self.inner.borrow_mut();
+        let slots = inner.slots();
+        inner.read_chunk(slots).is_ok_and(|chunk| { let (first, second) = chunk.as_slices(); first.iter().chain(second).any(found) })
     }
 }
 
@@ -383,6 +388,13 @@ impl StrokeBuilder {
 
     pub fn predicted_points(&self) -> &[StrokePoint] {
         &self.predicted
+    }
+
+    pub(crate) fn truncate_real(&mut self, len: usize) {
+        if len >= self.real.len() { return; }
+        self.real.truncate(len);
+        self.predicted.clear();
+        self.last_event = None;
     }
 
     pub(crate) fn replace_real(&mut self, index: usize, point: StrokePoint) {

@@ -69,7 +69,7 @@ fn deferred_object_snapshot_retries_preserve_filtered_windows_and_histogram() {
         match submit_encoded(live, |live, encoder| scene.capture_region_prepared(live, frame, &texture,
             PixelRect::full([32; 2]), scene::Output::Artwork(None), encoder)) {
             Ok(())=>Ok(()),
-            Err(pending@GpuRasterError::NotReady)=>{live.wait_idle().unwrap();Err(pending)},
+            Err(pending@(GpuRasterError::NotReady|GpuRasterError::Waiting(_)))=>{live.wait_idle().unwrap();Err(pending)},
             Err(error)=>panic!("{error}"),
         }
     });
@@ -95,7 +95,7 @@ fn cancelled_object_captures_keep_output_unpublished() {
     let (texture, _) = create_color_target(&live.device, [32; 2], "cancelled object capture");
     let mut scene = live.scene.take().unwrap_or_else(|| scene::Scene::new(live).unwrap());
     let mut encoder = submission::CommandEncoder::new(&live.device, &Default::default());
-    assert!(matches!(scene.capture_region(live, frame, &texture, PixelRect::full([32; 2]), scene::Output::Artwork(None), &mut encoder), Err(GpuRasterError::NotReady)));
+    assert!(matches!(scene.capture_region(live, frame, &texture, PixelRect::full([32; 2]), scene::Output::Artwork(None), &mut encoder), Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
     live.snapshot_cancelled = Some(Arc::new(AtomicBool::new(true)));
     assert!(matches!(pollster::block_on(scene.prepare_capture_work_async(live)), Err(GpuRasterError::Color(message)) if message == "Snapshot capture cancelled"));
     let mut reader = capture(fixture.document).unwrap();

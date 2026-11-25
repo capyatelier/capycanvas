@@ -1,10 +1,19 @@
 use std::sync::Arc;
 use crate::{PipelineDevice, SdrSurfaceColor, Uploads, GpuRasterError, Deferred, residency::Tier};
 
-pub(crate) struct Charge { charge: Option<crate::residency::Charge>, memory: Option<layer_core::MemoryOwner> }
+pub(crate) struct Charge { charge: Option<crate::residency::Charge>, memory: Option<layer_core::MemoryOwner>, retiring: std::sync::OnceLock<crate::residency::Hold> }
 impl Charge {
     pub(crate) fn new(bytes:u64,tier:&Arc<Tier>,memory:Option<layer_core::MemoryOwner>)->Self {
-        let charge=tier.charge(bytes);report(memory.as_ref(),tier);Self {charge:Some(charge),memory}
+        let charge=Self::detached(tier.charge(bytes),memory);report(charge.memory.as_ref(),tier);charge
+    }
+    pub(crate) fn detached(charge:crate::residency::Charge,memory:Option<layer_core::MemoryOwner>)->Self {Self {charge:Some(charge),memory,retiring:Default::default()}}
+    #[cfg(not(target_arch="wasm32"))]
+    pub(crate) fn report(&self) {if let Some(charge)=&self.charge {report(self.memory.as_ref(),charge.tier());}}
+}
+pub(crate) struct Shown(Arc<Charge>);
+impl Drop for Shown {
+    fn drop(&mut self) {
+        if Arc::strong_count(&self.0)>1 && let Some(charge)=&self.0.charge {let _=self.0.retiring.set(charge.tier().heap().retire());}
     }
 }
 fn report(memory:Option<&layer_core::MemoryOwner>,tier:&Tier) {
@@ -25,7 +34,7 @@ pub struct HeldCanvas {
     pub(crate) format: wgpu::TextureFormat,
     pub(crate) encoding: SdrSurfaceColor,
     pub(crate) device: wgpu::Device,
-    pub(crate) _charge: Arc<Charge>,
+    pub(crate) shown: Arc<Shown>,
 }
 impl HeldCanvas {
     pub(crate) fn capture(encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, draw: impl FnOnce(&mut wgpu::RenderPass<'_>)) {
@@ -47,16 +56,15 @@ impl HeldCanvas {
         canvas: Option<wgpu::TextureView>, navigator: Option<(wgpu::TextureView, crate::pixel_rect::PixelRect)>) -> Self {
         let bytes = canvas.iter().chain(navigator.iter().map(|(view,_)| view)).map(|view| crate::texture_bytes(view.texture())).sum();
         Self {canvas,navigator,size,format,encoding,device:(**device).clone(),
-            _charge:Arc::new(Charge::new(bytes,&device.transient_display,device.transient_memory.clone()))}
+            shown:Arc::new(Shown(Arc::new(Charge::new(bytes,&device.transient_display,device.transient_memory.clone()))))}
     }
     pub(crate) fn compatible(&self, device:&PipelineDevice,size:[u32;2],format:wgpu::TextureFormat,encoding:SdrSurfaceColor)->bool {
         self.device == **device && self.size == size && self.format == format && self.encoding == encoding
     }
     pub(crate) fn retain_until_complete(&self, device:&PipelineDevice, encoder:&wgpu::CommandEncoder) {
+        let retained = self.shown.0.clone();
         #[cfg(not(target_arch = "wasm32"))]
-        let retained = device.retirement(self.clone());
-        #[cfg(target_arch = "wasm32")]
-        let retained = self._charge.clone();
+        let retained = device.retirement(retained);
         device.on_encoder_done(encoder,move || {#[cfg(not(target_arch="wasm32"))] retained.complete();#[cfg(target_arch="wasm32")] drop(retained);});
     }
 }

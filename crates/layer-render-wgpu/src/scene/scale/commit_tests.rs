@@ -21,7 +21,7 @@ fn ready_units_hold_one_lease_per_source_storage() {
     let source=attempt.doc.artwork.paint.iter().filter_map(|(_,_,paint)|paint.base.as_ref()).next().unwrap().image.storage().clone();
     let mut inputs=crate::scene::sources::Inputs::default();
     for _ in 0..64 {inputs.image_for(&source,[0;2],attempt.r.document_color().space,crate::scene::sources::SourceUse::Exact);}
-    let mut unit=Unit {sources:inputs.accept_query(&mut attempt.r,Some(&attempt.scene)).unwrap(),..Default::default()};
+    let mut unit=Unit {sources:inputs.accept_query(&mut attempt.r,Some(&attempt.scene),crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh).unwrap(),..Default::default()};
     let read=crate::scene::sources::accepted_image(&unit.sources,&source,[0;2]).unwrap().sampled().uncertified();
     let output=attempt.scene.alloc(&attempt.r,wgpu::Color::TRANSPARENT).unwrap();let start=attempt.scene.jobs.len();
     for _ in 0..64 {
@@ -47,7 +47,7 @@ fn a_ready_parent_commits_before_unrelated_cold_source_preparation_spends_its_fr
         let mut encoder=submission::CommandEncoder::new(&attempt.r.device,&Default::default());
         {let mut work=crate::test_support::work(false);attempt.cache.prepare_source(&mut attempt.scene,&mut attempt.r,frame,&mut encoder,id,SourceRequest {
             plan:display_mips::Plan::window(extent,1,middle),required:middle.into(),covered:PixelRect::EMPTY,
-        },Class::Prefetch,&mut work).unwrap();}
+        },Class::Prefetch,crate::frame_demand::Allowance::Fresh,&mut work).unwrap();}
         attempt.r.uploads.finish(&encoder);encoder.submit(&attempt.r.queue);crate::test_support::complete(&attempt.r);
         let key=attempt.scene.scale_sources.entries[&id].key(&attempt.r,id,1,[2,0]);
         ready.push(attempt.cache.pages.lock().unwrap().get(&key,middle,pages::Accuracy::Display,key.level,crate::residency::Class::Visible).expect("each direct middle-parent source input must be committed before the attempt"));
@@ -57,7 +57,7 @@ fn a_ready_parent_commits_before_unrelated_cold_source_preparation_spends_its_fr
     assert!(ready.iter().map(|image|image.bytes()).sum::<u64>()<=attempt.r.memory.display_owner().grant().gpu_bytes);
     let view=frame.view;
     let (result,_)=attempt.attempt();
-    assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady)),"{result:?}");
+    assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"{result:?}");
     for (index,&id) in ids.iter().enumerate() {
         let key=attempt.scene.scale_sources.entries[&id].key(&attempt.r,id,1,[2,0]);
         let input=attempt.cache.pages.lock().unwrap().get(&key,middle,pages::Accuracy::Display,key.level,crate::residency::Class::Visible).expect("unrelated gathering cannot invalidate the isolated ready inputs");
@@ -114,7 +114,7 @@ fn a_ready_display_page_commits_during_continuous_input_without_an_idle_frame() 
         let mut encoder=submission::CommandEncoder::new(&attempt.r.device,&Default::default());
         {let mut work=crate::test_support::work(false);attempt.cache.prepare_source(&mut attempt.scene,&mut attempt.r,initial,&mut encoder,target,SourceRequest {
             plan:display_mips::Plan::at(extent,0),required:PixelRect::full(extent).into(),covered:PixelRect::EMPTY,
-        },Class::Prefetch,&mut work).unwrap();}
+        },Class::Prefetch,crate::frame_demand::Allowance::Fresh,&mut work).unwrap();}
         attempt.r.uploads.finish(&encoder);encoder.submit(&attempt.r.queue);crate::test_support::complete(&attempt.r);
         for coordinate in page_coordinates(PixelRect::full(extent)) {
             let key=attempt.scene.scale_sources.entries[&target].key(&attempt.r,target,0,coordinate);
@@ -131,7 +131,7 @@ fn a_ready_display_page_commits_during_continuous_input_without_an_idle_frame() 
             let previous=pages::bounds([x,0],0,extent);
             let requests=attempt.cache.region_sources(&attempt.scene,&attempt.r,initial,previous,false);
             let root=attempt.cache.graph.root.clone().unwrap();
-            assert!(attempt.cache.accept_parent(&mut attempt.scene,&mut attempt.r,initial,previous,&requests,0,false,std::slice::from_ref(&root),Root::Store,false,crate::residency::Class::Visible,crate::residency::Class::Visible,&mut encoder).unwrap().is_ok());
+            assert!(attempt.cache.accept_parent(&mut attempt.scene,&mut attempt.r,initial,previous,&requests,0,false,std::slice::from_ref(&root),Root::Store,false,crate::residency::Class::Visible,crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh,&mut encoder).unwrap().is_ok());
         }
         let root=attempt.cache.graph.root.clone().unwrap();let key=attempt.cache.page_key(root,PixelRect::full(extent));
         let accepted=attempt.cache.pages.lock().unwrap().accepted_coordinates(&key,0).collect::<std::collections::HashSet<_>>();
@@ -277,7 +277,7 @@ impl Attempt {
             scene.discard_unencoded_jobs();commands.begin();r.uploads.finish(&encoder);
             if encoder.has_work() {encoder.submit(&r.queue);crate::test_support::complete(r);} else {drop(encoder);}
         }
-        if result.as_ref().is_ok_and(|region|region.is_empty()) || matches!(result,Err(GpuRasterError::NotReady)) {
+        if result.as_ref().is_ok_and(|region|region.is_empty()) || matches!(result,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))) {
             assert_coverage_eq(&before_coverage,&cache.coverage_snapshot());
             assert_eq!(cache.commit_state(),before_branches);
             let after_pages=committed_composite_pages(cache);
@@ -310,7 +310,7 @@ impl Attempt {
         let deadline=std::time::Instant::now()+std::time::Duration::from_secs(30);
         while !self.cache.coverage_complete() {
             let (result,_)=self.attempt();
-            assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady)),"{result:?}");
+            assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"{result:?}");
             assert!(std::time::Instant::now()<deadline,"opened inputs must commit the same output");
             crate::test_support::settle_decodes(&mut self.r);
         }
@@ -341,7 +341,7 @@ fn display_cold_leaf_discards_all_prefix_work_and_requests_every_named_input() {
     let mut attempt=Attempt::new(false);
     let revision=(attempt.r.artwork_revision,attempt.r.composite_revision);
     let (result,counts)=attempt.attempt();
-    assert!(matches!(result,Ok(region) if region.is_empty()) || matches!(result,Err(GpuRasterError::NotReady)),"{result:?}");
+    assert!(matches!(result,Ok(region) if region.is_empty()) || matches!(result,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"{result:?}");
     assert_eq!(counts.total,0,"a cold upper leaf cannot encode a ready lower prefix");
     attempt.assert_uncommitted();
     assert_eq!((attempt.r.artwork_revision,attempt.r.composite_revision),revision);
@@ -354,7 +354,7 @@ fn display_cold_leaf_discards_all_prefix_work_and_requests_every_named_input() {
 fn discarded_display_attempt_never_queues_effect_parameter_writes() {
     let mut attempt=Attempt::new(true);
     let (result,_)=attempt.attempt();
-    assert!(matches!(result,Ok(region) if region.is_empty()) || matches!(result,Err(GpuRasterError::NotReady)),"{result:?}");
+    assert!(matches!(result,Ok(region) if region.is_empty()) || matches!(result,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"{result:?}");
     let buffers=attempt.scene.effects.parameter_buffers();
     assert!(!buffers.is_empty(),"the discarded prefix must prepare actual effect parameters");
     for buffer in buffers {
@@ -369,13 +369,13 @@ fn discarded_display_attempt_never_queues_effect_parameter_writes() {
 fn one_thousand_discarded_display_attempts_reuse_all_claimed_allocations() {
     let mut attempt=Attempt::new(true);
     let (result,counts)=attempt.attempt();
-    assert!(matches!(result,Ok(region) if region.is_empty()) || matches!(result,Err(GpuRasterError::NotReady)),"{result:?}");
+    assert!(matches!(result,Ok(region) if region.is_empty()) || matches!(result,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"{result:?}");
     assert_eq!(counts.total,0);
     attempt.assert_uncommitted();
     let footprint=attempt.footprint();
     for discarded in 0..1000 {
         let (result,_)=attempt.attempt();
-        assert!(matches!(result,Ok(region) if region.is_empty()) || matches!(result,Err(GpuRasterError::NotReady)),"attempt {discarded}: {result:?}");
+        assert!(matches!(result,Ok(region) if region.is_empty()) || matches!(result,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"attempt {discarded}: {result:?}");
         assert_eq!(attempt.footprint(),footprint,"attempt {discarded} grew discarded allocation claims");
     }
     attempt.assert_uncommitted();
@@ -396,7 +396,7 @@ fn pending_display_shader_does_not_hide_other_missing_decode_inputs() {
     let compose_pending=!attempt.r.scene_pipelines.scale.full.compose.ready();
     let requested=attempt.r.moving_decode.as_ref().map(|(_,queue)|queue.requested_image_tiles()).unwrap_or_default();
     release.send(()).unwrap();
-    assert!(matches!(result,Ok(region) if region.is_empty()) || matches!(result,Err(GpuRasterError::NotReady)),"{result:?}");
+    assert!(matches!(result,Ok(region) if region.is_empty()) || matches!(result,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"{result:?}");
     assert!(pending>0,"the fixture must retain a pending shader while inputs are discovered");
     assert!(compose_pending,"the required Display composition pipeline must still be pending");
     assert_eq!(counts.total,0);
@@ -416,7 +416,7 @@ fn twenty_four_delayed_display_layers_commit_with_bounded_attempts_uploads_and_c
     for readiness in 0..3 {
         let (result,_)=attempt.attempt();
         if attempt.cache.coverage_complete() {assert!(result.is_ok(),"{result:?}");committed=true;break;}
-        assert!(matches!(result,Ok(region) if region.is_empty()) || matches!(result,Err(GpuRasterError::NotReady)),"attempt {readiness}: {result:?}");
+        assert!(matches!(result,Ok(region) if region.is_empty()) || matches!(result,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"attempt {readiness}: {result:?}");
         attempt.assert_uncommitted();
         attempt.store.gate.release();
         crate::test_support::settle_decodes(&mut attempt.r);
@@ -499,7 +499,7 @@ fn one_thousand_changed_effect_discard_attempts_release_obsolete_parameter_stora
     let change=|attempt:&mut Attempt,value:f32| {
         set_effect_value(&mut attempt.doc,effect,"exposure",layer_core::EffectValue::Number(value));
         let (result,counts)=attempt.attempt();
-        assert!(matches!(result,Ok(region) if region.is_empty()) || matches!(result,Err(GpuRasterError::NotReady)),"{result:?}");
+        assert!(matches!(result,Ok(region) if region.is_empty()) || matches!(result,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"{result:?}");
         assert_eq!(counts.total,0);
         attempt.assert_uncommitted();
     };
@@ -573,11 +573,11 @@ fn wanted_page_inputs_release_cancelled_leases_and_preserve_source_working_capac
             evaluation:match step%3 {0=>Evaluation::Display,1=>Evaluation::Tiled(64),_=>Evaluation::Native}};
         let retained=cache.pages.clone();
         (cache,_)=Cache::select(Some(cache),&r,frame,request);
-        assert!(Arc::ptr_eq(&retained,&cache.pages),"camera and metadata changes must reconcile the same accepted-input Store");
+        assert!(retained.same(&cache.pages),"camera and metadata changes must reconcile the same accepted-input Store");
         scene.begin_frame();commands.begin();scene.scale_sources.prepare(&r,frame,&[]);
         crate::scene::scale::tests::prepare_fixture_frame(&r,frame,&scene);
         let prepared=cache.prepare_graph(&r,frame,&scene);
-        assert!(prepared.is_ok() || matches!(prepared,Err(GpuRasterError::NotReady)),"step {step}: {prepared:?}");
+        assert!(prepared.is_ok() || matches!(prepared,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"step {step}: {prepared:?}");
         if prepared.is_ok() {cache.retain_shared_work(&r,frame,&scene,&r.navigator);}
         if step>0 {
             assert_eq!(cache.pages.lock().unwrap().pinned_bytes(),0,"step {step}: cancelled accepted units must release before current-view admission");
@@ -597,7 +597,7 @@ fn wanted_page_inputs_release_cancelled_leases_and_preserve_source_working_capac
         let prepared=crate::prepare_image_tile(&warm,coordinate,r.device.working_space(),&r.device.source_samples,None).unwrap();
         Scene::decode_prepared_for(&mut r,&mut encoder,&warm,coordinate,prepared,crate::scene::sources::SourceUse::Exact,crate::residency::Class::Visible).unwrap();
         let result={let mut work=crate::test_support::work(false);cache.render_graph(&mut scene,&mut r,frame,&mut Encoding {encoder:&mut encoder,commands:&mut commands, retained:0, budget:&mut work},Destination::View)};
-        assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady)),"step {step}: {result:?}");
+        assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"step {step}: {result:?}");
         scene.discard_unencoded_jobs();r.uploads.finish(&encoder);
         if encoder.has_work() {encoder.submit(&r.queue);crate::test_support::complete(&r);}
         let displayed=cache.displays(region);
@@ -613,7 +613,7 @@ fn wanted_page_inputs_release_cancelled_leases_and_preserve_source_working_capac
 fn wanted_page_inputs_cancel_same_region_when_only_mode_key_or_format_changes() {
     let mut attempt=Attempt::new(false);
     let (result,_)=attempt.attempt();
-    assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady)),"{result:?}");
+    assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"{result:?}");
     let region=PixelRect::full([PAGE_SIZE;2]);
     let key=attempt.cache.page_key(attempt.cache.graph.root.clone().unwrap(),region);
     let source=rgba8_source([PAGE_SIZE;2],|_,_|[31,67,113,193]);
@@ -665,7 +665,7 @@ fn accepted_native_inputs_reuse_their_existing_normalization_workspace() {
     let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
     let requests=cache.region_sources(&scene,&r,frame(&doc,0),region,true);
     let roots=[cache.graph.root.clone().unwrap()];
-    assert!(cache.accept_parent(&mut scene,&mut r,frame(&doc,0),region,&requests,0,true,&roots,Root::Store,false,crate::residency::Class::Visible,crate::residency::Class::Visible,&mut encoder).unwrap().is_ok(),"ample Core working capacity must admit the whole native unit");
+    assert!(cache.accept_parent(&mut scene,&mut r,frame(&doc,0),region,&requests,0,true,&roots,Root::Store,false,crate::residency::Class::Visible,crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh,&mut encoder).unwrap().is_ok(),"ample Core working capacity must admit the whole native unit");
     let inputs=cache.pages.lock().unwrap().take_fixture_inputs(&key,region,0);
     for &owner in doc.scene().order().iter().filter(|owner|doc.scene().paint_source(**owner).is_some()) {
         let base=doc.scene().paint_source(owner).unwrap().base.as_ref().unwrap();

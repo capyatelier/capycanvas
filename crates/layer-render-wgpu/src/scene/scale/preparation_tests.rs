@@ -223,7 +223,7 @@ fn committed(r:&mut WgpuRasterizer,doc:&Document)->Vec<Vec<u8>> {
     let pages=scene.order().iter().filter_map(|owner|scene.source_target(*owner))
         .flat_map(|target|page_coordinates(PixelRect::full(scene.target_extent(target))).map(move|coordinate|(target,coordinate))).collect::<Vec<_>>();
     pages.into_iter().map(|(target,coordinate)| {
-        let tile=crate::test_support::submit_encoded(r,|r,encoder|crate::test_support::query_ready(r,encoder,|r,encoder|r.raw_layer_tile(target,coordinate,encoder).map(|tile|tile.map(crate::source_access::Sampled::uncertified))));
+        let tile=crate::test_support::submit_encoded(r,|r,encoder|crate::test_support::query_ready(r,encoder,|r,encoder|r.raw_layer_tile(target,coordinate,crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh,encoder).map(|tile|tile.map(crate::source_access::Sampled::uncertified))));
         tile.map_or_else(Vec::new,|tile|crate::layer_tests::page_bytes(r,&tile.texture))
     }).collect()
 }

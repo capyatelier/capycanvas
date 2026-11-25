@@ -5,15 +5,15 @@ use layer_core::{Document,color::SampleDepth, raster::{RasterPlane, RasterRevisi
 use layer_render::{RegionEdges, RegionOutput, RegionRefinement, RegionRequest, RegionSource, RegionTask};
 use std::collections::VecDeque;
 
-fn source(extent:[u32;2], ink:impl Fn(u32,u32)->bool)->Document {
+pub(crate) fn source(extent:[u32;2], ink:impl Fn(u32,u32)->bool)->Document {
     let mut document=paint_document(extent,"Flat areas reference");
     placement::set_source(&mut document,layer_core::color::source::rgba8_source(extent,|x,y|if ink(x,y){[0,0,0,255]}else{[255;4]}));
     document
 }
-fn frame(r:&mut WgpuRasterizer,document:&Document,extent:[u32;2]) {
+pub(crate) fn frame(r:&mut WgpuRasterizer,document:&Document,extent:[u32;2]) {
     submit_ready(r,FramePacket {reset_layers:true,view:layer_render::ViewState {width_px:128,height_px:128,document_to_surface:[0.01,0.,0.,0.01,0.,0.]},..packet(document.scene(),extent)}).unwrap();
 }
-fn receive(r:&mut WgpuRasterizer,document:&Document)->RasterRevision {receive_source(r,RegionSource::Source(target(document)),false)}
+pub(crate) fn receive(r:&mut WgpuRasterizer,document:&Document)->RasterRevision {receive_source(r,RegionSource::Source(target(document)),false)}
 fn receive_source(r:&mut WgpuRasterizer,source:RegionSource,close_gaps:bool)->RasterRevision {
     let request=RegionRequest {request_id:83,source,position:[0,0],tolerance:0.1,
         contiguous:false,selection:None,limit:None,enclosure:None,reference_count:None,paper:None,fill:None,fill_areas:Some(layer_core::FillAreas::TransparentOrWhite),
@@ -102,9 +102,32 @@ fn connected_word_runs_match_cpu_flood_across_window_and_canvas_edges() {
         }
     }
 }
-fn border([x0,y0,x1,y1]:[u32;4],x:u32,y:u32)->bool {
+pub(crate) fn border([x0,y0,x1,y1]:[u32;4],x:u32,y:u32)->bool {
     x>=x0 && x<x1 && y>=y0 && y<y1 && (x==x0 || x+1==x1 || y==y0 || y+1==y1)
 }
+#[test]
+fn a_flat_areas_piece_in_flight_asks_for_no_frame_until_its_submission_completes() {
+    let extent=[129,97];
+    let document=source(extent,|x,y|border([12,12,117,85],x,y));
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();frame(&mut r,&document,extent);
+    drop(receive(&mut r,&document));
+    let request=RegionRequest {request_id:84,source:RegionSource::Source(target(&document)),position:[0,0],tolerance:0.1,
+        contiguous:false,selection:None,limit:None,enclosure:None,reference_count:None,paper:None,fill:None,fill_areas:Some(layer_core::FillAreas::TransparentOrWhite),
+        colour_mode:Default::default(),refinement:RegionRefinement {close_gaps:false,edges:RegionEdges::LineMiddle,smooth_edges:false}};
+    assert!(r.request_region(RegionTask::FlatAreas(request)).unwrap());
+    let (release,gate)=std::sync::mpsc::channel::<()>();
+    r.device.retirement_handle().run(move||{let _=gate.recv();});
+    let before=crate::test_support::PassCounts::snapshot();
+    crate::test_support::wait_until("the first flat areas piece is submitted",||{
+        assert!(r.take_region().is_none(),"no flat areas result lands while the device poll is held");
+        (crate::test_support::PassCounts::snapshot().delta(before).submissions!=0).then_some(()).ok_or(())
+    });
+    assert!(!r.region_step_runnable(),"a flat areas job whose piece is in flight asks for no frame");
+    release.send(()).unwrap();
+    let RegionOutput::FlatAreas {request_id,..}=crate::test_support::wait_until("flat areas readback timed out",||r.take_region().ok_or(())).unwrap() else {panic!("expected flat areas raster")};
+    assert_eq!(request_id,84);
+}
+
 #[test]
 fn flat_areas_match_closed_components_exclude_exterior_and_thin_pockets() {
     for width in [1,10] {

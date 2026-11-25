@@ -982,6 +982,10 @@ impl ViewportPresenter {
     /// Whether the last presentation drew the paper lighting; its pipelines
     /// compile when lighting is first shown.
     pub fn paper_lighting_drawn(&self) -> bool { self.presented_variant.is_some_and(|(_, lit)| lit) }
+    #[cfg(test)]
+    pub(crate) fn stand_in_drawn(&self) -> bool {
+        self.presented_drawing.is_some_and(|drawing| drawing.showing) && self.presented_variant.is_some_and(|(source, _)| source == 1)
+    }
     /// Pixels of the last presentation that ran the artwork shader.
     pub fn shaded_area_pixels(&self) -> u64 { self.shaded_area }
 

@@ -20,7 +20,6 @@ impl Demand {
     pub(crate) fn current(self, epoch: u64, class: Class) -> bool { self.class_at(epoch).is_some_and(|demanded| demanded <= class) }
     pub(crate) fn outranks(self, epoch: u64, class: Class) -> bool {
         !class.floor_reserved() && self.recent(epoch).is_some_and(|demanded| demanded < class)
-            || class == Class::Refinement && self.0.is_some_and(|(_, latest, _)| latest.required())
     }
     pub(crate) fn class_at(self, epoch: u64) -> Option<Class> { self.0.filter(|(at, ..)| *at == epoch).map(|(_, latest, _)| latest) }
 }
@@ -39,6 +38,13 @@ mod tests {
         assert!(!demand.protects(6, Class::Refinement), "demand expires after the following epoch");
         demand.stamp(6, Class::Prefetch);
         assert!(!demand.protects(6, Class::Fallback), "a new epoch restarts from the new class");
+    }
+    #[test]
+    fn required_demand_outranks_refinement_only_while_it_is_recent() {
+        let mut demand = Demand::default();
+        demand.stamp(4, Class::Visible);
+        assert!(demand.outranks(5, Class::Refinement), "refinement yields to what required work used in the last epoch");
+        assert!(!demand.outranks(6, Class::Refinement), "a page required in an expired epoch is refinement's to take again");
     }
     #[test]
     fn current_demand_protects_only_within_its_own_epoch() {

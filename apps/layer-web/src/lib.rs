@@ -547,13 +547,16 @@ impl WebGpu {
             .get_default_config(&adapter, width, height)
             .ok_or_else(|| gpu_error("renderer", "WebGPU canvas format unavailable"))?;
         config.usage |= wgpu::TextureUsages::COPY_DST;
-        let failure = lost.clone();
-        device.set_device_lost_callback(move |reason, message| {
-            gpu_diagnostics::report("canvas", "device_lost", format!("{reason:?}: {message}"));
-            *failure.lock().unwrap() = Some(format!("Canvas GPU stopped ({reason:?}): {message}"));
-        });
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let factory = RendererFactory::new(adapter, device, queue);
+        let (failure, report_loss) = (lost.clone(), factory.on_device_lost());
+        factory.device().set_device_lost_callback(move |reason, message| {
+            gpu_diagnostics::report("canvas", "device_lost", format!("{reason:?}: {message}"));
+            let stopped = format!("Canvas GPU stopped ({reason:?}): {message}");
+            *failure.lock().unwrap() = Some(stopped.clone());
+            report_loss(stopped);
+            store_transport::wake();
+        });
         let mut renderer = *factory.rasterizer(color).map_err(|error| gpu_error("renderer", error))?;
         let hdr_capable = surface.get_capabilities(renderer.adapter())
             .color_spaces(wgpu::TextureFormat::Rgba16Float)

@@ -90,12 +90,12 @@ fn deferred_fine_objects_keep_committed_coarse_pages_without_backup() {
     crate::memory::memory_tests::legacy_scene_frame(&mut r,frame);
     let request=request(&r,frame).unwrap();assert_eq!(request.plan.level,0);
     let (cache,_)=Cache::select(r.scale_display.take(),&r,frame,request);
-    assert!(Arc::ptr_eq(&cache.pages,&retained));
+    assert!(cache.pages.same(&retained));
     r.scale_display=Some(cache);r.moving_images=Default::default();
     let mut scene=r.scene.take().unwrap();scene.object_results.clear();
     let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
     let result={let mut work=crate::test_support::work(false);scene.compose(&mut r,frame,&mut encoder,&mut work)};
-    assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady)),"{result:?}");
+    assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"{result:?}");
     r.scene=Some(scene);r.uploads.finish(&encoder);encoder.submit(&r.queue);r.wait_idle().unwrap();
     assert!(r.has_presentable_frame(),"a pending fine window must retain its committed coarse fallback");
     assert_eq!(present(&r,&mut presenter,fine),expected,"current-camera presentation must not expose unwritten fine pages");

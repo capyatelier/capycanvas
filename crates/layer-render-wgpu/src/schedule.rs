@@ -1,4 +1,4 @@
-use crate::frame_demand::{ArrivalToken, Input, Outstanding};
+use crate::frame_demand::{Allowance, Input, Outstanding, Turn, UnitWait};
 use crate::residency::{Blocked, Charge, Class, Reservation, Tier};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound::{Excluded, Unbounded};
@@ -13,10 +13,13 @@ impl Closure {
 
 pub(crate) struct Budget { reservation: Reservation, free: u32, seat: u64 }
 impl Budget {
-    pub(crate) fn spend(&mut self, tier: &Arc<Tier>, bytes: u64) -> Charge {
+    pub(crate) fn spend(&mut self, tier: &Arc<Tier>, bytes: u64) -> Option<Charge> {
         let spare = self.reservation.bytes().saturating_sub(u64::from(self.free) * self.seat);
-        drop(self.reservation.split(bytes.min(spare)));
-        tier.charge(bytes)
+        if bytes > spare { return None; }
+        let paid = self.reservation.split(bytes)?;
+        let charge = tier.charge(bytes);
+        drop(paid);
+        Some(charge)
     }
     pub(crate) fn seat(&mut self) -> Option<Reservation> {
         if self.free == 0 { return None; }
@@ -24,7 +27,8 @@ impl Budget {
         self.free -= 1;
         Some(seat)
     }
-    pub(crate) fn vacate(&mut self) { self.free += 1; self.reservation.grow(self.seat); }
+    pub(crate) fn vacate(&mut self, seat: Reservation) { self.free += 1; self.reservation.merge(seat); }
+    pub(crate) fn shed(&mut self, kept: u32) { while self.free > kept && let Some(seat) = self.seat() { drop(seat); } }
     #[cfg(test)]
     pub(crate) fn bytes(&self) -> u64 { self.reservation.bytes() }
 }
@@ -36,7 +40,7 @@ impl Waiter {
 }
 
 enum Phase { Wanted, Admitted(Budget), Running(Budget) }
-struct Entry { owner: u64, tag: u64, class: Class, obligation: bool, closure: Closure, sequence: u64, wanted: u64, phase: Phase, blocked: Option<(Input, ArrivalToken)>, waiter: Weak<AtomicBool> }
+struct Entry { owner: u64, tag: u64, class: Class, obligation: bool, closure: Closure, sequence: u64, wanted: u64, phase: Phase, blocked: Option<Input>, waiter: Weak<AtomicBool> }
 impl Drop for Entry {
     fn drop(&mut self) { if let Some(settled) = self.waiter.upgrade() { settled.store(true, Ordering::Release); } }
 }
@@ -48,7 +52,7 @@ impl Entry {
 }
 
 type Ranked = ((u8, u64), u64);
-enum Stop { Memory(ArrivalToken, Blocked), Full }
+enum Stop { Memory(UnitWait), Full }
 #[derive(Default)]
 struct Core { entries: BTreeMap<u64, Entry>, queue: BTreeSet<Ranked>, active: BTreeSet<Ranked>, queued: BTreeMap<u64, usize>, next: u64, stop: Option<Stop>, epoch: u64, dirty: bool, lapsed: Vec<(u64, u64)> }
 impl Core {
@@ -124,34 +128,49 @@ impl Schedule {
     pub(crate) fn admitted(&self, group: &Group) -> bool {
         self.0.lock().unwrap().entries.get(&group.id).is_some_and(|entry| !matches!(entry.phase, Phase::Wanted))
     }
-    pub(crate) fn admit(&self, epoch: u64, since: ArrivalToken, working: u64, mut reserve: impl FnMut(Class, u64) -> Result<Reservation, Blocked>) -> Option<Blocked> {
-        let (expired, mut admitted) = {
+    pub(crate) fn admit(&self, epoch: u64, observe: impl Fn(&UnitWait) -> Turn, working: u64, mut reserve: impl FnMut(Class, u64, Allowance) -> Result<Reservation, Blocked>) -> Option<Blocked> {
+        let mut allowance = Allowance::Fresh;
+        let (previous, mut admitted) = loop {
+            let (expired, stop) = {
+                let mut core = self.0.lock().unwrap();
+                let mut expired = Vec::new();
+                if core.epoch < epoch {
+                    core.epoch = epoch;
+                    let stale: Vec<u64> = core.entries.iter()
+                        .filter(|(_, entry)| !entry.obligation && !matches!(entry.phase, Phase::Running(_)) && entry.wanted.saturating_add(2) < epoch && entry.waiter.strong_count() == 0)
+                        .map(|(id, _)| *id).collect();
+                    core.dirty |= !stale.is_empty();
+                    expired.extend(stale.into_iter().filter_map(|id| core.remove(id)));
+                    let lapsed: Vec<_> = expired.iter().map(|entry: &Entry| (entry.owner, entry.tag)).collect();
+                    core.lapsed.extend(lapsed);
+                }
+                let stop = match &core.stop {
+                    _ if core.dirty => None,
+                    Some(Stop::Memory(wait)) => Some(Some(wait.clone())),
+                    _ => Some(None),
+                };
+                (expired, stop)
+            };
+            drop(expired);
+            let observed = match stop {
+                Some(None) => return None,
+                Some(Some(wait)) => Some((observe(&wait), wait)),
+                None => None,
+            };
             let mut core = self.0.lock().unwrap();
-            let mut expired = Vec::new();
-            if core.epoch < epoch {
-                core.epoch = epoch;
-                let stale: Vec<u64> = core.entries.iter()
-                    .filter(|(_, entry)| !entry.obligation && !matches!(entry.phase, Phase::Running(_)) && entry.wanted.saturating_add(2) < epoch && entry.waiter.strong_count() == 0)
-                    .map(|(id, _)| *id).collect();
-                core.dirty |= !stale.is_empty();
-                expired.extend(stale.into_iter().filter_map(|id| core.remove(id)));
-                let lapsed: Vec<_> = expired.iter().map(|entry: &Entry| (entry.owner, entry.tag)).collect();
-                core.lapsed.extend(lapsed);
-            }
-            if !core.dirty {
-                match &core.stop {
-                    Some(Stop::Memory(at, blocked)) if *at == since && !blocked.fits() => return Some(blocked.clone()),
-                    Some(Stop::Memory(..)) => {},
-                    _ => return None,
+            if let Some((turn, wait)) = observed {
+                if core.dirty || !matches!(&core.stop, Some(Stop::Memory(current)) if *current == wait) { continue; }
+                match turn {
+                    Turn::Enter(entered) => allowance = entered,
+                    Turn::Sleep(_) | Turn::Dormant | Turn::Deliver => return wait.need().cloned(),
                 }
             }
-            core.stop = None;
             core.dirty = false;
             let admitted = core.active.iter().map(|(_, id)| &core.entries[id]).filter(|entry| entry.best_effort())
                 .fold((0, 0), |(count, bytes): (usize, u64), entry| (count + 1, bytes.saturating_add(entry.closure.total())));
-            (expired, admitted)
+            break (core.stop.take(), admitted);
         };
-        drop(expired);
+        drop(previous);
         let below = |head: Ranked| -> Vec<u64> { self.0.lock().unwrap().active.range((Excluded(head), Unbounded)).rev().map(|(_, id)| *id).collect() };
         let preempt = |victim: u64, best_effort_only: bool, admitted: &mut (usize, u64)| -> bool {
             let mut core = self.0.lock().unwrap();
@@ -171,18 +190,21 @@ impl Schedule {
                 for victim in below(head) { preempt(victim, true, &mut admitted); }
                 if crowded(&admitted) { self.0.lock().unwrap().stop = Some(Stop::Full); return None; }
             }
-            let mut result = reserve(class, closure.total());
+            let mut result = reserve(class, closure.total(), allowance);
             for victim in below(head) {
                 if result.is_ok() { break; }
-                if preempt(victim, false, &mut admitted) { result = reserve(class, closure.total()); }
+                if preempt(victim, false, &mut admitted) { result = reserve(class, closure.total(), allowance); }
             }
             let mut core = self.0.lock().unwrap();
             match result {
-                Ok(reservation) => if core.entries.contains_key(&head.1) {
-                    core.enter(head.1, Phase::Admitted(Budget { reservation, free: closure.seats, seat: closure.seat }));
-                    if best_effort { admitted.0 += 1; admitted.1 += closure.total(); }
-                } else { drop(core); drop(reservation); },
-                Err(blocked) => { core.stop = Some(Stop::Memory(since, blocked.clone())); return Some(blocked); }
+                Ok(reservation) => {
+                    allowance = Allowance::Fresh;
+                    if core.entries.contains_key(&head.1) {
+                        core.enter(head.1, Phase::Admitted(Budget { reservation, free: closure.seats, seat: closure.seat }));
+                        if best_effort { admitted.0 += 1; admitted.1 += closure.total(); }
+                    } else { drop(core); drop(reservation); }
+                },
+                Err(blocked) => { core.stop = Some(Stop::Memory(UnitWait::parked(blocked.clone(), allowance))); return Some(blocked); }
             }
         }
     }
@@ -203,26 +225,34 @@ impl Schedule {
     pub(crate) fn budget<T>(&self, group: &Group, use_: impl FnOnce(&mut Budget) -> T) -> Option<T> {
         match &mut self.0.lock().unwrap().entries.get_mut(&group.id)?.phase { Phase::Running(budget) => Some(use_(budget)), _ => None }
     }
-    pub(crate) fn block(&self, group: &Group, input: Input, since: ArrivalToken) {
-        if let Some(entry) = self.0.lock().unwrap().entries.get_mut(&group.id) { entry.blocked = Some((input, since)); }
+    pub(crate) fn block(&self, group: &Group, input: Input) {
+        if let Some(entry) = self.0.lock().unwrap().entries.get_mut(&group.id) { entry.blocked = Some(input); }
     }
-    pub(crate) fn hold(&self, owner: u64, input: Input, since: ArrivalToken) {
+    pub(crate) fn hold(&self, owner: u64, input: Input) {
         let mut core = self.0.lock().unwrap();
         let Core { entries, active, .. } = &mut *core;
-        for (_, id) in active.iter() { if let Some(entry) = entries.get_mut(id).filter(|entry| entry.owner == owner) { entry.blocked = Some((input, since)); } }
+        for (_, id) in active.iter() { if let Some(entry) = entries.get_mut(id).filter(|entry| entry.owner == owner) { entry.blocked = Some(input); } }
     }
-    pub(crate) fn demand(&self, owner: u64, waits: impl Fn(Input, ArrivalToken) -> bool) -> Option<Outstanding> {
-        let core = self.0.lock().unwrap();
-        let blocked = |entry: &Entry| entry.blocked.filter(|&(input, since)| waits(input, since)).map(|(input, _)| input);
-        if core.admitted(owner).any(|entry| blocked(entry).is_none()) { return Some(Outstanding::Runnable); }
-        if core.queued.contains_key(&owner) {
-            match &core.stop {
-                Some(Stop::Memory(since, _)) if waits(Input::Residency, *since) => return Some(Outstanding::Blocked(Input::Residency)),
-                Some(Stop::Full) if !core.active.is_empty() => {},
-                _ => return Some(Outstanding::Runnable),
-            }
+    pub(crate) fn demand(&self, owner: u64, waits: impl Fn(Input) -> bool, observe: impl Fn(&UnitWait) -> Turn) -> Option<Outstanding> {
+        let (stop, blocked) = {
+            let core = self.0.lock().unwrap();
+            let blocked = core.admitted(owner).map(|entry| entry.blocked).collect::<Vec<_>>();
+            let stop = match &core.stop {
+                _ if !core.queued.contains_key(&owner) => None,
+                Some(Stop::Memory(wait)) => Some(Some(wait.clone())),
+                Some(Stop::Full) if !core.active.is_empty() => None,
+                _ => Some(None),
+            };
+            (stop, blocked)
+        };
+        let blocked = blocked.into_iter().map(|input| input.filter(|&input| waits(input))).collect::<Vec<_>>();
+        if blocked.iter().any(Option::is_none) { return Some(Outstanding::Runnable); }
+        match stop.map(|wait| wait.map(|wait| observe(&wait))) {
+            Some(None | Some(Turn::Enter(_))) => return Some(Outstanding::Runnable),
+            Some(Some(Turn::Sleep(input))) => return Some(Outstanding::Blocked(input)),
+            Some(Some(Turn::Dormant | Turn::Deliver)) | None => {},
         }
-        core.admitted(owner).find_map(blocked).map(Outstanding::Blocked)
+        blocked.into_iter().flatten().next().map(Outstanding::Blocked)
     }
 }
 
@@ -237,7 +267,7 @@ impl Schedule {
         let core = self.0.lock().unwrap();
         let mut census = [0; 3];
         for entry in core.entries.values() { census[match entry.phase { Phase::Wanted => 0, Phase::Admitted(_) => 1, Phase::Running(_) => 2 }] += 1; }
-        (census, matches!(core.stop, Some(Stop::Memory(..))), matches!(core.stop, Some(Stop::Full)))
+        (census, matches!(core.stop, Some(Stop::Memory(_))), matches!(core.stop, Some(Stop::Full)))
     }
     pub(crate) fn reserved(&self) -> u64 {
         self.0.lock().unwrap().entries.values().map(|entry| match &entry.phase { Phase::Admitted(budget) | Phase::Running(budget) => budget.bytes(), Phase::Wanted => 0 }).sum()

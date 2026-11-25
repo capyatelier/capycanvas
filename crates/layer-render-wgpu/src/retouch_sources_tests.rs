@@ -231,7 +231,7 @@ fn sample(r: &mut WgpuRasterizer, page: [u32; 2], offset: [f32; 2]) -> (Vec<[f32
     let view = field.create_view(&Default::default());
     let complete = wait_until("the clone source's pages must decode", || {
         match r.draw_retouch_source(&view, page.map(|v| v * PAGE_SIZE), [PAGE_SIZE; 2], [1.; 2], offset) {
-            Err(pending @ GpuRasterError::NotReady) => { crate::test_support::settle_decodes(r); Err(pending) },
+            Err(pending @ (GpuRasterError::NotReady|GpuRasterError::Waiting(_))) => { crate::test_support::settle_decodes(r); Err(pending) },
             result => Ok(result.unwrap()),
         }
     });
@@ -239,7 +239,7 @@ fn sample(r: &mut WgpuRasterizer, page: [u32; 2], offset: [f32; 2]) -> (Vec<[f32
 }
 
 fn layer_page(r: &mut WgpuRasterizer, layer: SourceTarget, page: [u32; 2]) -> Vec<[f32; 4]> {
-    let tile = submit_encoded(r, |r, encoder| crate::test_support::query_ready(r, encoder, |r, encoder| r.raw_layer_tile(layer, page, encoder).map(|tile|tile.map(crate::source_access::Sampled::uncertified))));
+    let tile = submit_encoded(r, |r, encoder| crate::test_support::query_ready(r, encoder, |r, encoder| r.raw_layer_tile(layer, page, crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh, encoder).map(|tile|tile.map(crate::source_access::Sampled::uncertified))));
     tile.map_or_else(|| vec![[0.; 4]; (PAGE_SIZE * PAGE_SIZE) as usize], |tile| floats(&crate::layer_tests::page_bytes(r, &tile.texture)))
 }
 
@@ -512,6 +512,27 @@ fn a_reference_page_bound_to_a_queued_draw_survives_an_internal_submission() {
     encoder.submit(&r.queue);
     let (got, expected) = (crate::test_support::float_pixels(r, &output)[128 * 256 + 128], page_tone(128, 128).map(linear));
     assert!(close(got, expected), "the queued draw reads its donor: {got:?} != {expected:?}");
+}
+
+#[test]
+fn a_reference_page_without_room_waits_within_the_limit_and_its_stroke_hears_of_it_once() {
+    let (mut fixture, _) = wide_references();
+    let r = &mut fixture.r;
+    let tier = r.raster_tiers.retouch.clone();
+    tier.update_limit(tier.used());
+    let mut sources = r.retouch_sources();
+    sources.live = Some(StrokeId(7));
+    let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
+    for coordinate in [[0, 0], [1, 0], [0, 0]] {
+        assert!(sources.reference_page(r, coordinate, None, &mut encoder).unwrap().is_none(), "a reference page without room is a miss");
+        assert!(tier.used() <= tier.limit(), "a refused reference page took {} bytes past its {} byte limit", tier.used(), tier.limit());
+    }
+    assert_eq!(sources.take_miss(), Some(StrokeId(7)), "the stroke hears of the references it could not read");
+    assert_eq!(sources.take_miss(), None, "and hears of them once");
+    drop(encoder);
+    r.retouch = Some(sources);
+    assert!(!r.outstanding_terms().contains(&("retouch sources", crate::frame_demand::Outstanding::Runnable)),
+        "a reference page without room waits for room instead of asking for frames: {:?}", r.outstanding_terms());
 }
 
 fn scribble(

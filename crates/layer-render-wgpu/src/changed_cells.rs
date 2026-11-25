@@ -93,7 +93,7 @@ impl ChangedCells {
         }
         self.retire(r,&wanted,side);
         let missing=wanted.iter().filter(|key|!self.pages.contains_key(key)).count() as u64*bytes;
-        let Ok(reservation)=r.admit_display(None,crate::residency::Class::Authored,missing) else {
+        let Ok(reservation)=r.admit_display(None,crate::residency::Class::Authored,missing,crate::frame_demand::Allowance::Fresh) else {
             self.retire(r,&BTreeSet::new(),self.side);return;
         };
         self.admission=Some(admission);

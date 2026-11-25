@@ -149,7 +149,7 @@ fn unresolved_packing_keeps_the_authored_input_snapshot_without_an_edit() {
     physical.initialize(&submitted).unwrap().publish(owner.version(key()));
     assert!(owner.written(physical.write(&owner.intent(key()),&submitted).unwrap().publish(ContentName::fresh())));
     let before=owner.versions();
-    let canonical=layer_core::raster::CanonicalName::new(owner.version(key()));
+    let canonical=layer_core::raster::CanonicalWriter::new(owner.version(key()));
     assert!(owner.written(physical.write(&owner.intent(key()),&submitted).unwrap().publish(canonical.version())));
     let pending=owner.versions();let mut authored=Vec::new();
     assert!(before.authored_changes(&pending,RasterPlane::Color,|coordinate|authored.push(coordinate)));
@@ -164,7 +164,7 @@ fn page_edits_follow_canonical_resolution_and_discarded_writes() {
     let mut owner=contents();let selected=owner.version(key());
     let first=receipt(SubmissionState::Submitted);let mut physical=Resident::unwritten(31u32);
     physical.initialize(&first).unwrap().publish(&selected);
-    let canonical=layer_core::raster::CanonicalName::new(&selected);
+    let canonical=layer_core::raster::CanonicalWriter::new(&selected);
     assert!(owner.written(physical.write(&owner.intent(key()),&first).unwrap().publish(canonical.version())));
     assert!(owner.modified([0;2]));assert_eq!(owner.modified_coordinates(),[[0;2]].into());
     canonical.resolve(false).unwrap();
@@ -218,10 +218,10 @@ fn discarded_initialization_is_unwritten_and_a_later_failed_write_keeps_a_submit
 
 #[test]
 fn canonical_comparison_pending_is_not_a_content_mismatch_or_an_implicit_rename() {
-    use layer_core::raster::CanonicalName;
+    use layer_core::raster::CanonicalWriter;
     let owner = contents();
     let before = owner.version(key());
-    let name = CanonicalName::new(&before);
+    let name = CanonicalWriter::new(&before);
     let identity = name.version().identity();
     let submitted = receipt(SubmissionState::Submitted);
     let mut resident = Resident::unwritten(4u32);
@@ -359,7 +359,7 @@ fn preview_expected_and_producer_share_write_once_captured_contact_inputs() {
     let dab=Dab {center:layer_core::Point {x:32.,y:32.},radii:[8.;2],rotation:[1.,0.],motion:[0.;2],color_rgba_linear:[1.;4],flow:1.,hardness:1.,texture_sign:[1.;2],material:[0.;4],previous:[0.;4],contact:[0.;4],previous_contact:[0.;4]};
     let packet=layer_render::FramePacket {dab_batches:&[batch],dabs:&[dab],..crate::test_support::packet(document.scene(),[256;2])};
     let declaration=Arc::new(PreviewDeclaration::from_scene(packet,Default::default(),Default::default(),PreviewQuality::default(),None,None).unwrap().unwrap());
-    assert!(matches!(declaration.version(target,RasterPlane::Color,[0;2],PreviewStage::Final),Err(crate::GpuRasterError::NotReady)));
+    assert!(matches!(declaration.version(target,RasterPlane::Color,[0;2],PreviewStage::Final),Err(crate::GpuRasterError::NotReady|crate::GpuRasterError::Waiting(_))));
     let producer=receipt(SubmissionState::Encoding);let name:layer_core::raster::ContentVersion=ContentName::fresh().into();let mut contact=Resident::unwritten(());contact.initialize(&producer).unwrap().publish(&name);
     declaration.accept_inputs(target,RasterPlane::Color,[0;2],PreviewStage::AfterBatch(0),PreviewPass::Color,vec![contact.read(&name,Some(&producer)).unwrap().input()]).unwrap();
     let final_name=declaration.version(target,RasterPlane::Color,[0;2],PreviewStage::Final).unwrap();

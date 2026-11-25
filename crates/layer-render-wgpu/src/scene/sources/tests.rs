@@ -365,7 +365,7 @@ fn discarded_source_decodes_cannot_be_reused_as_valid_pixels() {
     let upload_bytes = r.source_tiles.borrow().in_flight.limit();
     assert_eq!(r.source_tiles.borrow().in_flight.used(), 0);
     let reservation = r.source_tiles.borrow().admit_upload(crate::residency::Class::Authored, upload_bytes).unwrap();
-    assert_eq!(r.source_tiles.borrow().charge_upload(&pending, reservation, upload_bytes), upload_bytes);
+    assert_eq!(r.source_tiles.borrow().charge_upload(&pending, reservation, upload_bytes).unwrap(), upload_bytes);
     assert!(r.source_tiles.borrow().uploads_full(crate::residency::Class::Visible));
     assert!(blocks(warm));
     assert!(!blocks(PixelRect::EMPTY));
@@ -1186,11 +1186,11 @@ fn same_encoder_preview_pages_are_accepted_without_waiting_for_submission() {
     let [Some(kept),None]=accepted.color(&r,packet.scene,target,[0;2]).unwrap() else {panic!("accepted preview was reselected")};
     assert_eq!(kept.sampled().uncertified().view,selected.sampled().uncertified().view);
     r.preview_pages=previews;
-    assert!(matches!(declare(&r,None),Err(GpuRasterError::NotReady)));
+    assert!(matches!(declare(&r,None),Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
     let page=&r.preview_pages[0];
-    assert!(matches!(r.read_scene_color_input(document.scene(),target,page,true,None,None),Err(GpuRasterError::NotReady)));
+    assert!(matches!(r.read_scene_color_input(document.scene(),target,page,true,None,None),Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
     let mut unrelated=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    assert!(matches!(r.read_scene_color_input(document.scene(),target,page,true,None,Some(&unrelated.submission())),Err(GpuRasterError::NotReady)));
+    assert!(matches!(r.read_scene_color_input(document.scene(),target,page,true,None,Some(&unrelated.submission())),Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
     assert!(r.read_scene_color_input(document.scene(),target,page,true,None,Some(&receipt)).unwrap().is_some());
     encoder.submit(&r.queue);
     assert!(declare(&r,None).is_ok());
@@ -1373,7 +1373,7 @@ fn after_wake<T>(r: &mut WgpuRasterizer, wake: &std::sync::mpsc::Receiver<()>, m
         wake.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).expect("the upload release wakes the yielded work");
         match attempt(r) {
             Ok(value) => return (value, wakes),
-            Err(GpuRasterError::NotReady) => {},
+            Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)) => {},
             Err(error) => panic!("{error}"),
         }
     }
@@ -1387,14 +1387,14 @@ fn a_full_upload_window_yields_an_upload_without_waiting_for_the_gpu_and_its_rel
     let busy = queued_gpu_work(&r);
     let limit = r.source_tiles.borrow().in_flight.limit();
     let reserved = r.source_tiles.borrow().admit_upload(crate::residency::Class::Authored, limit).unwrap();
-    r.source_tiles.borrow().charge_upload(&busy, reserved, limit);
+    r.source_tiles.borrow().charge_upload(&busy, reserved, limit).unwrap();
     busy.submit(&r.queue);
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     let pixels = crate::prepare_image_tile(&source, [0, 0], r.document_color().space, &r.device.source_samples, None).unwrap();
     let started = std::time::Instant::now();
     let result = Scene::decode_prepared(&mut r, &mut encoder, &source, [0, 0], pixels);
     let elapsed = started.elapsed();
-    assert!(matches!(result, Err(GpuRasterError::NotReady)), "a full upload window must yield the upload: {:?}", result.map(drop));
+    assert!(matches!(result, Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))), "a full upload window must yield the upload: {:?}", result.map(drop));
     assert!(elapsed < std::time::Duration::from_millis(100), "the upload waited {elapsed:?} for the GPU");
     assert_eq!(r.source_tiles.borrow().in_flight.used(), limit);
     after_wake(&mut r, &wake, |r| {
@@ -1411,7 +1411,7 @@ fn background_uploads_cannot_take_the_upload_floor_reserved_for_visible_work() {
     let source = scan_source(2, 32);
     let busy = queued_gpu_work(&r);
     let reserved = r.source_tiles.borrow().admit_upload(crate::residency::Class::Authored, 2 * NORMALIZED_PAGE_BYTES).unwrap();
-    r.source_tiles.borrow().charge_upload(&busy, reserved, 2 * NORMALIZED_PAGE_BYTES);
+    r.source_tiles.borrow().charge_upload(&busy, reserved, 2 * NORMALIZED_PAGE_BYTES).unwrap();
     busy.submit(&r.queue);
     let mut scene = Scene::new(&r).unwrap();
     for (x, class) in [(0, Class::Prefetch), (1, Class::Visible)] {
@@ -1428,6 +1428,29 @@ fn background_uploads_cannot_take_the_upload_floor_reserved_for_visible_work() {
 }
 
 #[test]
+fn a_decoded_result_refused_display_room_is_awaited_until_a_release_lets_it_install() {
+    use crate::{object_image_mips::{PreparedImageWork, PreparedMipTile}, residency::Class};
+    let (mut r, _wake) = upload_window_renderer(4 * NORMALIZED_PAGE_BYTES);
+    pollster::block_on(r.compilation.prepare_all([&r.scene_pipelines.source.integer])).unwrap();
+    let source = scan_source(1, 32);
+    let space = r.device.working_space();
+    let pixels = crate::prepare_image_tile(&source, [0, 0], space, &r.device.source_samples, None);
+    r.source_results.push_back((space, PreparedImageWork::Image(PreparedMipTile {
+        class: Class::Visible, use_: SourceUse::Native, id: layer_core::authored::PortableId::random(), source: source.clone(), coordinate: [0, 0], pixels,
+    }), r.scene_tiers.ram.charge(0)));
+    let limit = r.scene_tiers.display.limit();
+    r.scene_tiers.display.update_limit(0);
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    for _ in 0..2 { assert!(r.drain_image_decode(&mut encoder).unwrap().is_none(), "a result with no display room is not installed"); }
+    assert_eq!(r.source_results.len(), 1, "the refused result is held for its installation");
+    assert!(r.image_decode_waiting(), "a held result refused room reads as installable, so every decode consumer spins: {:?}", r.outstanding_terms());
+    r.scene_tiers.display.update_limit(limit);
+    assert!(!r.image_decode_waiting(), "the release that lets the held result fit makes it installable");
+    assert!(r.drain_image_decode(&mut encoder).unwrap().is_some(), "the held result installs once room returns");
+    Scene::submit_chunk(&mut r, &mut encoder, "test installation").unwrap();
+}
+
+#[test]
 fn decode_results_keep_their_requester_class_and_navigator_results_cannot_take_the_upload_floor() {
     use crate::{object_image_mips::{PreparedImageWork, PreparedMipTile}, residency::Class};
     let (mut r, _wake) = upload_window_renderer(4 * NORMALIZED_PAGE_BYTES);
@@ -1435,7 +1458,7 @@ fn decode_results_keep_their_requester_class_and_navigator_results_cannot_take_t
     let source = scan_source(2, 32);
     let busy = queued_gpu_work(&r);
     let reserved = r.source_tiles.borrow().admit_upload(crate::residency::Class::Authored, 2 * NORMALIZED_PAGE_BYTES).unwrap();
-    r.source_tiles.borrow().charge_upload(&busy, reserved, 2 * NORMALIZED_PAGE_BYTES);
+    r.source_tiles.borrow().charge_upload(&busy, reserved, 2 * NORMALIZED_PAGE_BYTES).unwrap();
     busy.submit(&r.queue);
     let space = r.device.working_space();
     for (x, class) in [(0, Class::Navigator), (1, Class::Visible)] {
@@ -1475,7 +1498,7 @@ fn an_ordered_batch_larger_than_its_upload_window_resumes_after_each_release_wit
         Scene::submit_chunk(r, &mut encoder, "test batch").unwrap();
         result
     };
-    assert!(matches!(attempt(&mut r), Err(GpuRasterError::NotReady)), "the first attempt must yield at its full upload window");
+    assert!(matches!(attempt(&mut r), Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))), "the first attempt must yield at its full upload window");
     assert_eq!(pending.iter().filter(|pending| pending.recorded()).count(), 1);
     let (_, wakes) = after_wake(&mut r, &wake, &mut attempt);
     assert!(wakes >= 3, "each upload window release resumes one tile, not {wakes} wakes");
@@ -1512,7 +1535,7 @@ fn a_capture_yields_its_next_window_until_the_previous_window_retires() {
     while wake.try_recv().is_ok() {}
     let (tile, _) = crate::create_color_target(&r.device, [PAGE_SIZE; 2], "page window");
     let result = capture.region_into(&mut r, packet, page, &tile, &mut encoder).map(crate::source_access::Sampled::uncertified);
-    assert!(matches!(result, Err(GpuRasterError::NotReady)), "the next window started while the previous one was in flight: {result:?}");
+    assert!(matches!(result, Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))), "the next window started while the previous one was in flight: {result:?}");
     after_wake(&mut r, &wake, |r| capture.region_into(r, packet, page, &tile, &mut encoder).map(crate::source_access::Sampled::uncertified));
 }
 
@@ -1648,15 +1671,22 @@ fn a_refusal_behind_retiring_source_slots_agrees_with_its_fit_while_the_retireme
 fn a_refused_edit_waits_for_a_retired_source_only_while_its_gpu_work_completes() {
     let mut r=crate::memory::memory_tests::renderer(Default::default(),layer_core::DeviceMemoryFacts {budget_bytes:Some(1<<30),..Default::default()}).unwrap();
     r.publish_memory();r.factory.memory_budget().flush_reports();r.refresh_memory_limits();
-    r.live_stroke=Some(layer_core::StrokeId(1));
-    let completing=r.source_tiles.borrow().completing.charge(NORMALIZED_PAGE_BYTES);
-    let read=r.source_tiles.borrow().retired_bytes.charge(NORMALIZED_PAGE_BYTES);
-    assert!(r.admit_raster_working(u64::MAX/2).is_err());
-    assert_eq!(r.take_lane_failure(),None,"a retirement whose GPU work is still completing frees its room without the edit, so the edit waits");
-    drop(completing);
-    assert!(r.admit_raster_working(u64::MAX/2).is_err());
-    assert_eq!(r.take_lane_failure(),Some(GpuRasterError::StrokeMemory),"a retired slot that only a reader still holds is no release to wait for");
-    drop(read);
+    let (wake,woken)=std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move||{let _=wake.send(());}));
+    let (_source,leases)=lease_foreign_sources(&mut r,1);
+    drop(leases);
+    assert!(r.scene_tiers.display.heap().evict(u64::MAX,crate::residency::Class::Authored)>0,"the search marks the unleased slot");
+    assert!(r.source_tiles.borrow_mut().retire_evicted()>0,"the marked slot retires with its search's hold");
+    r.live_stroke=Some(layer_core::StrokeId(1));r.memory.claim(r.live_stroke);
+    assert!(r.admit_raster_working(u64::MAX/2,crate::frame_demand::Allowance::Fresh).is_err());
+    assert_eq!(r.take_lane_failure(layer_core::StrokeId(1)),None,"a retirement whose GPU work is still completing frees its room without the edit, so the edit waits");
+    assert!(r.lane_waits(),"the refused edit sleeps on the retiring slot's batch");
+    let mut retired=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    r.source_tiles.borrow_mut().flush_retired(&mut retired);retired.submit(&r.queue);
+    crate::test_support::complete(&r);r.device.retirement_handle().flush().unwrap();
+    while r.lane_waits() {woken.recv_timeout(std::time::Duration::from_secs(10)).expect("the retired slot's completion wakes the waiting edit");}
+    assert!(r.admit_raster_working(u64::MAX/2,crate::frame_demand::Allowance::Fresh).is_err());
+    assert_eq!(r.take_lane_failure(layer_core::StrokeId(1)),Some(GpuRasterError::StrokeMemory),"once the retired slot's GPU work completes nothing else can free the room");
 }
 
 #[test]
@@ -1682,4 +1712,24 @@ fn evicted_decoded_slots_return_their_memory_beside_long_lived_textures() {
     assert!(cache.slots.is_empty());
     let grown=reserved().unwrap().saturating_sub(start);
     assert!(grown<=kept_bytes+(16<<20),"{} MiB stay reserved for {} MiB of long-lived textures",grown>>20,kept_bytes>>20);
+}
+
+#[cfg(not(target_arch="wasm32"))]
+#[test]
+fn a_refused_source_upload_waits_for_released_room_within_the_upload_limit() {
+    let mut r=crate::memory::memory_tests::renderer(Default::default(),layer_core::DeviceMemoryFacts {budget_bytes:Some(1<<30),..Default::default()}).unwrap();
+    let (send,woken)=std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move||{let _=send.send(());}));
+    crate::test_support::complete(&r);
+    let used=r.source_tiles.borrow().in_flight.used();
+    r.source_tiles.get_mut().admit_limits(used+NORMALIZED_PAGE_BYTES);
+    let limit=r.source_tiles.borrow().upload_limit();
+    let first=r.reserve_upload(crate::residency::Class::Visible,NORMALIZED_PAGE_BYTES).expect("one page fits the upload room");
+    assert!(r.reserve_upload(crate::residency::Class::Visible,NORMALIZED_PAGE_BYTES).is_none(),"a page past the upload room waits");
+    assert!(r.source_tiles.borrow().in_flight.used()<=limit,"a refused upload took room past the upload limit");
+    while woken.try_recv().is_ok() {}
+    drop(first);
+    r.device.retirement_handle().flush().unwrap();
+    woken.recv_timeout(std::time::Duration::from_secs(5)).expect("released upload room wakes the refused upload");
+    assert!(r.reserve_upload(crate::residency::Class::Visible,NORMALIZED_PAGE_BYTES).is_some(),"the woken upload fits");
 }

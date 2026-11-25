@@ -29,7 +29,7 @@ pub(super) fn capture_native_effect(
     let window = scene.cached_capture_window(packet.scene, bounds);
     let output=scene::Output::EffectComposite(handle);
     let result = scene.prepare_region_in_frame(r, packet, (bounds, window), PixelRect::EMPTY, false, encoder)
-        .and_then(|()| scene.declare_capture(r,packet,&destination,&regions,output,Some(&reserved),initialized)?.accept_query(r,Some(scene)))
+        .and_then(|()| scene.declare_capture(r,packet,&destination,&regions,output,Some(&reserved),initialized)?.accept_query(r,Some(scene),crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh))
         .and_then(|mut accepted| {accepted.clone().track(encoder);
             scene.capture_prepared_regions_reuse(r, packet, &destination, &regions, output, false, Some(&reserved), initialized, encoder, &mut accepted)});
     scene.used.iter_mut().for_each(scratch::Usage::reset); scene.used[..reserved.len()].clone_from_slice(&reserved); scene.placement_display = true;
@@ -155,7 +155,7 @@ impl Evaluator<'_> {
                 let covered = regions.iter().fold(PixelRect::EMPTY, |bounds, region| bounds.union(page_rect(tile).intersect(*region))).intersect(plan.bounds);
                 if covered.is_empty() { continue; }
                 match self.scene.capture_prepared_tile_jobs(self.r, packet, &destination, tile, covered, scene::Output::EffectComposite(handle), initialized.as_ref(), self.accepted) {
-                    Err(GpuRasterError::NotReady|GpuRasterError::NotPublished) => self.unit.waiting = true,
+                    Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished) => self.unit.waiting = true,
                     result => result?,
                 }
             }

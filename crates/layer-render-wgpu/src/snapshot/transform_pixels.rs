@@ -38,7 +38,7 @@ impl SnapshotGpu {
                     let result=(|| {
                         if accepted.as_ref().is_some_and(|inputs|inputs.unit()!=Some(unit)) {scene.discard_unencoded_jobs();}
                         accepted=scene::sources::AcceptedInputs::take_for(&mut accepted,unit);
-                        if accepted.is_none() {accepted=Some(scene.declare_raw_capture(r,packet,target,&placements,coordinate)?.for_unit(unit)?.accept_query(r,Some(&scene))?);}
+                        if accepted.is_none() {accepted=Some(scene.declare_raw_capture(r,packet,target,&placements,coordinate)?.for_unit(unit)?.accept_query(r,Some(&scene),crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh)?);}
                         let inputs=accepted.as_mut().ok_or(GpuRasterError::Invariant("accepted raw capture sources are missing"))?;
                         inputs.check_unit(unit)?;inputs.clone().track(encoder);
                         let result=scene.capture_raw_tile(r,packet,coordinate,&plan,&placements,encoder,inputs);

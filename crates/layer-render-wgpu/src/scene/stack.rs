@@ -227,7 +227,7 @@ impl Compositor for Tile<'_> {
 impl Tile<'_> {
     fn ready<T>(&mut self, result: Result<T, GpuRasterError>) -> Result<Option<T>, GpuRasterError> {
         match result {
-            Err(GpuRasterError::NotReady|GpuRasterError::NotPublished) => {self.waiting=true;Ok(None)},
+            Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished) => {self.waiting=true;Ok(None)},
             result=>result.map(Some),
         }
     }
@@ -303,7 +303,7 @@ mod tests {
             let packet=crate::test_support::packet(doc.scene(),[16;2]);
             let declaration=scene.capture_declaration(&r,packet).unwrap();let mut accepted=scene.accept_capture(&mut r,packet,Some(crate::scene::Output::Artwork(None)),&declaration,|scene,r,accepted|tile(scene,r,packet,None,[0;2],accepted).map(drop)).unwrap();
             let result=tile(&mut scene,&r,packet,None,[0;2],&mut accepted);
-            assert!(matches!(result,Err(GpuRasterError::NotReady)));
+            assert!(matches!(result,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
             let requested:std::collections::BTreeSet<_>=scene.object_results.request_windows().into_iter().map(|(_,owner,_)|owner).collect();
             assert_eq!(requested,owners.iter().copied().collect(),"passthrough={passthrough}");
             assert!(scene.jobs.iter().any(|job|matches!(job,Job::DecodedTile(_))),"a waiting source must still gather its own cold mask");

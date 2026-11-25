@@ -5215,7 +5215,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.targeted_curve_busy()
             || self.auto_levels.is_some()
             || self.eyedropper.busy()
-            || self.region_tools.busy()
+            || self.region_tools.runnable()
             || self.selection_masks.refine.as_ref().is_some_and(|d| d.unsettled())
             || self.frequency_separation.as_ref().is_some_and(|d| d.unpublished())
             || self.painted_selections.busy()
@@ -5252,7 +5252,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let clone_source = self.engine.clone_source();
         let budget_completions=self.engine.metrics().input_budget_completions;
         let tile_refusals=self.engine.metrics().saved_tile_refusals;
-        let memory_refusals=self.engine.backend().stroke_memory_refusals();
+        let memory_refusals=self.engine.metrics().stroke_memory_refusals;
         if let Err(cause)=self.engine.render_frame_for(now_ns,presentation_ns) {
             let cause=error(cause);
             if self.recover_failed_edits(false,Some(&cause))? {
@@ -5269,7 +5269,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.engine.metrics().input_budget_completions!=budget_completions {
             self.raise_message_notice(MessageId::COMMON_STROKE_INPUT_LIMIT);
         }
-        if self.engine.backend().stroke_memory_refusals()!=memory_refusals {
+        for _ in memory_refusals..self.engine.metrics().stroke_memory_refusals {
             self.raise_message_notice(MessageId::COMMON_STROKE_MEMORY);
         }
         if self.engine.metrics().saved_tile_refusals!=tile_refusals {
@@ -9586,6 +9586,27 @@ mod tests {
     }
 
     #[test]
+    fn a_wand_request_in_flight_leaves_frames_to_the_renderer_and_holds_speculative_compiles() {
+        let mut s = session(Platform::Gtk);
+        invoke(&mut s, CommandId::AutoSelect);
+        pen_at(&mut s, 10, PenPhase::Down, [48., 72.]);
+        pen_at(&mut s, 10, PenPhase::Up, [48., 72.]);
+        assert!(s.frame_demand() == layer_render::FrameDemand::Work, "a queued tap needs a frame to reach the renderer");
+        s.frame(1, 1).unwrap();
+        s.frame(2, 2).unwrap();
+        assert_eq!(s.renderer_mut().region_requests.len(), 1);
+        assert!(s.region_tools.busy());
+        assert!(s.frame_demand() != layer_render::FrameDemand::Work, "the renderer, not the tool, asks for frames while its request runs");
+        assert!(!s.renderer_mut().shader_idle.1, "speculative compiles wait while a region request sleeps");
+        let request_id = s.renderer_mut().region_requests[0].request_id;
+        s.renderer_mut().region_reply = Some(layer_render::RegionResult { translucent_seed: false, colour_on_solid: false, gaps: None, underfill: None,
+            tonal_sample: None, placement: layer_core::Affine::IDENTITY, request_id,
+            pixels: std::sync::Arc::new(layer_core::SelectionPixels::new([8, 1], [0, 0, 8, 1], vec![0x44444444]).unwrap()) });
+        s.frame(3, 3).unwrap();
+        assert!(!s.region_tools.busy());
+    }
+
+    #[test]
     fn ruler_tools_preview_edit_cancel_and_undo_without_repainting() {
         use layer_core::RulerGeometry;
         let mut s = session(Platform::Gtk);
@@ -10759,7 +10780,7 @@ mod tests {
         assert!(s.state.filter_load.pending && s.filter_previews_idle());
         assert!(!s.background_readback_idle());
         assert!(s.renderer_mut().validation.is_some());
-        assert_eq!(s.engine.backend().shader_idle, (true, true));
+        assert_eq!(s.engine.backend().shader_idle, (true, false), "speculative compiles hold while the validation is pending, and its required recipes still compile");
     }
 
     #[test]

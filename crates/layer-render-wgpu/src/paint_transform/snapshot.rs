@@ -154,7 +154,7 @@ impl TileSnapshot {
                 if let Some(base)=&self.base {requested.base(base,coordinate,r.document_color().space);}
                 Ok(pending)
             })?;
-        let accepted=requested.accept_query(r,None)?;
+        let accepted=requested.accept_query(r,None,crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh)?;
         let ready=accepted.prepare(r)?;
         accepted.clone().track(encoder);
         if !accepted.encode(r,encoder,crate::residency::Class::Authored)? || !ready || pending {return Err(GpuRasterError::NotReady);}
@@ -636,7 +636,7 @@ mod tests {
         let snapshot=TileSnapshot {pages:[([0,0],captured)].into(),base:None,backing:None,bounds:PixelRect::full([PAGE_SIZE;2])};
         assert!(snapshot.original_page(&mut r,[0,0],&mut encoder).unwrap().is_some());
         page.clear(&mut encoder,0.75,layer_core::raster::ContentName::fresh()).unwrap();
-        assert!(matches!(snapshot.original_page(&mut r,[0,0],&mut encoder),Err(GpuRasterError::NotReady)));
+        assert!(matches!(snapshot.original_page(&mut r,[0,0],&mut encoder),Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
         encoder.submit(&r.queue);crate::test_support::complete(&r);
     }
 

@@ -1782,6 +1782,10 @@ mod tests {
         let notice = |host: &NativeHost, message: MessageId| host.session.state().notice.as_ref().is_some_and(|notice| notice.text == english.text(message).as_ref());
         settle(&mut host, &|_| true);
         host.dispatch_user_action(UiAction::Effect { action: EffectAction::Insert { effect: "swirl".into() } }).unwrap();
+        settle(&mut host, &|host| {
+            let document = host.session.engine().document();
+            document.working.occurrence.is_some_and(|id| document.scene().effect(id).is_some_and(|effect| effect.program.id.as_ref() == "swirl"))
+        });
         let swirl = host.session.engine().document().working.occurrence.unwrap();
         assert!(host.session.engine().document().scene().effect(swirl).is_some_and(|effect| effect.program.id.as_ref() == "swirl"));
         settle(&mut host, &|host| notice(host, MessageId::DOCUMENTS_FILTER_PREVIEW_SKIPPED));
@@ -1805,7 +1809,6 @@ mod tests {
 
     #[test]
     fn a_windows_host_whose_stroke_waits_on_memory_frames_only_when_its_renderer_asks() {
-        use layer_render::CanvasRenderer;
         use std::time::{Duration, Instant};
         const MIB: u64 = 1 << 20;
         let budget = layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts { host_default_bytes: Some(8 << 30), override_bytes: Some(8 << 30), ..Default::default() });
@@ -1840,7 +1843,7 @@ mod tests {
             windows_frame(&mut host);
         }
         let waiting = serve(&mut host, Duration::from_secs(2));
-        assert!(host.session.engine().backend().stroke_waits_for_memory(), "the stroke waits on memory");
+        assert!(host.session.engine().has_pending_document_edits() && host.session.engine().metrics().stroke_memory_refusals == 0, "the stroke waits on memory");
         assert!(waiting <= 4, "a stroke waiting on memory drove {waiting} frames that could not admit it");
         budget.update_device(device, roomy);
         budget.flush_reports();

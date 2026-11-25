@@ -208,7 +208,7 @@ pub(crate) fn declare(inputs:Inputs,declaration:Declaration,traverse:impl FnOnce
         let _pass=DeclarePass(DECLARING.with(|flag|flag.replace(true)));
         traverse(&mut accepted)
     };
-    match result {Ok(())|Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>accepted.declared(),Err(error)=>Err(error)}
+    match result {Ok(())|Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished)=>accepted.declared(),Err(error)=>Err(error)}
 }
 #[cfg(test)]
 pub(crate) fn assert_reading(entry:&str) {assert!(!DECLARING.with(std::cell::Cell::get),"{entry} is reachable in declare mode");}
@@ -284,19 +284,21 @@ impl Inputs {
         commit(context,r,reservation)?;
         result.map(Some)
     }
-    pub(crate) fn accept_query(&self,r:&mut WgpuRasterizer,scene:Option<&Scene>)->Result<AcceptedInputs,GpuRasterError> {
-        self.accept(r,&mut (),|_,r,inputs| {
+    pub(crate) fn accept_query(&self,r:&mut WgpuRasterizer,scene:Option<&Scene>,class:crate::residency::Class,allowance:crate::frame_demand::Allowance)->Result<AcceptedInputs,GpuRasterError> {
+        let mut refused=None;
+        self.accept(r,&mut refused,|refused,r,inputs| {
             let bytes=inputs.additional_bytes(&r.source_tiles.borrow());
-            r.admit_display(scene,crate::residency::Class::Visible,bytes).ok()
+            r.admit_display(scene,class,bytes,allowance).map_err(|blocked|*refused=Some(blocked)).ok()
         },|_,_|Ok(()),|_,_,_|Ok(()))?
-            .map(|((),inputs)|inputs).ok_or(GpuRasterError::NotReady)
+            .map(|((),inputs)|inputs).ok_or_else(||refused_wait(refused))
     }
-    pub(crate) fn accept_lane(&self,r:&mut WgpuRasterizer)->Result<AcceptedInputs,GpuRasterError> {
-        self.accept(r,&mut (),|_,r,inputs| {
+    pub(crate) fn accept_lane(&self,r:&mut WgpuRasterizer,allowance:crate::frame_demand::Allowance)->Result<AcceptedInputs,GpuRasterError> {
+        let mut refused=None;
+        self.accept(r,&mut refused,|refused,r,inputs| {
             let bytes=inputs.additional_bytes(&r.source_tiles.borrow());
-            r.admit_group(0,bytes).map(|(source,_)|source).ok()
+            r.admit_group(0,bytes,allowance).map(|(source,_)|source).map_err(|blocked|*refused=Some(blocked)).ok()
         },|_,_|Ok(()),|_,_,_|Ok(()))?
-            .map(|((),inputs)|inputs).ok_or(GpuRasterError::NotReady)
+            .map(|((),inputs)|inputs).ok_or_else(||refused_wait(refused))
     }
     fn insert(&mut self,key:Key,color:Option<SourceColor>,pixels:Option<Pixels>) {
         self.insert_for(key,color,pixels,SourceUse::Exact);
@@ -491,6 +493,9 @@ impl Inputs {
         }
         Ok(AcceptedInputs {brush:None,brush_state:None,unit:self.unit,leases:accepted,placements:self.placements.clone(),decisions:self.decisions.clone(),declaring:None,objects_refusal:None,class:Some(class)})
     }
+}
+fn refused_wait(refused:Option<crate::residency::Blocked>)->GpuRasterError {
+    refused.map_or(GpuRasterError::Invariant("a refused admission names its need"),|blocked|crate::frame_demand::Waiting::error(blocked))
 }
 pub(crate) trait Admitted {fn class(&self)->crate::residency::Class;}
 impl Admitted for crate::residency::Reservation {fn class(&self)->crate::residency::Class {crate::residency::Reservation::class(self)}}
@@ -1088,7 +1093,7 @@ impl Lease {
     }
 }
 struct Slot {
-    charge: crate::residency::Charge,
+    charge: Arc<std::sync::Mutex<crate::residency::Charge>>,
     key: Option<Key>,
     layer: Layer,
     view: wgpu::TextureView,
@@ -1103,6 +1108,12 @@ struct Slot {
     used: std::sync::atomic::AtomicU64,
 }
 struct SlotPin(std::sync::Mutex<crate::residency::Charge>);
+pub(crate) struct Seat {reservation:crate::residency::Reservation,_paid:PaidSlot}
+impl Seat {pub(crate) fn release(self)->crate::residency::Reservation {self.reservation}}
+struct PaidSlot(Weak<std::sync::Mutex<crate::residency::Charge>>,u64);
+impl Drop for PaidSlot {
+    fn drop(&mut self) {if let Some(charge)=self.0.upgrade() {charge.lock().unwrap().resize(self.1);}}
+}
 struct Layers { texture: wgpu::Texture, free: std::sync::Mutex<Option<Vec<u32>>>, pass: std::sync::atomic::AtomicU64 }
 impl Layers {
     fn free(&self) -> Option<usize> { self.free.lock().unwrap().as_ref().map(Vec::len).filter(|free| *free != 0) }
@@ -1124,14 +1135,14 @@ impl Drop for Layer {
         if layers.len() as u32 == self.array.texture.depth_or_array_layers() { *free = None; self.array.texture.destroy(); }
     }
 }
-struct RetiredSlot { _layer:Layer, encoded:Weak<Pin>, _charge:[crate::residency::Charge;2], completed:Arc<std::sync::atomic::AtomicBool> }
+struct RetiredSlot { _layer:Layer, encoded:Weak<Pin>, _charge:[crate::residency::Charge;2], completed:Arc<std::sync::atomic::AtomicBool>, _batch:Option<crate::residency::Hold> }
 impl RetiredSlot {
     fn ready(&self)->bool {self.completed.load(Ordering::Acquire) && self.encoded.strong_count()==0}
 }
 impl Slot {
     fn touch(&self,epoch:u64) {self.used.store(epoch,Ordering::Relaxed);}
     fn leased(&self)->bool {self.pin.lock().unwrap().strong_count()!=0}
-    fn bytes(&self)->u64 {self.charge.bytes()}
+    fn bytes(&self)->u64 {page_bytes(self.layer.format())}
     fn offer(&self) {
         let value=if self.key.is_some() {crate::residency::rebuild_value(super::object_cache::PASS_TAPS,self.bytes())}else {0};
         self.lease.offer(self.bytes(),value);
@@ -1281,30 +1292,31 @@ struct EncodedInput {
 }
 fn page_bytes(format:wgpu::TextureFormat)->u64 {u64::from(PAGE_SIZE).pow(2)*u64::from(format.block_copy_size(None).unwrap())}
 #[cfg(target_arch="wasm32")]
-struct WebRetirement {
-    send:futures_channel::mpsc::UnboundedSender<RetiredSlot>,
+pub(crate) struct WebRetirement<T> {
+    send:futures_channel::mpsc::UnboundedSender<T>,
     wake:Arc<futures_util::task::AtomicWaker>,
 }
 #[cfg(target_arch="wasm32")]
-impl WebRetirement {
-    fn new()->Self {
+impl<T:'static> WebRetirement<T> {
+    pub(crate) fn new(ready:fn(&T)->bool)->Self {
         use futures_util::{Stream,stream::FusedStream};
-        let (send,mut receive)=futures_channel::mpsc::unbounded::<RetiredSlot>();
+        let (send,mut receive)=futures_channel::mpsc::unbounded::<T>();
         let wake=Arc::new(futures_util::task::AtomicWaker::new());let observed=wake.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            let mut pending=Vec::<RetiredSlot>::new();
+            let mut pending=Vec::<T>::new();
             std::future::poll_fn(move|context| {
                 observed.register(context.waker());
                 while !receive.is_terminated() {match std::pin::Pin::new(&mut receive).poll_next(context) {
                     std::task::Poll::Ready(Some(value))=>pending.push(value),_=>break,
                 }}
-                pending.retain(|value|!value.ready());
+                pending.retain(|value|!ready(value));
                 if receive.is_terminated() && pending.is_empty() {std::task::Poll::Ready(())}else {std::task::Poll::Pending}
             }).await;
         });
         Self {send,wake}
     }
-    fn release_wake(&self)->Arc<dyn Fn()+Send+Sync> {let wake=self.wake.clone();Arc::new(move||wake.wake())}
+    pub(crate) fn send(&self,value:T) {self.send.unbounded_send(value).unwrap_or_else(|_|unreachable!("the retirement receiver lives while its sender does"));}
+    pub(crate) fn release_wake(&self)->Arc<dyn Fn()+Send+Sync> {let wake=self.wake.clone();Arc::new(move||wake.wake())}
 }
 pub(crate) struct DecodedTiles {
     destination: RgbSpace,
@@ -1336,7 +1348,7 @@ pub(crate) struct DecodedTiles {
     #[cfg(not(target_arch="wasm32"))]
     retirement:Option<crate::device_poll::RetirementHandle>,
     #[cfg(target_arch="wasm32")]
-    retirement:Option<WebRetirement>,
+    retirement:Option<WebRetirement<RetiredSlot>>,
     retiring: Vec<SourceRetirement>,
 }
 impl DecodedTiles {
@@ -1468,22 +1480,27 @@ impl DecodedTiles {
         });
         Lease {owner,_encoded:encoded,read:None}
     }
+    pub(crate) fn seat(&self,inputs:&AcceptedInputs,seat:crate::residency::Reservation)->Result<Seat,crate::residency::Reservation> {
+        let Some(slot)=inputs.iter().filter_map(|lease|self.views.get(&lease.read.as_ref()?.tile.view)).map(|index|&self.slots[*index])
+            .find(|slot|Arc::weak_count(&slot.charge)==0 && slot.bytes()==seat.bytes()) else {return Err(seat);};
+        slot.charge.lock().unwrap().resize(0);
+        Ok(Seat {reservation:seat,_paid:PaidSlot(Arc::downgrade(&slot.charge),slot.bytes())})
+    }
     fn retire(&mut self,slot:Slot)->SourceRetirement {
         let completed=Arc::new(std::sync::atomic::AtomicBool::new(false));
         let completing=self.completing.charge(slot.bytes());
-        let value=RetiredSlot {_charge:[self.retired_bytes.charge(slot.bytes()),self.retiring_bytes.as_ref().unwrap().charge(slot.bytes())],_layer:slot.layer,encoded:slot.encoded.map(|weak|weak.into_inner().unwrap()).unwrap_or_default(),completed:completed.clone()};
+        let value=RetiredSlot {_charge:[self.retired_bytes.charge(slot.bytes()),self.retiring_bytes.as_ref().unwrap().charge(slot.bytes())],_batch:slot.lease.take_batch(),_layer:slot.layer,encoded:slot.encoded.map(|weak|weak.into_inner().unwrap()).unwrap_or_default(),completed:completed.clone()};
         let owner=self.retirement.as_ref().unwrap();
         let completion=RetirementCompletion {completed,wake:owner.release_wake(),_completing:completing};
         #[cfg(not(target_arch="wasm32"))]
         owner.dispose_when(value,RetiredSlot::ready);
         #[cfg(target_arch="wasm32")]
-        owner.send.unbounded_send(value).unwrap_or_else(|_|unreachable!("source retirement receiver remains alive"));
+        owner.send(value);
         #[cfg(not(target_arch="wasm32"))]
         let completion=owner.retirement(completion);
         completion
     }
     pub(crate) fn retired_tier(&self)->Arc<crate::residency::Tier> {self.retired_bytes.clone()}
-    pub(crate) fn completing_tier(&self)->Arc<crate::residency::Tier> {self.completing.clone()}
     pub(crate) fn flush_retired(&mut self, encoder: &mut crate::submission::CommandEncoder) {
         if self.retiring.is_empty() { return; }
         encoder.retain_resources();
@@ -1544,10 +1561,9 @@ impl DecodedTiles {
         self.prepared_slot(&Key::raster(blob, space, destination))
     }
 
-    pub(crate) fn charge_upload(&self, encoder: &crate::submission::CommandEncoder, reservation: crate::residency::Reservation, bytes: u64) -> u64 {
-        let charge = reservation.charge(bytes);
-        encoder.hold(charge);
-        self.in_flight.used()
+    pub(crate) fn charge_upload(&self, encoder: &crate::submission::CommandEncoder, mut reservation: crate::residency::Reservation, bytes: u64) -> Result<u64, GpuRasterError> {
+        encoder.hold(reservation.split(bytes).ok_or(GpuRasterError::Invariant("an upload exceeds its reservation"))?.charge());
+        Ok(self.in_flight.used())
     }
     pub(crate) fn non_slot_bytes(&self) -> u64 { self.input_bytes.bytes() + self.table_bytes.bytes() }
     pub fn gpu_bytes(&self) -> u64 { self.decoded.used() }
@@ -1659,12 +1675,12 @@ impl DecodedTiles {
             #[cfg(not(target_arch="wasm32"))]
             {r.device.retirement_handle()}
             #[cfg(target_arch="wasm32")]
-            {WebRetirement::new()}
+            {WebRetirement::new(RetiredSlot::ready)}
         });
         self.retiring_bytes.get_or_insert_with(|| r.scene_tiers.retiring.clone());
         let (layer, view) = self.layer(r, format);
         self.views.insert(view.clone(),self.slots.len());
-        self.slots.push(Slot { charge:self.decoded.charge(page_bytes(format)),key: None, layer, view, created: 0,
+        self.slots.push(Slot { charge:Arc::new(std::sync::Mutex::new(self.decoded.charge(page_bytes(format)))),key: None, layer, view, created: 0,
             valid: Arc::new(std::sync::atomic::AtomicBool::new(false)), lease: self.decoded.heap().lease(&self.evicted), pin: Default::default(),
             encoded:(format!=wgpu::TextureFormat::Rgba32Float).then(Default::default), samples,pending:None,assembly:None,used:Default::default() });
         self.slots.len() - 1
@@ -1703,7 +1719,7 @@ impl DecodedTiles {
         let (layer,view)=self.layer(r,wgpu::TextureFormat::Rgba32Float);
         let texture=layer.texture();
         let write = crate::submission::CacheWrite::new();
-        let charge=self.decoded.charge(NORMALIZED_PAGE_BYTES);
+        let charge=Arc::new(std::sync::Mutex::new(self.decoded.charge(NORMALIZED_PAGE_BYTES)));
         let slot = &mut self.slots[index];
         self.views.remove(&slot.view);self.views.insert(view.clone(),index);
         let pin=std::mem::take(&mut slot.pin);
@@ -2147,6 +2163,6 @@ pub(crate) fn encode_pending(r: &mut WgpuRasterizer, encoder: &mut crate::submis
             Some(binding)
         } else { None };
         let bytes = r.source_tiles.get_mut().encode(&r.device, &mut r.uploads, &r.scene_pipelines.source, encoder, &pending,r.snapshot_worker, binding.as_ref())?;
-        r.charge_upload(encoder, reservation, bytes);
+        r.charge_upload(encoder, reservation, bytes)?;
     Ok(true)
 }

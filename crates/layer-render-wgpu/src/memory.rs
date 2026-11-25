@@ -71,7 +71,9 @@ impl Demand {
 }
 
 #[derive(Default)]
-struct Lane {refused:Option<crate::residency::Blocked>,wanted:u64,asked:bool,lent:u64,base:u64,lendable:u64,exhausted:bool,refusals:u64}
+struct Lane {refused:Option<crate::residency::Blocked>,end:Option<crate::residency::Search>,wait:crate::frame_demand::UnitWait,owner:Option<(Option<StrokeId>,u64)>,claimant:Option<StrokeId>,generation:u64,wanted:u64,asked:bool,closing:Option<Close>,presented:Option<u64>,lent:u64,base:u64,lendable:u64}
+#[derive(Clone,Copy)]
+struct Close {operation:StrokeId,generation:u64,finishes:bool,footprint:u64,spent:u64}
 
 pub(super) struct Memory {
     display: Owner,
@@ -87,11 +89,11 @@ pub(super) struct Memory {
     refused: std::cell::Cell<u64>,
     lane: std::cell::RefCell<Lane>,
     trimmed: std::cell::Cell<Option<[u64; 2]>>,
+    reclaiming: std::cell::RefCell<Option<(u64, crate::residency::Batch)>>,
     retired: std::cell::Cell<Option<[u64; 2]>>,
     wake: Arc<std::sync::Mutex<Option<(Arc<dyn Fn() + Send + Sync>, std::sync::Weak<crate::residency::Tier>)>>>,
     resources: Arc<std::sync::atomic::AtomicU64>,
     overdraft: std::cell::RefCell<Vec<layer_core::MemoryReservation>>,
-    fruitless: std::cell::RefCell<Vec<(Arc<crate::residency::Tier>,crate::residency::Class,u64,crate::residency::Blocked)>>,
     #[cfg(not(target_arch = "wasm32"))]
     watch: std::cell::RefCell<Option<layer_core::MemoryWatch>>,
     unified: bool,
@@ -152,7 +154,7 @@ impl Memory {
             samples: samples.report_to(|| factory.memory_owner(Kind::DecodedSamples)),
             raster: Owner::new(factory, Kind::RasterPool, MemoryReport { pinned_gpu_bytes: working, pinned_ram_bytes: working, demand_gpu_bytes: working, demand_ram_bytes: working, ..Default::default() }),
             staging: Owner::new(factory, Kind::Staging, MemoryReport { pinned_gpu_bytes: working, demand_gpu_bytes: working, ..Default::default() }),
-            demand: std::cell::Cell::new(demand), demand_key: std::cell::Cell::new(None), applied_limits: std::cell::Cell::new(None), limits_dirty: std::cell::Cell::new(true), preparation: std::cell::Cell::new(0), target: std::cell::Cell::new(total(demand.wanted(0))), refused: Default::default(), lane: Default::default(), trimmed: Default::default(), retired: Default::default(), wake, resources, overdraft: Default::default(), fruitless: Default::default(), #[cfg(not(target_arch = "wasm32"))] watch: Default::default(),
+            demand: std::cell::Cell::new(demand), demand_key: std::cell::Cell::new(None), applied_limits: std::cell::Cell::new(None), limits_dirty: std::cell::Cell::new(true), preparation: std::cell::Cell::new(0), target: std::cell::Cell::new(total(demand.wanted(0))), refused: Default::default(), lane: Default::default(), trimmed: Default::default(), reclaiming: Default::default(), retired: Default::default(), wake, resources, overdraft: Default::default(), #[cfg(not(target_arch = "wasm32"))] watch: Default::default(),
             unified: factory.unified_memory(), idle: std::sync::atomic::AtomicBool::new(true), parked, pass_evictable: Default::default(),
         };
         samples.set_demand(SOURCE_WORKING_BYTES, DECODED_SAMPLE_BYTES);
@@ -186,7 +188,10 @@ impl Memory {
         if kind==Kind::Scene {self.overdraft.borrow_mut().clear();}
     }
     fn overdrawn(&self)->bool {!self.overdraft.borrow().is_empty()}
-    fn stop(&self)->Option<crate::residency::Blocked> {self.lane.borrow().refused.clone()}
+    fn stop(&self)->Option<crate::residency::Blocked> {
+        let lane=self.lane.borrow();
+        lane.refused.clone().map(|refused|match &lane.end {Some(end)=>refused.awaiting(end.batch()),None=>refused})
+    }
     fn lent(&self,raster:u64)->u64 {
         let lane=self.lane.borrow();
         if lane.refused.is_some() {lane.lent}else {lane.lent.min(raster.saturating_add(lane.wanted).saturating_sub(lane.base))}
@@ -200,7 +205,9 @@ impl Memory {
         let lent=self.lent(raster);let drawn=raster.saturating_sub(limit.saturating_sub(lent)).min(lent);
         let mut lane=self.lane.borrow_mut();(lane.lent,lane.wanted,lane.base)=(drawn,0,raster.saturating_sub(drawn));
     }
-    pub(crate) fn stroke_memory_refusals(&self)->u64 {self.lane.borrow().refusals}
+    pub(crate) fn lane_generation(&self)->u64 {self.lane.borrow().generation}
+    pub(crate) fn next_lane_generation(&self)->u64 {let mut lane=self.lane.borrow_mut();lane.generation+=1;lane.generation}
+    pub(crate) fn claim(&self,claimant:Option<StrokeId>)->Option<StrokeId> {std::mem::replace(&mut self.lane.borrow_mut().claimant,claimant)}
     fn carry_overdraft(&self,used:u64) {
         if used>self.retention_grant() && self.lane.borrow().refused.is_none() {self.overdraft.borrow_mut().extend(self.display.handle.admit_working_through(used,None));}
     }
@@ -288,11 +295,11 @@ impl WgpuRasterizer {
     fn sync_raster_report(&mut self) {
         self.memory.sync_report(Kind::RasterPool,self.raster_memory_report());
     }
-    pub(crate) fn admit_raster_working(&mut self,bytes:u64)->Result<crate::residency::Reservation,crate::residency::Blocked> {
-        self.admit_group(bytes,0).map(|(_,held)|held)
+    pub(crate) fn admit_raster_working(&mut self,bytes:u64,allowance:crate::frame_demand::Allowance)->Result<crate::residency::Reservation,crate::residency::Blocked> {
+        self.admit_group(bytes,0,allowance).map(|(_,held)|held)
     }
-    pub(crate) fn admit_group(&mut self,raster:u64,display:u64)->Result<(crate::residency::Reservation,crate::residency::Reservation),crate::residency::Blocked> {
-        self.admit_group_within(raster,raster,display)
+    pub(crate) fn admit_group(&mut self,raster:u64,display:u64,allowance:crate::frame_demand::Allowance)->Result<(crate::residency::Reservation,crate::residency::Reservation),crate::residency::Blocked> {
+        self.admit_group_within(raster,raster,display,allowance)
     }
     pub(crate) fn memory_pass<T>(&mut self,pass:impl FnOnce(&mut Self)->T)->T {
         if self.memory.pass_evictable.get().is_some() {return pass(self);}
@@ -304,92 +311,157 @@ impl WgpuRasterizer {
     fn publish_and_apply_grants(&mut self) {
         self.memory_pass(|r|{r.publish_memory();r.factory.memory_budget().flush_reports();r.refresh_memory_limits();});
     }
-    pub(crate) fn admit_group_within(&mut self,least:u64,raster:u64,display:u64)->Result<(crate::residency::Reservation,crate::residency::Reservation),crate::residency::Blocked> {
-        self.memory_pass(|r|r.admit_lane_group(least,raster,display))
+    pub(crate) fn admit_group_within(&mut self,least:u64,raster:u64,display:u64,allowance:crate::frame_demand::Allowance)->Result<(crate::residency::Reservation,crate::residency::Reservation),crate::residency::Blocked> {
+        self.memory_pass(|r|r.admit_lane_group(least,raster,display,allowance))
     }
-    fn admit_lane_group(&mut self,least:u64,raster:u64,display:u64)->Result<(crate::residency::Reservation,crate::residency::Reservation),crate::residency::Blocked> {
-        self.memory.lane.borrow_mut().asked=true;self.memory.lend(self.raster_tiers.raster.used(),raster,0);
-        let drain=crate::residency::Drain::new(self.draining());
-        let admitted=self.try_group(raster,display).or_else(|_|{self.yield_to_lane(raster,display);self.try_group(raster,display)}).or_else(|blocked| {
-            if least==raster {return Err(blocked);}
-            self.memory.lend(self.raster_tiers.raster.used(),least,0);self.try_group(least,display)
-        });
+    fn admit_lane_group(&mut self,least:u64,raster:u64,display:u64,allowance:crate::frame_demand::Allowance)->Result<(crate::residency::Reservation,crate::residency::Reservation),crate::residency::Blocked> {
+        let wait={let mut lane=self.memory.lane.borrow_mut();lane.asked=true;lane.wait.clone()};
+        let Some(saved)=wait.eligible(self) else {
+            return Err(self.memory.lane.borrow().refused.clone().unwrap_or_else(||self.raster_tiers.admitted.wanting(crate::residency::Class::Authored,raster)));
+        };
+        let allowance=if saved==crate::frame_demand::Allowance::Spent {saved} else {allowance};
+        let evict=allowance==crate::frame_demand::Allowance::Fresh;
+        if !evict {self.publish_memory();}
+        self.memory.lend(self.raster_tiers.raster.used(),raster,0);
+        let mut trimmed=None;
+        let mut admitted=self.try_group(raster,display,allowance);
+        if admitted.is_err() && evict {trimmed=self.yield_to_lane(raster,display);admitted=self.try_group(raster,display,allowance);}
+        if admitted.is_err() && least!=raster {self.memory.lend(self.raster_tiers.raster.used(),least,0);admitted=self.try_group(least,display,allowance);}
+        if admitted.is_err() && self.close_overcommits(least.saturating_add(display)) {
+            let class=crate::residency::Class::Authored;
+            admitted=Ok((self.scene_tiers.display.wanting(class,display).overcommit(),self.raster_tiers.admitted.wanting(class,least).overcommit()));
+        }
         match admitted {
             Ok(held)=>{
                 self.memory.draw(self.raster_tiers.raster.used(),self.raster_tiers.raster.limit());
                 self.end_lane_wait();self.memory.invalidate_limits();self.publish_memory();self.refresh_memory_limits();Ok(held)
             },
-            Err(blocked)=>Err(self.hold_lane(blocked.draining(drain))),
+            Err(blocked)=>Err(self.hold_lane(blocked,allowance,trimmed)),
         }
     }
-    fn draining(&self)->Vec<Arc<crate::residency::Tier>> {
-        vec![self.retired_display_bytes.clone(),self.source_tiles.borrow().completing_tier(),self.device.transient_display.clone(),self.raster_buffers.transfer.clone()]
-    }
-    fn try_group(&mut self,raster:u64,display:u64)->Result<(crate::residency::Reservation,crate::residency::Reservation),crate::residency::Blocked> {
+    fn try_group(&mut self,raster:u64,display:u64,allowance:crate::frame_demand::Allowance)->Result<(crate::residency::Reservation,crate::residency::Reservation),crate::residency::Blocked> {
         #[cfg(test)] crate::test_support::PassCounts {raster_admissions:1,..Default::default()}.record();
         let class=crate::residency::Class::Authored;
         self.sync_raster_report();self.factory.memory_budget().flush_reports();
         let tiers=self.raster_tiers.clone();
-        let held=tiers.admitted.admit(class,raster).or_else(|blocked| {
+        let held=if allowance==crate::frame_demand::Allowance::Fresh {tiers.admitted.admit(class,raster).or_else(|blocked| {
             let mut encoder=submission::CommandEncoder::new(&self.device,&Default::default());
             self.evict_raster(blocked.deficit(),&[],&[],&mut encoder);
             if encoder.has_work() {self.last_submission=encoder.submit(&self.queue);}
             tiers.admitted.admit(class,raster)
-        }).map_err(|blocked|blocked.with(self.scene_tiers.display.wanting(class,display)))?;
+        })} else {tiers.admitted.admit_unevicted(class,raster)}.map_err(|blocked|blocked.with(self.scene_tiers.display.wanting(class,display)))?;
         let display_tier=&self.scene_tiers.display;
-        let source=if display==0 {display_tier.admit(class,0)} else {self.admit_unstopped(None,display_tier,class,display,true)}
+        let source=if display==0 {display_tier.admit(class,0)} else {self.admit_unstopped(None,display_tier,class,display,allowance)}
             .map_err(|blocked|blocked.with(tiers.admitted.wanting(class,raster)))?;
         Ok((source,held))
     }
-    fn yield_to_lane(&mut self,raster:u64,display:u64) {
+    fn yield_to_lane(&mut self,raster:u64,display:u64)->Option<crate::residency::Batch> {
         let deficit=|r:&Self|r.raster_tiers.raster.used().saturating_add(raster).saturating_sub(r.raster_tiers.raster.limit());
         let shown=&self.scene_tiers.display;
-        self.trim_display_by(self.scene.as_deref(),deficit(self).max(shown.used().saturating_add(display).saturating_sub(shown.limit())));
+        let trimmed=self.trim_display_by(self.scene.as_deref(),deficit(self).max(shown.used().saturating_add(display).saturating_sub(shown.limit())));
         self.factory.memory_budget().flush_reports();
         self.memory.lend(self.raster_tiers.raster.used(),raster,if deficit(self)==0 {0}else {u64::MAX});
         self.publish_memory();self.factory.memory_budget().flush_reports();
+        trimmed
     }
-    fn hold_lane(&mut self,blocked:crate::residency::Blocked)->crate::residency::Blocked {
-        self.memory.lane.borrow_mut().refused=Some(blocked.clone());self.memory.invalidate_limits();
-        self.wait_for_release(blocked.clone());
-        let (display,raster)=(&self.scene_tiers.display,&self.raster_tiers.raster);
-        let ours=[&self.memory.display,&self.memory.raster,&self.memory.staging].map(|owner|{let report=owner.published.get();report.gpu_bytes.saturating_sub(report.pinned_gpu_bytes)});
-        let draining=crate::residency::Drain::new(self.draining()).bytes();
-        let optional=self.factory.memory_budget().snapshot().devices.iter().find(|device|device.device==self.factory.memory_device())
-            .map_or(0,|device|device.physical_bytes.saturating_sub(device.pinned_bytes)).saturating_sub(ours.into_iter().sum());
+    fn hold_lane(&mut self,blocked:crate::residency::Blocked,allowance:crate::frame_demand::Allowance,trimmed:Option<crate::residency::Batch>)->crate::residency::Blocked {
+        let batch=(allowance==crate::frame_demand::Allowance::Fresh).then(||crate::residency::Batch::joined(blocked.waiting().cloned().into_iter().chain(trimmed).chain(self.raster_backing_landed()).chain(self.device.transient_display.heap().retiring()))).flatten();
+        let blocked=blocked.reclaiming(batch);
+        let wait=crate::frame_demand::UnitWait::refused(blocked.clone(),allowance);
+        let claimant=self.memory.lane.borrow().claimant;
+        if matches!(wait,crate::frame_demand::UnitWait::End(_)) && claimant.is_none() {self.end_lane_wait();return blocked;}
+        let generation=self.memory.next_lane_generation();
         let mut lane=self.memory.lane.borrow_mut();
-        let short=raster.used().saturating_add(lane.wanted).saturating_sub(raster.limit());
-        let lent_out=lane.lent>=lane.lendable || short==0;
-        lane.exhausted=self.live_stroke.is_some() && draining==0 && !self.raster_backing_in_flight() && optional<short.max(blocked.deficit()) && lent_out && display.yielding()==0 && display.heap().pending()==0 && !blocked.fits();
+        if lane.end.is_none() {lane.end=Some(crate::residency::Search::open([]));}
+        lane.owner=Some((claimant,generation));
+        (lane.refused,lane.wait)=(Some(blocked.clone()),wait);
+        drop(lane);self.memory.invalidate_limits();
         blocked
     }
-    pub(crate) fn lane_exhausted(&self)->bool {self.memory.lane.borrow().exhausted}
-    pub(crate) fn take_lane_failure(&mut self)->Option<GpuRasterError> {
-        if !self.lane_exhausted() {return None;}
-        self.memory.lane.borrow_mut().refusals+=1;
+    pub(crate) fn lane_exhausted(&self)->bool {matches!(self.memory.lane.borrow().wait,crate::frame_demand::UnitWait::End(_))}
+    pub(crate) fn take_lane_failure(&mut self,claimant:StrokeId)->Option<GpuRasterError> {
+        let failure={let lane=self.memory.lane.borrow();lane.wait.ended().filter(|_|lane.owner.is_none_or(|(owner,_)|owner.is_none_or(|owner|owner==claimant)))}?;
         self.retire_restore();self.end_lane_wait();
-        Some(GpuRasterError::StrokeMemory)
+        Some(failure)
     }
-    pub(crate) fn lane_polls(&self)->bool {
-        #[cfg(not(target_arch="wasm32"))] {self.preparation_wake.is_none() && self.lane_waits()}
-        #[cfg(target_arch="wasm32")] {self.lane_waits()}
+    pub(crate) fn report_lane_end(&mut self,claimant:Option<StrokeId>) {
+        let ended=self.memory.lane.borrow().owner.and_then(|(owner,_)|owner).filter(|owner|Some(*owner)!=claimant);
+        if let Some(owner)=ended && self.take_lane_failure(owner).is_some() {self.refusals.push_back(self.drawn.refusal(owner));}
     }
-    pub(crate) fn lane_waits(&self)->bool {
-        self.scene_tiers.display.heap().pending()==0 && self.memory.stop().is_some_and(|lane|self.refuses(&lane))
+    pub(crate) fn admit_private_working(&mut self,bytes:u64)->Result<crate::residency::Reservation,crate::residency::Blocked> {
+        if let Some(lane)=self.memory.stop() {return Err(lane);}
+        self.memory_pass(|r|{let (_,held)=r.try_group(bytes,0,crate::frame_demand::Allowance::Fresh)?;r.sync_raster_report();Ok(held)})
     }
+    pub(crate) fn end_lane_with(&self,loss:GpuRasterError) {
+        let generation=self.memory.next_lane_generation();
+        let mut lane=self.memory.lane.borrow_mut();
+        (lane.owner,lane.wait)=(Some((None,generation)),crate::frame_demand::UnitWait::End(Some(loss)));
+        drop(lane);self.memory.invalidate_limits();
+    }
+    fn lane_turn(&self)->crate::frame_demand::Turn {
+        let wait=self.memory.lane.borrow().wait.clone();
+        wait.observe(self)
+    }
+    pub(crate) fn lane_waits(&self)->bool {matches!(self.lane_turn(),crate::frame_demand::Turn::Sleep(_))}
     fn end_lane_wait(&self) {
-        let ended={let mut lane=self.memory.lane.borrow_mut();(lane.wanted,lane.exhausted)=(0,false);lane.refused.take().is_some()};
+        let (ended,end)={let mut lane=self.memory.lane.borrow_mut();lane.wanted=0;lane.wait=Default::default();lane.owner=None;(lane.refused.take().is_some(),lane.end.take())};
+        drop(end);
         if !ended {return;}
+        self.memory.next_lane_generation();
         self.memory.invalidate_limits();self.publish_memory();
         if let Some(wake)=&self.preparation_wake {wake();}
     }
-    pub(crate) fn admit_capture_window(&mut self,least:u64,most:u64,reserve:u64)->crate::residency::Reservation {
+    pub(crate) fn admit_capture_window(&mut self,least:u64,most:u64,reserve:u64,allowance:crate::frame_demand::Allowance)->Result<crate::residency::Reservation,crate::residency::Blocked> {
         let (wanted,raster)=(most.saturating_add(reserve),&self.raster_tiers.raster);
         let room=raster.limit().saturating_sub(raster.used());
-        match self.admit_raster_working(if wanted<=room {wanted}else {room.max(least.saturating_add(reserve))}) {
-            Ok(mut reservation)=>{drop(reservation.split(reserve));reservation},
-            Err(_)=>{self.end_lane_wait();self.raster_tiers.admitted.wanting(crate::residency::Class::Authored,least).overcommit()},
+        let (owner,closing)={let mut lane=self.memory.lane.borrow_mut();(lane.owner,lane.closing.take())};
+        let admitted=self.admit_raster_working(if wanted<=room {wanted}else {room.max(least.saturating_add(reserve))},allowance);
+        self.memory.lane.borrow_mut().closing=closing;
+        match admitted {
+            Ok(mut reservation)=>{drop(reservation.split(reserve));Ok(reservation)},
+            Err(_) if self.close_overcommits(least)=>{if self.memory.lane.borrow().owner!=owner {self.end_lane_wait();}Ok(self.raster_tiers.admitted.wanting(crate::residency::Class::Authored,least).overcommit())},
+            Err(blocked)=>Err(blocked),
         }
+    }
+    fn close_generation(&self,packet:FramePacket<'_>)->Option<(u64,bool)> {
+        let operation=packet.operation();
+        if operation.0==0 {return packet.commit_rasters.then_some((packet.scene.revision(),false));}
+        let lifts=packet.commit_rasters && packet.dab_batches.iter().any(|batch|batch.stroke_id==operation && batch.kind==DabBatchKind::Persistent && batch.stroke_end);
+        self.drawn.prefix().filter(|(stroke,_)|*stroke==operation && packet.dab_batches.iter().all(|batch|!batch.stroke_start && (lifts || batch.dab_count==0))).map(|(_,generation)|(generation,true))
+    }
+    fn presented(&self,generation:u64,finishes:bool,packet:FramePacket<'_>)->bool {
+        finishes || self.memory.lane.borrow().presented==Some(generation) || self.presents_commit(packet)
+    }
+    fn funds(&self,close:&Close,packet:FramePacket<'_>)->bool {
+        close.operation==packet.operation() && self.close_generation(packet)==Some((close.generation,close.finishes)) && self.presented(close.generation,close.finishes,packet)
+    }
+    pub(crate) fn fund_close(&self,packet:FramePacket<'_>,footprint:impl FnOnce(bool)->u64) {
+        let Some(close)=self.memory.lane.borrow().closing.filter(|close|self.funds(close,packet)) else {return;};
+        let footprint=footprint(close.finishes);
+        let mut lane=self.memory.lane.borrow_mut();
+        if !close.finishes {lane.presented=Some(close.generation);}
+        if let Some(close)=&mut lane.closing {close.footprint=close.spent.saturating_add(footprint);}
+    }
+    pub(crate) fn extend_close(&self,packet:FramePacket<'_>,bytes:u64) {
+        if !self.memory.lane.borrow().closing.is_some_and(|close|self.funds(&close,packet)) {return;}
+        if let Some(close)=&mut self.memory.lane.borrow_mut().closing {close.footprint=close.footprint.saturating_add(bytes);}
+    }
+    pub(crate) fn close_steps_past_own_reclaim(&self,packet:FramePacket<'_>)->bool {
+        let operation=packet.operation();
+        let own={let lane=self.memory.lane.borrow();lane.owner.is_some_and(|(owner,_)|owner==Some(operation)) && matches!(&lane.wait,crate::frame_demand::UnitWait::Reclaim(need,_) if !need.external())};
+        if !own || !self.close_generation(packet).is_some_and(|(generation,finishes)|self.presented(generation,finishes,packet)) {return false;}
+        self.end_lane_wait();
+        self.memory.lane.borrow_mut().wait=crate::frame_demand::UnitWait::Ready(crate::frame_demand::Allowance::Spent);
+        true
+    }
+    pub(crate) fn close_overcommits(&self,asked:u64)->bool {
+        let mut lane=self.memory.lane.borrow_mut();
+        let claimant=lane.claimant;
+        let Some(close)=lane.closing.as_mut().filter(|close|claimant==Some(close.operation)
+            && (close.operation.0==0 || self.drawn.prefix()==Some((close.operation,close.generation)))) else {return false;};
+        let Some(spent)=close.spent.checked_add(asked).filter(|spent|*spent<=close.footprint) else {return false;};
+        close.spent=spent;
+        true
     }
     pub(crate) fn commit_raster_working(&mut self,reservation:crate::residency::Reservation) {
         self.memory_pass(|r|{drop(reservation);r.sync_raster_report();r.memory.invalidate_limits();r.refresh_memory_limits();});
@@ -401,10 +473,11 @@ impl WgpuRasterizer {
             #[cfg(not(target_arch="wasm32"))] _scratch:(Vec::new(),Vec::new())};
         pages.iter_mut().for_each(PageSurface::discharge);
         encoder.retain_resources();
+        let batch=leases.iter().filter_map(|lease|lease.take_batch()).collect::<Vec<_>>();
         #[cfg(not(target_arch="wasm32"))]
-        encoder.retire((pages,retirement,leases));
+        encoder.retire((pages,retirement,leases,batch));
         #[cfg(target_arch="wasm32")]
-        {drop(pages);encoder.retire((retirement,leases));}
+        {drop(pages);encoder.retire((retirement,leases,batch));}
     }
     pub(crate) fn refresh_memory_limits(&mut self) {
         if !self.memory_pass_due() {return;}
@@ -420,11 +493,12 @@ impl WgpuRasterizer {
         self.apply_memory_grants(scene.as_deref_mut(),cache.as_mut(),encoder);
         self.scene=scene;self.scale_display=cache;
     }
-    pub(crate) fn apply_memory_grants(&mut self,mut scene:Option<&mut scene::Scene>,cache:Option<&mut scene::scale::Cache>,encoder:&mut submission::CommandEncoder) {
+    pub(crate) fn apply_memory_grants(&mut self,mut scene:Option<&mut scene::Scene>,mut cache:Option<&mut scene::scale::Cache>,encoder:&mut submission::CommandEncoder) {
         let reclaim=self.memory.display.handle.reclaim_epoch();
+        self.settle_reclaim(scene.as_deref(),cache.as_deref());
         self.retire_victims(scene.as_deref_mut(),encoder);
-        if !self.memory.apply_limits(self.memory.grants()) && !self.memory.overdrawn() && !self.retention_above_grant() {self.memory.display.handle.reclaimed(reclaim);return;}
-        let composition=self.composition_memory(scene.as_deref());
+        if !self.memory.apply_limits(self.memory.grants()) && !self.memory.overdrawn() && !self.retention_above_grant() {self.answer_reclaim(reclaim,None,encoder,scene.as_deref(),cache.as_deref());return;}
+        let composition=self.composition_with(scene.as_deref(),cache.as_deref());
         self.memory.sync_report(Kind::Scene,self.display_memory_report(scene.as_deref(),composition));
         let raster=self.raster_memory_report();self.memory.sync_report(Kind::RasterPool,raster);
         self.memory.sync_report(Kind::Staging,self.staging_memory_report());
@@ -443,30 +517,48 @@ impl WgpuRasterizer {
         self.uploads.trim_unused(upload_limit);self.restore_uploads.trim_unused(uploads.saturating_sub(upload_limit));
         self.memory.sync_report(Kind::Staging,self.staging_memory_report());
         self.evict_raster(self.raster_excess(),&[],&[],encoder);
-        self.trim_display_to_grant(scene.as_deref());
+        let trimmed=self.trim_display_to_grant(scene.as_deref());
         self.retire_victims(scene.as_deref_mut(),encoder);
-        if self.scene_tiers.display.used()>self.memory.retention_grant() {self.retire_scratch(scene.as_deref_mut(),cache,encoder);}
+        if self.scene_tiers.display.used()>self.memory.retention_grant() {self.retire_scratch(scene.as_deref_mut(),cache.as_deref_mut(),encoder);}
         self.source_tiles.get_mut().flush_retired(encoder);
         self.memory.sync_report(Kind::Scene,self.display_memory_report(scene.as_deref(),composition));
         self.memory.sync_report(Kind::RasterPool,self.raster_memory_report());
         if self.warm.is_none() {self.memory.carry_overdraft(self.scene_tiers.display.used());}
-        self.memory.display.handle.reclaimed(reclaim);
+        self.answer_reclaim(reclaim,trimmed,encoder,scene.as_deref(),cache.as_deref());
+    }
+    fn answer_reclaim(&self,epoch:u64,trimmed:Option<crate::residency::Batch>,encoder:&submission::CommandEncoder,scene:Option<&scene::Scene>,cache:Option<&scene::scale::Cache>) {
+        if !self.memory.reclaim_unanswered() || self.memory.reclaiming.borrow().as_ref().is_some_and(|(at,_)|*at>=epoch) {return;}
+        let earlier=self.memory.reclaiming.take().map(|(_,batch)|batch);
+        let search=crate::residency::Search::open(earlier.into_iter().chain(trimmed).chain(self.scene_tiers.display.heap().retiring()));
+        encoder.retire(search.hold());
+        let batch=search.seal();
+        if batch.pending_with(self.preparation_wake.as_ref()) {self.memory.reclaiming.replace(Some((epoch,batch)));} else {self.publish_memory_with(scene,cache);self.memory.display.handle.reclaimed(epoch);}
+    }
+    fn settle_reclaim(&self,scene:Option<&scene::Scene>,cache:Option<&scene::scale::Cache>) {
+        if !self.memory.reclaiming.borrow().as_ref().is_some_and(|(_,batch)|batch.settled()) {return;}
+        let Some((epoch,_))=self.memory.reclaiming.take() else {return;};
+        self.publish_memory_with(scene,cache);self.memory.display.handle.reclaimed(epoch);
+    }
+    pub(crate) fn reclaim_due(&self)->bool {
+        self.memory.reclaim_unanswered() && self.memory.reclaiming.borrow().as_ref().is_none_or(|(epoch,batch)|*epoch<self.memory.display.handle.reclaim_epoch() || !batch.pending_with(self.preparation_wake.as_ref()))
     }
     fn memory_pass_due(&self)->bool {
         let display=&self.scene_tiers.display;
-        display.heap().pending()!=0 || self.memory.retired.get()!=Some([display.heap().epoch(),display.floor()])
-            || self.memory.limits_changed() || self.memory.overdrawn() || self.retention_above_grant() || self.memory.reclaim_unanswered()
+        display.heap().pending()!=0 || self.victims_marked() || self.memory.retired.get()!=Some([display.heap().epoch(),display.floor()])
+            || self.memory.limits_changed() || self.memory.overdrawn() || self.retention_above_grant() || self.reclaim_due()
     }
     fn retire_victims(&mut self,scene:Option<&mut scene::Scene>,encoder:&mut submission::CommandEncoder)->bool {
         let floor=self.scene_tiers.display.floor();
         self.memory.retired.set(Some([self.scene_tiers.display.heap().epoch(),floor]));
         if self.warm.is_some() {self.source_tiles.borrow().release_ready();} else {self.release_unused_decodes();}
+        self.scene_tiers.display.heap().take_marked();
         let sources=self.source_tiles.get_mut();
         let decoded=sources.retire_evicted();sources.flush_retired(encoder);
         let retired=decoded+self.moving_images.retire_evicted(encoder)+scene.map_or(0,|scene|scene.retire_victims(encoder))!=0;
         if retired {encoder.retain_resources();}
         retired
     }
+    pub(crate) fn victims_marked(&self)->bool {self.scene_tiers.display.heap().marked()}
     pub(crate) fn release_unused_decodes(&self)->u64 {
         let display=&self.scene_tiers.display;
         let tiles=self.source_tiles.borrow();
@@ -479,11 +571,10 @@ impl WgpuRasterizer {
         retired
     }
     pub(crate) fn begin_frame_memory(&mut self, packet: FramePacket<'_>) {
-        if let Some(lane)=self.memory.stop() {lane.rearm();}
-        self.memory.lane.borrow_mut().exhausted=false;
-        self.memory.fruitless.borrow_mut().clear();
         if self.restore_preparation()==Some(crate::frame_demand::Outstanding::Blocked(crate::frame_demand::Input::Residency))
             && let Some(scene)=&self.scene {scene.advance_demand_epoch();}
+        let closing=self.close_generation(packet).map(|(generation,finishes)|Close {operation:packet.operation(),generation,finishes,footprint:0,spent:0});
+        self.memory.lane.borrow_mut().closing=closing;
         self.frame_room(packet);
         if packet.dabs.is_empty() && packet.dab_batches.is_empty() && self.pen_down_warm_due() {self.warm_pen_down();}
         self.scene_tiers.display.begin_frame();
@@ -514,81 +605,64 @@ impl WgpuRasterizer {
         self.scene_tiers.display.set_grant(self.memory.retention_ceiling());
     }
     pub(crate) fn end_frame_memory(&mut self) {
-        if !std::mem::take(&mut self.memory.lane.borrow_mut().asked) {self.end_lane_wait();}
+        let asked={let mut lane=self.memory.lane.borrow_mut();lane.closing=None;std::mem::take(&mut lane.asked)};
+        if !asked && matches!(self.lane_turn(),crate::frame_demand::Turn::Enter(_)) {self.end_lane_wait();}
         self.scene_tiers.display.heap().begin_frame();self.scene_tiers.display.end_frame();
     }
-    fn trim_display_to_grant(&self,scene:Option<&scene::Scene>) {
+    fn trim_display_to_grant(&self,scene:Option<&scene::Scene>)->Option<crate::residency::Batch> {
         let display=&self.scene_tiers.display;let grant=self.memory.retention_limit();
-        self.trim_display_by(scene,display.used().saturating_sub(grant.saturating_add(self.scene_tiers.retiring.used())));
+        let trimmed=self.trim_display_by(scene,display.used().saturating_sub(grant.saturating_add(self.scene_tiers.retiring.used())));
         self.memory.trimmed.set(Some([grant,display.used()]));
+        trimmed
     }
-    fn trim_display_by(&self,scene:Option<&scene::Scene>,excess:u64) {
+    fn trim_display_by(&self,scene:Option<&scene::Scene>,excess:u64)->Option<crate::residency::Batch> {
         let display=&self.scene_tiers.display;let before=display.used();
         display.heap().reclaim(excess);
         let excess=excess.saturating_sub(display.heap().pending());
-        if excess!=0 && let Some(scene)=scene {scene.release_pages_by(excess);}
+        let released=scene.filter(|_|excess!=0).and_then(|scene|scene.release_pages_by(excess));
         if display.used()<before {self.memory.display.publish(self.display_memory_report(scene,self.composition_memory(scene)));}
+        crate::residency::Batch::joined(display.heap().retiring().into_iter().chain(released))
     }
     pub(crate) fn retention_above_grant(&self)->bool {
         let display=&self.scene_tiers.display;let grant=self.memory.retention_limit();
         display.used()>grant.saturating_add(self.scene_tiers.retiring.used()) && self.memory.trimmed.get()!=Some([grant,display.used()])
     }
-    pub(crate) fn admit_display(&self,scene:Option<&scene::Scene>,class:crate::residency::Class,bytes:u64)->Result<crate::residency::Reservation,crate::residency::Blocked> {
-        self.admit_tier(scene,&self.scene_tiers.display,class,bytes)
+    pub(crate) fn admit_display(&self,scene:Option<&scene::Scene>,class:crate::residency::Class,bytes:u64,allowance:crate::frame_demand::Allowance)->Result<crate::residency::Reservation,crate::residency::Blocked> {
+        self.admit_tier(scene,&self.scene_tiers.display,class,bytes,allowance)
     }
-    pub(crate) fn admit_tier(&self,scene:Option<&scene::Scene>,tier:&Arc<crate::residency::Tier>,class:crate::residency::Class,bytes:u64)->Result<crate::residency::Reservation,crate::residency::Blocked> {
-        let scan=!self.searched_in_vain(tier,class,bytes);
-        let admitted=self.admit_within(scene,tier,class,bytes,scan);
+    pub(crate) fn admit_tier(&self,scene:Option<&scene::Scene>,tier:&Arc<crate::residency::Tier>,class:crate::residency::Class,bytes:u64,allowance:crate::frame_demand::Allowance)->Result<crate::residency::Reservation,crate::residency::Blocked> {
+        if let Some(lane)=self.memory.stop() {return Err(lane);}
+        let admitted=self.admit_unstopped(scene,tier,class,bytes,allowance);
         let display=&self.scene_tiers.display;
-        if admitted.is_err() && scan && class.floor_reserved() {display.heap().release_stale(display.above_optional());}
-        if scan && self.memory.stop().is_none() && let Err(refusal)=&admitted {
-            let mut fruitless=self.memory.fruitless.borrow_mut();
-            fruitless.retain(|(searched,refused,least,_)|!(Arc::ptr_eq(searched,tier) && *refused>=class && *least>=bytes));
-            fruitless.push((tier.clone(),class,bytes,refusal.clone()));
+        if admitted.is_err() && allowance==crate::frame_demand::Allowance::Fresh && class.floor_reserved() && display.heap().release_stale(display.above_optional())!=0 {
+            return admitted.map_err(|blocked|{let batch=crate::residency::Batch::joined(blocked.waiting().cloned().into_iter().chain(display.heap().retiring()));blocked.reclaiming(batch)});
         }
         admitted
     }
-    fn searched_in_vain(&self,tier:&Arc<crate::residency::Tier>,class:crate::residency::Class,bytes:u64)->bool {
-        let mut fruitless=self.memory.fruitless.borrow_mut();
-        fruitless.retain(|(_,_,_,refusal)|!refusal.fits());
-        fruitless.iter().any(|(searched,refused,least,_)|Arc::ptr_eq(searched,tier) && *refused<=class && bytes>=*least)
-    }
-    fn admit_within(&self,scene:Option<&scene::Scene>,tier:&Arc<crate::residency::Tier>,class:crate::residency::Class,bytes:u64,scan:bool)->Result<crate::residency::Reservation,crate::residency::Blocked> {
-        if let Some(lane)=self.memory.stop() {return Err(lane);}
-        self.admit_unstopped(scene,tier,class,bytes,scan)
-    }
-    fn admit_unstopped(&self,scene:Option<&scene::Scene>,tier:&Arc<crate::residency::Tier>,class:crate::residency::Class,bytes:u64,scan:bool)->Result<crate::residency::Reservation,crate::residency::Blocked> {
+    fn admit_unstopped(&self,scene:Option<&scene::Scene>,tier:&Arc<crate::residency::Tier>,class:crate::residency::Class,bytes:u64,allowance:crate::frame_demand::Allowance)->Result<crate::residency::Reservation,crate::residency::Blocked> {
+        let scan=allowance==crate::frame_demand::Allowance::Fresh;
         #[cfg(test)] crate::test_support::PassCounts {room_scans:u64::from(scan),..Default::default()}.record();
         let display=&self.scene_tiers.display;
         display.set_grant(self.memory.retention_ceiling());
         let scene=scene.or(self.scene.as_deref());
         let over=|| display.used().saturating_add(bytes).saturating_sub(display.grant());
-        let cover=if class.floor_reserved() && over()!=0 {
+        let mut trimmed=None;
+        let cover=if bytes!=0 && class.floor_reserved() && over()!=0 {
             let ledger=&self.memory.display.handle;
             if scan {
                 display.heap().evict(over(),class);
-                if let Some(scene)=scene {scene.trim_pages_by(over().saturating_sub(display.heap().pending()),class);}
+                trimmed=scene.and_then(|scene|scene.trim_pages_by(over().saturating_sub(display.heap().pending()),class));
             }
             let total=display.used().saturating_add(bytes);
-            (over()!=0).then(||ledger.admit_working_through(total,None).ok_or_else(||tier.refused_by(ledger.clone(),class,bytes))).transpose()
-                .inspect_err(|blocked|self.wait_for_release(blocked.clone()))?
+            (over()!=0).then(||tier.admit_working(ledger,total,class,bytes)
+                .map_err(|blocked|blocked.reclaiming(crate::residency::Batch::joined(display.heap().retiring().into_iter().chain(trimmed.clone()).chain(self.device.transient_display.heap().retiring()))))).transpose()?
         } else {None};
         let reservation=if scan {tier.admit(class,bytes).or_else(|blocked| {
-            if let Some(scene)=scene {scene.trim_pages_by(blocked.deficit(),class);}
-            tier.admit(class,bytes)
-        })} else {tier.admit_unevicted(class,bytes)}.inspect_err(|blocked|self.wait_for_release(blocked.clone()))?;
+            let trimmed=scene.and_then(|scene|scene.trim_pages_by(blocked.deficit(),class)).into_iter().chain(trimmed);
+            tier.admit(class,bytes).map_err(|blocked|{let batch=crate::residency::Batch::joined(blocked.waiting().cloned().into_iter().chain(trimmed));blocked.reclaiming(batch)})
+        })} else {tier.admit_unevicted(class,bytes)}?;
         self.memory.overdraft.borrow_mut().extend(cover);
         Ok(reservation)
-    }
-    #[cfg_attr(target_arch="wasm32",expect(unused_variables,reason="Wasm admissions have no release wake to wait on"))]
-    pub(crate) fn wait_for_release(&self,blocked:crate::residency::Blocked) {
-        #[cfg(not(target_arch="wasm32"))]
-        if let Some(wake)=self.preparation_wake.clone() {blocked.wake_on_release(&self.device.retirement_handle(),wake);}
-    }
-    pub(crate) fn refuses(&self,refusal:&crate::residency::Blocked)->bool {
-        #[cfg(not(target_arch="wasm32"))]
-        if let Some(wake)=&self.preparation_wake {return self.device.retirement_handle().refuses(refusal,wake);}
-        !refusal.fits()
     }
     pub(super) fn prepare_capture_memory(&mut self, scene: SceneView<'_>, extent: [u32; 2]) {
         self.memory.demand_region(scene, extent, PixelRect::full(extent));
@@ -701,14 +775,17 @@ impl WgpuRasterizer {
         self.warm_report(MemoryReport {gpu_bytes:uploads.saturating_add(restore),pinned_gpu_bytes:pinned.saturating_add(restore_pinned).max(WORKING_BYTES),
             demand_gpu_bytes:uploads.saturating_add(restore).max(WORKING_BYTES),..Default::default()},0)
     }
+    #[cfg(test)]
     pub(crate) fn current_display_memory_report(&self)->MemoryReport {
         self.display_memory_report(self.scene.as_deref(),self.composition_memory(self.scene.as_deref()))
     }
-    pub(crate) fn composition_memory(&self,scene:Option<&scene::Scene>)->[u64;2] {
-        [0,self.scene_tiers.windows.used().saturating_add(self.scale_display.as_ref().map_or_else(||scene.map_or(0,|scene|scene.retained_scale_bytes()[1]),scene::scale::Cache::pinned_page_bytes))]
+    pub(crate) fn composition_memory(&self,scene:Option<&scene::Scene>)->[u64;2] {self.composition_with(scene,self.scale_display.as_ref())}
+    fn composition_with(&self,scene:Option<&scene::Scene>,cache:Option<&scene::scale::Cache>)->[u64;2] {
+        [0,self.scene_tiers.windows.used().saturating_add(cache.map_or_else(||scene.map_or(0,|scene|scene.retained_scale_bytes()[1]),scene::scale::Cache::pinned_page_bytes))]
     }
-    pub(super) fn publish_memory(&self) {
-        self.memory.display.publish(self.current_display_memory_report());
+    pub(super) fn publish_memory(&self) {self.publish_memory_with(self.scene.as_deref(),self.scale_display.as_ref());}
+    fn publish_memory_with(&self,scene:Option<&scene::Scene>,cache:Option<&scene::scale::Cache>) {
+        self.memory.display.publish(self.display_memory_report(scene,self.composition_with(scene,cache)));
         self.memory.raster.publish(self.raster_memory_report());
         self.memory.staging.publish(self.staging_memory_report());
     }

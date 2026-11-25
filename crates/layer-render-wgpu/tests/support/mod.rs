@@ -24,8 +24,8 @@ pub fn submit_settled(r: &mut WgpuRasterizer, frame: layer_render::FramePacket<'
     loop {
         r.poll_pending(frame.view).unwrap();
         let next = if first { frame } else { idle };
-        if r.can_submit() && r.raster_dependencies_ready(next, None) {
-            r.submit(next).unwrap();
+        if r.can_submit() && let std::task::Poll::Ready(result) = r.submit_when_ready(next, None) {
+            result.unwrap();
             first = false;
         }
         r.wait_idle().unwrap();

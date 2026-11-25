@@ -255,7 +255,7 @@ fn native_alpha_reuse_admits_warm_pages_beside_cold_output_pages() {
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
         let write=cache.pages.lock().unwrap().prepare_write(key.clone(),warm,pages::Accuracy::Exact,0).unwrap();
         scene.prepare_region_in_frame(&mut r,frame,(warm,warm.into()),PixelRect::EMPTY,false,&mut encoder).unwrap();
-        let mut accepted=scene.declare_capture(&mut r,frame,&image,&[warm],scene::Output::EffectComposite(handle),None,cache.evaluated_from(&output,output.plan.bounds,&expected).as_ref()).unwrap().accept_query(&mut r,Some(&scene)).unwrap();
+        let mut accepted=scene.declare_capture(&mut r,frame,&image,&[warm],scene::Output::EffectComposite(handle),None,cache.evaluated_from(&output,output.plan.bounds,&expected).as_ref()).unwrap().accept_query(&mut r,Some(&scene),crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh).unwrap();
         scene.capture_prepared_regions_reuse(&mut r,frame,&image,&[warm],scene::Output::EffectComposite(handle),false,None,
             cache.evaluated_from(&output,output.plan.bounds,&expected).as_ref(),&mut encoder,&mut accepted).unwrap();
         cache.pages.lock().unwrap().commit(write,0,&mut encoder);
@@ -268,7 +268,7 @@ fn native_alpha_reuse_admits_warm_pages_beside_cold_output_pages() {
         let full=PixelRect::full(extent);
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
         scene.prepare_region_in_frame(&mut r,frame,(full,full.into()),PixelRect::EMPTY,false,&mut encoder).unwrap();
-        let mut accepted=scene.declare_capture(&mut r,frame,&image,&[full],scene::Output::EffectComposite(handle),None,cache.evaluated_from(&output,output.plan.bounds,&expected).as_ref()).unwrap().accept_query(&mut r,Some(&scene)).unwrap();
+        let mut accepted=scene.declare_capture(&mut r,frame,&image,&[full],scene::Output::EffectComposite(handle),None,cache.evaluated_from(&output,output.plan.bounds,&expected).as_ref()).unwrap().accept_query(&mut r,Some(&scene),crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh).unwrap();
         scene.capture_prepared_regions_reuse(&mut r,frame,&image,&[full],scene::Output::EffectComposite(handle),false,None,
             cache.evaluated_from(&output,output.plan.bounds,&expected).as_ref(),&mut encoder,&mut accepted).unwrap();
         r.uploads.finish(&encoder);
@@ -280,7 +280,7 @@ fn native_alpha_reuse_admits_warm_pages_beside_cold_output_pages() {
         let reference=Image::new(&r,image.plan,"full effect capture reference");
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
         scene.prepare_region_in_frame(&mut r,frame,(full,full.into()),PixelRect::EMPTY,false,&mut encoder).unwrap();
-        let mut accepted=scene.declare_capture(&mut r,frame,&reference,&[full],scene::Output::EffectComposite(handle),None,None).unwrap().accept_query(&mut r,Some(&scene)).unwrap();
+        let mut accepted=scene.declare_capture(&mut r,frame,&reference,&[full],scene::Output::EffectComposite(handle),None,None).unwrap().accept_query(&mut r,Some(&scene),crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh).unwrap();
         scene.capture_prepared_regions(&mut r,frame,&reference,&[full],scene::Output::EffectComposite(handle),false,None,&mut encoder,&mut accepted).unwrap();
         r.uploads.finish(&encoder);
         encoder.submit(&r.queue);

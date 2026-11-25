@@ -64,14 +64,16 @@ impl Entry {
     }
 }
 #[cfg(target_arch="wasm32")]
-struct RetirementCompletion(Arc<AtomicBool>);
+type RetiredEntry=(Entry,Option<crate::residency::Hold>,Arc<AtomicBool>);
 #[cfg(target_arch="wasm32")]
-impl Drop for RetirementCompletion { fn drop(&mut self) { self.0.store(true,Ordering::Release); } }
+struct Landed(Arc<AtomicBool>,crate::residency::Wake);
+#[cfg(target_arch="wasm32")]
+impl Drop for Landed { fn drop(&mut self) { self.0.store(true,Ordering::Release);(self.1)(); } }
 #[derive(Default)]
 pub(crate) struct MovingImages {
     entries: Vec<Entry>,
     #[cfg(target_arch="wasm32")]
-    retired: Vec<(Entry,Arc<AtomicBool>)>,
+    reaper: Option<crate::scene::sources::WebRetirement<RetiredEntry>>,
     live: Arc<Tier>,
     building: Arc<Tier>,
     retiring: Arc<Tier>,
@@ -173,20 +175,18 @@ impl MovingImages {
         self.evictions+=1;
         entry.lease.hold();
         entry.charges[0]=self.retiring.charge(entry.charges[0].bytes());
+        let batch=entry.lease.take_batch();
         #[cfg(not(target_arch="wasm32"))]
-        encoder.retire(entry);
+        encoder.retire((entry,batch));
         #[cfg(target_arch="wasm32")]
         {
-            let complete=Arc::new(AtomicBool::new(false));let callback=RetirementCompletion(complete.clone());
-            encoder.hold(callback);self.retired.push((entry,complete));
+            let reaper=self.reaper.get_or_insert_with(||crate::scene::sources::WebRetirement::new(|(_,_,landed):&RetiredEntry|landed.load(Ordering::Acquire)));
+            let landed=Arc::new(AtomicBool::new(false));
+            encoder.hold(Landed(landed.clone(),reaper.release_wake()));
+            reaper.send((entry,batch,landed));
         }
     }
-    fn drop_retired(&mut self) {
-        #[cfg(target_arch="wasm32")]
-        self.retired.retain(|(_,complete)|!complete.load(Ordering::Acquire));
-    }
     pub(crate) fn retire_evicted(&mut self,encoder:&mut crate::submission::CommandEncoder)->u64 {
-        self.drop_retired();
         let mut bytes=0;
         if self.evicted.swap(false,Ordering::AcqRel) {
             for entry in std::mem::take(&mut self.entries) {
@@ -224,7 +224,6 @@ impl MovingImages {
         Ok(tight)
     }
     pub(crate) fn plan(&mut self,r:&WgpuRasterizer,requests:&[MovingRequest],budget:u64,encoder:&mut crate::submission::CommandEncoder)->Result<MipPlan,GpuRasterError> {
-        self.drop_retired();
         for entry in &mut self.entries {
             if !entry.root && let Some(request)=requests.iter().find(|request|entry.matches(request.id,&request.source)) && entry.wanted!=request.bounds {
                 entry.wanted=request.bounds;
@@ -323,14 +322,14 @@ impl MovingImages {
     pub(crate) fn allocate(&mut self,r:&WgpuRasterizer,plan:MipPlan,encoder:&mut crate::submission::CommandEncoder) {
         if plan.targets.is_empty() {return;}
         self.pipelines(&r.device);
-        let Ok(windows)=plan.targets.iter().map(|target|r.admit_tier(None,&self.building,Class::Visible,target.bytes)).collect::<Result<Vec<_>,_>>()
+        let Ok(windows)=plan.targets.iter().map(|target|r.admit_tier(None,&self.building,Class::Visible,target.bytes,crate::frame_demand::Allowance::Fresh)).collect::<Result<Vec<_>,_>>()
             else {self.allocation_waiting=true;return;};
         let (work,charge)=match self.work.take() {
             Some(work)=>work,
             None=>{
-                let Ok(reserved)=r.admit_tier(None,&self.scratch,Class::Visible,working_bytes()) else {self.allocation_waiting=true;return;};
+                let Ok(reserved)=r.admit_tier(None,&self.scratch,Class::Visible,working_bytes(),crate::frame_demand::Allowance::Fresh) else {self.allocation_waiting=true;return;};
                 let work=display_mips::Image::with_device(&r.device,display_mips::Plan::at([PAGE_SIZE;2],display_mips::MAX_LEVEL),display_mips::MAX_LEVEL);
-                let charge=reserved.charge(work.storage_bytes());
+                let charge=reserved.charge();
                 (work,charge)
             },
         };
@@ -368,7 +367,7 @@ impl MovingImages {
             }
             let source=Arc::downgrade(&target.request.source);
             if pending.is_empty() && !copied.iter().any(|(id,known)|*id==target.request.id && known.ptr_eq(&source)) {copied.push((target.request.id,source.clone()));}
-            let building=reserved.charge(image.storage_bytes());
+            let building=reserved.charge();
             let window=if pending.is_empty() {self.live.charge(building.bytes())} else {building};
             let charges=[window,self.ram.charge(pending.capacity() as u64*std::mem::size_of::<[u32;2]>() as u64)];
             replacements.push(Entry {id:target.request.id,source,image,pending:pending.into(),valid,root:target.root,requested:true,rank:target.request.rank,wanted:target.request.bounds,charges,lease:self.live.heap().lease(&self.evicted)});
@@ -458,7 +457,7 @@ impl MovingImages {
                 if bytes.len()!=row as usize*PAGE_SIZE as usize {return Err(GpuRasterError::InvalidImage);}
                 let reservation=r.reserve_upload(Class::Visible,bytes.len() as u64).ok_or(GpuRasterError::NotReady)?;
                 r.uploads.write_texture_region(encoder,&entry.image.texture,wgpu::Origin3d {x:destination[0],y:destination[1],z:0},extent,row,|mapped|mapped.copy_from_slice(bytes))?;
-                r.charge_upload(encoder,reservation,bytes.len() as u64);
+                r.charge_upload(encoder,reservation,bytes.len() as u64)?;
             }
         }
         if let Some(level)=level {
@@ -1259,6 +1258,29 @@ pub(crate) mod tests {
         let crate::scene::sources::PreparedSourcePixels::NativeSamples(pixels)=current.pixels.unwrap() else {panic!("Successful B retains native pixels");};
         assert_eq!(pixels.as_slice(),[9,8,7,255]);
         drop(stale);drop(a);assert_eq!(weak.strong_count(),0);
+    }
+    #[cfg(not(target_arch="wasm32"))]
+    #[test]
+    fn a_snapshot_awaiting_a_parked_installation_ends_with_the_device_loss() {
+        struct Notify(std::sync::mpsc::Sender<()>);
+        impl std::task::Wake for Notify {fn wake(self:Arc<Self>) {let _=self.0.send(());}}
+        let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();let space=r.device.working_space();
+        let source=layer_core::color::source::rgba8_source([1;2],|_,_|[255,0,0,255]);
+        let tile=PreparedImageWork::Image(PreparedMipTile {class:Class::Visible,use_:crate::scene::sources::SourceUse::Native,id:PortableId::random(),source:source.clone(),coordinate:[0;2],
+            pixels:prepare_image_tile(&source,[0;2],space,&r.device.source_samples,None)});
+        r.source_results.push_back((space,tile,r.scene_tiers.ram.charge(0)));
+        r.installation=crate::frame_demand::UnitWait::Parked(Arc::new(Tier::default()).wanting(Class::Visible,1));
+        assert!(r.image_decode_waiting(),"the decoded tile waits for installation room");
+        let (notify,woken)=std::sync::mpsc::channel();
+        let waker=std::task::Waker::from(Arc::new(Notify(notify)));
+        let mut context=std::task::Context::from_waker(&waker);
+        let mut future=std::pin::pin!(r.await_image_decode());
+        assert!(std::future::Future::poll(future.as_mut(),&mut context).is_pending());
+        r.device.loss().report("Canvas GPU stopped (Unknown): test".into());
+        r.device.poll_binding().retire_lost(||{});
+        woken.recv_timeout(std::time::Duration::from_secs(5)).expect("the lost device wakes the snapshot that awaits its installation");
+        assert!(matches!(std::future::Future::poll(future.as_mut(),&mut context),std::task::Poll::Ready(Err(GpuRasterError::WaitFailed(_)))),
+            "a snapshot waiting on installation room ends with the device loss instead of waiting until it is cancelled");
     }
     #[cfg(not(target_arch="wasm32"))]
     #[test]

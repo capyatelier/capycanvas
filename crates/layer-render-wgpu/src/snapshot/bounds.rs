@@ -155,7 +155,7 @@ impl SnapshotGpu {
                     snapshot.with_region_gpu(region, 32, |r, packet, region, encoder| {
                         let coordinate = [x / PAGE_SIZE, y / PAGE_SIZE];
                         let default = r.layer_masks.definitions.get(&id).map(|mask| mask.default_coverage);
-                        let texture = r.raw_layer_tile(id, coordinate, encoder)?.map(|page| page.uncertified().texture);
+                        let texture = r.raw_layer_tile(id, coordinate, crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh, encoder)?.map(|page| page.uncertified().texture);
                         let mask = default.map(|coverage| (snapshot_mask_inverted, texture.is_none().then_some(coverage)));
                         let texture = texture.unwrap_or_else(|| r.empty_texture.clone().into());
                         if let Some(selection) = &selection {

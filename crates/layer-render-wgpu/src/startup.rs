@@ -1109,7 +1109,7 @@ mod tests {
         crate::layer_tests::placement::paint_mut(&mut document).operations=Arc::new(vec![layer_core::RasterOperation {placement:layer_core::Affine::IDENTITY,
             coverage:crate::layer_tests::placement::reveal_all([64;2],[0;2]),kind:layer_core::RasterOperationKind::Fill {edges:None,underfill:None,color:[0.,0.,1.,1.],alpha_locked:false,texture:Default::default()}}]);
         let batches=[DabBatch {kind:DabBatchKind::RasterOperation(0),dab_count:0,..crate::test_support::dab_batch(target,style,layer_core::Rect::from_extent([64;2]))}];
-        assert!(renderer.brush_batches_ready(FramePacket {dab_batches:&batches,..crate::test_support::packet(document.scene(),[64;2])}));
+        assert!(renderer.brush_batches_wait(FramePacket {dab_batches:&batches,..crate::test_support::packet(document.scene(),[64;2])}).is_none());
         assert!(!required.ready());
     }
     #[test]
@@ -1431,7 +1431,7 @@ mod gpu_tests {
         let compiler=&renderer.startup.as_ref().unwrap().compiler;
         compiler.enqueue(DOCUMENT,move||{let _=entered.send(());let _=held.recv();Ok(())});
         entry.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert!(matches!(renderer.prepare_raster_uploads(&[(blob,RgbSpace::Srgb,RgbSpace::Srgb)]),Err(GpuRasterError::NotReady)));
+        assert!(matches!(renderer.prepare_raster_uploads(&[(blob,RgbSpace::Srgb,RgbSpace::Srgb)]),Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
         assert!(!renderer.scene_pipelines.source.integer.ready());
         assert!(compile::tests::requested(&renderer.compilation,&renderer.scene_pipelines.source.integer,VALIDATION));
         release.send(()).unwrap();

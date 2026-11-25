@@ -21,7 +21,7 @@ struct Canvas {
     peak: u64,
 }
 
-struct Memory { lane: u64, admitted: u64, strokes: u64 }
+struct Memory { admitted: u64, strokes: u64 }
 
 impl Canvas {
     fn photo(budget_mib: u64) -> Self { Self::photo_of(EXTENT, layer_core::color::SampleDepth::U8, budget_mib) }
@@ -83,13 +83,13 @@ impl Canvas {
                 let timestamp_ns = start_ns + contact * 4_001_000_000 + step * 4_000_000_000 / STEPS;
                 self.input.push(PenEvent { timestamp_ns, view_revision: 1, pressure: if phase == PenPhase::Up { 0. } else { 1. },
                     ..crate::test_support::pen(self.sequence, phase, [view.width_px as f32 * (center[0] + radius * angle.cos()), view.height_px as f32 * (center[1] + radius * angle.sin())], SampleFlags::PRIMARY) }).unwrap();
-                let refusals = self.engine.backend().stroke_memory_refusals();
+                let refusals = self.engine.metrics().stroke_memory_refusals;
                 self.frame(timestamp_ns);
                 for _ in 1..if held || step == STEPS { 1 } else { SAMPLE_FRAMES } {
                     if !self.engine.has_pending_input() && !self.engine.has_pending_document_edits() { break; }
                     self.frame(self.clock + FRAME_NS);
                 }
-                if self.engine.backend().stroke_memory_refusals() != refusals { self.refused.push(step); }
+                if self.engine.metrics().stroke_memory_refusals != refusals { self.refused.push(step); }
                 held |= self.engine.has_pending_input() && step != STEPS;
             }
         }
@@ -97,13 +97,11 @@ impl Canvas {
     }
     fn memory(&self) -> Memory {
         let r = self.engine.backend();
-        let scratch = r.liquify.as_ref().map_or(0, |liquify| resident::Storage::storage_bytes(&liquify.empty)
-            + liquify.scratch_map.iter().map(resident::Storage::storage_bytes).sum::<u64>() + liquify.partials.surfaces.iter().map(|(texture, ..)| texture_bytes(texture)).sum::<u64>());
         let mut strokes = 0;
         for stroke in r.liquify.iter().flat_map(|liquify| liquify.strokes.values()) {
             layer_core::liquify::Field::resources(&stroke.field, &mut |_, bytes| strokes += bytes as u64);
         }
-        Memory { lane: r.raster_tiers.raster.used() - scratch, admitted: r.raster_tiers.admitted.used(), strokes }
+        Memory { admitted: r.raster_tiers.admitted.used(), strokes }
     }
     fn original_bytes(&self) -> u64 {
         let mut atlases = BTreeMap::new();
@@ -125,7 +123,8 @@ impl Canvas {
     }
     fn take(&mut self, bytes: u64) -> Option<crate::residency::Reservation> {
         for _ in 0..SETTLE_FRAMES {
-            if let Ok(taken) = self.engine.backend_mut().admit_raster_working(bytes) { return Some(taken); }
+            if let Ok(taken) = self.engine.backend_mut().admit_raster_working(bytes,crate::frame_demand::Allowance::Fresh) { return Some(taken); }
+            if self.engine.backend().next_frame() == layer_render::FrameDemand::Work { self.frame(self.clock + FRAME_NS); continue; }
             self.engine.backend_mut().wait_idle().unwrap();
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
@@ -153,28 +152,68 @@ impl Canvas {
 }
 
 #[test]
-fn a_stroke_refused_its_own_memory_ends_with_the_drawing_as_it_was_and_the_next_stroke_commits() {
+fn a_stroke_refused_its_own_memory_after_it_drew_commits_what_it_drew_once_and_the_next_stroke_commits() {
     for preset in [layer_core::DefaultBrushPreset::LiquifyPush, layer_core::DefaultBrushPreset::LoadedOil] {
         let mut canvas = Canvas::photo(384);
         canvas.brush(preset, 740.);
-        let (document, before, shown, refusals) = (canvas.engine.document().clone(), canvas.memory(), canvas.pixels(), canvas.engine.backend().stroke_memory_refusals());
+        let (document, before, shown, refusals) = (canvas.engine.document().clone(), canvas.memory(), canvas.pixels(), canvas.engine.metrics().stroke_memory_refusals);
         assert!(canvas.ovals([0.5; 2], 1. / 3., 1), "{preset:?}: the stroke must end within {SETTLE_FRAMES} frames of its last input, not wait on {:?}", canvas.engine.backend().outstanding_terms());
-        assert_eq!(canvas.engine.backend().stroke_memory_refusals(), refusals + 1, "{preset:?}: the painter is told once that the stroke found no memory");
-        let current = canvas.engine.document();
-        assert!(current.revision == document.revision && current.artwork == document.artwork && current.working == document.working, "{preset:?}: the refused stroke leaves the drawing at its revision");
+        assert_eq!(canvas.engine.metrics().stroke_memory_refusals, refusals + 1, "{preset:?}: the painter is told once that the stroke found no memory");
+        assert!(matches!(canvas.refused[..], [step] if step > 0), "{preset:?}: memory refuses the stroke after it drew: {:?}", canvas.refused);
         let after = canvas.memory();
-        assert_eq!([after.lane, after.admitted, after.strokes], [before.lane, before.admitted, before.strokes], "{preset:?}: the refused stroke returns the lane and its Liquify maps and originals");
-        assert!(canvas.pixels() == shown, "{preset:?}: the canvas shows the pixels from before the refused stroke");
+        assert_eq!([after.admitted, after.strokes], [before.admitted, before.strokes], "{preset:?}: the refused stroke returns its Liquify maps and originals");
+        let (drawn, kept) = (canvas.contents(), canvas.pixels());
+        assert!(canvas.engine.document().revision == document.revision + 1 && canvas.engine.document().artwork != document.artwork, "{preset:?}: what the refused stroke drew commits as one revision");
+        assert!(kept != shown, "{preset:?}: the canvas keeps what the refused stroke drew");
         canvas.brush(preset, 200.);
         assert!(canvas.ovals([0.5; 2], 1. / 8., 1), "{preset:?}: a stroke that fits must end");
-        assert_eq!((canvas.engine.document().revision, canvas.engine.backend().stroke_memory_refusals()), (document.revision + 1, refusals + 1), "{preset:?}: the next stroke commits one revision");
+        assert_eq!((canvas.engine.document().revision, canvas.engine.metrics().stroke_memory_refusals), (document.revision + 2, refusals + 1), "{preset:?}: the next stroke commits one revision");
         let (painted, pushed) = (canvas.contents(), canvas.pixels());
-        assert!(!painted.is_empty() && pushed != shown, "{preset:?}: the committed stroke changes the photo");
+        assert!(painted != drawn && pushed != kept, "{preset:?}: the committed stroke changes the drawing");
         assert!(canvas.engine.undo().unwrap() && canvas.settle());
-        assert!(canvas.engine.document().artwork == document.artwork && canvas.pixels() == shown, "{preset:?}: Undo returns the pixels from before both strokes");
-        assert!(!canvas.engine.undo().unwrap(), "{preset:?}: the refused stroke left no history");
-        assert!(canvas.engine.redo().unwrap() && canvas.settle());
-        assert!(canvas.contents() == painted && canvas.pixels() == pushed, "{preset:?}: Redo returns the committed stroke");
+        assert!(canvas.contents() == drawn && canvas.pixels() == kept, "{preset:?}: Undo returns what the refused stroke drew");
+        assert!(canvas.engine.undo().unwrap() && canvas.settle());
+        assert!(canvas.engine.document().artwork == document.artwork && canvas.pixels() == shown, "{preset:?}: a second Undo returns the photo");
+        assert!(!canvas.engine.undo().unwrap(), "{preset:?}: the refused stroke is one history entry");
+        assert!(canvas.engine.redo().unwrap() && canvas.engine.redo().unwrap() && canvas.settle());
+        assert!(canvas.contents() == painted && canvas.pixels() == pushed, "{preset:?}: Redo returns both strokes");
+    }
+}
+
+#[test]
+fn a_drawn_stroke_closes_and_finalizes_once_with_all_other_room_pinned() {
+    const STEPS: u64 = 16;
+    for preset in [layer_core::DefaultBrushPreset::LoadedOil, layer_core::DefaultBrushPreset::LiquifyPush] {
+        let mut canvas = Canvas::photo(1024);
+        canvas.brush(preset, 200.);
+        let (document, refusals) = (canvas.engine.document().clone(), canvas.engine.metrics().stroke_memory_refusals);
+        let (view, start) = (canvas.engine.view(), canvas.clock.max(60_000_000_000));
+        let mut pinned = Vec::new();
+        for step in 0..=STEPS {
+            let angle = step as f32 * std::f32::consts::TAU / (2 * STEPS) as f32;
+            let phase = if step == 0 { PenPhase::Down } else if step == STEPS { PenPhase::Up } else { PenPhase::Move };
+            if phase == PenPhase::Up {
+                assert!(canvas.engine.has_active_stroke() && canvas.engine.metrics().stroke_memory_refusals == refusals, "{preset:?}: the stroke draws before its room is pinned");
+                pinned = crate::memory::memory_tests::pin_every_free_byte(canvas.engine.backend_mut());
+            }
+            canvas.sequence += 1;
+            let timestamp_ns = start + step * 125_000_000;
+            canvas.input.push(PenEvent { timestamp_ns, view_revision: 1, pressure: if phase == PenPhase::Up { 0. } else { 1. },
+                ..crate::test_support::pen(canvas.sequence, phase, [view.width_px as f32 * (0.5 + angle.cos() / 8.), view.height_px as f32 * (0.5 + angle.sin() / 8.)], SampleFlags::PRIMARY) }).unwrap();
+            canvas.frame(timestamp_ns);
+            for _ in 1..SAMPLE_FRAMES {
+                if !canvas.engine.has_pending_input() && !canvas.engine.has_pending_document_edits() { break; }
+                canvas.frame(canvas.clock + FRAME_NS);
+            }
+        }
+        assert!(canvas.settle(), "{preset:?}: the close and its finalization finish with all other room pinned, not wait on {:?}", canvas.engine.backend().outstanding_terms());
+        let told = canvas.engine.metrics().stroke_memory_refusals - refusals;
+        for _ in 0..8 { canvas.frame(canvas.clock + FRAME_NS); }
+        assert!(told == 0 && canvas.engine.metrics().stroke_memory_refusals == refusals, "{preset:?}: neither the pen-up frame nor its close is refused, so the painter is not told: {told} then {}", canvas.engine.metrics().stroke_memory_refusals - refusals);
+        assert!(canvas.engine.document().revision == document.revision + 1 && canvas.engine.document().artwork != document.artwork, "{preset:?}: the stroke commits as one revision");
+        drop(pinned);
+        assert!(canvas.engine.undo().unwrap() && canvas.settle() && canvas.engine.document().artwork == document.artwork, "{preset:?}: one Undo returns the photo");
+        assert!(!canvas.engine.undo().unwrap(), "{preset:?}: the stroke is one history entry");
     }
 }
 
@@ -191,7 +230,7 @@ fn back_to_back_contacts_commit_the_revisions_a_roomy_run_commits() {
     assert_eq!((roomy.len(), refused), (3, Vec::new()), "a roomy run commits both contacts");
     for budget in [512, 560] {
         let (tight, refused) = revisions(budget);
-        assert!(tight.len() == 2 && tight[..] == roomy[..2], "{budget} MiB: the first contact's pixels are the roomy run's");
+        assert!(tight.len() == 3 && tight[..2] == roomy[..2] && tight[2] != roomy[2], "{budget} MiB: the first contact's pixels are the roomy run's, and the second commits only what it drew");
         assert!(matches!(refused[..], [step] if step > 1), "{budget} MiB: the second contact paints past its first move before memory refuses it: {refused:?}");
     }
 }
@@ -210,7 +249,7 @@ fn a_rebuilt_original_leaves_the_photo_page_it_decoded_to_the_next_admission() {
     canvas.engine.backend_mut().commit_raster_working(taken);
     assert!(canvas.settle() && canvas.original_bytes() < held, "another edit takes the finished contact's originals");
     let painted: Vec<[u32; 2]> = canvas.contents().keys().map(|key| key.coordinate).collect();
-    let (view, start, refusals) = (canvas.engine.view(), canvas.clock + 1_000_000_000, canvas.engine.backend().stroke_memory_refusals());
+    let (view, start, refusals) = (canvas.engine.view(), canvas.clock + 1_000_000_000, canvas.engine.metrics().stroke_memory_refusals);
     let mut rebuilt = 0;
     for step in 0..=2u64 {
         let angle = step as f32 * std::f32::consts::TAU / 32.;
@@ -233,7 +272,7 @@ fn a_rebuilt_original_leaves_the_photo_page_it_decoded_to_the_next_admission() {
         }
     }
     assert!(canvas.settle() && rebuilt != 0, "the second contact rebuilds originals of pages the first one painted");
-    assert_eq!(canvas.engine.backend().stroke_memory_refusals(), refusals, "the second contact fits");
+    assert_eq!(canvas.engine.metrics().stroke_memory_refusals, refusals, "the second contact fits");
 }
 
 #[test]
@@ -532,7 +571,7 @@ fn fill_lane(r: &mut WgpuRasterizer) -> Vec<crate::residency::Reservation> {
     loop {
         let before = held.len();
         for bytes in [64 << 20, 4 << 20, 256 << 10, 16 << 10] {
-            while let Ok(taken) = r.admit_raster_working(bytes) { held.push(taken); }
+            while let Ok(taken) = r.admit_raster_working(bytes,crate::frame_demand::Allowance::Fresh) { held.push(taken); }
         }
         r.wait_idle().unwrap();
         if held.len() == before { return held; }

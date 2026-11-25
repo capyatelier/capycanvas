@@ -128,8 +128,8 @@ fn context_operation_declaration_covers_real_batches() {
         let declared = demanded(renderer, BACKGROUND);
         let before = compile::tests::demands(&renderer.compilation, DOCUMENT);
         let batches = [operation_batch(document, operation)];
-        assert!(!renderer.brush_batches_ready(FramePacket { dab_batches: &batches,
-            ..crate::test_support::packet(document.scene(), [64; 2]) }));
+        assert!(renderer.brush_batches_wait(FramePacket { dab_batches: &batches,
+            ..crate::test_support::packet(document.scene(), [64; 2]) }).is_some());
         let after = compile::tests::demands(&renderer.compilation, DOCUMENT);
         let required: HashSet<_> = after.difference(&before).copied().collect();
         assert!(!required.is_empty());
@@ -268,8 +268,8 @@ fn context_replacement_cancels_optional_demands_but_keeps_required_promotions() 
         let anticipated = demanded(renderer, ANTICIPATED);
         assert!(!anticipated.is_empty());
         let batches = [operation_batch(document, OperationUse::Gradient)];
-        assert!(!renderer.brush_batches_ready(FramePacket { dab_batches: &batches,
-            ..crate::test_support::packet(document.scene(), [64; 2]) }));
+        assert!(renderer.brush_batches_wait(FramePacket { dab_batches: &batches,
+            ..crate::test_support::packet(document.scene(), [64; 2]) }).is_some());
         let required = compile::tests::demands(&renderer.compilation, DOCUMENT);
         assert!(anticipated.is_subset(&required));
         crate::layer_tests::placement::paint_mut(document).operations = Arc::new(Vec::new());
@@ -390,8 +390,8 @@ fn warmed_context_needs_no_compile_at_first_use(use_: FirstUse) {
             FirstUse::Gradient | FirstUse::Figure => {
                 let operation = if matches!(use_, FirstUse::Figure) {OperationUse::Figure} else {OperationUse::Gradient};
                 let batches = [operation_batch(document, operation)];
-                assert!(renderer.brush_batches_ready(FramePacket {dab_batches:&batches,
-                    ..crate::test_support::packet(document.scene(), [64;2])}));
+                assert!(renderer.brush_batches_wait(FramePacket {dab_batches:&batches,
+                    ..crate::test_support::packet(document.scene(), [64;2])}).is_none());
             }
             FirstUse::Toolbar | FirstUse::Resize | FirstUse::SelectedBrush | FirstUse::Transform => {
                 let mut next = if matches!(use_, FirstUse::Toolbar) {shown.clone()} else {brush.clone()};

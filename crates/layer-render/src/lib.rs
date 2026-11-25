@@ -26,7 +26,33 @@ pub use outline::{TipOutline, mask_outline};
 pub use telemetry::{FrameRate, FrameRateSource, PresentationRate, RendererTelemetry, TimingSamples,
     GpuAdapter, GpuMemory, GpuMemoryKind, MemoryPeak, MemoryPool, MemorySnapshot, MemoryBudgetSummary, ProcessMemory, ProcessMemoryKind};
 
-pub struct ReadySubmission(());
+#[derive(Debug, PartialEq, Eq)]
+pub struct ReadySubmission { turn: u64, packet: u64 }
+impl ReadySubmission {
+    pub fn new(turn: u64, packet: FramePacket<'_>) -> Self { Self { turn, packet: packet.identity() } }
+    pub fn admits(&self, turn: u64, packet: FramePacket<'_>) -> bool { self.turn == turn && self.packet == packet.identity() }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Refusal { pub stroke: StrokeId, pub drawn: u64 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DrawnInk { stroke: StrokeId, dabs: u64, generation: u64 }
+impl DrawnInk {
+    pub fn record(&mut self, packet: FramePacket<'_>) {
+        for batch in packet.dab_batches.iter().filter(|batch| batch.kind == DabBatchKind::Persistent) {
+            if batch.stroke_start || batch.stroke_id != self.stroke { *self = Self { stroke: batch.stroke_id, dabs: 0, generation: self.generation + 1 }; }
+            self.dabs += u64::from(batch.dab_count);
+        }
+    }
+    pub fn prefix(&self) -> Option<(StrokeId, u64)> { (self.stroke.0 != 0 && self.dabs != 0).then_some((self.stroke, self.generation)) }
+    pub fn refusal(&self, stroke: StrokeId) -> Refusal {
+        Refusal { stroke, drawn: if stroke == self.stroke && stroke.0 != 0 { self.dabs } else { 0 } }
+    }
+}
+
+#[must_use]
+pub enum SubmissionTurn<E> { Ready(ReadySubmission), Held, Refused(Refusal, E) }
 
 #[derive(Clone, Debug)]
 #[expect(clippy::large_enum_variant, reason = "Snapshot handoffs move captured plans without per-request boxing")]
@@ -350,6 +376,24 @@ pub struct DabBatch {
     pub damage: Rect,
 }
 
+pub fn withdraw_stroke(batches: &mut Vec<DabBatch>, dabs: &mut Vec<Dab>, stroke: StrokeId, drew: bool) -> bool {
+    let closes = |batch: &DabBatch| drew && batch.stroke_end && batch.kind == DabBatchKind::Persistent;
+    if !batches.iter().any(|batch| batch.stroke_id == stroke && !(closes(batch) && batch.dab_count == 0)) { return false; }
+    let mut kept = Vec::with_capacity(dabs.len());
+    batches.retain_mut(|batch| {
+        let own = batch.stroke_id == stroke;
+        if own && !closes(batch) { return false; }
+        let start = batch.first_dab as usize;
+        let end = if own { start } else { start + batch.dab_count as usize };
+        batch.first_dab = u32::try_from(kept.len()).unwrap_or(u32::MAX);
+        kept.extend_from_slice(&dabs[start..end]);
+        if own { (batch.dab_count, batch.damage, batch.preview_end) = (0, Rect::EMPTY, None); }
+        true
+    });
+    *dabs = kept;
+    true
+}
+
 /// Borrowed for one synchronous renderer call. A deferred renderer must copy
 /// the small records it needs after return; canvas pixels remain GPU-owned.
 #[derive(Clone, Copy, Debug)]
@@ -380,6 +424,24 @@ pub struct FramePacket<'a> {
     pub composite_all: bool,
     /// How the layers combine. Changing it recomposes the composite.
     pub blend_space: layer_core::BlendSpace,
+}
+impl FramePacket<'_> {
+    fn identity(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::hash::DefaultHasher::new();
+        (self.operation(), self.scene.owner(), self.scene.revision(), self.dabs.len(), self.restore_rasters.len(), self.commit_rasters, self.reset_layers, self.composite_all).hash(&mut hasher);
+        for batch in self.dab_batches {
+            let kind = match batch.kind { DabBatchKind::Persistent => 0, DabBatchKind::Preview => 1, DabBatchKind::RasterOperation(index) => 2 + u64::from(index) };
+            (batch.stroke_id, batch.target, kind, batch.first_dab, batch.dab_count, batch.stroke_start, batch.stroke_end).hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+    pub fn operation(&self) -> StrokeId {
+        let stroke = |batch: &&DabBatch| batch.stroke_id.0 != 0 && !matches!(batch.kind, DabBatchKind::RasterOperation(_));
+        let inking = |batch: &&DabBatch| stroke(batch) && (batch.dab_count != 0 || batch.stroke_start || batch.kind == DabBatchKind::Preview);
+        let closing = |batch: &&DabBatch| self.restore_rasters.is_empty() && self.dab_batches.iter().all(|batch| stroke(&batch)) && stroke(batch);
+        self.dab_batches.iter().find(inking).or_else(|| self.dab_batches.iter().find(closing)).map_or(StrokeId(0), |batch| batch.stroke_id)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -958,8 +1020,6 @@ pub trait CanvasRenderer {
     fn has_pending_submission(&self) -> bool { false }
     fn next_frame(&self) -> FrameDemand { FrameDemand::Wait }
     fn waits_for_frame_slot(&self) -> bool { false }
-    fn stroke_waits_for_memory(&self) -> bool { false }
-    fn stroke_memory_refusals(&self) -> u64 { 0 }
     fn skipped_filter_previews(&self) -> u64 { 0 }
     fn refused_filter_bakes(&self) -> u64 { 0 }
     /// Host frame-mailbox backpressure before consuming input.
@@ -971,10 +1031,8 @@ pub trait CanvasRenderer {
     fn can_capture_raster(&self) -> bool {
         true
     }
-    /// A restore may depend on an earlier asynchronous capture. Returning false
-    /// retains this prepared frame for retry without consuming further input.
-    fn raster_dependencies_ready(&mut self, _packet: FramePacket<'_>, _preview: Option<&TransformPreview>) -> bool {
-        true
+    fn submission_turn(&mut self, packet: FramePacket<'_>, _preview: Option<&TransformPreview>) -> SubmissionTurn<Self::Error> {
+        SubmissionTurn::Ready(ReadySubmission::new(0, packet))
     }
     fn paint_ready(&self, _document: &layer_core::Document, _brush: &layer_core::BrushSnapshot, _transform: bool) -> bool {
         true
@@ -1011,6 +1069,7 @@ pub trait CanvasRenderer {
     /// The latest stroke can no longer be corrected, so its stroke-start
     /// pixels may be released.
     fn retire_stroke_sources(&mut self) {}
+    fn take_refused_stroke(&mut self) -> Option<Refusal> { None }
     /// Applied by the next submit. None restores the captured original before
     /// subsequent paint/operations. This performs no readback or blocking wait.
     fn set_transform_preview(
@@ -1071,9 +1130,6 @@ pub trait CanvasRenderer {
     fn prepare_asset(&mut self, asset: &AssetId, image: HostImage<'_>) -> Result<(), Self::Error>;
     fn release_asset(&mut self, asset: &AssetId);
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error>;
-    fn ready_submission(&mut self, packet: FramePacket<'_>, preview: Option<&TransformPreview>) -> Option<ReadySubmission> {
-        self.raster_dependencies_ready(packet, preview).then_some(ReadySubmission(()))
-    }
     fn submit_ready(&mut self, _ready: ReadySubmission, packet: FramePacket<'_>) -> Result<(), Self::Error> {
         let result = self.submit(packet);
         debug_assert!(!result.as_ref().is_err_and(Self::is_preparation_pending),
@@ -1082,7 +1138,11 @@ pub trait CanvasRenderer {
     }
     fn submit_when_ready(&mut self, packet: FramePacket<'_>, preview: Option<&TransformPreview>)
         -> std::task::Poll<Result<(), Self::Error>> {
-        self.ready_submission(packet, preview).map_or(std::task::Poll::Pending, |ready| std::task::Poll::Ready(self.submit_ready(ready, packet)))
+        match self.submission_turn(packet, preview) {
+            SubmissionTurn::Ready(ready) => std::task::Poll::Ready(self.submit_ready(ready, packet)),
+            SubmissionTurn::Held => std::task::Poll::Pending,
+            SubmissionTurn::Refused(_, error) => std::task::Poll::Ready(Err(error)),
+        }
     }
 
     /// Small asynchronous UI previews, never full-resolution paint readback.
@@ -1297,7 +1357,9 @@ mod tests {
         impl CanvasRenderer for Renderer {
             type Error = BackendError;
             fn is_preparation_pending(error: &Self::Error) -> bool { error.0 == "preparation pending" }
-            fn raster_dependencies_ready(&mut self, _: FramePacket<'_>, _: Option<&TransformPreview>) -> bool { self.ready }
+            fn submission_turn(&mut self, packet: FramePacket<'_>, _: Option<&TransformPreview>) -> SubmissionTurn<Self::Error> {
+                if self.ready { SubmissionTurn::Ready(ReadySubmission::new(0, packet)) } else { SubmissionTurn::Held }
+            }
             fn resize_surface(&mut self, _: u32, _: u32) -> Result<(), Self::Error> { Ok(()) }
             fn prepare_asset(&mut self, _: &AssetId, _: HostImage<'_>) -> Result<(), Self::Error> { Ok(()) }
             fn release_asset(&mut self, _: &AssetId) {}

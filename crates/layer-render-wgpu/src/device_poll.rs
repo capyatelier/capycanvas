@@ -1,7 +1,7 @@
 use std::sync::{Arc,Condvar,Mutex,OnceLock,Weak,atomic::{AtomicBool,Ordering::SeqCst},mpsc};
 
 type Action=Box<dyn FnOnce()+Send>;
-type Notify=Arc<dyn Fn()+Send+Sync>;
+type Notify=crate::residency::Wake;
 trait Conditional:Send {fn ready(&self)->bool;}
 struct Waiting<T,R> {value:T,ready:R}
 impl<T:Send,R:Fn(&T)->bool+Send> Conditional for Waiting<T,R> {fn ready(&self)->bool {(self.ready)(&self.value)}}
@@ -14,7 +14,7 @@ struct Mailbox {
     sink:Mutex<Sink>,
     retired:Mutex<Vec<Box<dyn Conditional>>>,
     tickets:Mutex<Option<Vec<Weak<dyn Abandon>>>>,
-    waiters:Mutex<Vec<(crate::residency::Blocked,Notify)>>,
+    rooms:Mutex<Vec<Notify>>,
     armed:AtomicBool,
     released:AtomicBool,
     woken:AtomicBool,
@@ -28,7 +28,7 @@ pub(crate) struct RetirementHandle(Arc<Mailbox>);
 impl RetirementHandle {
     fn channel()->(Self,mpsc::Receiver<Message>) {
         let (sender,receiver)=mpsc::channel();
-        (Self(Arc::new(Mailbox {sink:Mutex::new(Sink::Open(sender)),retired:Default::default(),tickets:Mutex::new(Some(Vec::new())),waiters:Default::default(),armed:AtomicBool::new(false),released:AtomicBool::new(false),woken:AtomicBool::new(false),terminal:Default::default(),completion:Default::default(),completions:Default::default(),thread:OnceLock::new()})),receiver)
+        (Self(Arc::new(Mailbox {sink:Mutex::new(Sink::Open(sender)),retired:Default::default(),tickets:Mutex::new(Some(Vec::new())),rooms:Default::default(),armed:AtomicBool::new(false),released:AtomicBool::new(false),woken:AtomicBool::new(false),terminal:Default::default(),completion:Default::default(),completions:Default::default(),thread:OnceLock::new()})),receiver)
     }
     fn wake(&self) {self.0.woken.store(true,SeqCst);if let Some(thread)=self.0.thread.get() {thread.unpark();}}
     fn send(&self,message:Message)->Result<(),Message> {
@@ -49,6 +49,7 @@ impl RetirementHandle {
     pub fn run(&self,action:impl FnOnce()+Send+'static) {
         if let Err(Message::Dispose(action))=self.send(Message::Dispose(Box::new(action))) {action();}
     }
+    pub(crate) fn post(&self,action:impl FnOnce()+Send+'static) {let _=self.send(Message::Dispose(Box::new(action)));}
     fn after_gpu(&self,action:Action) {
         let action={let mut sink=self.0.sink.lock().unwrap();match &mut *sink {
             Sink::Open(sender)=>match sender.send(Message::AfterGpu(action)) {Ok(())=>None,Err(error)=>{let Message::AfterGpu(action)=error.0 else {unreachable!()};Some(action)}},
@@ -67,13 +68,8 @@ impl RetirementHandle {
         drop(ready);
     }
     fn release(&self) {
-        let closed=self.closed();
-        let waiting=self.0.waiters.lock().unwrap().clone();
-        let woken=waiting.into_iter().filter(|(blocked,_)|closed || blocked.fits()).map(|(_,wake)|wake).collect::<Vec<_>>();
-        {let mut waiters=self.0.waiters.lock().unwrap();
-            waiters.retain(|(_,wake)|!woken.iter().any(|woken|Arc::ptr_eq(woken,wake)));
-            self.0.armed.store(!waiters.is_empty(),SeqCst);}
-        for (index,wake) in woken.iter().enumerate() {if !woken[..index].iter().any(|earlier|Arc::ptr_eq(earlier,wake)) {wake();}}
+        let woken={let mut rooms=self.0.rooms.lock().unwrap();self.0.armed.store(false,SeqCst);std::mem::take(&mut *rooms)};
+        for wake in woken {wake();}
     }
     pub fn signal_release(&self) {
         if self.0.armed.load(SeqCst) {self.0.released.store(true,SeqCst);self.wake();}
@@ -87,31 +83,20 @@ impl RetirementHandle {
         drop(completion);self.completions()
     }
     pub fn completions(&self)->u64 {self.0.completions.load(SeqCst)}
+    pub fn post_completion(&self) {if !self.closed() {self.completed();}}
     fn completed(&self) {
         self.0.completions.fetch_add(1,SeqCst);
         let wakes=std::mem::take(&mut *self.0.completion.lock().unwrap());for wake in wakes {wake();}
     }
     pub fn release_wake(&self)->Notify {let handle=self.clone();Arc::new(move||handle.pulse())}
     pub(crate) fn same(&self,other:&Self)->bool {Arc::ptr_eq(&self.0,&other.0)}
-    pub(crate) fn wait_for_release(&self,blocked:&crate::residency::Blocked,wake:Notify) {
-        if !self.refuses(blocked,&wake) || self.closed() {wake();}
-    }
-    pub(crate) fn refuses(&self,blocked:&crate::residency::Blocked,wake:&Notify)->bool {
+    pub(crate) fn on_release(&self,blocked:&crate::residency::Blocked,wake:&Notify)->bool {
         let edge=blocked.bind(self);
         debug_assert!(edge.same(self),"a tier signals only the poll owner it first waited on");
-        let registered={let mut waiters=edge.0.waiters.lock().unwrap();edge.0.armed.store(true,SeqCst);
-            if edge.closed() {None}else {match waiters.iter_mut().find(|(waiting,old)|Arc::ptr_eq(old,wake) && waiting.same_wait(blocked)) {
-                Some((waiting,_))=>blocked.supersedes(waiting).then(||Some(std::mem::replace(waiting,blocked.clone()))),
-                None=>{waiters.push((blocked.clone(),wake.clone()));Some(None)},
-            }}};
-        if !blocked.fits() {return true;}
-        if let Some(previous)=registered {
-            let mut waiters=edge.0.waiters.lock().unwrap();
-            if let Some(index)=waiters.iter().position(|(waiting,old)|Arc::ptr_eq(old,wake) && waiting.same(blocked)) {
-                match previous {Some(previous)=>waiters[index].0=previous,None=>{waiters.remove(index);}}
-            }
-        }
-        false
+        let mut rooms=edge.0.rooms.lock().unwrap();
+        if edge.closed() {return false;}
+        if !rooms.iter().any(|old|Arc::ptr_eq(old,wake)) {rooms.push(wake.clone());}
+        edge.0.armed.store(true,SeqCst);true
     }
     fn callback<A:Send+'static,F:FnOnce(A)+Send+'static>(&self,callback:Option<F>)->impl FnOnce(A)+Send+'static+use<A,F> {
         let ticket=Arc::new(Ticket {value:Mutex::new(callback)});
@@ -152,12 +137,12 @@ impl<T:Send+'static> Retirement<T> {
 impl<T:Send+'static> Drop for Retirement<T> {fn drop(&mut self) {if let Some(value)=self.value.take() {self.handle.after_gpu(Box::new(move||drop(value)));}}}
 struct Owner {handle:RetirementHandle,worker:Option<std::thread::JoinHandle<Action>>}
 impl Owner {
-    fn start(mut poll:impl FnMut()->Result<bool,String>+Send+'static,handle:RetirementHandle,receiver:mpsc::Receiver<Message>,queue:Arc<OnceLock<wgpu::Queue>>)->std::io::Result<Self> {
+    fn start(mut poll:impl FnMut()->Result<bool,String>+Send+'static,handle:RetirementHandle,receiver:mpsc::Receiver<Message>,queue:Arc<OnceLock<wgpu::Queue>>,loss:Arc<crate::pipeline_device::DeviceLoss>)->std::io::Result<Self> {
         let worker_handle=handle.clone();
         let worker=std::thread::Builder::new().name("capy-gpu-poll".into()).spawn(move|| {
             let mut failure=None;
             let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                run(&mut poll,&worker_handle,&receiver,&queue,&mut failure);
+                run(&mut poll,&worker_handle,&receiver,&queue,&loss,&mut failure);
                 worker_handle.close();finish(&worker_handle,&receiver);
             }));
             Box::new(move|| {
@@ -181,7 +166,7 @@ fn wait_for_progress(submission_index:Option<wgpu::SubmissionIndex>,poll:impl Fn
     poll(wgpu::PollType::Wait {submission_index,timeout:None}).map(|status|!matches!(status,wgpu::PollStatus::QueueEmpty)).map_err(|error|error.to_string())
 }
 enum State {New {handle:RetirementHandle,receiver:mpsc::Receiver<Message>},Running(Owner),Retired(RetirementHandle)}
-pub(crate) struct Root {state:Mutex<State>,admitted:Mutex<usize>,drained:Condvar,queue:Arc<OnceLock<wgpu::Queue>>}
+pub(crate) struct Root {state:Mutex<State>,admitted:Mutex<usize>,drained:Condvar,queue:Arc<OnceLock<wgpu::Queue>>,loss:Arc<crate::pipeline_device::DeviceLoss>}
 struct Admitted<'a>(&'a Root);
 impl Drop for Admitted<'_> {fn drop(&mut self) {let mut admitted=self.0.admitted.lock().unwrap();*admitted-=1;if *admitted==0 {self.0.drained.notify_all();}}}
 impl Drop for Root {
@@ -197,9 +182,10 @@ impl Drop for Root {
 #[derive(Clone)]
 pub(crate) enum Binding {Owned(Arc<Root>),Recipe(Weak<Root>)}
 impl Default for Binding {
-    fn default()->Self {let (handle,receiver)=RetirementHandle::channel();Self::Owned(Arc::new(Root {state:Mutex::new(State::New {handle,receiver}),admitted:Default::default(),drained:Default::default(),queue:Default::default()}))}
+    fn default()->Self {Self::reporting(&Default::default())}
 }
 impl Binding {
+    pub(crate) fn reporting(loss:&Arc<crate::pipeline_device::DeviceLoss>)->Self {let (handle,receiver)=RetirementHandle::channel();Self::Owned(Arc::new(Root {state:Mutex::new(State::New {handle,receiver}),admitted:Default::default(),drained:Default::default(),queue:Default::default(),loss:loss.clone()}))}
     fn root(&self)->Option<Arc<Root>> {match self {Self::Owned(root)=>Some(root.clone()),Self::Recipe(root)=>root.upgrade()}}
     pub fn owned(&self)->Self {self.root().map(Self::Owned).unwrap_or_else(||self.clone())}
     pub fn recipe(&self)->Self {Self::Recipe(self.root().as_ref().map_or_else(Weak::new,Arc::downgrade))}
@@ -221,7 +207,7 @@ impl Binding {
         if matches!(*state,State::New {..}) && !handle.closed() {
             let State::New {receiver,..}=std::mem::replace(&mut *state,State::Retired(handle.clone())) else {unreachable!()};
             let device=device.clone();
-            match Owner::start(move||wait_for_progress(device.next_completion(),|kind|device.poll(kind)),handle.clone(),receiver,root.queue.clone()) {
+            match Owner::start(move||wait_for_progress(device.next_completion(),|kind|device.poll(kind)),handle.clone(),receiver,root.queue.clone(),root.loss.clone()) {
                 Ok(owner)=>*state=State::Running(owner),
                 Err(error)=>{handle.close();panic!("Device poll owner failed: {error}");},
             }
@@ -248,6 +234,7 @@ impl Binding {
         }
     }
     pub fn submit(&self,work:impl FnOnce()->wgpu::SubmissionIndex)->Option<wgpu::SubmissionIndex> {self.admit(||Ok(work())).ok()}
+    pub fn mailbox(&self)->Option<RetirementHandle> {self.root().map(|root|Self::state_handle(&root.state.lock().unwrap()))}
 }
 fn receive(handle:&RetirementHandle,receiver:&mpsc::Receiver<Message>,queue:Option<&wgpu::Queue>)->Vec<mpsc::Sender<()>> {
     let mut waiters=Vec::new();
@@ -277,7 +264,7 @@ fn finish(handle:&RetirementHandle,receiver:&mpsc::Receiver<Message>) {
     for waiter in waiters {let _=waiter.send(());}
 }
 fn drain_idle(handle:&RetirementHandle,receiver:&mpsc::Receiver<Message>) {finish(handle,receiver);}
-fn run(poll:&mut impl FnMut()->Result<bool,String>,handle:&RetirementHandle,receiver:&mpsc::Receiver<Message>,queue:&OnceLock<wgpu::Queue>,failure:&mut Option<Box<dyn std::any::Any+Send>>) {
+fn run(poll:&mut impl FnMut()->Result<bool,String>,handle:&RetirementHandle,receiver:&mpsc::Receiver<Message>,queue:&OnceLock<wgpu::Queue>,loss:&crate::pipeline_device::DeviceLoss,failure:&mut Option<Box<dyn std::any::Any+Send>>) {
     let mut closing=None;
     loop {
         handle.0.woken.store(false,SeqCst);
@@ -299,9 +286,10 @@ fn run(poll:&mut impl FnMut()->Result<bool,String>,handle:&RetirementHandle,rece
             Ok((active,drained))
         }));
         let active=match step {
-            Ok(Ok((_,true)))|Ok(Err(_))=>break,
+            Ok(Ok((_,true)))=>break,
+            Ok(Err(message))=>{loss.report(message);break},
             Ok(Ok((active,false)))=>active,
-            Err(panic)=>{failure.get_or_insert(panic);handle.close();continue;},
+            Err(panic)=>{loss.report(crate::panic_message(&*panic));failure.get_or_insert(panic);handle.close();continue;},
         };
         if !active {while !handle.0.woken.swap(false,SeqCst) {std::thread::park();}}
     }
@@ -314,7 +302,7 @@ mod tests {
     use super::*;
     use std::time::Duration;
     pub(super) fn owner(poll:impl FnMut()->Result<bool,String>+Send+'static)->Owner {
-        let (handle,receiver)=RetirementHandle::channel();Owner::start(poll,handle,receiver,Default::default()).unwrap()
+        let (handle,receiver)=RetirementHandle::channel();Owner::start(poll,handle,receiver,Default::default(),Default::default()).unwrap()
     }
     #[test]
     fn retirement_releases_its_charge_and_waiter_while_later_gpu_submissions_continue() {
@@ -357,9 +345,8 @@ mod tests {
         while Instant::now()<end && sent<512 {
             if dropped.is_none() && start.elapsed()>=Duration::from_millis(100) {
                 let check=tier.clone();let woken=woken.clone();
-                tier.admit(Class::Visible,1).err().unwrap().wake_on_release(&handle,Arc::new(move|| {
-                    if check.used()==0 {let _=woken.send(Instant::now());}
-                }));
+                let wake:Notify=Arc::new(move|| {if check.used()==0 {let _=woken.send(Instant::now());}});
+                handle.on_release(&tier.admit(Class::Visible,1).err().unwrap(),&wake);
                 dropped=Some(Instant::now());drop(held.take());
             }
             if let Err(error)=completion.recv_timeout(Duration::from_secs(1)) {producer_error=Some(error);break;}
@@ -390,7 +377,7 @@ mod tests {
         let polls=Arc::new(AtomicUsize::new(0));
         let (device,counted)=((*r.device).clone(),polls.clone());
         let mut owner=Owner::start(move|| {counted.fetch_add(1,Ordering::AcqRel);wait_for_progress(device.next_completion(),|kind|device.poll(kind))},
-            handle.clone(),receiver,Arc::new(OnceLock::from(r.queue.clone()))).unwrap();
+            handle.clone(),receiver,Arc::new(OnceLock::from(r.queue.clone())),Default::default()).unwrap();
         let (idle,quiet)=mpsc::channel::<()>();
         let before_idle=polls.load(Ordering::Acquire);let _=quiet.recv_timeout(Duration::from_millis(50));
         let idle_polls=polls.load(Ordering::Acquire)-before_idle;
@@ -457,7 +444,7 @@ mod tests {
         let mut owner=Owner::start(move||wait_for_progress(None,|kind| {
             let wgpu::PollType::Wait {timeout,..}=kind else {panic!("the poll owner polled without waiting for progress");};
             let _=sent.send(timeout);Ok(wgpu::PollStatus::QueueEmpty)
-        }),handle.clone(),receiver,Default::default()).unwrap();
+        }),handle.clone(),receiver,Default::default(),Default::default()).unwrap();
         handle.flush().unwrap();owner.shutdown();
         let timeouts:Vec<_>=timeouts.try_iter().collect();
         assert!(!timeouts.is_empty(),"the poll owner never waited");
@@ -471,7 +458,7 @@ mod tests {
         let mut owner=Owner::start(move||wait_for_progress(None,|_| {
             if counted.fetch_add(1,Ordering::AcqRel)<3 {panic!("Parent device is lost");}
             Ok(wgpu::PollStatus::QueueEmpty)
-        }),handle.clone(),receiver,Default::default()).unwrap();
+        }),handle.clone(),receiver,Default::default(),Default::default()).unwrap();
         let (closed,woken)=mpsc::channel();handle.on_retired(Arc::new(move||{let _=closed.send(());}));
         let retired=woken.recv_timeout(Duration::from_secs(10));
         let joined=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||owner.shutdown()));
@@ -480,12 +467,23 @@ mod tests {
         assert_eq!(joined.err().as_deref().map(crate::panic_message).as_deref(),Some("Parent device is lost"),"joining the poll owner lost the device's panic");
     }
     #[test]
+    fn a_poll_thread_that_panics_reports_the_device_loss_before_its_service_retires() {
+        let r=crate::WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let handle=r.device.retirement_handle();
+        let (closed,retired)=mpsc::channel();handle.on_retired(Arc::new(move||{let _=closed.send(());}));
+        handle.post(||panic!("a retirement failed on the poll thread"));
+        retired.recv_timeout(Duration::from_secs(10)).expect("a panicking poll thread retires its service");
+        let lost=r.device.loss().error().is_some();
+        drop(std::panic::catch_unwind(std::panic::AssertUnwindSafe(||drop(r))));
+        assert!(lost,"the poll thread closed its service without reporting a device loss, so parked work sleeps until teardown");
+    }
+    #[test]
     fn the_poll_owner_retires_at_the_first_persistent_poll_error() {
         use std::sync::atomic::{AtomicUsize,Ordering};
         for error in [||wgpu::PollError::Timeout,||wgpu::PollError::WrongSubmissionIndex(2,1)] {
             let (handle,receiver)=RetirementHandle::channel();
             let polls=Arc::new(AtomicUsize::new(0));let counted=polls.clone();
-            let mut owner=Owner::start(move||wait_for_progress(None,|_| {counted.fetch_add(1,Ordering::AcqRel);Err(error())}),handle.clone(),receiver,Default::default()).unwrap();
+            let mut owner=Owner::start(move||wait_for_progress(None,|_| {counted.fetch_add(1,Ordering::AcqRel);Err(error())}),handle.clone(),receiver,Default::default(),Default::default()).unwrap();
             let (closed,woken)=mpsc::channel();handle.on_retired(Arc::new(move||{let _=closed.send(());}));
             let retired=woken.recv_timeout(Duration::from_secs(1));
             owner.shutdown();
@@ -611,16 +609,14 @@ mod tests {
         let joined=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||owner.shutdown()));
         let driver_thread=driver_drop.recv_timeout(Duration::from_secs(1));
         let closed=handle.closed();
-        let (late,late_waiter)=mpsc::channel();
-        std::sync::Arc::new(crate::residency::Tier::default()).admit(crate::residency::Class::Visible,1).err().unwrap().wake_on_release(&handle,Arc::new(move|| {let _=late.send(());}));
-        let late_waiter=late_waiter.recv_timeout(Duration::from_secs(1));
+        let late=handle.on_release(&std::sync::Arc::new(crate::residency::Tier::default()).admit(crate::residency::Class::Visible,1).err().unwrap(),&(Arc::new(||{}) as Notify));
         let payload=joined.as_ref().err().and_then(|panic|panic.downcast_ref::<&str>().copied().or_else(||panic.downcast_ref::<String>().map(String::as_str)));
         let expected=if terminal_panic {"controlled terminal notification panic"}else {"controlled abandoned callback Drop panic"};
         drop(callback);drop(owner);
         assert!(panic_entered.is_ok(),"cleanup panic path must actually execute");
         assert!(joined.is_err(),"the callback panic must propagate on the joining owner");
         assert!(closed,"cleanup panic left the handle Open");
-        assert!(late_waiter.is_ok(),"a terminal handle must wake a newly refused waiter immediately");
+        assert!(!late,"a terminal handle must tell a newly refused waiter that no release will wake it");
         assert_eq!((driver_thread.unwrap(),payload),(std::thread::current().id(),Some(expected)),"cleanup must return the driver guard and resume the first panic on its joining owner");
     }
     #[test]
@@ -886,7 +882,7 @@ mod tests {
         use crate::residency::Tier;
         let mut owner=owner(||Ok(false));let handle=owner.handle.clone();
         let tier=Arc::new(Tier::default());let (notify,woken)=mpsc::channel();
-        tier.admit(crate::residency::Class::Visible,1).err().unwrap().wake_on_release(&handle,Arc::new(move||{let _=notify.send(());}));
+        handle.on_release(&tier.admit(crate::residency::Class::Visible,1).err().unwrap(),&(Arc::new(move||{let _=notify.send(());}) as Notify));
         handle.run(||{});drop(handle.retirement(()));handle.dispose_when((),|_|true);handle.flush().unwrap();
         let spurious=woken.try_recv();
         tier.set_limit(1,0);let raised=woken.recv_timeout(Duration::from_secs(1));owner.shutdown();
@@ -900,7 +896,7 @@ mod tests {
         let active=Arc::new(AtomicBool::new(true));let polling=active.clone();
         let mut owner=owner(move||Ok(polling.load(Ordering::Acquire)));let handle=owner.handle.clone();
         let tier=Arc::new(Tier::default());tier.set_limit(1,0);let held=tier.charge(1);let (notify,woken)=mpsc::channel();
-        tier.admit(Class::Visible,1).err().unwrap().wake_on_release(&handle,Arc::new(move||{let _=notify.send(());}));
+        handle.on_release(&tier.admit(Class::Visible,1).err().unwrap(),&(Arc::new(move||{let _=notify.send(());}) as Notify));
         drop(handle.retirement(held));
         let released=woken.recv_timeout(Duration::from_secs(1));let freed=tier.used()==0;
         active.store(false,Ordering::Release);handle.wake();owner.shutdown();
@@ -908,28 +904,29 @@ mod tests {
         assert!(freed);
     }
     #[test]
-    fn a_ledger_callback_inside_a_capacity_check_can_refuse_on_the_same_mailbox_and_its_release_still_wakes() {
-        use crate::residency::{Class,Drain,Tier};
+    fn a_release_registration_on_a_terminal_mailbox_never_calls_its_wake() {
+        let (handle,_receiver)=RetirementHandle::channel();handle.close();
+        let woken=Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let wake:Notify={let woken=woken.clone();Arc::new(move||woken.store(true,SeqCst))};
+        let serviced=handle.on_release(&Arc::new(crate::residency::Tier::default()).admit(crate::residency::Class::Visible,1).err().unwrap(),&wake);
+        assert!(!woken.load(SeqCst),"registering on a closed mailbox called the waiter's wake inside the registration");
+        assert!(!serviced && handle.0.rooms.lock().unwrap().is_empty() && !handle.0.armed.load(SeqCst),"a closed mailbox kept a release registration that no drain will ever wake");
+    }
+    #[test]
+    fn a_release_wake_that_registers_again_on_its_own_mailbox_is_posted_outside_the_lock() {
+        use crate::residency::{Class,Tier};
         let mut owner=owner(||Ok(false));let handle=owner.handle.clone();
-        let budget=layer_core::MemoryBudget::new();
-        let ledger=budget.register_owner(layer_core::MemoryOwnerKind::Other,layer_core::MemoryClass::Pinned,None);
-        let full=Tier::limited_by(ledger.clone());full.set_limit(0,0);
-        let draining=Arc::new(Tier::default());let held=Arc::new(Mutex::new(Some(draining.charge(1))));
-        let armed=Arc::new(AtomicBool::new(false));let (nested,refused)=mpsc::channel();
-        let _watch={let (armed,held,full,handle)=(armed.clone(),held.clone(),full.clone(),handle.clone());
-            budget.watch(Arc::new(move|| if armed.swap(false,SeqCst) {
-                drop(held.lock().unwrap().take());
-                full.admit(Class::Visible,1).err().unwrap().wake_on_release(&handle,Arc::new(||{}));
-                let _=nested.send(());
-            }))};
-        ledger.publish(layer_core::MemoryReport {gpu_bytes:1,..Default::default()});armed.store(true,SeqCst);
-        let blocked=full.admit(Class::Visible,1).err().unwrap().draining(Drain::new(vec![draining.clone()]));
-        let (woken,wake)=mpsc::channel();let waiting=handle.clone();
-        let _refusing=std::thread::spawn(move||blocked.wake_on_release(&waiting,Arc::new(move||{let _=woken.send(());})));
-        let nested=refused.recv_timeout(Duration::from_secs(2));let woken=wake.recv_timeout(Duration::from_secs(2));
-        assert!(nested.is_ok(),"a refusal registered from a ledger callback inside the outer capacity check deadlocked");
-        assert!(woken.is_ok(),"a release made by the outer capacity check's ledger flush never woke its waiter");
+        let tier=Arc::new(Tier::default());let held=tier.charge(1);
+        let blocked=tier.admit(Class::Visible,1).err().unwrap();
+        let (woken,wake)=mpsc::channel();
+        let again:Notify={let (handle,blocked)=(handle.clone(),blocked.clone());Arc::new(move|| {
+            handle.on_release(&blocked,&(Arc::new(||{}) as Notify));let _=woken.send(());
+        })};
+        handle.on_release(&blocked,&again);
+        tier.set_limit(1,0);drop(held);
+        let woken=wake.recv_timeout(Duration::from_secs(2));
         owner.shutdown();
+        assert!(woken.is_ok(),"a wake that registers on the mailbox it is posted from deadlocked");
     }
     #[test]
     fn an_inline_callback_panic_closes_and_abandons_before_join_but_retains_the_driver() {
@@ -942,7 +939,7 @@ mod tests {
         let (fired,entered)=mpsc::channel();let mut callback=Some(handle.callback(Some(move|()|{let _=fired.send(());panic!("controlled inline callback panic");})));
         let mut owner=Owner::start(move|| {
             let _=&driver;if let Some(callback)=callback.take() {callback(());}Ok(false)
-        },handle.clone(),receiver,Default::default()).unwrap();
+        },handle.clone(),receiver,Default::default(),Default::default()).unwrap();
         let entered=entered.recv_timeout(Duration::from_secs(1));
         let terminal=woken.recv_timeout(Duration::from_secs(1));
         let abandoned=pending.recv_timeout(Duration::from_secs(1));

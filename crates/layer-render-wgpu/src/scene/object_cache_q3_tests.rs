@@ -27,7 +27,8 @@ impl ObjectCache {
     pub fn memory_bytes(&self) -> [u64; 2] { [self.ram.used() + self.retired.used(), self.gpu.used() + self.retired_gpu.used()] }
     pub fn walked_bytes(&self) -> [u64; 3] {
         let tasks = || self.tasks.values().chain(self.retiring.iter());
-        let gpu = self.uniform.as_ref().map_or(0, |(uniform, _)| uniform.size()) + self.retired_gpu.used() + tasks().map(Task::gpu_bytes).sum::<u64>();
+        let gpu = self.uniform.as_ref().map_or(0, |(uniform, _)| uniform.size()) + self.retired_gpu.used()
+            + tasks().map(|task| task.gpu_bytes() + task.seats.len() as u64 * sources::NORMALIZED_PAGE_BYTES).sum::<u64>();
         let ram = self.damage.values().map(|damage| std::mem::size_of::<(u32, scale::Damage)>() as u64 + damage.regions.capacity() as u64 * std::mem::size_of::<PixelRect>() as u64).sum::<u64>()
             + self.retired.used() + self.coordinates.values().filter_map(std::sync::Weak::upgrade).map(|coordinates| { let state = coordinates.lock().unwrap(); std::mem::size_of::<Option<crate::object_image_mips::CoordinateResult>>() as u64 + state.result.as_ref().and_then(|result| result.as_ref().ok()).map_or(0, |bytes| bytes.capacity() as u64) }).sum::<u64>()
             + self.coordinates.capacity() as u64 * (std::mem::size_of::<CoordinateKey>() + std::mem::size_of::<crate::object_image_mips::CoordinateDestination>()) as u64
@@ -83,6 +84,65 @@ fn initialized_object_bytes_are_charged_once_before_settle() {
     });crate::test_support::complete(&r);
 }
 
+fn two_page_photo_windows(sizes:&[[u32;2]],cached:bool)->(WgpuRasterizer,ObjectCache,Vec<Task>) {
+    let extent=[2*PAGE_SIZE,PAGE_SIZE];
+    let source=layer_core::color::source::rgba8_source(extent,|_,_|[71,113,29,255]);
+    let mut artwork=Artwork::new(extent).unwrap();
+    let object=artwork.objects.insert(PortableId::random(),ImageObject::new(layer_core::authored::Image::new(source.clone()))).unwrap();
+    let owner=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(object),"Image")).unwrap();
+    let stack=artwork.compositions.get(artwork.root).unwrap().result;
+    artwork.stacks.get_mut(stack).unwrap().entries=vec![owner];
+    let document=layer_core::Document::from_artwork(artwork).unwrap();
+    let frame=crate::test_support::packet(document.scene(),extent);
+    let mut r=crate::memory::memory_tests::legacy_scene_renderer(document.composition().color);
+    crate::memory::memory_tests::legacy_scene_frame(&mut r,frame);
+    if cached {
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        for coordinate in [[0,0],[1,0]] {
+            let pixels=crate::prepare_image_tile(&source,coordinate,r.device.working_space(),&r.device.source_samples,None).unwrap();
+            crate::test_support::prepare_raster(&mut r,|r|Scene::decode_prepared_for(r,&mut encoder,&source,coordinate,pixels.clone(),sources::SourceUse::Exact,Class::Visible)).unwrap();
+        }
+        r.uploads.finish(&encoder);encoder.submit(&r.queue);r.wait_idle().unwrap();
+    }
+    let mut scene=Scene::new(&r).unwrap();
+    let content=scene.object_spatial.content(document.scene(),owner).unwrap();
+    let requests:Vec<_>=sizes.iter().map(|&size|scene.collection_job(&r,frame,owner,content.clone(),objects::ObjectWindow {origin:[0.;2],side:1.,size})).collect();
+    let mut cache=ObjectCache::for_scene(&scene,false);
+    for request in &requests {assert!(cache.resolve_collection(&r,document.scene(),request,None).unwrap().is_none());}
+    assert!(cache.admit(&r,Class::Visible,&requests,None).unwrap().is_none());
+    let mut tasks:Vec<Task>=std::iter::from_fn(||cache.tasks.pop_first().map(|(_,task)|task)).collect();
+    for task in &mut tasks {
+        assert!(cache.schedule.start(task.group.as_ref().unwrap()));
+        task.tiles=page_coordinates(working_set(&task.job).unwrap().1).collect();
+    }
+    (r,cache,tasks)
+}
+
+fn charged_slots(r:&WgpuRasterizer)->u64 {r.scene_tiers.display.used()-r.source_tiles.borrow().non_slot_bytes()}
+
+#[test]
+fn a_window_seat_pays_for_its_missed_input_until_the_slot_returns_to_the_cache() {
+    let (mut r,mut cache,mut tasks)=two_page_photo_windows(&[[2*PAGE_SIZE,PAGE_SIZE]],false);
+    let task=&mut tasks[0];
+    let admitted=charged_slots(&r);
+    cache.prepare_inputs(&mut r,task).unwrap();
+    assert_eq!(task.seats.len(),2,"the window holds a seat for each missed input");
+    assert_eq!(charged_slots(&r),admitted,"the seats the window was admitted with pay for the slots its missed inputs decode into");
+    cache.vacate(task);
+    assert_eq!(charged_slots(&r),admitted+2*sources::NORMALIZED_PAGE_BYTES,"released slots stay as cache, charged once");
+    assert_eq!(cache.schedule.reserved(),ObjectCache::closure(&r,&task.collection.as_ref().unwrap().request).unwrap().total(),"the window budget is whole again");
+}
+
+#[test]
+fn a_window_reading_pages_another_windows_seats_pay_for_holds_no_seat_for_them() {
+    let (mut r,mut cache,mut tasks)=two_page_photo_windows(&[[2*PAGE_SIZE,PAGE_SIZE],[2*PAGE_SIZE,PAGE_SIZE-1]],true);
+    let admitted=charged_slots(&r);
+    for task in &mut tasks {cache.prepare_inputs(&mut r,task).unwrap();}
+    assert_eq!(tasks[0].seats.len(),2,"the first window's seats pay for the two cached pages it reads");
+    assert!(tasks[1].seats.is_empty(),"a window holds no seat for pages another window's seats pay for, but held {}",tasks[1].seats.len());
+    assert_eq!(charged_slots(&r),admitted-3*sources::NORMALIZED_PAGE_BYTES,"each cached page is charged once, by the seat that pays for it, and the second window keeps one of its two seats");
+}
+
 #[cfg(not(target_arch="wasm32"))]
 #[test]
 fn a_refused_object_admission_wakes_once_when_the_display_limit_rises() {
@@ -107,13 +167,14 @@ fn a_refused_object_admission_wakes_once_when_the_display_limit_rises() {
     crate::test_support::complete(&r);r.device.retirement_handle().flush().unwrap();
     let (send,woken)=std::sync::mpsc::channel();
     r.preparation_wake=Some(Arc::new(move||{let _=send.send(());}));
-    let mut admit=|r:&WgpuRasterizer|scene.object_results.admit(r,Class::Visible,std::slice::from_ref(&request),None).unwrap().is_none();
-    assert!(!admit(&r),"the display tier must refuse the object window");
+    assert!(scene.object_results.admit(&r,Class::Visible,std::slice::from_ref(&request),None).unwrap().is_some(),"the display tier must refuse the object window");
+    assert_ne!(scene.object_results.demand(&r,|_| false),Some(crate::frame_demand::Outstanding::Runnable));
     assert!(woken.recv_timeout(std::time::Duration::from_millis(200)).is_err(),"a refused admission is not woken before a release");
     display.set_limit(u64::MAX,0);
     woken.recv_timeout(std::time::Duration::from_secs(1)).expect("a raised display limit must wake the refused admission");
     assert!(woken.recv_timeout(std::time::Duration::from_millis(200)).is_err(),"a raised limit wakes the refused admission once");
-    assert!(admit(&r),"the woken admission fits");
+    assert_eq!(scene.object_results.demand(&r,|_| false),Some(crate::frame_demand::Outstanding::Runnable));
+    assert!(scene.object_results.admit(&r,Class::Visible,std::slice::from_ref(&request),None).unwrap().is_none(),"the woken admission fits");
     drop(held);
 }
 
@@ -135,7 +196,7 @@ fn a_ledger_refused_object_admission_is_blocked_on_the_ledger_and_wakes_once_whe
     let content=scene.object_spatial.content(document.scene(),owner).unwrap();
     let request=scene.collection_job(&r,frame,owner,content,objects::ObjectWindow {origin:[0.;2],side:1.,size:extent});
     let bytes=ObjectCache::closure(&r,&request).unwrap().total();
-    let raster=r.admit_raster_working(512*MIB).expect("the raster holds most of the device");
+    let raster=r.admit_raster_working(512*MIB,crate::frame_demand::Allowance::Fresh).expect("the raster holds most of the device");
     r.memory.display_owner().report(layer_core::MemoryReport {demand_gpu_bytes:1,..Default::default()});
     r.scene_tiers.display.set_limit(u64::MAX,0);
     let held=r.scene_tiers.display.charge(384*MIB);
@@ -145,11 +206,13 @@ fn a_ledger_refused_object_admission_is_blocked_on_the_ledger_and_wakes_once_whe
     let blocked=scene.object_results.admit(&r,Class::Visible,std::slice::from_ref(&request),None).unwrap().expect("the ledger refuses the object window");
     assert!(r.scene_tiers.display.blocked(Class::Visible,bytes).is_some(),"the display tier judges the window against the ledger's room, not its stored limit");
     assert!(!blocked.fits(),"a ledger refusal stays blocked while the raster holds the device");
+    assert_ne!(scene.object_results.demand(&r,|_| false),Some(crate::frame_demand::Outstanding::Runnable));
     assert!(woken.recv_timeout(std::time::Duration::from_millis(200)).is_err(),"a ledger-refused admission is not woken before a release");
     r.commit_raster_working(raster);
     woken.recv_timeout(std::time::Duration::from_secs(1)).expect("the ledger's release edge wakes the refused admission");
     assert!(woken.recv_timeout(std::time::Duration::from_millis(200)).is_err(),"one release wakes the refused admission once");
     assert!(blocked.fits(),"the refusal fits once the ledger can admit it");
+    assert_eq!(scene.object_results.demand(&r,|_| false),Some(crate::frame_demand::Outstanding::Runnable));
     assert!(scene.object_results.admit(&r,Class::Visible,std::slice::from_ref(&request),None).unwrap().is_none(),"the woken admission fits");
     drop(held);
 }

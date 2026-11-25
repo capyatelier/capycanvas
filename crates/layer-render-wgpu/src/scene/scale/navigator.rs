@@ -127,7 +127,7 @@ impl Navigator {
         scene.scale_commands = Some(commands);
         r.scene = Some(scene);
         let texels=match result {
-            Err(GpuRasterError::NotReady|GpuRasterError::NotPublished|GpuRasterError::SourceWorkingSetExceeded)=> {
+            Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished|GpuRasterError::SourceWorkingSetExceeded)=> {
                 scene_write.track(encoder);
                 return Ok(());
             },
@@ -510,7 +510,7 @@ mod tests {
         let mut navigator=std::mem::take(&mut r.navigator);
         let cache=navigator.cache.as_ref().unwrap();
         cache.evict_window(cache.plan.bounds);
-        cache.refuse(None,cache.plan.bounds,&r.scene_tiers.display.wanting(crate::residency::Class::Navigator,u64::MAX));
+        cache.refuse(cache.plan.bounds,&r.scene_tiers.display.wanting(crate::residency::Class::Navigator,u64::MAX),crate::frame_demand::Allowance::Fresh);
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
         for moving in [true,false] {
             let before=crate::test_support::PassCounts::snapshot();

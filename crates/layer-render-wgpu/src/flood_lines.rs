@@ -117,7 +117,7 @@ impl Lines {
     pub fn storage_bytes(&self)->u64 {
         self.tokens.as_ref().map_or(0,wgpu::Buffer::size)+self.frontier.as_ref().map_or(0,wgpu::Buffer::size)+self.data.as_ref().map_or(0,wgpu::Buffer::size)+self.scratch.as_ref().map_or(0,|buffers|buffers.iter().map(wgpu::Buffer::size).sum())
     }
-    fn cache_pipelines(&self)->impl Iterator<Item=&Deferred<wgpu::ComputePipeline>> {
+    pub fn cache_pipelines(&self)->impl Iterator<Item=&Deferred<wgpu::ComputePipeline>> {
         STAGES.iter().filter(|entry|self.building.as_ref().map_or_else(
             ||STAGES[..8].contains(entry) || **entry=="reset_ends",
             |work|work.steps.iter().any(|(pending,_,_)|pending==*entry))).map(|entry|&self.pipelines[entry])
@@ -139,10 +139,8 @@ impl Lines {
             _=>true,
         }).map(|entry|&self.pipelines[entry]))
     }
-    pub fn prepare_areas(&self,compiler:&compile::Scope,priority:startup::Class)->bool {
-        self.prepare_cache(compiler,priority)
-            & compiler.require(["open_bits","apply_seals","hold_barriers","reset_ends","region_seeds","jump_distance","assign_tokens"].map(|entry|&self.pipelines[entry]),priority)
-            & compiler.require([&self.colour],priority)
+    pub fn area_pipelines(&self)->impl Iterator<Item=&Deferred<wgpu::ComputePipeline>> {
+        self.cache_pipelines().chain(["open_bits","apply_seals","hold_barriers","reset_ends","region_seeds","jump_distance","assign_tokens"].map(|entry|&self.pipelines[entry])).chain([&self.colour])
     }
     pub fn token_buffer(&self)->&wgpu::Buffer {self.tokens.as_ref().unwrap()}
     pub fn begin_areas(&mut self,device:&PipelineDevice) {
@@ -345,6 +343,7 @@ impl Lines {
         self.building=Some(work);Ok(true)
     }
     pub fn discarded(&self)->bool {self.building.as_ref().is_some_and(|work|work.submission.as_ref().is_some_and(|owner|owner.discarded()))}
+    pub fn submission(&self)->Option<crate::submission::Submission> {self.building.as_ref().and_then(|work|work.submission.clone())}
     pub fn cancel(&mut self) {self.building=None;}
     #[allow(clippy::too_many_arguments)]
     pub fn build(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,paper:(paper::Grain,u32,bool),budget:f64,demand:bool,dirty:&std::collections::BTreeSet<[u32;2]>,(lines,reads_open):(bool,bool))->Result<(bool,f64),GpuRasterError> {

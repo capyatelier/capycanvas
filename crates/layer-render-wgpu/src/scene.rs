@@ -596,8 +596,8 @@ impl Scene {
     pub(crate) fn usage(&self)->Usage {self.tiers.usage()}
     pub(crate) fn working_bytes(&self)->u64 {self.usage().working}
     pub(crate) fn store_metadata_bytes(&self)->u64 {self.scale_pages.lock().unwrap().metadata_bytes()}
-    pub(crate) fn trim_pages_by(&self,deficit:u64,class:crate::residency::Class) {scale::trim_pages_by(&self.scale_pages,deficit,class);}
-    pub(crate) fn release_pages_by(&self,deficit:u64) {scale::release_pages_by(&self.scale_pages,deficit);}
+    pub(crate) fn trim_pages_by(&self,deficit:u64,class:crate::residency::Class)->Option<crate::residency::Batch> {scale::trim_pages_by(&self.scale_pages,deficit,class)}
+    pub(crate) fn release_pages_by(&self,deficit:u64)->Option<crate::residency::Batch> {scale::release_pages_by(&self.scale_pages,deficit)}
     pub(crate) fn advance_demand_epoch(&self) {self.scale_pages.lock().unwrap().advance_epoch();}
     pub(crate) fn retained_scale_bytes(&self)->[u64;2] {
         let pages=self.scale_pages.lock().unwrap();[pages.bytes(),pages.pinned_bytes()]
@@ -881,9 +881,9 @@ impl Scene {
             let bytes=scratch_page_bytes(format);
             let charge=match reserved {
                 Some((limit,_)) if self.pool_bytes().saturating_add(bytes)>limit=>return Err(GpuRasterError::SourceWorkingSetExceeded),
-                Some((_,reservation))=>reservation.split(bytes).ok_or(GpuRasterError::Invariant("scratch allocation exceeds its accepted reservation"))?.charge(bytes),
+                Some((_,reservation))=>reservation.split(bytes).ok_or(GpuRasterError::Invariant("scratch allocation exceeds its accepted reservation"))?.charge(),
                 None if self.declaring=>self.tiers.gpu.charge(bytes),
-                None=>r.admit_tier(None,&self.tiers.gpu,crate::residency::Class::Visible,bytes).map_err(|_|GpuRasterError::NotReady)?.charge(bytes),
+                None=>r.admit_tier(None,&self.tiers.gpu,crate::residency::Class::Visible,bytes,crate::frame_demand::Allowance::Fresh).map_err(|blocked|crate::frame_demand::Waiting::error(blocked))?.charge(),
             };
             let mut page = if self.declaring { r.declared_scratch[usize::from(scalar)].sharing() }
                 else if scalar { r.create_scalar_page_surface(&self.tiers.gpu, "scene reusable scalar") } else { r.create_page_surface(&self.tiers.gpu, "scene reusable tile") };
@@ -970,7 +970,7 @@ impl Scene {
     pub(super) fn accept_traversal(&mut self,r:&mut WgpuRasterizer,inputs:sources::Inputs,declaration:sources::Declaration,
         traverse:impl FnOnce(&mut Self,&mut WgpuRasterizer,&mut sources::AcceptedInputs)->Result<(),GpuRasterError>,
     )->Result<sources::AcceptedInputs,GpuRasterError> {
-        self.declare(r,inputs,declaration,traverse)?.accept_query(r,Some(self))
+        self.declare(r,inputs,declaration,traverse)?.accept_query(r,Some(self),crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh)
     }
     pub(super) fn accept_capture(&mut self,r:&mut WgpuRasterizer,packet:FramePacket<'_>,output:Option<Output>,declaration:&sources::Declaration,
         traverse:impl FnOnce(&mut Self,&mut WgpuRasterizer,&mut sources::AcceptedInputs)->Result<(),GpuRasterError>,
@@ -1015,7 +1015,7 @@ impl Scene {
         coordinate: [u32; 2], encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<Option<crate::source_access::RawTile>, GpuRasterError> {
         let mut requested=sources::Inputs::default();requested.base(base,coordinate,r.document_color().space);
-        let inputs=requested.accept_query(r,Some(self))?;
+        let inputs=requested.accept_query(r,Some(self),crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh)?;
         if !inputs.prepare(r)? {return Err(GpuRasterError::NotReady);}
         #[cfg(test)]
         let _record=sources::record_reads(&inputs);
@@ -1060,7 +1060,7 @@ impl Scene {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn raster_tile_for_query(&mut self, r: &mut WgpuRasterizer, blob: &std::sync::Arc<layer_core::raster::TileBlob>, space: layer_core::color::RgbSpace, encoder: &mut crate::submission::CommandEncoder) -> Result<crate::source_access::RawTile, GpuRasterError> {
         let mut requested=sources::Inputs::default();requested.raster(blob.clone(),space,r.document_color().space);
-        let inputs=requested.accept_query(r,Some(self))?;
+        let inputs=requested.accept_query(r,Some(self),crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh)?;
         if !inputs.prepare(r)? {return Err(GpuRasterError::NotReady);}
         #[cfg(test)]
         let _record=sources::record_reads(&inputs);
@@ -1187,7 +1187,7 @@ impl Scene {
         let mut waiting=false;
         let prepared = match self.effects.prepare(r, packet.scene, indices, effects::Execution::Fused, packet.time_seconds, 0, packet.blend_space) {
             Ok(prepared)=>Some(prepared),
-            Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>{waiting=true;None},
+            Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished)=>{waiting=true;None},
             Err(error)=>return Err(error),
         };
         let indirect_mask=indices.len()==1 && !direct_effect_mask(packet.scene,handle);
@@ -1198,7 +1198,7 @@ impl Scene {
         } else { Ok(None) };
         let mask=match mask {
             Ok(mask)=>mask,
-            Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>{waiting=true;None},
+            Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished)=>{waiting=true;None},
             Err(error)=>return Err(error),
         };
         let _mask = mask.map(|mask| self.own(mask));
@@ -1210,7 +1210,7 @@ impl Scene {
                 if let Some((m, source)) = packet.scene.mask(*handle).filter(|(m, _)| m.enabled) {
                     let view=match self.mask_page(r,SourceTarget::Coverage(m.source),source,tile, accepted) {
                         Ok(view)=>view,
-                        Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>{waiting=true;None},
+                        Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished)=>{waiting=true;None},
                         Err(error)=>return Err(error),
                     };
                     if let Some(view)=view {
@@ -2066,7 +2066,7 @@ impl Scene {
         self.prepare_region(r, packet, (region, window), dirty, matches!(output,Output::Source(_) | Output::MaskImage(_) | Output::Objects(_)), encoder)?;
         let destination = Image { texture: destination.clone(), view: destination.create_view(&Default::default()),
             plan: display_mips::Plan::window(packet.document_extent, 0, region) };
-        let mut accepted=self.declare_capture(r,packet,&destination,&[region],output,None,None)?.accept_query(r,Some(self))?;
+        let mut accepted=self.declare_capture(r,packet,&destination,&[region],output,None,None)?.accept_query(r,Some(self),crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh)?;
         #[cfg(test)]
         let _record=sources::record_reads(&accepted);
         accepted.clone().track(encoder);
@@ -2196,7 +2196,7 @@ impl Scene {
         let mut pending=false;
         loop {
             let result=(|| {
-                if accepted.is_none() {*accepted=Some(declaration.accept_query(r,Some(self))?);}
+                if accepted.is_none() {*accepted=Some(declaration.accept_query(r,Some(self),crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh)?);}
                 let inputs=accepted.as_mut().unwrap();inputs.check_unit(unit)?;
                 inputs.clone().track(encoder);
                 #[cfg(test)]
@@ -2285,7 +2285,7 @@ impl Scene {
                 let image = self.group(r, packet, layer_core::composite_input_scope(packet.scene, id), tile, accepted);
                 self.stop_before = previous;
                 let image = match image {
-                    Err(GpuRasterError::NotReady|GpuRasterError::NotPublished) => { waiting = true; self.alloc(r, wgpu::Color::TRANSPARENT)? }
+                    Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished) => { waiting = true; self.alloc(r, wgpu::Color::TRANSPARENT)? }
                     image => image?,
                 };
                 let image = if matches!(output, Output::EffectInput(_)) { image } else { self.effect(r, packet, &[id], tile, image, accepted)? };
@@ -2419,7 +2419,7 @@ impl Scene {
             let mut waiting=false;
             for (tile,covered) in scene.begin_capture(r,packet,destination,regions,output,reserved) {
                 match scene.capture_prepared_tile_jobs(r,packet,destination,tile,covered,output,initialized,accepted) {
-                    Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>waiting=true,
+                    Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished)=>waiting=true,
                     result=>result?,
                 }
             }

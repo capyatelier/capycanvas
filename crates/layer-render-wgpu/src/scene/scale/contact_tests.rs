@@ -344,7 +344,7 @@ fn a_contact_ended_under_a_refused_predicted_tip_labels_no_picture_current_while
         if !composite_all {
             let cache=r.scale_display.as_ref().unwrap();
             let display=r.scene_tiers.display.clone();
-            cache.refuse(None,tipped,&display.blocked(crate::residency::Class::Visible,display.limit()+1).expect("a unit larger than the display grant is refused"));
+            cache.refuse(tipped,&display.blocked(crate::residency::Class::Visible,display.limit()+1).expect("a unit larger than the display grant is refused"),crate::frame_demand::Allowance::Fresh);
             assert!(held.is_some() && cache.keyless(tipped) && cache.refused(&r,tipped),"the contact writes the tip's cell without a key, and its next composition is refused");
         }
         crate::test_support::upload_layer_page(&mut r,doc.scene(),other_target,[0,1],&bytes);
@@ -454,7 +454,7 @@ fn a_cell_refused_at_pen_down_and_reached_later_in_the_contact_shows_every_dab_i
     let mut r=renderer(&doc);prepared(&mut r);
     let display=r.scene_tiers.display.clone();
     let refused=display.blocked(crate::residency::Class::Visible,display.limit()+1).expect("a unit larger than the display grant is refused");
-    {let cache=r.scale_display.as_ref().unwrap();cache.evict_window(cell);cache.refuse(None,cell,&refused);}
+    {let cache=r.scale_display.as_ref().unwrap();cache.evict_window(cell);cache.refuse(cell,&refused,crate::frame_demand::Allowance::Fresh);}
     for (step,dab) in dabs.iter().enumerate() {
         crate::test_support::submit_ready(&mut r,FramePacket {dabs:std::slice::from_ref(dab),dab_batches:std::slice::from_ref(&stroke_batch(target,dab,step==0,false)),time_seconds:0.01*(step+1) as f32,..frame}).unwrap();
         if step==0 {
@@ -537,22 +537,22 @@ fn a_frame_whose_commit_is_discarded_keeps_presenting_the_last_committed_root() 
     let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
     let mut r=renderer(&doc);
     crate::test_support::submit_settled(&mut r,frame);crate::test_support::complete(&r);
-    let coverage=|r:&WgpuRasterizer|r.scale_display.as_ref().unwrap().storm_visible_coverage(frame.view);
-    let [settled,_,_,known]=coverage(&r);
-    assert!(settled>0. && known==1.,"the settled view presents a committed root");
+    let coverage=|r:&WgpuRasterizer|{let coverage=r.presentation_page().unwrap().storm_coverage(frame.view,false);(coverage.root,coverage.known)};
+    let (settled,known)=coverage(&r);
+    assert!(settled>0. && known,"the settled view presents a committed root");
     for (step,x) in [300.,1500.].into_iter().enumerate() {
         let dab=stroke_dab(x,300.);let batch=stroke_batch(target,&dab,step==0,false);
         r.test.discard_frame=true;
         crate::test_support::submit_ready(&mut r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),time_seconds:0.01*(step+1) as f32,..frame}).unwrap();
         assert!(!r.test.discard_frame,"the stroke frame's encoder is dropped");
-        let [covered,_,_,known]=coverage(&r);
-        assert_eq!(known,1.,"frame {step}: the presented root has a matching publication witness");
+        let (covered,known)=coverage(&r);
+        assert!(known,"frame {step}: the presented root has a matching publication witness");
         assert!(covered>=settled,"frame {step}: a discarded commit lost presented coverage: settled {settled}, covered {covered}");
         assert!(r.scale_display.as_ref().unwrap().pixels.committed_root().is_some(),"frame {step}: the display keeps its last committed root");
     }
     crate::test_support::submit_ready(&mut r,frame).unwrap();crate::test_support::complete(&r);
-    let [covered,_,_,known]=coverage(&r);
-    assert!(known==1. && covered>=settled,"the frame after the discarded commits keeps every written cell: settled {settled}, covered {covered}");
+    let (covered,known)=coverage(&r);
+    assert!(known && covered>=settled,"the frame after the discarded commits keeps every written cell: settled {settled}, covered {covered}");
 }
 
 #[test]

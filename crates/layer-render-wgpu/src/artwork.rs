@@ -18,15 +18,19 @@ pub(super) struct Frame {
 pub(super) struct PendingFrame {
     pub frame: Arc<Frame>,
     pub view: ViewState,
+    pub operation: layer_core::StrokeId,
     pub capture: Option<raster::native_edit::NativeJob>,
 }
-impl Drop for PendingFrame {
-    fn drop(&mut self) {
+impl PendingFrame {
+    pub fn fail(&self, error: &str) {
         let view = self.frame.scene.view();
         for root in view.targets().filter_map(|target| view.raster(target)) {
-            if root.try_data().is_none() { let _ = root.publish(Err("Healing stopped before raster capture".into())); }
+            if root.try_data().is_none() { let _ = root.publish(Err(error.into())); }
         }
     }
+}
+impl Drop for PendingFrame {
+    fn drop(&mut self) { self.fail("Healing stopped before raster capture"); }
 }
 impl Frame {
     /// Selection overlays, navigation and layer labels do not alter raw artwork.
@@ -134,7 +138,7 @@ pub(super) struct Capture {
     window: Option<DocRect>,
     pub peak_image_bytes: u64,
     pub image_limit: Option<u64>,
-    retiring: Option<Arc<std::sync::atomic::AtomicBool>>,
+    retiring: Option<(Arc<std::sync::atomic::AtomicBool>, crate::submission::Submission)>,
 }
 impl Capture {
     pub fn layer_tile(&mut self, r: &mut WgpuRasterizer, id: SourceTarget, coordinate: [u32; 2],
@@ -223,8 +227,8 @@ impl Capture {
         let retiring = self.retiring.take();
         if self.retires_window(window) {
             let wake = r.preparation_wake.clone();
-            let retired = match retiring { Some(retired) => retired, None => scene::Scene::submit_window(r, encoder, "artwork query window", wake)? };
-            if !retired.load(std::sync::atomic::Ordering::Acquire) { self.retiring = Some(retired); return Err(GpuRasterError::NotReady); }
+            let (retired, receipt) = match retiring { Some(retiring) => retiring, None => { let receipt = encoder.submission(); (scene::Scene::submit_window(r, encoder, "artwork query window", wake)?, receipt) } };
+            if !retired.load(std::sync::atomic::Ordering::Acquire) { self.retiring = Some((retired, receipt)); return Err(GpuRasterError::NotReady); }
             if let Some(scene) = &mut self.scene {
                 scene.release_capture_window(window);
             }
@@ -252,6 +256,9 @@ impl Capture {
         }
         Ok((window, bytes))
     }
+    pub fn awaiting(&self) -> Option<crate::frame_demand::Producer> {
+        self.retiring.as_ref().map(|(_, receipt)| crate::frame_demand::Producer::Gpu(receipt.clone()))
+    }
     fn retires_window(&self, window: DocRect) -> bool {
         self.window.is_some_and(|old| old != window) && self.peak_image_bytes > 0
     }
@@ -260,7 +267,7 @@ impl Capture {
     pub fn would_block(&self, r: &WgpuRasterizer, packet: FramePacket<'_>, region: PixelRect) -> bool {
         let window = scene::Scene::capture_window(packet.scene, region, packet.document_extent);
         scene::Scene::capture_image_bound(packet.scene, region) > 0
-            || self.retires_window(window) && !self.retiring.as_ref().is_some_and(|retired| retired.load(std::sync::atomic::Ordering::Acquire))
+            || self.retires_window(window) && !self.retiring.as_ref().is_some_and(|(retired, _)| retired.load(std::sync::atomic::Ordering::Acquire))
             || page_coordinates(region).any(|tile| {
                 r.source_tiles.borrow().uploads_full(crate::residency::Class::Visible) || source_tile_decodes(r, packet.scene, tile)
             })

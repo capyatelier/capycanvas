@@ -22,10 +22,11 @@ impl CanonicalComparisons {
     pub fn reserved(r:&mut WgpuRasterizer,count:usize,allocation:&mut crate::residency::Reservation)->Result<Self,GpuRasterError> {
         let bytes=Self::bytes(count)?;
         if bytes>r.device.limits().max_buffer_size {return Err(GpuRasterError::SourceWorkingSetExceeded);}
+        let paid=allocation.split(bytes).ok_or(GpuRasterError::Invariant("canonical comparisons exceed their working reservation"))?;
         let buffer=r.device.create_buffer(&wgpu::BufferDescriptor {label:Some("native capture canonical comparisons"),
             size:bytes,usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_SRC,mapped_at_creation:false});
         let storage=Self {storage:Arc::new(Storage {buffer,_charge:r.raster_buffers.charge(bytes)}),offset:0,len:count};
-        drop(allocation.split(bytes).ok_or(GpuRasterError::Invariant("canonical comparisons exceed their working reservation"))?);
+        drop(paid);
         Ok(storage)
     }
     pub fn len(&self)->usize {self.len}
@@ -35,17 +36,16 @@ impl CanonicalComparisons {
         assert!(start+count<=self.len);
         Self {storage:self.storage.clone(),offset:self.offset+start as u64*STRIDE,len:count}
     }
-    pub fn result(&self,index:usize,name:Arc<layer_core::raster::CanonicalName>)->CanonicalReadback {
+    pub fn result(&self,index:usize,writer:layer_core::raster::CanonicalWriter)->CanonicalReadback {
         assert!(index<self.len());
-        CanonicalReadback {storage:self.clone(),index,name}
+        CanonicalReadback {storage:self.clone(),index,writer}
     }
 }
 
-#[derive(Clone)]
 pub(crate) struct CanonicalReadback {
     storage:CanonicalComparisons,
     index:usize,
-    name:Arc<layer_core::raster::CanonicalName>,
+    writer:layer_core::raster::CanonicalWriter,
 }
 impl CanonicalReadback {
     pub fn copy(&self,encoder:&mut wgpu::CommandEncoder,buffer:&wgpu::Buffer,offset:u64) {
@@ -59,5 +59,5 @@ impl CanonicalReadback {
         }
         Ok(changed)
     }
-    pub fn resolve(&self,changed:bool)->Result<(),String> {self.name.resolve(changed).map_err(str::to_owned)}
+    pub fn resolve(self,changed:bool)->Result<(),String> {self.writer.resolve(changed).map_err(str::to_owned)}
 }

@@ -1811,3 +1811,13 @@ fn vector_reference_line_middle_tracks_pressure_stroke_centrelines() {
     }
     assert!(failures.is_empty(), "vector reference centreline maximum {maximum} exceeds the local width gate or has missing crossings: {failures:#?}");
 }
+
+#[test]
+fn paths_derived_off_the_canvas_thread_wake_the_held_bake_after_their_last_chunk() {
+    let Record::Path(path) = stroke(1, &[[4., 4.], [60., 60.]], 4., [1.; 4]) else { unreachable!() };
+    let (woken, wake) = std::sync::mpsc::channel();
+    let results = derive_off_thread((0..600).map(|slot| (slot, path.clone())).collect(), level_frame([0.; 2], 0, [64; 2]), Some(Arc::new(move || { let _ = woken.send(()); })));
+    wake.recv_timeout(std::time::Duration::from_secs(30)).expect("the derivation wakes the frame it holds");
+    assert_eq!(results.try_iter().map(|baked| baked.len()).sum::<usize>(), 600, "every derived path is delivered before the wake");
+    assert!(matches!(results.try_recv(), Err(std::sync::mpsc::TryRecvError::Disconnected)), "the woken frame sees the derivation finished");
+}

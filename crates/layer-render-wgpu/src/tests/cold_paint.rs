@@ -714,21 +714,30 @@ fn a_stroke_frame_refused_raster_room_waits_for_a_release() {
     let (dab, batch) = stroke(2, 2860.);
     paint_mut(&mut document).raster = RasterRevision::pending();
     let frame = FramePacket { dabs: &[dab], dab_batches: std::slice::from_ref(&batch), ..packet(&document, false) };
+    let retirement = r.raster_tiers.raster.heap().retire();
     let mut retiring = Vec::new();
     loop {
         r.begin_frame_memory(frame);
         let room = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used()).max(1 << 20);
-        let Ok(found) = r.admit_raster_working(room).or_else(|_| r.admit_raster_working(1 << 20)) else { break; };
+        let Ok(found) = r.admit_raster_working(room,crate::frame_demand::Allowance::Fresh).or_else(|_| r.admit_raster_working(1 << 20,crate::frame_demand::Allowance::Fresh)) else { break; };
         retiring.push(r.raster_buffers.transfer.charge(found.bytes()));
         r.commit_raster_working(found);
     }
+    assert!(!retiring.is_empty(), "the test occupies room with transfer charges");
+    let edge = r.device.retirement_handle();
+    let retiring = edge.retirement((retiring, retirement));
     assert!(!r.raster_dependencies_ready(frame, None), "memory still retiring holds the room the stroke frame needs");
     assert_eq!(r.restore_preparation(), Some(crate::frame_demand::Outstanding::Blocked(crate::frame_demand::Input::Residency)),
         "the stroke frame's restore records its refusal");
     complete(&r);
-    let _ = r.frame_demand();
-    assert_eq!(r.frame_demand(), layer_render::FrameDemand::Wait, "a refused stroke frame waits for a release instead of spinning");
-    drop(retiring);
+    let before = crate::test_support::PassCounts::snapshot();
+    for _ in 0..3 {
+        assert_eq!(r.frame_demand(), layer_render::FrameDemand::Wait, "a refused stroke frame waits for a release instead of spinning");
+        assert!(!r.raster_dependencies_ready(frame, None), "a forced frame cannot bypass its pending reclaim");
+    }
+    assert_eq!(crate::test_support::PassCounts::snapshot().delta(before).raster_admissions, 0, "a sleeping restore makes no fresh admission attempts");
+    retiring.complete();
+    edge.flush().unwrap();
     assert_eq!(r.frame_demand(), layer_render::FrameDemand::Work, "the released room makes the refused frame runnable");
     assert!((0..64).any(|_| { let ready = r.raster_dependencies_ready(frame, None); complete(&r); ready }), "the released room admits the stroke frame");
 }

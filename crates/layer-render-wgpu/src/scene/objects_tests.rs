@@ -46,7 +46,7 @@ fn native(r: &mut WgpuRasterizer, doc: &layer_core::Document, output: Output) ->
     let mut scene = r.scene.take().unwrap();
     for _ in 0..5000 {
         let result=submit_encoded(r,|r,encoder|scene.capture_region_prepared(r,packet(doc.scene(),extent),&texture,PixelRect::full(extent),output,encoder));
-        match result {Ok(())=>break,Err(GpuRasterError::NotReady)=>{},Err(error)=>panic!("{error}")}
+        match result {Ok(())=>break,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))=>{},Err(error)=>panic!("{error}")}
         r.wait_idle().unwrap();
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
@@ -419,7 +419,7 @@ fn object_only_native_and_display_composite_ordered_siblings_and_raw_queries() {
     let mut captured = false;
     for _ in 0..5000 {
         let result = submit_encoded(&mut r, |r, encoder| scene.capture_region_prepared(r, raw_frame, &target, PixelRect::full([16; 2]), Output::Objects(owner), encoder));
-        if let Err(error) = &result { assert!(matches!(error, GpuRasterError::NotReady), "{error:?}"); }
+        if let Err(error) = &result { assert!(matches!(error, GpuRasterError::NotReady|GpuRasterError::Waiting(_)), "{error:?}"); }
         r.wait_idle().unwrap();
         if result.is_ok() { captured = true; break; }
     }
@@ -666,7 +666,7 @@ fn coarse_linear_object_node_includes_source_outside_its_output_cell() {
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         r.prepare_moving_images(frame, &mut encoder, &mut crate::test_support::work(false)).unwrap();
         let composed = {let mut work=crate::test_support::work(false);scene.compose(&mut r, frame, &mut encoder, &mut work)};
-        if let Err(error) = &composed { assert!(matches!(error, GpuRasterError::NotReady), "{error:?}"); }
+        if let Err(error) = &composed { assert!(matches!(error, GpuRasterError::NotReady|GpuRasterError::Waiting(_)), "{error:?}"); }
         r.uploads.finish(&encoder); r.last_submission = encoder.submit(&r.queue); r.wait_idle().unwrap();
         if composed.is_ok() && scene.objects_outstanding(&r).is_none() && !r.moving_images.pending() && !r.image_decode_waiting() { settled = true; break; }
         std::thread::sleep(std::time::Duration::from_millis(1));
@@ -1107,7 +1107,7 @@ fn live_object_read_defers_without_inline_decode_then_returns_canonical_pixels()
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     let before = r.device.source_samples.stats();
     let result = scene.capture_region_prepared(&mut r, frame, &target, PixelRect::full([64; 2]), Output::Objects(owner), &mut encoder);
-    assert!(matches!(result, Err(GpuRasterError::NotReady)));
+    assert!(matches!(result, Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
     assert_eq!(r.device.source_samples.stats(), before, "the initiating read cannot decompress source pixels");
     assert!(!r.image_decode_waiting(), "initial admission schedules only metadata");
     assert_eq!(encoder.pass_count(), 0);
@@ -1116,7 +1116,7 @@ fn live_object_read_defers_without_inline_decode_then_returns_canonical_pixels()
     for _ in 0..500 {
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         let result = scene.capture_region_prepared(&mut r, frame, &target, PixelRect::full([64; 2]), Output::Objects(owner), &mut encoder);
-        if let Err(error) = &result { assert!(matches!(error, GpuRasterError::NotReady), "{error:?}"); }
+        if let Err(error) = &result { assert!(matches!(error, GpuRasterError::NotReady|GpuRasterError::Waiting(_)), "{error:?}"); }
         assert!(encoder.pass_count() < 40, "live reads advance bounded GPU work");
         r.uploads.finish(&encoder); r.last_submission = encoder.submit(&r.queue); r.wait_idle().unwrap();
         if result.is_ok() { complete = true; break; }
@@ -1144,7 +1144,7 @@ fn cold_object_reads_advance_every_finished_tile_and_the_idle_budget_per_attempt
         assert!(attempts < 32, "a read of 64 source tiles and 2^24 taps completes in a few host polls");
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         let result = scene.capture_region_prepared(&mut r, frame, &target, PixelRect::full([128; 2]), Output::Objects(owner), &mut encoder);
-        if let Err(error) = &result { assert!(matches!(error, GpuRasterError::NotReady), "{error:?}"); }
+        if let Err(error) = &result { assert!(matches!(error, GpuRasterError::NotReady|GpuRasterError::Waiting(_)), "{error:?}"); }
         r.uploads.finish(&encoder); r.last_submission = encoder.submit(&r.queue); r.wait_idle().unwrap();
         if result.is_ok() { break; }
         std::thread::sleep(std::time::Duration::from_millis(16));
@@ -1256,7 +1256,7 @@ fn overlapping_sibling_images_keep_bounded_residency_and_composite_order() {
             assert!(start.elapsed()<std::time::Duration::from_secs(40),"ordered sibling images make bounded progress");
             let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
             let result=scene.capture_region_prepared(&mut r,FramePacket {blend_space:blend,..packet(doc.scene(),[256;2])},&target,PixelRect::full([256;2]),Output::Artwork(None),&mut encoder);
-            if let Err(error)=&result {assert!(matches!(error,GpuRasterError::NotReady),"{error:?}");}
+            if let Err(error)=&result {assert!(matches!(error,GpuRasterError::NotReady|GpuRasterError::Waiting(_)),"{error:?}");}
             peak=peak.max(scene.object_results.bytes());
             assert!(scene.object_results.bytes()<=r.scene_tiers.display.limit(),"resident outputs stay within the display tier");
             r.uploads.finish(&encoder);encoder.submit(&r.queue);r.wait_idle().unwrap();
@@ -1345,7 +1345,7 @@ fn deferred_collection_construction_discards_unencoded_prefix_and_reuses_scratch
     for _ in 0..12 {
         scene.alloc(&r,wgpu::Color::TRANSPARENT).unwrap();
         let before=crate::test_support::PassCounts::snapshot();
-        assert!(matches!(scene.object_tile(&r,packet(doc.scene(),[256;2]),owner,[0;2],&mut Default::default()),Err(GpuRasterError::NotReady)));
+        assert!(matches!(scene.object_tile(&r,packet(doc.scene(),[256;2]),owner,[0;2],&mut Default::default()),Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
         assert_eq!(crate::test_support::PassCounts::snapshot().delta(before).total,0,"deferred construction must not encode the prefix");
         assert!(matches!(scene.jobs.as_slice(),[Job::Clear(target,_)] if *target==scene.pool[0].view),"deferred construction must leave the prefix unwritten");
         scene.discard_unencoded_jobs();
@@ -2098,7 +2098,7 @@ fn object_admission_and_charges_are_unchanged_when_the_caches_move_out() {
     let charged=r.scene_tiers.display.used();
     r.scene_tiers.display.set_limit(charged+1,0);
     let admission=|scene:&Scene| {
-        let accepted=r.admit_display(Some(scene),Class::Visible,1);
+        let accepted=r.admit_display(Some(scene),Class::Visible,1,crate::frame_demand::Allowance::Fresh);
         (accepted.is_ok(),r.scene_tiers.display.used())
     };
     let before=admission(&scene);
@@ -2134,9 +2134,16 @@ fn object_counters_match_a_cache_walk_after_seeded_windows_edits_and_completions
         frame.view.document_to_surface = [scale as f32, 0., 0., scale as f32, 0., 0.];
         crate::test_support::submit_ready(&mut r, FramePacket { composite_all: step == 0, reset_layers: step == 0, ..frame }).unwrap();
         if seed & 4 != 0 { r.wait_idle().unwrap(); }
+        let (entered,ready)=std::sync::mpsc::channel();let (release,held)=std::sync::mpsc::channel::<()>();
+        r.device.retirement_handle().run(move || {
+            entered.send(()).unwrap();
+            let _=held.recv_timeout(crate::READBACK_TIMEOUT);
+        });
+        ready.recv_timeout(crate::READBACK_TIMEOUT).unwrap();
         let scene = r.scene.as_ref().unwrap();
         let [counted, walked] = [scene.usage(), scene.walked_usage()];
         let [objects, walked_objects] = scene.object_gpu();
+        release.send(()).unwrap();
         assert_eq!([counted.working, counted.ram, counted.pinned, objects], [walked.working, walked.ram, walked.pinned, walked_objects], "step {step}");
     }
     crate::test_support::settle_decodes(&mut r);

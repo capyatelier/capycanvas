@@ -83,7 +83,7 @@ fn raw_planes(r: &mut WgpuRasterizer, document: &Document) -> Planes {
                     else { inputs.raw_scalar(r, target, plane, coordinate) }
                 };
                 let declaration = crate::scene::sources::Declaration::raw(None, Some(versions.clone()), Some(encoder.submission()));
-                let mut inputs = crate::scene::sources::declare(Default::default(), declaration, |inputs| read(r, inputs).map(drop))?.accept_query(r, None)?;
+                let mut inputs = crate::scene::sources::declare(Default::default(), declaration, |inputs| read(r, inputs).map(drop))?.accept_query(r, None,crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh)?;
                 if !inputs.prepare(r)? { return Err(GpuRasterError::NotReady); }
                 let source = read(r, &mut inputs)?;
                 inputs.track(encoder);

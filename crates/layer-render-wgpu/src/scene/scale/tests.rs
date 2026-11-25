@@ -55,7 +55,7 @@ pub(super) fn prepare_layer_pages(r:&mut WgpuRasterizer,frame:FramePacket<'_>) {
         scene.begin_frame();
         let requests=cache.region_sources(&scene,r,frame,cache.plan.bounds,false);
         let ready=requests.iter().all(|(id,request)|cache.source_ready(&scene,r,*id,request));
-        for (id,request) in requests {{let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,r,frame,&mut encoder,id,request,Class::Visible,&mut work).unwrap();}}
+        for (id,request) in requests {{let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,r,frame,&mut encoder,id,request,Class::Visible,crate::frame_demand::Allowance::Fresh,&mut work).unwrap();}}
         r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(r);
         r.scene=Some(scene);r.scale_display=Some(cache);
         if ready {return;}
@@ -111,7 +111,7 @@ pub(super) fn covered_document_pages(cache:&Cache,accuracy:pages::Accuracy)->imp
 fn reset_page_store(cache:&mut Cache) {
     let expected=cache.pages.lock().unwrap().expected().cloned();
     let mut store=pages::Store::default();if let Some(expected)=expected {store.set_expected(expected);}
-    let pages=Arc::new(std::sync::Mutex::new(store));
+    let pages=pages::Pages::new(store);
     let mut current=Some(cache);
     while let Some(cache)=current {cache.pixels=Default::default();cache.cells=Default::default();cache.pages=pages.clone();current=cache.overview.as_deref_mut();}
 }
@@ -378,14 +378,14 @@ fn plain_raster_stroke_with_shared_overview(minified:bool) {
     crate::test_support::submit_settled(&mut renderer,frame);
     let cache=renderer.scale_display.as_ref().unwrap();
     let overview=cache.overview.as_ref().expect("plain raster fixture has an overview");
-    assert!(Arc::ptr_eq(&cache.pages,&overview.pages));
+    assert!(cache.pages.same(&overview.pages));
     assert_ne!(cache.plan,overview.plan);
     let shared=cache.pages.clone();
     if minified {
         renderer.test.exact_display=false;
         frame.view.document_to_surface=[1./64.,0.,0.,1./64.,0.,0.];
         crate::test_support::submit_settled(&mut renderer,FramePacket {composite_all:false,..frame});
-        assert!(Arc::ptr_eq(&shared,&renderer.scale_display.as_ref().unwrap().pages));
+        assert!(shared.same(&renderer.scale_display.as_ref().unwrap().pages));
     }
     let mut dab=crate::tests::test_dab([1152.;2],[1.,0.,0.,1.],1.);dab.radii=[32.;2];
     let batch=dab_batch(source_at(&document,0),crate::layer_tests::preset_style(DefaultBrushPreset::GPen),dab.bounds());
@@ -425,7 +425,7 @@ fn an_overview_derived_while_its_view_has_a_hole_shows_the_views_current_pixels(
             assert!(!hole.is_empty() && hole.intersect(visible).is_empty()!=visible_hole,"the hole is {} the view",if visible_hole {"inside"}else {"outside"});
             let display=r.scene_tiers.display.clone();
             let refused=display.blocked(crate::residency::Class::Visible,display.limit()+1).expect("a unit larger than the display grant is refused");
-            main.evict_window(hole);main.refuse(None,hole,&refused);
+            main.evict_window(hole);main.refuse(hole,&refused,crate::frame_demand::Allowance::Fresh);
         }
         crate::test_support::upload_layer_page(&mut r,document.scene(),target,changed,&blue);
         for _ in 0..6 {
@@ -462,7 +462,7 @@ fn a_view_without_an_overview_admits_its_root_window_beyond_a_quarter_of_the_sce
     let _budget=crate::memory::memory_tests::display_frame_with_budget(&mut r,frame,used+2*bytes);
     let grant=r.memory.display_grant();
     assert!(grant/4<r.scene_tiers.display.used()+bytes && r.scene_tiers.display.used()+bytes<=grant,"the window fits the display grant but not a quarter of it: window={bytes} grant={grant}");
-    assert!(cache.reserve_window(&r,r.scene.as_ref().unwrap(),bytes).is_ok(),"the view's required root window is admitted within the scene budget");
+    assert!(cache.reserve_window(&r,r.scene.as_ref().unwrap(),bytes,crate::frame_demand::Allowance::Fresh).is_ok(),"the view's required root window is admitted within the scene budget");
 }
 
 #[test]
@@ -903,7 +903,7 @@ fn streamed_sources_reuse_valid_finer_pages_without_native_decoding() {
         let (mut scene,mut cache)=(r.scene.take().unwrap(),r.scale_display.take().unwrap());
         let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
         scene.begin_frame();
-        {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan:display_mips::Plan::at(frame.document_extent,2),required:PixelRect::full(frame.document_extent).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut work).unwrap();}
+        {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan:display_mips::Plan::at(frame.document_extent,2),required:PixelRect::full(frame.document_extent).into(),covered:PixelRect::EMPTY},Class::Prefetch,crate::frame_demand::Allowance::Fresh,&mut work).unwrap();}
         r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
         r.scene=Some(scene);r.scale_display=Some(cache);
     }
@@ -1180,7 +1180,7 @@ fn cold_identity_sources_prepare_adjacent_detail_without_redecoding() {
     assert!(source_levels(r.scale_display.as_ref().unwrap(),source_at(&doc,0)).contains_key(&3));
     let mut cache=r.scale_display.take().unwrap();let mut scene=r.scene.take().unwrap();
     let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());scene.begin_frame();
-    {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,source_at(&doc,0),SourceRequest {plan:display_mips::Plan::at(frame.document_extent,2),required:PixelRect::full(frame.document_extent).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut work).unwrap();}
+    {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,source_at(&doc,0),SourceRequest {plan:display_mips::Plan::at(frame.document_extent,2),required:PixelRect::full(frame.document_extent).into(),covered:PixelRect::EMPTY},Class::Prefetch,crate::frame_demand::Allowance::Fresh,&mut work).unwrap();}
     r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
     let updates=scene.scale_sources.entries[&source_at(&doc,0)].updates;
     let levels=source_levels(&cache,source_at(&doc,0)).keys().copied().collect::<BTreeSet<_>>();
@@ -1264,17 +1264,17 @@ fn source_windows_derive_across_origins_and_fill_only_missing_pages() {
         scene.begin_frame();
         {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {
             plan:display_mips::Plan::window(extent,1,fine),required:fine.into(),covered:PixelRect::EMPTY,
-        },Class::Prefetch,&mut work).unwrap();}
+        },Class::Prefetch,crate::frame_demand::Allowance::Fresh,&mut work).unwrap();}
         cache.pages.lock().unwrap().remove_source_level(id,2);
         let plan=display_mips::Plan::window(extent,2,coarse);
         let updates=scene.scale_sources.entries[&id].updates;
         scene.begin_frame();
-        {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan,required:fine.intersect(coarse).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut work).unwrap();}
+        {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan,required:fine.intersect(coarse).into(),covered:PixelRect::EMPTY},Class::Prefetch,crate::frame_demand::Allowance::Fresh,&mut work).unwrap();}
         let complete=source_chunks(&cache,id,2).len();
         assert_eq!(complete,page_coordinates(fine.intersect(coarse)).count());
         assert_eq!(scene.scale_sources.entries[&id].updates,updates);
         scene.begin_frame();
-        {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan,required:coarse.into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut work).unwrap();}
+        {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan,required:coarse.into(),covered:PixelRect::EMPTY},Class::Prefetch,crate::frame_demand::Allowance::Fresh,&mut work).unwrap();}
         assert_eq!(scene.scale_sources.entries[&id].updates-updates,(page_coordinates(coarse).count()-complete) as u64);
         r.uploads.finish(&encoder);encoder.submit(&r.queue);
         let image=source_image(&r,&cache,&scene.scale_sources.entries[&id],id,plan);
@@ -1473,10 +1473,10 @@ fn deriving_partial_sources_preserves_completed_texels_between_refreshed_regions
     for tile in [[0,0],[3,3]] {
         cache.pages.lock().unwrap().discard_source_chunks(id,3,page_rect(tile));
         scene.begin_frame();
-        {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan:display_mips::Plan::at(extent,1),required:page_rect(tile).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut work).unwrap();}
+        {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan:display_mips::Plan::at(extent,1),required:page_rect(tile).into(),covered:PixelRect::EMPTY},Class::Prefetch,crate::frame_demand::Allowance::Fresh,&mut work).unwrap();}
     }
     scene.begin_frame();
-    {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan,required:PixelRect::full(extent).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut work).unwrap();}
+    {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan,required:PixelRect::full(extent).into(),covered:PixelRect::EMPTY},Class::Prefetch,crate::frame_demand::Allowance::Fresh,&mut work).unwrap();}
     r.uploads.finish(&encoder);encoder.submit(&r.queue);
     let actual=pixels(&r,&source_image(&r,&cache,&scene.scale_sources.entries[&id],id,plan).texture);
     assert!(actual.iter().flatten().zip(expected.iter().flatten()).all(|(a,b)|(a-b).abs()<1e-6));
@@ -2967,7 +2967,7 @@ fn a_large_display_prefetch_refusal_never_shrinks_the_raster_grant() {
     let cache=r.scale_display.as_ref().unwrap();
     cache.evict_window(cache.plan.bounds);
     let refusal=r.scene_tiers.display.blocked(crate::residency::Class::Prefetch,2<<30).expect("the prefetch does not fit");
-    cache.refuse(None,cache.plan.bounds,&refusal);
+    cache.refuse(cache.plan.bounds,&refusal,crate::frame_demand::Allowance::Fresh);
     r.frame_room(frame);
     assert!(r.memory.raster_grant()>=before,"a display prefetch refusal took the raster's room: {} -> {}",before,r.memory.raster_grant());
 }

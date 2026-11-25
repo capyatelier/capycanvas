@@ -49,15 +49,16 @@ struct CoverageProgress {
     previous:Option<([u64;3],f64)>,first_visible:Option<usize>,zero:usize,partial:usize,full:usize,
 }
 impl CoverageProgress {
-    fn observe(&mut self,frame:usize,context:[u64;3],covered:f64,visible:f64,artwork:bool) {
+    fn observe(&mut self,frame:usize,context:[u64;3],coverage:crate::test_support::StormCoverage,artwork:bool) {
+        let crate::test_support::StormCoverage {root,presented,total:visible,..}=coverage;
         if let Some((previous,area))=self.previous && previous==context {
             let projection_roundoff=visible.max(1.)*f64::EPSILON*128.;
-            assert!(covered+projection_roundoff>=area,"compatible view lost committed coverage: frame={frame}, previous={area}, covered={covered}, context={context:?}");
+            assert!(presented+projection_roundoff>=area,"compatible view lost presented coverage: frame={frame}, previous={area}, presented={presented}, root={root}, context={context:?}");
         }
-        self.previous=Some((context,covered));
-        if self.first_visible.is_none() && artwork && covered>0. {self.first_visible=Some(frame);}
+        self.previous=Some((context,presented));
+        if self.first_visible.is_none() && artwork && root>0. {self.first_visible=Some(frame);}
         if visible>0. && self.first_visible.is_some() {
-            if covered==0. {self.zero+=1;}else if covered+visible*f64::EPSILON*128.<visible {self.partial+=1;}else{self.full+=1;}
+            if root==0. {self.zero+=1;}else if root+visible*f64::EPSILON*128.<visible {self.partial+=1;}else{self.full+=1;}
         }
     }
 }
@@ -269,10 +270,10 @@ fn storm(fixture:Fixture,grant:Grant,profile:IoProfile) {
             assert!(!pictured || presenter.presented_camera()==Some(view),"I2 withheld/current camera: {profile:?}/{fixture:?}/{grant:?}, seed={seed:x}, frame={frame}, presented={:?}, requested={view:?}",presenter.presented_camera());
             assert!(!pictured || presenter.canvas_revision().is_some(),"I2 withheld artwork: {profile:?}/{fixture:?}/{grant:?}, seed={seed:x}, frame={frame}");
             timings.push(owner_cpu().saturating_sub(start));
-            let [covered,visible,_,known]=r.scale_display.as_ref().map_or([0.,crate::test_support::storm_surface_area(PixelRect::full(extent),view),0.,1.],|cache|cache.storm_visible_coverage(view));
-            assert_eq!(known,1.,"committed root has no matching publication witness");
+            let presented=crate::test_support::storm_coverage(r,&presenter,view,extent);
+            assert!(presented.known,"presented picture has no matching publication witness: {presented:?}");
             let camera=crate::test_support::coverage_hash(&(view.document_to_surface.map(f32::to_bits),[view.width_px,view.height_px]));
-            coverage.observe(frame,[owner,revision,camera],covered,visible,presenter.canvas_revision().is_some() && presenter.presented_camera()==Some(view));
+            coverage.observe(frame,[owner,revision,camera],presented,presenter.canvas_revision().is_some() && presenter.presented_camera()==Some(view));
             pictured=coverage.first_visible.is_some();
             if !cfg!(debug_assertions) && matches!(grant,Grant::Desktop) {assert!(timings.last().unwrap()<=&CPU_MAX,"CPU max: {profile:?}/{fixture:?}/{grant:?}, seed={seed:x}, frame={frame}, cpu={:?}",timings.last());}
             let physical=r.telemetry().resident_bytes;
@@ -302,16 +303,16 @@ fn storm(fixture:Fixture,grant:Grant,profile:IoProfile) {
             let revision=live.document().revision;let owner=live.document().owner;let r=live.backend_mut();
             let view=requested_view;
             if presenter.needs_present(r,view,[0.18,0.18,0.18,1.]) {presenter.present(r,&output.1,view,[0.18,0.18,0.18,1.]).unwrap();}
-            let [covered,visible,_,known]=r.scale_display.as_ref().map_or([0.,0.,0.,1.],|cache|cache.storm_visible_coverage(view));
-            assert_eq!(known,1.,"settled root has no matching publication witness");
+            let presented=crate::test_support::storm_coverage(r,&presenter,view,extent);
+            assert!(presented.known,"settled picture has no matching publication witness: {presented:?}");
             let camera=crate::test_support::coverage_hash(&(view.document_to_surface.map(f32::to_bits),[view.width_px,view.height_px]));
-            coverage.observe(FRAMES+frame,[owner,revision,camera],covered,visible,presenter.canvas_revision().is_some());
+            coverage.observe(FRAMES+frame,[owner,revision,camera],presented,presenter.canvas_revision().is_some());
             let waiting=!live.has_pending_input() && !live.has_pending_document_edits() && !live.raster_backing_pending()
                 && live.frame_demand() == layer_render::FrameDemand::Wait;
             if waiting && wakes.recv_timeout(QUIET).is_err() {
                 let r=live.backend();
                 assert!(r.has_presentable_frame());
-                assert!(covered>0.,"idle renderer has no visible committed content: {coverage:?}");
+                assert!(presented.root>0.,"idle renderer has no visible committed content: {coverage:?}");
                 if let Some(cache)=&r.scale_display && let Err(cell)=cache.storm_view_settled(view) {
                     panic!("settled with a required visible cell incomplete: {profile:?}/{fixture:?}/{grant:?}, seed={seed:x}, frame={frame}: {cell}");
                 }

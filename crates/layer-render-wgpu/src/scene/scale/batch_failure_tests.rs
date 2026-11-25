@@ -36,7 +36,7 @@ fn shared_ready_encode_error_discards_jobs_before_any_unit_state_commits() {
     let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
     for owner in &owners {
         let id=doc.scene().source_target(*owner).unwrap();
-        {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan,required:PixelRect::full(extent).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut work).unwrap();}
+        {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan,required:PixelRect::full(extent).into(),covered:PixelRect::EMPTY},Class::Prefetch,crate::frame_demand::Allowance::Fresh,&mut work).unwrap();}
     }
     let before_coverage=cache.coverage_snapshot();
     let before_branches=cache.commit_state();
@@ -55,7 +55,7 @@ fn shared_ready_encode_error_discards_jobs_before_any_unit_state_commits() {
         let expected=scene.scale_pages.lock().unwrap().expected().cloned().unwrap();
         let mut accepted=cache.declare_unit(&mut scene,&mut r,frame,expected,page_rect([page,0]),plan,false,false,0,crate::residency::Class::Visible,&mut encoder,|evaluator| {
             let output=evaluator.evaluate_root(&root,Root::Store)?;evaluator.materialize(output,None).map(drop)
-        }).unwrap().accept_query(&mut r,Some(&scene)).unwrap();
+        }).unwrap().accept_query(&mut r,Some(&scene),crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh).unwrap();
         {
             let mut evaluator=Evaluator {class:crate::residency::Class::Visible,accepted:&mut accepted,cache:&mut cache,scene:&mut scene,packet:frame,r:&mut r,
                 encoder:&mut encoder,region:page_rect([page,0]).into(),input:plan,tiled:false,

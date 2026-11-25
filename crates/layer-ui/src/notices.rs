@@ -632,6 +632,18 @@ mod localization_tests {
     }
 
     #[test]
+    fn two_refusals_in_one_frame_tell_the_person_twice() {
+        let mut s = crate::session::test_support::launched(session(Platform::Gtk));
+        s.frame(1, 1).unwrap();
+        let before = s.last_notice_id();
+        s.engine.backend_mut().memory_refusals = vec![layer_render::Refusal { stroke: layer_core::StrokeId(0), drawn: 0 }; 2];
+        s.frame(2, 2).unwrap();
+        assert_eq!(s.last_notice_id(), before + 2, "each refused operation is announced once");
+        s.frame(3, 3).unwrap();
+        assert_eq!(s.last_notice_id(), before + 2, "a delivered refusal is not announced again");
+    }
+
+    #[test]
     fn whole_drawing_filter_limits_are_told_once_per_new_refusal_and_not_for_a_replaced_renderer() {
         let mut s = crate::session::test_support::launched(session(Platform::Gtk));
         s.frame(1, 1).unwrap();

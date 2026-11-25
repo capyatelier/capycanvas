@@ -1581,7 +1581,7 @@ fn sparse_transform_capture_keeps_filter_edges_and_watercolor_metadata_without_e
                 |r, packet, _, encoder| {
                     let mut scene = r.scene.take().unwrap_or_else(|| scene::Scene::new(r).unwrap());
                     let result=(|| {
-                        if accepted.is_none() {accepted=Some(scene.declare_raw_capture(r,packet,plan.paint.map(SourceTarget::Paint).unwrap_or(plan.target),&placements,coordinate)?.accept_query(r,Some(&scene))?);}
+                        if accepted.is_none() {accepted=Some(scene.declare_raw_capture(r,packet,plan.paint.map(SourceTarget::Paint).unwrap_or(plan.target),&placements,coordinate)?.accept_query(r,Some(&scene),crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh)?);}
                         accepted.as_ref().unwrap().clone().track(encoder);
                         scene.capture_raw_tile(r,packet,coordinate,&plan,&placements,encoder,accepted.as_mut().unwrap())
                     })();
@@ -1628,7 +1628,7 @@ fn default_one_masks_keep_zero_tiles_and_skip_no_authored_coverage() {
             |r, packet, _, encoder| {
                 let mut scene = r.scene.take().unwrap_or_else(|| scene::Scene::new(r).unwrap());
                 let result=(|| {
-                        if accepted.is_none() {accepted=Some(scene.declare_raw_capture(r,packet,plan.paint.map(SourceTarget::Paint).unwrap_or(plan.target),&placements,coordinate)?.accept_query(r,Some(&scene))?);}
+                        if accepted.is_none() {accepted=Some(scene.declare_raw_capture(r,packet,plan.paint.map(SourceTarget::Paint).unwrap_or(plan.target),&placements,coordinate)?.accept_query(r,Some(&scene),crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh)?);}
                         accepted.as_ref().unwrap().clone().track(encoder);
                         scene.capture_raw_tile(r,packet,coordinate,&plan,&placements,encoder,accepted.as_mut().unwrap())
                     })();

@@ -308,7 +308,7 @@ impl Cache {
             for (id,request) in self.region_sources(scene,r,packet,cell,tiled) {
                 if budget.source_pages(Class::Refinement)==0 {return Ok(());}
                 if inside.contains(&id) || self.source_ready(scene,r,id,&request) {continue;}
-                self.prepare_source(scene,r,packet,encoder,id,request,Class::Refinement,budget)?;
+                self.prepare_source(scene,r,packet,encoder,id,request,Class::Refinement,crate::frame_demand::Allowance::Fresh,budget)?;
             }
         }
         Ok(())
@@ -417,7 +417,7 @@ impl Cache {
             }
             if let Some(class)=prepare(cell) {
                 for (id,request) in wanted.iter().filter(|(id,request)|!self.source_ready(scene,r,*id,request)).cloned().collect::<Vec<_>>() {
-                    self.prepare_source(scene,r,packet,encoder,id,request,class,budget)?;
+                    self.prepare_source(scene,r,packet,encoder,id,request,class,crate::frame_demand::Allowance::Fresh,budget)?;
                 }
             }
             if wanted.iter().all(|(id,request)|self.source_ready(scene,r,*id,request)) {ready.push(cell);requests.extend(wanted);}
@@ -457,7 +457,7 @@ impl Cache {
         }
         let level=level.or_else(||requests.iter().find(|(id,_)|*id==target).map(|(_,request)|request.plan.level));
         let reductions=match level.filter(|_|!tiles.is_empty()) {Some(level)=>Self::declare_reductions(scene,r,packet,frame,target,level,tiles,encoder),None=>Ok(Default::default())};
-        let Some(inputs)=reductions.ok().and_then(|inputs|inputs.accept_query(r,Some(scene)).ok()) else {return Ok(None);};
+        let Some(inputs)=reductions.ok().and_then(|inputs|inputs.accept_query(r,Some(scene),crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh).ok()) else {return Ok(None);};
         let cell_reads=self.cell_reads(target,&cells.iter().map(|(cell,_)|*cell).collect::<Vec<_>>());
         let span=PAGE_SIZE<<self.plan.level;
         cells.retain(|(cell,_)|cell_reads.contains_key(&[cell.min_x()/span,cell.min_y()/span]));
@@ -584,7 +584,7 @@ impl Cache {
                 let before=baselines.remove(&cell);
                 let result=(|| {
                     let (_,declared)=cells.iter().find(|(cell,_)|*cell==region).ok_or(GpuRasterError::Invariant("a contact cell has no declared inputs"))?;
-                    let mut accepted=declared.accept_query(r,Some(scene))?;
+                    let mut accepted=declared.accept_query(r,Some(scene),crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh)?;
                     accepted.overlay(&inputs);
                     let input=unit_plan(input,packet.scene,region,tiled,Some(self.graph.objects()));
                     let mut compositor=Evaluator {cache:&mut *self,scene:&mut *scene,packet,r:&mut *r,encoder:&mut *encoder,region:region.into(),input,tiled,
@@ -610,7 +610,7 @@ impl Cache {
                         let written=texels.map_or(region,|[x,y,width,height]|PixelRect::new(x*side,y*side,(x+width)*side,(y+height)*side).translated([region.min_x(),region.min_y()]).intersect(region));
                         composed.push((written,lag.map_or(written,|lag|written.intersect(lag))));
                     },
-                    Err(GpuRasterError::NotReady|GpuRasterError::NotPublished|GpuRasterError::SourceWorkingSetExceeded)=>{scene.discard_jobs_from(start);blocked.push(region);},
+                    Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished|GpuRasterError::SourceWorkingSetExceeded)=>{scene.discard_jobs_from(start);blocked.push(region);},
                     Err(error)=>return Err(error),
                 }
             }

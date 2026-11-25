@@ -49,7 +49,7 @@ fn cold_correction_gather_finishes_resident_pages_and_requests_the_next() {
         attempts += 1;
         match result {
             Ok(()) => break,
-            Err(GpuRasterError::NotReady) => {}
+            Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)) => {}
             Err(error) => panic!("{error}"),
         }
         assert!(2 * attempts < pages, "a gather attempt must finish every page whose decode arrived and request more than one page");
@@ -87,7 +87,7 @@ fn an_ordered_correction_resumes_each_pending_page_with_its_own_inputs() {
     let full=PixelRect::full(extent);let window=DocRect::from(full);
     submit_encoded(&mut r,|r,encoder| {
         let result=scene.prepare_region(r,frame,(full,window),full,false,encoder);
-        assert!(matches!(result,Err(GpuRasterError::NotReady)),"both source pages begin pending: {result:?}");
+        assert!(matches!(result,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"both source pages begin pending: {result:?}");
         let gather=scene.images.stages.iter().find(|stage|stage.id==effect).and_then(|stage|stage.input_gather.as_ref()).expect("the two-page effect input is being gathered");
         assert_eq!(gather.pages.iter().copied().collect::<Vec<_>>(),vec![[0,0],[1,0]],"neither page may have committed while delivery is gated");
         let queue=&r.moving_decode.as_ref().expect("both missing pages request decoding").1;
@@ -101,7 +101,7 @@ fn an_ordered_correction_resumes_each_pending_page_with_its_own_inputs() {
             r.drain_image_decodes(encoder).unwrap();
             scene.prepare_region(r,frame,(full,window),full,false,encoder)
         });crate::test_support::complete(&r);
-        match result {Ok(())=>Ok(()),Err(pending@GpuRasterError::NotReady)=>{crate::test_support::settle_decodes(&mut r);Err(pending)},Err(error)=>panic!("{error}")}
+        match result {Ok(())=>Ok(()),Err(pending@(GpuRasterError::NotReady|GpuRasterError::Waiting(_)))=>{crate::test_support::settle_decodes(&mut r);Err(pending)},Err(error)=>panic!("{error}")}
     });
     let stage=scene.images.stages.iter().find(|stage|stage.id==effect).unwrap();
     assert!(stage.valid && stage.input_gather.is_none());
@@ -163,7 +163,7 @@ fn correction_progress(change: CorrectionChange) {
     let held = crate::test_support::GatedStore::new(&layer_core::Editor::new(doc.clone()).retained_tiles(), false);
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     let result = scene.prepare_region(&mut r, frame, (full, window), full, false, &mut encoder);
-    assert!(matches!(result, Err(GpuRasterError::NotReady)), "{result:?}");
+    assert!(matches!(result, Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))), "{result:?}");
     r.uploads.finish(&encoder);
     let pages = page_coordinates(full).count();
     let gather = scene.images.stages.iter().find(|stage| stage.id == effect).and_then(|stage| stage.input_gather.as_ref())
@@ -225,7 +225,7 @@ fn correction_progress(change: CorrectionChange) {
         }
         match result {
             Ok(()) => Ok(()),
-            Err(GpuRasterError::NotReady) => { crate::test_support::settle_decodes(&mut r); Err(remaining) }
+            Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)) => { crate::test_support::settle_decodes(&mut r); Err(remaining) }
             Err(error) => panic!("{error}"),
         }
     });

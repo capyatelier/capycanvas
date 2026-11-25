@@ -8,9 +8,7 @@ use layer_render::{ColorSample, ColorSampleRequest, ColorSampleSource};
 pub(super) struct ColorSampler {
     capture: artwork::Capture,
     buffer: Option<wgpu::Buffer>,
-    tx: mpsc::Sender<Result<ColorSample, GpuRasterError>>,
-    rx: crate::frame_demand::Delivery<Result<ColorSample, GpuRasterError>>,
-    pending: bool,
+    rx: Option<crate::frame_demand::Delivery<ColorSample>>,
     waiting: Option<(ColorSampleRequest, Option<Arc<artwork::Frame>>)>,
     charge: crate::residency::Charge,
 }
@@ -23,32 +21,26 @@ impl ColorSampler {
         self.charge.resize(bytes);
     }
     pub fn new(tier: &Arc<crate::residency::Tier>) -> Self {
-        let (tx, rx) = crate::frame_demand::Delivery::channel();
         Self {
             charge: tier.charge(0),
             capture: Default::default(),
             buffer: None,
-            tx,
-            rx,
-            pending: false,
+            rx: None,
             waiting: None,
         }
     }
     pub fn take(&mut self) -> Option<Result<ColorSample, GpuRasterError>> {
-        if !self.pending {
-            return None;
-        }
-        let result = self.rx.try_recv().ok()?;
-        self.pending = false;
+        let result = self.rx.as_ref()?.take()?;
+        self.rx = None;
         Some(result)
     }
 }
 impl WgpuRasterizer {
     pub fn color_sample_pending(&self) -> bool {
-        self.color_sampler.pending || self.color_sampler.waiting.is_some()
+        self.color_sampler.rx.is_some() || self.color_sampler.waiting.is_some()
     }
     pub(super) fn color_sample_ready(&self) -> bool {
-        self.color_sampler.waiting.is_some() || self.color_sampler.pending && self.color_sampler.rx.arrived()
+        self.color_sampler.waiting.is_some() || self.color_sampler.rx.as_ref().is_some_and(crate::frame_demand::Delivery::arrived)
     }
 
     pub(super) fn start_color_sample(
@@ -77,11 +69,12 @@ impl WgpuRasterizer {
         let extent = frame.as_ref().map_or(self.document_extent, |frame| frame.scene.view().composition().size);
         let inside = x < extent[0] && y < extent[1];
         if !inside {
-            let _ = self.color_sampler.tx.send(Ok(ColorSample {
+            let (tx, rx) = crate::frame_demand::Delivery::channel(self.device.loss());
+            let _ = tx.send(Ok(ColorSample {
                 request_id,
                 rgba: [0.;4],
             }));
-            self.color_sampler.pending = true;
+            self.color_sampler.rx = Some(rx);
             return Ok(true);
         }
         let radius = request.area.width() / 2;
@@ -137,7 +130,7 @@ impl WgpuRasterizer {
             );
             self.color_sampler.capture = capture;
                         self.color_sampler.account();
-            if matches!(result, Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)) {
+            if matches!(result, Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished)) {
                 self.uploads.finish(&encoder);
                 encoder.submit(&self.queue);
                 self.color_sampler.waiting = Some((request, Some(frame)));
@@ -160,7 +153,7 @@ impl WgpuRasterizer {
                         let result=match &frame {Some(frame)=>capture.layer_tile_at(self,frame,id,[tx,ty],&mut encoder),None=>Err(GpuRasterError::InvalidExtent)};
                         self.color_sampler.capture = capture;
                         self.color_sampler.account();
-                        if matches!(result, Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)) {
+                        if matches!(result, Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished)) {
                             self.uploads.finish(&encoder);
                             encoder.submit(&self.queue);
                             self.color_sampler.waiting = Some((request, frame));
@@ -190,7 +183,7 @@ impl WgpuRasterizer {
         }
         self.uploads.finish(&encoder);
         encoder.submit(&self.queue);
-        let tx = self.color_sampler.tx.clone();
+        let (tx, rx) = crate::frame_demand::Delivery::channel(self.device.loss());
         let space = self.document_color.space;
         crate::raster::map_then(
             &self.device,
@@ -243,7 +236,7 @@ impl WgpuRasterizer {
                 let _ = tx.send(result);
             },
         );
-        self.color_sampler.pending = true;
+        self.color_sampler.rx = Some(rx);
         Ok(true)
     }
 }

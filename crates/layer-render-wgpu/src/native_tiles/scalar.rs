@@ -81,7 +81,7 @@ pub(crate) fn upload_coverage(
             mapped.slice(y * 1024..(y + 1) * 1024).copy_from_slice(&row);
         }
     })?;
-    r.charge_upload(encoder, reservation, COVERAGE_TILE_BYTES);
+    r.charge_upload(encoder, reservation, COVERAGE_TILE_BYTES)?;
     Ok(())
 }
 

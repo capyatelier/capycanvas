@@ -589,7 +589,7 @@ impl Evaluator<'_> {
         };
         self.approximate|=outer_approximate;
         match result {
-            Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>{self.unit.waiting=true;Ok(Value::Color([0.;4]))},
+            Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished)=>{self.unit.waiting=true;Ok(Value::Color([0.;4]))},
             result=>result,
         }
     }

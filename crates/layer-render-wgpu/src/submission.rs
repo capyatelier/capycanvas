@@ -80,11 +80,15 @@ impl LatestSubmission {
     }
     pub fn completed(&mut self)->(std::sync::Arc<std::sync::OnceLock<web_time::Instant>>,bool) {(self.completed.clone(),!std::mem::replace(&mut self.observed,true))}
 }
-struct PendingSubmission(Submission);
+struct PendingSubmission(Submission,#[cfg(not(target_arch="wasm32"))] Option<crate::device_poll::RetirementHandle>);
 impl Drop for PendingSubmission {
     fn drop(&mut self) {
-        let _=self.0.0.try_update(std::sync::atomic::Ordering::AcqRel,std::sync::atomic::Ordering::Acquire,|state|
-            (state==SubmissionState::Encoding as u8 || state==SubmissionState::Submitted as u8).then_some(SubmissionState::Discarded as u8));
+        let discarded=self.0.0.try_update(std::sync::atomic::Ordering::AcqRel,std::sync::atomic::Ordering::Acquire,|state|
+            (state==SubmissionState::Encoding as u8 || state==SubmissionState::Submitted as u8).then_some(SubmissionState::Discarded as u8)).is_ok();
+        #[cfg(not(target_arch="wasm32"))]
+        if discarded && let Some(mailbox)=&self.1 {mailbox.post_completion();}
+        #[cfg(target_arch="wasm32")]
+        if discarded {crate::pipeline_device::post_completion();}
     }
 }
 
@@ -103,6 +107,8 @@ pub(crate) struct CommandEncoder {
     latest: std::sync::Arc<std::sync::Mutex<LatestSubmission>>,
     #[cfg(not(target_arch="wasm32"))]
     poll: crate::device_poll::Binding,
+    #[cfg(target_arch="wasm32")]
+    loss: std::sync::Arc<crate::pipeline_device::DeviceLoss>,
 }
 
 impl CommandEncoder {
@@ -128,10 +134,13 @@ impl CommandEncoder {
             resource_work: false,
             completions: Default::default(),
             latest: device.latest_submission.clone(),
+            #[cfg(target_arch="wasm32")]
+            loss: device.loss().clone(),
         }
     }
     pub fn submission(&mut self)->Submission {
-        self.submission.get_or_insert_with(||PendingSubmission(Submission(std::sync::Arc::new(std::sync::atomic::AtomicU8::new(SubmissionState::Encoding as u8))))).0.clone()
+        self.submission.get_or_insert_with(||PendingSubmission(Submission(std::sync::Arc::new(std::sync::atomic::AtomicU8::new(SubmissionState::Encoding as u8))),
+            #[cfg(not(target_arch="wasm32"))] self.poll.mailbox())).0.clone()
     }
     fn current(&self)->&wgpu::CommandEncoder {
         self.current.get_or_init(|| {
@@ -223,7 +232,7 @@ impl CommandEncoder {
         #[cfg(not(target_arch="wasm32"))]
         let complete=self.poll.callback(&self.device,move|()|complete());
         #[cfg(target_arch="wasm32")]
-        let complete=crate::pipeline_device::waking_completion(move|()|complete());
+        let complete=self.loss.completion(move|()|complete());
         self.current().on_submitted_work_done(move||complete(()));
         #[cfg(not(target_arch="wasm32"))]
         let poll=self.poll.clone();
@@ -339,10 +348,37 @@ mod tests {
     }
     #[cfg(not(target_arch="wasm32"))]
     #[test]
+    fn a_discarded_submission_wakes_its_completion_listeners() {
+        let r=renderer();let mut held=encoder(&r);let receipt=held.submission();
+        let (wake,woken)=std::sync::mpsc::channel();
+        let wake:Arc<dyn Fn()+Send+Sync>=Arc::new(move||{let _=wake.send(());});
+        let before=r.device.on_next_completion(&wake);
+        drop(held);
+        assert!(receipt.discarded());
+        woken.recv_timeout(std::time::Duration::from_secs(5)).expect("discarding a submission never woke its completion listener");
+        assert_ne!(r.device.completions(),before,"a discarded submission counts as a delivered outcome");
+    }
+    #[cfg(not(target_arch="wasm32"))]
+    #[test]
+    fn a_submission_pending_when_its_renderer_leaves_never_owns_the_device_root() {
+        for complete in [true,false] {
+            let r=renderer();
+            let root=r.device.poll_binding().recipe();
+            let mut commands=encoder(&r);let receipt=commands.submission();
+            let pending=commands.submission.take().unwrap();drop(commands);
+            drop(r);crate::finish_shader_compiler_shutdown();
+            assert!(root.is_retired(),"a pending submission kept the device root after its renderer left");
+            if complete {pending.0.0.store(SubmissionState::Complete as u8,Ordering::Release);}
+            std::thread::spawn(move||drop(pending)).join().expect("settling a departed renderer's submission panicked");
+            assert!(!receipt.pending());
+        }
+    }
+    #[cfg(not(target_arch="wasm32"))]
+    #[test]
     fn a_submitted_receipt_is_discarded_when_its_unfired_completion_is_retired() {
         let r=renderer();
         let receipt=Submission(Arc::new(std::sync::atomic::AtomicU8::new(SubmissionState::Submitted as u8)));
-        let pending=PendingSubmission(receipt.clone());
+        let pending=PendingSubmission(receipt.clone(),r.device.poll_binding().mailbox());
         let callback=r.device.callback(move|()| {
             let completed=pending;
             completed.0.0.store(SubmissionState::Complete as u8,Ordering::Release);

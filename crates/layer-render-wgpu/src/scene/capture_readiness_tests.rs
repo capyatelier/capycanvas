@@ -40,10 +40,10 @@ fn cold_fragment_family_defers_before_encoding_and_capture_prepares_only_that_fa
             if !ordered {
                 assert!(scene.encode_query_jobs(r,encoder,None).is_ok(),"discarded fragment work must not block an empty batch");
                 scene.jobs.push(job.clone());
-                assert!(matches!(scene.encode_query_jobs(r,encoder,None),Err(GpuRasterError::NotReady)));
+                assert!(matches!(scene.encode_query_jobs(r,encoder,None),Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
             }
             release.send(()).unwrap();
-            assert!(matches!(deferred,Err(GpuRasterError::NotReady)),"{deferred:?}");
+            assert!(matches!(deferred,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"{deferred:?}");
             assert_eq!(passes,0);
             assert_eq!(records,0);
             assert_eq!(retained,usize::from(ordered));
@@ -155,7 +155,7 @@ fn capture_after_cold_deferral(hidden_separator: bool) {
     submit_encoded(&mut r, |r, encoder| {
         let result = scene.capture_region(r, packet(doc.scene(), EXTENT), &destination,
             PixelRect::full(EXTENT), output, encoder);
-        assert!(matches!(result, Err(GpuRasterError::NotReady)), "{result:?}");
+        assert!(matches!(result, Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))), "{result:?}");
         assert_eq!(encoder.pass_count(), 0);
         assert_eq!(scene.record_count, 0);
         assert!(scene.jobs.is_empty());
@@ -388,10 +388,10 @@ fn a_capture_requests_its_cold_decodes_at_the_class_its_inputs_were_admitted_at(
     scene.prepare_region(r,frame,(region,DocRect::from(region)),PixelRect::EMPTY,false,&mut encoder).unwrap();
     let inputs=scene.declare_capture(r,frame,&destination,&[region],Output::Artwork(None),None,None).unwrap();
     let (_,mut accepted)=inputs.accept(r,&mut (),|_,r,inputs| {
-        let bytes=inputs.additional_bytes(&r.source_tiles.borrow());r.admit_display(None,Class::Refinement,bytes).ok()
+        let bytes=inputs.additional_bytes(&r.source_tiles.borrow());r.admit_display(None,Class::Refinement,bytes,crate::frame_demand::Allowance::Fresh).ok()
     },|_,_|Ok(()),|_,_,_|Ok(())).unwrap().unwrap();
     let captured=scene.capture_prepared_regions(r,frame,&destination,&[region],Output::Artwork(None),false,None,&mut encoder,&mut accepted);
-    assert!(matches!(captured,Err(GpuRasterError::NotReady)),"{captured:?}");
+    assert!(matches!(captured,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"{captured:?}");
     assert_eq!(r.moving_decode.as_ref().unwrap().1.outstanding_classes(),[Class::Refinement],"a refinement capture decodes ahead of the view");
 }
 

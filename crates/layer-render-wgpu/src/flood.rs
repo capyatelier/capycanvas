@@ -199,6 +199,7 @@ impl Flood {
         self.lines.pipelines(refinement,prepare_ends).chain(stages(enclosed,contiguous).map(|entry|&self.pipelines[entry]))
     }
     pub fn prepare_cache(&self,compiler:&compile::Scope,priority:startup::Class)->bool {self.lines.prepare_cache(compiler,priority)}
+    pub fn cache_pipelines(&self)->impl Iterator<Item=&Deferred<wgpu::ComputePipeline>> {self.lines.cache_pipelines()}
     #[allow(clippy::too_many_arguments)]
     pub fn build_lines(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,extent:[u32;2],paper:(paper::Grain,u32,bool),(budget,demand):(f64,bool),dirty:&std::collections::BTreeSet<[u32;2]>,lines:(bool,bool))->Result<(bool,f64),GpuRasterError> {
         let device=input.device;
@@ -229,8 +230,11 @@ impl Flood {
         chunks.op(|encoder|{probe=Some(self.lines.probe_scope(&Input {device,mask:classified,paper},encoder,seed));0.});
         Ok(probe.unwrap())
     }
+    pub fn area_pipelines(&self)->impl Iterator<Item=&Deferred<wgpu::ComputePipeline>> {
+        self.lines.area_pipelines().chain(["initialize","merge","mark_exterior","export_border","seam_merge","propagate_flags","area_tokens"].map(|entry|&self.pipelines[entry]))
+    }
     pub fn prepare_areas(&self,compiler:&compile::Scope,priority:startup::Class)->bool {
-        self.lines.prepare_areas(compiler,priority) & compiler.require(["initialize","merge","mark_exterior","export_border","seam_merge","propagate_flags","area_tokens"].map(|entry|&self.pipelines[entry]),priority)
+        self.lines.prepare_cache(compiler,priority) & compiler.require(self.area_pipelines(),priority)
     }
     pub fn area_tokens(&self)->&wgpu::Buffer {self.lines.token_buffer()}
     pub fn area_window(core:[u32;4],extent:[u32;2])->[u32;4] {lines::analysis_window(core,extent)}
@@ -296,6 +300,7 @@ impl Flood {
         }
     }
     pub fn lines_ready(&mut self,demand:bool)->Result<bool,GpuRasterError> {self.lines.ready(demand)}
+    pub fn lines_submission(&self)->Option<crate::submission::Submission> {self.lines.submission()}
     pub fn lines_discarded(&self)->bool {self.lines.discarded()}
     pub fn cancel_lines(&mut self) {self.lines.cancel();}
     #[allow(clippy::too_many_arguments)]

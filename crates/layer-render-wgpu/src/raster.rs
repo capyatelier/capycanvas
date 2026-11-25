@@ -37,10 +37,12 @@ struct Target {
 #[derive(Default)]
 struct PreparationWake {
     callback: std::sync::Mutex<Option<Arc<dyn Fn()+Send+Sync>>>,
+    published: std::sync::atomic::AtomicU64,
 }
 impl std::task::Wake for PreparationWake {
     fn wake(self:Arc<Self>) {self.wake_by_ref();}
     fn wake_by_ref(self:&Arc<Self>) {
+        self.published.fetch_add(1,std::sync::atomic::Ordering::AcqRel);
         let callback=self.callback.lock().unwrap().clone();
         if let Some(callback)=callback {callback();}
     }
@@ -69,8 +71,9 @@ impl RasterRuntime {
 }
 #[cfg(not(target_arch = "wasm32"))]
 struct CaptureWorker {
-    sender: Option<mpsc::SyncSender<(NativeCapture,[crate::residency::Charge;2])>>,
+    sender: Option<mpsc::SyncSender<(crate::residency::Hold,NativeCapture,[crate::residency::Charge;2])>>,
     pending: Arc<crate::residency::Tier>,
+    landed: std::sync::Mutex<Option<crate::residency::Batch>>,
     thread: Option<std::thread::JoinHandle<()>>,
     staging: Arc<crate::residency::Tier>,
     error: Arc<std::sync::Mutex<Option<String>>>,
@@ -78,7 +81,7 @@ struct CaptureWorker {
 #[cfg(not(target_arch = "wasm32"))]
 impl CaptureWorker {
     fn new(wake:Arc<PreparationWake>)->Result<Self,GpuRasterError> {
-        let (sender, receiver) = mpsc::sync_channel::<(NativeCapture,[crate::residency::Charge;2])>(16);
+        let (sender, receiver) = mpsc::sync_channel::<(crate::residency::Hold,NativeCapture,[crate::residency::Charge;2])>(16);
         let pending = Arc::default();
         let staging = Arc::default();
         let error = Arc::new(std::sync::Mutex::new(None));
@@ -86,7 +89,7 @@ impl CaptureWorker {
         let thread = std::thread::Builder::new()
             .name("capy-raster-backing".into())
             .spawn(move || {
-                while let Ok((captures,charges)) = receiver.recv() {
+                while let Ok((_landed,captures,charges)) = receiver.recv() {
                     // Dropped tickets publish failures even if a driver callback or
                     // compression panics; never leave backpressure permanently set.
                     let result = if failure.lock().unwrap().is_some() {
@@ -109,6 +112,7 @@ impl CaptureWorker {
         Ok(Self {
             sender: Some(sender),
             pending,
+            landed: Default::default(),
             staging,
             error,
             thread: Some(thread),
@@ -123,10 +127,11 @@ impl CaptureWorker {
         self.pending.used() < 16
             && self.staging.used() <= MAX_CAPTURE_BYTES - CAPTURE_CHUNK
     }
-    fn in_flight(&self) -> bool { self.pending.used() != 0 }
+    fn landed(&self) -> Option<crate::residency::Batch> { self.landed.lock().unwrap().clone().filter(|batch| !batch.settled()) }
     fn submit_batch(&self, captures: NativeCapture) -> Result<(), GpuRasterError> {
         let charges = [self.staging.charge(captures.storage_bytes()), self.pending.charge(1)];
-        if self.sender.as_ref().unwrap().try_send((captures, charges)).is_err() {
+        let hold = { let mut landed = self.landed.lock().unwrap(); let search = crate::residency::Search::open(landed.take()); let hold = search.hold(); *landed = Some(search.seal()); hold };
+        if self.sender.as_ref().unwrap().try_send((hold, captures, charges)).is_err() {
             return Err(GpuRasterError::Effect(
                 "Raster backing queue is full or stopped".into(),
             ));
@@ -174,11 +179,11 @@ impl Chunk {
         device.request_poll();
         Self {buffer,entries,ready}
     }
-    fn resolve_comparisons(&self,bytes:&[u8])->Result<(),String> {
-        let outcomes=self.entries.iter().filter_map(|entry|entry.comparison.as_ref()).map(|(offset,comparison)|
-            comparison.changed(&bytes[*offset as usize..*offset as usize+crate::native_tiles::comparison::RESULT_BYTES as usize]).map(|changed|(comparison,changed)))
+    fn resolve_comparisons(entries:&mut [Entry],bytes:&[u8])->Result<(),String> {
+        let outcomes=entries.iter().filter_map(|entry|entry.comparison.as_ref()).map(|(offset,comparison)|
+            comparison.changed(&bytes[*offset as usize..*offset as usize+crate::native_tiles::comparison::RESULT_BYTES as usize]))
             .collect::<Result<Vec<_>,_>>()?;
-        outcomes.into_iter().try_for_each(|(comparison,changed)|comparison.resolve(changed))
+        entries.iter_mut().filter_map(|entry|entry.comparison.take()).zip(outcomes).try_for_each(|((_,comparison),changed)|comparison.resolve(changed))
     }
 }
 
@@ -359,7 +364,7 @@ impl RasterCapture {
     #[cfg(not(target_arch="wasm32"))]
     fn finish_recycling(mut self,recycle:impl Fn(wgpu::Buffer)+Sync)->Result<(),String> {
         let result: Result<(), String> = (|| {
-            fn finish_chunk(device:&PipelineDevice,chunk:&Chunk,pool:&BufferPool,lanes:usize,recycle:&(impl Fn(wgpu::Buffer)+Sync))->Result<(),String> {
+            fn finish_chunk(device:&PipelineDevice,chunk:&mut Chunk,pool:&BufferPool,lanes:usize,recycle:&(impl Fn(wgpu::Buffer)+Sync))->Result<(),String> {
                 wait_mapping(device, &chunk.ready)?;
                 let mapped = chunk
                     .buffer
@@ -374,7 +379,7 @@ impl RasterCapture {
                 drop(mapped);
                 chunk.buffer.unmap();
                 recycle(chunk.buffer.clone());
-                chunk.resolve_comparisons(&bytes)?;
+                Chunk::resolve_comparisons(&mut chunk.entries,&bytes)?;
                 let encode = |entries: &[Entry]| -> Result<(), String> {
                     for entry in entries {
                         let begin = entry.offset as usize;
@@ -403,7 +408,7 @@ impl RasterCapture {
                 Ok(())
             }
             if self.chunks.len() == 1 {
-                finish_chunk(&self.device,&self.chunks[0],&self.pool,4,&recycle)?;
+                finish_chunk(&self.device,&mut self.chunks[0],&self.pool,4,&recycle)?;
             } else {
                 let group_size = self.chunks.len().div_ceil(4);
                 let lanes = 4 / self.chunks.len().min(4);
@@ -525,6 +530,9 @@ impl WgpuRasterizer {
     pub(crate) fn raster_name_waker(&self)->Option<std::task::Waker> {
         self.raster.as_ref().map(|runtime|std::task::Waker::from(runtime.preparation_wake.clone()))
     }
+    pub(crate) fn raster_declarations(&self)->u64 {
+        self.raster.as_ref().map_or(0,|runtime|runtime.preparation_wake.published.load(std::sync::atomic::Ordering::Acquire))
+    }
     #[cfg(not(target_arch="wasm32"))]
     pub(crate) fn adopt_raster_preparation_wake(&mut self,previous:&Self) {
         if let Some(previous)=&previous.raster {
@@ -537,8 +545,8 @@ impl WgpuRasterizer {
             .and_then(|r| r.worker.as_ref())
             .is_none_or(CaptureWorker::ready)
     }
-    pub(crate) fn raster_backing_in_flight(&self) -> bool {
-        self.raster.as_ref().and_then(|r| r.worker.as_ref()).is_some_and(CaptureWorker::in_flight)
+    pub(crate) fn raster_backing_landed(&self) -> Option<crate::residency::Batch> {
+        self.raster.as_ref().and_then(|r| r.worker.as_ref()).and_then(CaptureWorker::landed)
     }
 
     pub(super) fn prepare_source_backing(&mut self) -> Result<(), GpuRasterError> {
@@ -685,7 +693,7 @@ impl WgpuRasterizer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("immutable raster revision capture"),
             });
-        let capture=prepare_capture(&self.raster_buffers,&mut encoder,copies,|bytes|self.raster_buffers.take(&self.device,bytes))?;
+        let capture=prepare_capture_compared(&self.raster_buffers,&mut encoder,copies,Vec::new(),|bytes|self.raster_buffers.take(&self.device,bytes))?;
         self.queue.submit([encoder.finish()]);
         Ok(capture.submitted_device(&self.device))
     }
@@ -831,17 +839,9 @@ pub(super) mod native_edit;
 mod residency;
 pub(super) mod staging;
 
-fn prepare_capture(
-    pool:&Arc<BufferPool>,
-    encoder:&mut wgpu::CommandEncoder,
-    copies:&[TileCapture<'_>],
-    buffer:impl FnMut(u64)->wgpu::Buffer,
-) -> Result<PreparedCapture, GpuRasterError> {
-    prepare_capture_compared(pool,encoder,copies,&[],buffer)
-}
 fn prepare_capture_compared(
     pool:&Arc<BufferPool>,encoder:&mut wgpu::CommandEncoder,copies:&[TileCapture<'_>],
-    comparisons:&[Option<crate::native_tiles::comparison::CanonicalReadback>],
+    comparisons:Vec<Option<crate::native_tiles::comparison::CanonicalReadback>>,
     mut buffer:impl FnMut(u64)->wgpu::Buffer,
 )->Result<PreparedCapture,GpuRasterError> {
     if !comparisons.is_empty() && comparisons.len()!=copies.len() {return Err(GpuRasterError::InvalidExtent);}
@@ -882,6 +882,7 @@ fn prepare_capture_compared(
         ranges.push((start..end, allocation));
         start = end;
     }
+    let mut comparisons=comparisons.into_iter();
     let mut chunks = Vec::with_capacity(ranges.len());
     for (range, allocation) in ranges {
         let buffer=buffer(allocation);
@@ -908,7 +909,7 @@ fn prepare_capture_compared(
                     encoder.copy_buffer_to_buffer(source, 0, &buffer, offset, size)
                 }
             }
-            let comparison=comparisons.get(index).cloned().flatten().map(|comparison| {
+            let comparison=comparisons.next().flatten().map(|comparison| {
                 let offset=status_offset;comparison.copy(encoder,&buffer,offset);status_offset+=crate::native_tiles::comparison::RESULT_BYTES;(offset,comparison)
             });
             entries.push(Entry {

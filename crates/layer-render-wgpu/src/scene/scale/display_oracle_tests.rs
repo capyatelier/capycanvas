@@ -127,7 +127,7 @@ impl Injected {
         let cache = oracle.subject.scale_display.as_ref().unwrap();
         let display = oracle.subject.scene_tiers.display.clone();
         cache.invalidate_cells(cache.reached_cells(DocRect::from(self.refused)), None);
-        cache.refuse(None, self.refused, &display.blocked(crate::residency::Class::Visible, display.limit() + 1).expect("a unit larger than the display grant is refused"));
+        cache.refuse(self.refused, &display.blocked(crate::residency::Class::Visible, display.limit() + 1).expect("a unit larger than the display grant is refused"),crate::frame_demand::Allowance::Fresh);
     }
     fn clear(&mut self, oracle: &mut Oracle, schedule: Schedule) {
         let subject = &mut oracle.subject;
@@ -574,7 +574,7 @@ fn a_root_a_blocked_prediction_left_unstamped_publishes_while_the_stroke_continu
         evict_composite_pages(cache, &[predicted]);
         cache.invalidate_cells(cache.reached_cells(DocRect::from(predicted)), None);
         let display = r.scene_tiers.display.clone();
-        cache.refuse(None, predicted, &display.blocked(crate::residency::Class::Visible, display.limit() + 1).expect("a unit larger than the display grant is refused"));
+        cache.refuse(predicted, &display.blocked(crate::residency::Class::Visible, display.limit() + 1).expect("a unit larger than the display grant is refused"),crate::frame_demand::Allowance::Fresh);
     }
     let stroke = |r: &mut WgpuRasterizer, x: f32, kind: DabBatchKind, step: usize| {
         let mut dab = crate::tests::test_dab([x, 640.], G_PEN.color, 1.);

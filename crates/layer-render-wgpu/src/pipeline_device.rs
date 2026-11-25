@@ -23,8 +23,40 @@ impl Drop for CompileTrace<'_> {
 }
 #[cfg(target_arch="wasm32")]
 thread_local! {static COMPLETION:std::cell::RefCell<(u64,Vec<std::sync::Arc<dyn Fn()+Send+Sync>>)>=Default::default();}
+#[cfg(target_arch="wasm32")]
+trait Abandon:Send+Sync {fn abandon(&self);}
+#[cfg(target_arch="wasm32")]
+impl<F:Send> Abandon for std::sync::Mutex<Option<F>> {fn abandon(&self) {let callback=self.lock().unwrap().take();drop(callback);}}
+#[derive(Default)]
+pub(crate) struct DeviceLoss {
+    error:std::sync::OnceLock<crate::GpuRasterError>,
+    #[cfg(target_arch="wasm32")]
+    tickets:std::sync::Mutex<Vec<std::sync::Weak<dyn Abandon>>>,
+}
+impl DeviceLoss {
+    pub(crate) fn error(&self)->Option<&crate::GpuRasterError> {self.error.get()}
+    pub(crate) fn report(&self,message:String) {
+        if self.error.set(crate::GpuRasterError::WaitFailed(message)).is_err() {return;}
+        #[cfg(target_arch="wasm32")]
+        {
+            let tickets=std::mem::take(&mut *self.tickets.lock().unwrap());
+            for ticket in tickets {if let Some(ticket)=ticket.upgrade() {ticket.abandon();}}
+            post_completion();
+        }
+    }
+    #[cfg(target_arch="wasm32")]
+    pub(crate) fn completion<A:Send+'static>(&self,callback:impl FnOnce(A)+Send+'static)->impl FnOnce(A)+Send+'static {
+        let ticket=std::sync::Arc::new(std::sync::Mutex::new(Some(callback)));
+        let erased:std::sync::Arc<dyn Abandon>=ticket.clone();
+        let mut tickets=self.tickets.lock().unwrap();
+        if self.error.get().is_none() {tickets.retain(|ticket|ticket.strong_count()!=0);tickets.push(std::sync::Arc::downgrade(&erased));}
+        else {drop(tickets);erased.abandon();}
+        move|argument| {let callback=ticket.lock().unwrap().take();if let Some(callback)=callback {callback(argument);post_completion();}}
+    }
+}
 #[derive(Clone)]
 pub(crate) struct DeviceRecipes {
+    pub(crate) loss: std::sync::Arc<DeviceLoss>,
     #[cfg(not(target_arch="wasm32"))]
     poll: crate::device_poll::Binding,
     compilation: std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<crate::compile::Coordinator>>>>,
@@ -40,13 +72,14 @@ pub(crate) struct DeviceRecipes {
     pub native_transfers: std::sync::Arc<std::sync::Mutex<super::native_tiles::transfer::Tables>>,
     latest_submission: std::sync::Arc<std::sync::Mutex<crate::submission::LatestSubmission>>,
 }
-#[cfg(not(target_arch="wasm32"))]
 impl DeviceRecipes {
+    #[cfg(not(target_arch="wasm32"))]
     pub(crate) fn poll_binding(&self) -> crate::device_poll::Binding { self.poll.owned() }
 }
 impl From<&PipelineDevice> for DeviceRecipes {
     fn from(device: &PipelineDevice) -> Self {
         Self {
+            loss: device.loss.clone(),
             #[cfg(not(target_arch="wasm32"))]
             poll: device.poll.clone(),
             compilation: device.compilation.clone(),
@@ -66,6 +99,7 @@ impl From<&PipelineDevice> for DeviceRecipes {
 }
 #[derive(Clone)]
 pub(crate) struct PipelineDevice {
+    loss: std::sync::Arc<DeviceLoss>,
     #[cfg(not(target_arch="wasm32"))]
     poll: crate::device_poll::Binding,
     compilation: std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<crate::compile::Coordinator>>>>,
@@ -93,9 +127,11 @@ pub(crate) struct PipelineDevice {
 }
 impl From<wgpu::Device> for PipelineDevice {
     fn from(device: wgpu::Device) -> Self {
+        let loss=std::sync::Arc::<DeviceLoss>::default();
         Self {
             #[cfg(not(target_arch="wasm32"))]
-            poll: Default::default(),
+            poll: crate::device_poll::Binding::reporting(&loss),
+            loss,
             compilation: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             saved_pipelines: None,
@@ -131,6 +167,7 @@ impl std::ops::Deref for PipelineDevice {
 }
 impl PipelineDevice {
     pub fn with_device_recipes(mut self, recipes: &DeviceRecipes) -> Self {
+        self.loss = recipes.loss.clone();
         #[cfg(not(target_arch="wasm32"))]
         {self.poll=recipes.poll.clone();}
         self.compilation = recipes.compilation.clone();
@@ -159,7 +196,7 @@ impl PipelineDevice {
         }
     }
     pub fn for_recipe(&self) -> Self {
-        Self { working_space: self.working_space, depth: self.depth, transient_display: self.transient_display.clone(), transient_memory: self.transient_memory.clone(),
+        Self { working_space: self.working_space, depth: self.depth, transient_display: self.transient_display.clone(), transient_memory: self.transient_memory.clone(), loss: self.loss.clone(),
             #[cfg(not(target_arch="wasm32"))]
             poll: self.poll.recipe(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -186,6 +223,12 @@ impl PipelineDevice {
     pub(crate) fn retirement_handle(&self)->crate::device_poll::RetirementHandle {self.poll.handle(&self.device)}
     #[cfg(not(target_arch="wasm32"))]
     pub(crate) fn retirement<T:Send+'static>(&self,value:T)->crate::device_poll::Retirement<T> {self.retirement_handle().retirement(value)}
+    pub(crate) fn on_release(&self,blocked:&crate::residency::Blocked,wake:&crate::residency::Wake)->bool {
+        #[cfg(not(target_arch="wasm32"))]
+        {self.retirement_handle().on_release(blocked,wake)}
+        #[cfg(target_arch="wasm32")]
+        {blocked.on_release(wake);true}
+    }
     pub(crate) fn request_poll(&self) {
         #[cfg(not(target_arch="wasm32"))]
         self.poll.request(&self.device);
@@ -208,7 +251,14 @@ impl PipelineDevice {
         #[cfg(not(target_arch="wasm32"))]
         {self.poll.callback(&self.device,callback)}
         #[cfg(target_arch="wasm32")]
-        {waking_completion(callback)}
+        {self.loss.completion(callback)}
+    }
+    pub(crate) fn loss(&self)->&std::sync::Arc<DeviceLoss> {&self.loss}
+    pub(crate) fn post_completion(&self) {
+        #[cfg(not(target_arch="wasm32"))]
+        self.retirement_handle().post_completion();
+        #[cfg(target_arch="wasm32")]
+        post_completion();
     }
     pub(crate) fn completions(&self)->u64 {
         #[cfg(not(target_arch="wasm32"))]
@@ -337,12 +387,9 @@ impl PipelineDevice {
     }
 }
 #[cfg(target_arch="wasm32")]
-pub(crate) fn waking_completion<A:Send+'static>(callback:impl FnOnce(A)+Send+'static)->impl FnOnce(A)+Send+'static {
-    move|argument| {
-        callback(argument);
-        let wakes=COMPLETION.with_borrow_mut(|(count,wakes)| {*count+=1;std::mem::take(wakes)});
-        for wake in wakes {wake();}
-    }
+pub(crate) fn post_completion() {
+    let wakes=COMPLETION.with_borrow_mut(|(count,wakes)| {*count+=1;std::mem::take(wakes)});
+    for wake in wakes {wake();}
 }
 pub(crate) fn float_sampling_wgsl(filterable: bool) -> &'static str {
     if filterable { include_str!("float_sample_filtered.wgsl") } else { include_str!("float_sample_texels.wgsl") }

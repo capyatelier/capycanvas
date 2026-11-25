@@ -165,7 +165,7 @@ mod lifecycle_tests {
             }).map(|batch|batch.cloned());
             assert!(calls<=2);
             match result {
-                Err(GpuRasterError::NotReady)=>{assert_eq!(steps,0);yields+=1;},
+                Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))=>{assert_eq!(steps,0);yields+=1;},
                 Ok(Some(batch))=>{
                     assert!(covered.insert([batch.output.min_x(),batch.output.min_y()]));
                     let mut exhausted=0;
@@ -188,7 +188,7 @@ mod lifecycle_tests {
     fn multiple_output_regions_share_one_frame_planning_allowance() {
         let mut steps=1;let mut first=Regions::new(PixelRect::new(0,0,1,1));let mut second=Regions::new(PixelRect::new(1,0,2,1));
         assert!(first.prepare(1,&mut steps,|_|Ok(Default::default())).unwrap().is_some());first.advance();
-        assert!(matches!(second.prepare(1,&mut steps,|_|panic!("the frame allowance must not reset per region")),Err(GpuRasterError::NotReady)));
+        assert!(matches!(second.prepare(1,&mut steps,|_|panic!("the frame allowance must not reset per region")),Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
         steps=1;assert!(second.prepare(1,&mut steps,|_|Ok(Default::default())).unwrap().is_some());
     }
 

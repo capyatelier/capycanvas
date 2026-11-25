@@ -1,11 +1,11 @@
-use super::{Class, Demand};
+use super::{Batch, Class, Demand, Hold, Search};
 use std::{cmp::Ordering, collections::BinaryHeap, sync::{Arc, Mutex, Weak, atomic::{AtomicBool, AtomicU64, Ordering::SeqCst}}};
 
 const SCALE: u128 = 1 << 32;
 pub(crate) fn rebuild_value(work: u64, bytes: u64) -> u64 { (u128::from(work) * SCALE / u128::from(bytes.max(1))).min(u128::from(u64::MAX)) as u64 }
 
 #[derive(Default)]
-pub(crate) struct Heap { queue: Mutex<Queue>, pending: AtomicU64, epoch: AtomicU64 }
+pub(crate) struct Heap { queue: Mutex<Queue>, pending: AtomicU64, epoch: AtomicU64, marked: AtomicBool, retiring: Mutex<Vec<Batch>> }
 #[derive(Default)]
 struct Queue { inflation: u64, sequence: u64, live: usize, entries: BinaryHeap<Entry> }
 struct Entry { priority: u64, sequence: u64, lease: Weak<Lease> }
@@ -15,7 +15,7 @@ impl PartialEq for Entry { fn eq(&self, other: &Self) -> bool { (self.priority, 
 impl Eq for Entry {}
 
 #[derive(Default)]
-struct State { offered: Option<u64>, bytes: u64, evicted: bool, demand: Demand, guard: Option<Weak<dyn Send + Sync>> }
+struct State { offered: Option<u64>, bytes: u64, evicted: bool, demand: Demand, guard: Option<Weak<dyn Send + Sync>>, batch: Option<Hold> }
 impl State {
     fn guarded(&self) -> bool { self.guard.as_ref().is_some_and(|guard| guard.strong_count() != 0) }
 }
@@ -28,18 +28,26 @@ impl Heap {
     pub(crate) fn begin_frame(&self) { self.epoch.fetch_add(1, SeqCst); }
     pub(crate) fn epoch(&self) -> u64 { self.epoch.load(SeqCst) }
     pub(crate) fn pending(&self) -> u64 { self.pending.load(SeqCst) }
+    pub(crate) fn take_marked(&self) -> bool { self.marked.swap(false, SeqCst) }
+    pub(crate) fn marked(&self) -> bool { self.marked.load(SeqCst) }
+    pub(crate) fn retiring(&self) -> Option<Batch> {
+        let mut retiring = self.retiring.lock().unwrap();
+        retiring.retain(|batch| !batch.settled());
+        Batch::joined(retiring.iter().cloned())
+    }
     pub(crate) fn evict(&self, bytes: u64, class: Class) -> u64 { self.mark(bytes, |demand, epoch| demand.current(epoch, class) || demand.outranks(epoch, class)) }
     pub(crate) fn release_stale(&self, bytes: u64) -> u64 { self.mark(bytes, |demand, epoch| demand.protects(epoch, Class::Refinement)) }
     pub(crate) fn reclaim(&self, bytes: u64) -> u64 { self.mark(bytes, |demand, epoch| demand.current(epoch, Class::Fallback)) }
     fn mark(&self, bytes: u64, protected: impl Fn(Demand, u64) -> bool) -> u64 {
         let wanted = bytes.saturating_sub(self.pending());
-        let (epoch, mut queue, mut marked, mut kept, mut seen) = (self.epoch(), self.queue.lock().unwrap(), 0, Vec::new(), Vec::new());
+        let (epoch, mut queue, mut marked, mut kept, mut seen, mut search) = (self.epoch(), self.queue.lock().unwrap(), 0, Vec::new(), Vec::new(), None);
         while marked < wanted && let Some(entry) = queue.entries.pop() {
             let Some(lease) = entry.lease.upgrade() else { continue; };
             let mut state = lease.state.lock().unwrap();
             if state.offered == Some(entry.sequence) && (protected(state.demand, epoch) || state.guarded()) { kept.push(entry); }
             else if state.offered == Some(entry.sequence) {
                 (state.offered, state.evicted) = (None, true);
+                state.batch = Some(search.get_or_insert_with(|| Search::open([])).hold());
                 queue.live -= 1;
                 queue.inflation = queue.inflation.max(entry.priority);
                 marked += state.bytes;
@@ -52,7 +60,22 @@ impl Heap {
         queue.entries.extend(kept);
         drop(queue);
         drop(seen);
+        if let Some(search) = search {
+            self.marked.store(true, SeqCst);
+            self.enroll(search.seal());
+        }
         marked
+    }
+    pub(crate) fn retire(&self) -> Hold {
+        let search = Search::open([]);
+        let hold = search.hold();
+        self.enroll(search.seal());
+        hold
+    }
+    fn enroll(&self, batch: Batch) {
+        let mut retiring = self.retiring.lock().unwrap();
+        retiring.retain(|batch| !batch.settled());
+        retiring.push(batch);
     }
 }
 
@@ -91,12 +114,18 @@ impl Lease {
         queue.live -= 1;
         state.evicted = true;
         self.heap.pending.fetch_add(state.bytes, SeqCst);
+        self.heap.marked.store(true, SeqCst);
         self.notice.store(true, SeqCst);
     }
     pub(crate) fn restore(&self) {
-        let mut state = self.state.lock().unwrap();
-        if std::mem::take(&mut state.evicted) { self.heap.pending.fetch_sub(state.bytes, SeqCst); }
+        let released = {
+            let mut state = self.state.lock().unwrap();
+            if std::mem::take(&mut state.evicted) { self.heap.pending.fetch_sub(state.bytes, SeqCst); }
+            state.batch.take()
+        };
+        drop(released);
     }
+    pub(crate) fn take_batch(&self) -> Option<Hold> { self.state.lock().unwrap().batch.take() }
     pub(crate) fn demand(&self) -> Option<Class> { self.state.lock().unwrap().demand.class_at(self.heap.epoch()) }
     pub(crate) fn stamp(&self, class: Class) { self.state.lock().unwrap().demand.stamp(self.heap.epoch(), class); }
     pub(crate) fn release_demand(&self) { self.state.lock().unwrap().demand = Default::default(); }

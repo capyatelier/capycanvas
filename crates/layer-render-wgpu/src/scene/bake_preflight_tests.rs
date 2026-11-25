@@ -93,7 +93,11 @@ fn a_bake_larger_than_the_memory_limit_stays_a_failure() {
     r.refresh_memory_limits();
     let pressure = budget.admit_import(budget.import_headroom_bytes()).unwrap();
     r.refresh_memory_limits();
+    let claimant = r.memory.claim(Some(layer_core::StrokeId(0)));
+    r.begin_frame_memory(frame);
     assert!(r.prepare_bakes(frame));
-    assert!(matches!(r.take_bake_failure(), Some(GpuRasterError::SourceWorkingSetExceeded)));
+    r.memory.claim(claimant);
+    r.end_frame_memory();
+    assert!(matches!(r.take_bake_failure(), Some(GpuRasterError::SourceWorkingSetExceeded)), "a Merge-style bake that has shown nothing is refused in its commit frame, not overcommitted");
     drop(pressure);
 }

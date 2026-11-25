@@ -459,6 +459,7 @@ pub enum GpuRasterError {
     SourceWorkingSetExceeded,
     StrokeMemory,
     NotReady,
+    Waiting(frame_demand::Waiting),
     NotPublished,
     Invariant(&'static str),
     StaleExpression,
@@ -489,7 +490,7 @@ impl fmt::Display for GpuRasterError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Color(message) => write!(formatter, "color: {message}"),
-            Self::NotReady => formatter.write_str("Canvas inputs are not ready"),
+            Self::NotReady | Self::Waiting(_) => formatter.write_str("Canvas inputs are not ready"),
             Self::NotPublished => formatter.write_str("Canvas pixels are not published yet"),
             Self::Invariant(message) => write!(formatter, "Renderer invariant failed: {message}"),
             Self::StaleExpression => formatter.write_str("Composite expression no longer exists"),
@@ -542,7 +543,7 @@ impl fmt::Display for GpuRasterError {
 }
 
 impl GpuRasterError {
-    pub(crate) fn is_preparation_pending(&self)->bool {matches!(self,Self::NotReady|Self::NotPublished|Self::SourceWorkingSetExceeded)}
+    pub(crate) fn is_preparation_pending(&self)->bool {matches!(self,Self::NotReady|Self::Waiting(_)|Self::NotPublished|Self::SourceWorkingSetExceeded)}
 }
 impl std::error::Error for GpuRasterError {}
 
@@ -1111,6 +1112,7 @@ pub struct WgpuRasterizer {
     restore_preflight:Option<raster::staging::RestorePreflight>,
     source_receipt:Option<std::sync::Weak<scene::sources::PendingTile>>,
     source_results:std::collections::VecDeque<(layer_core::color::RgbSpace,object_image_mips::PreparedImageWork,residency::Charge)>,
+    installation:frame_demand::UnitWait,
     bake_preflight:Option<scene::bake_preflight::BakePreflight>,
     fill_edges_preflight:Option<scene::fill_edges::FillEdgesPreflight>,
     raster_buffers: std::sync::Arc<raster::BufferPool>,
@@ -1118,7 +1120,8 @@ pub struct WgpuRasterizer {
     layer_masks: layer_masks::MaskRenderer,
     selection_clip: selection_clip::SelectionClip,
     display_selection: Option<(layer_core::Selection, wgpu::Buffer)>,
-    pending_display_selection: Option<layer_core::Selection>,
+    pending_display_selection: Option<(layer_core::Selection,frame_demand::UnitWait)>,
+    held_frame: Option<frame_demand::UnitWait>,
     /// Counts replacements of the displayed selection; the latest one
     /// repaints `display_selection_damage`, in document pixels.
     display_selection_revision: u64,
@@ -1158,7 +1161,6 @@ pub struct WgpuRasterizer {
     preparation_wake: Option<Arc<dyn Fn() + Send + Sync>>,
     #[cfg(not(target_arch = "wasm32"))]
     decode_wake: Option<Arc<dyn Fn() + Send + Sync>>,
-    arrivals: Arc<std::sync::atomic::AtomicU64>,
     observed_completions: std::sync::atomic::AtomicU64,
     failed_image_tiles: Vec<moving_projection::FailedImageTile>,
     failed_raster_tiles: Vec<(std::sync::Weak<layer_core::raster::TileBlob>,layer_core::color::RgbSpace,layer_core::color::RgbSpace,String)>,
@@ -1221,6 +1223,7 @@ pub struct WgpuRasterizer {
     layer_style_records: std::collections::HashMap<OccurrenceHandle, u32>,
     artwork_frame: Option<Arc<artwork::Frame>>,
     settling: Option<artwork::PendingFrame>,
+    device_lost: bool,
     effect_clocks: effects::Clocks,
     submitted_context: Option<EvaluationContext>,
     effect_analyses: Vec<Arc<effect_analysis::Prepared>>,
@@ -1239,6 +1242,8 @@ pub struct WgpuRasterizer {
     preview_valid: bool,
     preview_coverage_pages: Vec<StrokeCoveragePage>,
     live_stroke: Option<StrokeId>,
+    drawn: layer_render::DrawnInk,
+    refusals: std::collections::VecDeque<layer_render::Refusal>,
     preview_watercolor_wetness_pages: Vec<WatercolorWetnessPage>,
     preview_damage: PixelRect,
     preview_footprint: std::collections::BTreeSet<[u32; 2]>,
@@ -1558,6 +1563,7 @@ impl WgpuRasterizer {
             selection_clip,
             display_selection: None,
             pending_display_selection: None,
+            held_frame: None,
             display_selection_revision: 0,
             display_selection_damage: PixelRect::EMPTY,
             selection_painter: None,
@@ -1595,7 +1601,6 @@ impl WgpuRasterizer {
             preparation_wake: None,
             #[cfg(not(target_arch = "wasm32"))]
             decode_wake: None,
-            arrivals: Default::default(),
             observed_completions: Default::default(),
             failed_image_tiles: Vec::new(),
             failed_raster_tiles: Vec::new(),
@@ -1634,6 +1639,7 @@ impl WgpuRasterizer {
             layer_style_records: std::collections::HashMap::new(),
             artwork_frame: None,
             settling: None,
+            device_lost: false,
             effect_clocks: Default::default(),
             submitted_context: None,
             effect_analyses: Vec::new(),
@@ -1673,7 +1679,7 @@ impl WgpuRasterizer {
             raster: None,
             document_color: Default::default(),
             native_edit: None,
-            restore_preflight:None,source_receipt:None,source_results:Default::default(),bake_preflight:None,fill_edges_preflight:None,
+            restore_preflight:None,source_receipt:None,source_results:Default::default(),installation:Default::default(),bake_preflight:None,fill_edges_preflight:None,
             raster_buffers: std::sync::Arc::new(raster::BufferPool::within(&raster_tiers.raster)),
             raster_tiers,
             blend_space: layer_core::BlendSpace::Linear,
@@ -1682,6 +1688,8 @@ impl WgpuRasterizer {
             preview_valid: false,
             preview_coverage_pages: Vec::with_capacity(8),
             live_stroke: None,
+            drawn: Default::default(),
+            refusals: Default::default(),
             preview_watercolor_wetness_pages: Vec::with_capacity(8),
             preview_damage: PixelRect::EMPTY,
             preview_footprint: std::collections::BTreeSet::new(),
@@ -2165,65 +2173,81 @@ impl WgpuRasterizer {
         Ok(key)
     }
 
-    fn brush_textures_ready(&mut self, style: &layer_render::DabStyle) -> bool {
+    fn missing_brush_texture(&mut self, style: &layer_render::DabStyle) -> Option<AssetId> {
         let key = Self::texture_set_key(style);
         if self.texture_sets.iter().any(|set| set.key == key) {
-            return true;
+            return None;
         }
         if let Some(startup) = &mut self.startup {
             startup.masks.style(&startup.compiler, style, startup::BRUSH);
         }
         if self.prepare_paper(style, startup::BRUSH).is_err() {
-            return true;
+            return None;
         }
-        [&key.primary, &key.grain, &key.transport].into_iter().all(|id| self.texture_view(id).is_ok()
-            || !self.papers.requested(id) && !self.startup.as_ref().is_some_and(|startup| startup.masks.generates(id)))
+        [key.primary, key.grain, key.transport].into_iter().find(|id| self.texture_view(id).is_err()
+            && (self.papers.requested(id) || self.startup.as_ref().is_some_and(|startup| startup.masks.generates(id))))
     }
 
-    fn brush_batches_ready(&mut self, packet: FramePacket<'_>) -> bool {
-        let mut ready = true;
+    pub(crate) fn texture_pending(&self, id: &AssetId) -> bool {
+        self.texture_view(id).is_err() && if self.papers.requested(id) { !self.papers.work_pending(id, self.image_decode_waiting()) }
+            else { self.startup.as_ref().is_some_and(|startup| startup.masks.generates(id)) }
+    }
+
+    fn require_brush<'a, T: compile::Resource>(&self, recipes: impl IntoIterator<Item = &'a Deferred<T>>, held: &mut Vec<Deferred<T>>) {
+        held.extend(recipes.into_iter().filter(|recipe| !self.compilation.require([*recipe], startup::BRUSH)).cloned());
+    }
+
+    fn brush_batches_wait(&mut self, packet: FramePacket<'_>) -> Option<frame_demand::UnitWait> {
+        let mut compiling = compile::Needs::default();
+        let mut texture = None;
         for (position, batch) in packet.dab_batches.iter().enumerate() {
             if let DabBatchKind::RasterOperation(index) = batch.kind
                 && let Some(operation) = packet.scene.operations(batch.target).and_then(|ops| ops.get(index as usize))
             {
-                ready &= self.compilation.require([&self.layer_masks.initialize],startup::BRUSH)
-                    & self.compilation.require(self.selection_clip.pipelines(),startup::BRUSH);
+                self.require_brush([&self.layer_masks.initialize], &mut compiling.render);
+                self.require_brush(self.selection_clip.pipelines(), &mut compiling.compute);
                 if !batch.target.is_coverage()
                     && let Some(pipeline) = scene::operation_pipeline(&operation.kind) {
-                    ready &= self.compilation.require([&self.scene_pipelines.pipeline[pipeline]], startup::BRUSH);
+                    self.require_brush([&self.scene_pipelines.pipeline[pipeline]], &mut compiling.render);
                 }
                 if matches!(operation.kind, layer_core::RasterOperationKind::ApplyMask | layer_core::RasterOperationKind::Erase { alpha_locked: false }) {
                     let settles = matches!(operation.kind, layer_core::RasterOperationKind::ApplyMask)
                         || batch_pixel_rect(batch, packet.scene.target_extent(batch.target)) == PixelRect::full(packet.scene.target_extent(batch.target));
                     if settles && self.paint_layers.iter().any(|layer| layer.id == batch.target && layer.watercolor.is_some()) {
-                        ready &= self.compilation.require([&self.pipelines.watercolor_compute.1], startup::BRUSH);
+                        self.require_brush([&self.pipelines.watercolor_compute.1], &mut compiling.compute);
                     }
                 }
-                if let Some(texture) = scene::fill_texture(&operation.kind)
-                    && let Some(binding) = &texture.paper
+                if let Some(fill) = scene::fill_texture(&operation.kind)
+                    && let Some(binding) = &fill.paper
                     && self.prepare_paper_binding(binding, startup::BRUSH).is_ok() {
-                    ready &= paper::PaperTile::id_for(binding).is_none_or(|id| self.papers.view(&id).is_some());
+                    texture = texture.or_else(|| paper::PaperTile::id_for(binding).filter(|id| self.papers.view(id).is_none()));
                 }
                 if batch.dab_count==0 {continue;}
             }
-            ready &= self.brush_textures_ready(&batch.style);
+            let missing = self.missing_brush_texture(&batch.style);
+            texture = texture.or(missing);
             let dabs = packet.dabs.get(batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize).unwrap_or_default();
             let far = destination_material::far_entries(BrushPassPlan::for_device(&batch.style, &self.device), packet.dab_batches, position, dabs,
                 packet.scene.target_extent(batch.target));
-            ready &= self.compilation.require(far.into_iter().map(|entry| self.pipelines.destination_material.kernel(&batch.style, destination_material::Taps::Far, entry)),
-                startup::BRUSH);
+            self.require_brush(far.into_iter().map(|entry| self.pipelines.destination_material.kernel(&batch.style, destination_material::Taps::Far, entry)),
+                &mut compiling.compute);
             if batch.style.retouch.is_some() {
                 let (render, compute) = self.retouch_pipelines().required(batch.style.execution);
-                ready &= self.compilation.require(&render, startup::BRUSH) & self.compilation.require(&compute, startup::BRUSH);
+                self.require_brush(&render, &mut compiling.render);
+                self.require_brush(&compute, &mut compiling.compute);
             }
             if !self.startup.as_ref().is_some_and(|startup|startup.strokes.covers(&batch.style)) {
                 let mask = layer_masks::MaskRenderer::is_mask(packet.scene, batch.target);
                 let mut required = compile::Needs::default();
                 required.style(self, &batch.style, dry_material::Reach::of_dabs(dabs), mask, batch.kind == DabBatchKind::Preview);
-                ready &= required.require(&self.compilation, startup::BRUSH);
+                self.require_brush(&required.render, &mut compiling.render);
+                self.require_brush(&required.compute, &mut compiling.compute);
             }
         }
-        ready
+        if !compiling.render.is_empty() || !compiling.compute.is_empty() {
+            return Some(frame_demand::UnitWait::input(frame_demand::Producer::Compile(Arc::new(compiling))));
+        }
+        texture.map(|id| frame_demand::UnitWait::input(frame_demand::Producer::Texture(id)))
     }
 
     pub(crate) fn background_pipeline_ready(&self, pipeline: &deferred::Deferred<wgpu::ComputePipeline>) -> bool {
@@ -3523,7 +3547,8 @@ impl WgpuRasterizer {
             if self.display_selection.as_ref().is_none_or(|(old,_)| old != selection) {
                 self.compilation.check()?;
                 if !self.compilation.require(self.selection_clip.pipelines().into_iter().take(2), startup::BRUSH) {
-                    self.pending_display_selection = Some(selection.clone());
+                    let needs=compile::Needs {compute:self.selection_clip.pipelines().into_iter().take(2).cloned().collect(),..Default::default()};
+                    self.pending_display_selection = Some((selection.clone(),frame_demand::UnitWait::Input(frame_demand::Producer::Compile(Arc::new(needs)),frame_demand::Allowance::Fresh)));
                     return Ok(());
                 }
                 let mut encoder = crate::submission::CommandEncoder::new(&self.device,
@@ -3567,7 +3592,12 @@ fn outline_damage(a: Option<&layer_core::Selection>, b: Option<&layer_core::Sele
 impl WgpuRasterizer {
     fn held_result_ready(&self)->bool {
         let receipt=self.source_receipt.as_ref().and_then(std::sync::Weak::upgrade);
-        self.source_results.iter().any(|(context,result,_)|*context==self.device.working_space() && self.decode_result_eligible(receipt.as_deref(),result))
+        let installing=self.installation.eligible(self).is_some();
+        self.source_results.iter().any(|(context,result,_)|*context==self.device.working_space() && self.decode_result_eligible(receipt.as_deref(),result)
+            && (installing || Self::installs_without_room(result)))
+    }
+    fn installs_without_room(result:&object_image_mips::PreparedImageWork)->bool {
+        !matches!(result,object_image_mips::PreparedImageWork::Image(_)) && !matches!(result,object_image_mips::PreparedImageWork::Raster(tile) if !tile.scalar)
     }
     fn decode_result_admitted(&self,result:&object_image_mips::PreparedImageWork)->bool {
         !self.source_tiles.borrow().uploads_full(result.class())
@@ -3590,7 +3620,8 @@ impl WgpuRasterizer {
         if self.bake_preflight.as_ref().is_some_and(|state|state.waiting()) {return true;}
         #[cfg(target_arch = "wasm32")]
         if !self.browser_image_result.borrow().is_empty() { return false; }
-        self.moving_decode.as_ref().is_some_and(|(_,queue)|!queue.ready() && queue.pending())
+        let parked=!self.source_results.is_empty() && self.installation.eligible(self).is_none();
+        self.moving_decode.as_ref().is_none_or(|(_,queue)|!queue.ready()) && (parked || self.moving_decode.as_ref().is_some_and(|(_,queue)|queue.pending()))
     }
     pub(crate) fn drain_image_decode(&mut self, encoder: &mut submission::CommandEncoder) -> Result<Option<object_image_mips::PreparedMipTile>, GpuRasterError> {
         #[cfg(target_arch = "wasm32")]
@@ -3601,7 +3632,9 @@ impl WgpuRasterizer {
         let receipt=self.source_receipt.as_ref().and_then(std::sync::Weak::upgrade);
         let space=self.device.working_space();
         self.source_results.retain(|(context,..)|*context==space);
-        let held=self.source_results.iter().position(|(_,result,_)|self.decode_result_eligible(receipt.as_deref(),result));
+        if self.source_results.is_empty() {self.installation=frame_demand::UnitWait::default();}
+        let allowance=self.installation.eligible(self);
+        let held=self.source_results.iter().position(|(_,result,_)|self.decode_result_eligible(receipt.as_deref(),result) && (allowance.is_some() || Self::installs_without_room(result)));
         let Some((prepared,charge))=held.and_then(|index|self.source_results.remove(index)).map(|(_,result,charge)|(result,charge))
             .or_else(||self.moving_decode.as_mut().and_then(|(_,queue)|queue.poll())) else {return Ok(None);};
         let prepared=match prepared {
@@ -3611,7 +3644,7 @@ impl WgpuRasterizer {
             },
             prepared=>prepared,
         };
-        if !self.decode_result_admitted(&prepared) || receipt.as_ref().is_some_and(|receipt|!Self::receipt_matches(receipt,&prepared)) {
+        if !self.decode_result_eligible(receipt.as_deref(),&prepared) {
             self.source_results.push_back((space,prepared,charge));return Ok(None);
         }
         let result = (|| match &prepared {
@@ -3650,10 +3683,14 @@ impl WgpuRasterizer {
                 Ok(Some(prepared.clone()))
             },
         })();
-        if matches!(&result,Err(GpuRasterError::NotReady|GpuRasterError::SourceWorkingSetExceeded)) {
+        if matches!(&result,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::SourceWorkingSetExceeded)) {
+            if let Err(GpuRasterError::Waiting(waiting))=&result {
+                self.installation=frame_demand::UnitWait::parked(waiting.need().clone(),held.and(allowance).unwrap_or(frame_demand::Allowance::Fresh));
+            }
             self.source_results.push_front((space,prepared,charge));
             return Ok(None);
         }
+        self.installation=frame_demand::UnitWait::default();
         self.decode_consumed();
         result
     }
@@ -3667,7 +3704,6 @@ impl WgpuRasterizer {
     }
     fn decode_consumed(&mut self) {
         self.preparation_progress=self.preparation_progress.saturating_add(1);
-        self.arrivals.fetch_add(1,std::sync::atomic::Ordering::AcqRel);
     }
     pub(crate) fn drain_image_decodes(&mut self, encoder: &mut submission::CommandEncoder) -> Result<(), GpuRasterError> {
         loop {
@@ -3699,6 +3735,11 @@ impl WgpuRasterizer {
         let _subscription=Subscription(self);
         std::future::poll_fn(|cx| {
             self.register_image_decode_waker(cx.waker());
+            let waker=cx.waker().clone();
+            let wake:residency::Wake=Arc::new(move||waker.wake_by_ref());
+            self.device.on_next_completion(&wake);
+            let _=self.installation.observe_with(self,Some(&wake));
+            if let Some(loss)=self.device.loss().error() {return std::task::Poll::Ready(Err(loss.clone()));}
             if self.snapshot_cancelled.as_ref().is_some_and(|cancelled| cancelled.load(std::sync::atomic::Ordering::Relaxed)) {
                 return std::task::Poll::Ready(Err(GpuRasterError::Color("Snapshot capture cancelled".into())));
             }
@@ -3729,8 +3770,6 @@ impl WgpuRasterizer {
             if let Some((_,queue))=&self.moving_decode {queue.set_wake(wake.clone());}
             self.decode_wake=Some(wake.clone());
         }
-        let arrivals=self.arrivals.clone();
-        let wake:Arc<dyn Fn() + Send + Sync>=Arc::new(move||{arrivals.fetch_add(1,std::sync::atomic::Ordering::AcqRel);wake();});
         self.set_raster_preparation_wake(wake.clone());
         self.preparation_wake=Some(wake);
     }
@@ -3740,10 +3779,19 @@ impl WgpuRasterizer {
         self.memory.watch(self.factory.memory_budget(),Arc::new(move||edge.signal_release()));
     }
     pub fn preparation_progress(&self) -> u64 { self.preparation_progress }
-    pub(crate) fn arrival_token(&self) -> frame_demand::ArrivalToken { frame_demand::ArrivalToken(self.arrivals.load(std::sync::atomic::Ordering::Acquire)) }
-    pub(crate) fn arrived_since(&self, token: frame_demand::ArrivalToken) -> bool { self.arrivals.load(std::sync::atomic::Ordering::Acquire)!=token.0 }
+    fn settle_device_loss(&mut self) {
+        let Some(loss) = self.device.loss().error().filter(|_| !self.device_lost).cloned() else { return; };
+        self.device_lost = true;
+        self.end_lane_with(loss.clone());
+        if let Some(regions) = &mut self.regions { regions.end_waiting_with(&loss); }
+        if let Some(pending) = self.settling.take() { pending.fail(&loss.to_string()); }
+        self.device.post_completion();
+    }
     fn gpu_results_pending(&self) -> bool { self.frame_results_pending() || self.thumbnails_pending() }
-    fn settling_ready(&self) -> bool { self.background_ready.load(std::sync::atomic::Ordering::Acquire) && self.raster_ready() }
+    fn settling_ready(&self) -> bool {
+        self.background_ready.load(std::sync::atomic::Ordering::Acquire) && self.raster_ready()
+            && self.settling.as_ref().and_then(|pending| pending.capture.as_ref()).is_none_or(|job| self.native_window_ready(job))
+    }
     fn frame_results_pending(&self) -> bool {
         self.settling.is_some() || !self.background_ready.load(std::sync::atomic::Ordering::Acquire)
             || self.color_sample_pending() || self.selection_paint_pending() || self.region_pending()
@@ -3912,27 +3960,19 @@ impl WgpuRasterizer {
     fn upload_window_open(&self,class:residency::Class)->bool {
         #[cfg(not(target_arch="wasm32"))]
         if let Some(blocked)=self.source_tiles.borrow().upload_blocked(class,scene::sources::NORMALIZED_PAGE_BYTES) {
-            if let Some(wake)=self.preparation_wake.clone() {blocked.wake_on_release(&self.device.retirement_handle(),wake);}
+            if let Some(wake)=&self.preparation_wake {self.device.on_release(&blocked,wake);}
             return false;
         }
         true
     }
     fn reserve_upload(&self,class:residency::Class,bytes:u64)->Option<residency::Reservation> {
         let admitted=self.source_tiles.borrow().admit_upload(class,bytes);
-        match admitted {
-            Ok(reservation)=>Some(reservation),
-            #[cfg(not(target_arch="wasm32"))]
-            Err(blocked)=>{
-                if let Some(wake)=self.preparation_wake.clone() {blocked.wake_on_release(&self.device.retirement_handle(),wake);}
-                None
-            },
-            #[cfg(target_arch="wasm32")]
-            Err(blocked)=>Some(blocked.overcommit()),
-        }
+        admitted.inspect_err(|blocked|if let Some(wake)=&self.preparation_wake {self.device.on_release(blocked,wake);}).ok()
     }
-    fn charge_upload(&mut self,encoder:&submission::CommandEncoder,reservation:residency::Reservation,bytes:u64) {
-        let in_flight=self.source_tiles.borrow().charge_upload(encoder,reservation,bytes);
+    fn charge_upload(&mut self,encoder:&submission::CommandEncoder,reservation:residency::Reservation,bytes:u64)->Result<(),GpuRasterError> {
+        let in_flight=self.source_tiles.borrow().charge_upload(encoder,reservation,bytes)?;
         self.metrics.source_upload_peak_bytes=self.metrics.source_upload_peak_bytes.max(in_flight);
+        Ok(())
     }
     fn objects_outstanding(&self)->bool {self.scene.as_deref().and_then(|scene|scene.objects_outstanding(self)).is_some()}
     fn moving_images_pending(&self) -> bool {
@@ -3981,7 +4021,7 @@ impl WgpuRasterizer {
                 |source,coordinate,format|self.mip_source_resident(source,coordinate,format)) {
                 let mut requested=scene::sources::Inputs::default();
                 requested.image_for(&source,coordinate,self.device.working_space(),scene::sources::SourceUse::Native);
-                let accepted=requested.accept_query(self,None)?;
+                let accepted=requested.accept_query(self,None,crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh)?;
                 let read=scene::sources::accepted_image(&accepted,&source,coordinate)?;
                 if !read.encode(self,encoder,class)? {return Err(GpuRasterError::NotReady);}
                 let result=images.write_tile(self,encoder,&source,coordinate,&read.sampled().uncertified().texture,None);
@@ -4088,107 +4128,55 @@ impl CanvasRenderer for WgpuRasterizer {
     fn paint_ready(&self, document: &layer_core::Document, brush: &layer_core::BrushSnapshot, transform: bool) -> bool {
         self.startup.as_ref().is_none_or(|startup| startup.brush_ready) && !self.startup_needs_update(document, brush, transform)
     }
-    fn raster_dependencies_ready(&mut self, packet: FramePacket<'_>, preview: Option<&layer_render::TransformPreview>) -> bool {
-        self.activate_presentation(packet.scene);
-        if self.retained_transition_frame(packet, preview) { return true; }
-        if preview.is_some_and(|preview| preview.transform.validate().is_err()) { return true; }
-        let installed = preview.map(|preview| self.transform_preview.replace(preview.clone()));
-        self.register_tiled_sources(packet.scene);
-        self.begin_frame_memory(packet);
-        if self.bake_preflight.as_ref().is_some_and(|state|!state.matches(packet,self.document_color())) {self.bake_preflight=None;}
-        if self.fill_edges_preflight.as_ref().is_some_and(|state|!state.matches(packet,self.document_color())) {self.fill_edges_preflight=None;}
-        let mut required = compile::Needs::default();
-        self.transforms.as_ref().unwrap().require_frame(self, packet, preview, &mut required);
-        if let Some(native)=&self.native_edit {
-            let gray=packet.scene.targets().any(|t|packet.scene.color_mode(t)!=layer_core::color::LayerColorMode::FullColor);
-            required.compute.extend(native.required_pipelines(self.document_color.depth,gray).cloned());
-        }
-        if packet.scene.targets().any(SourceTarget::is_coverage) {
-            required.render.push(self.layer_masks.initialize.clone());
-            required.compute.extend(self.selection_clip.pipelines().into_iter().cloned());
-        }
-        let transforms_ready = required.require(&self.compilation,startup::BRUSH);
-        let scene_ready = self.compilation.require(self.scene_pipelines.for_scene(self,packet.scene,packet.dab_batches), startup::DOCUMENT)
-            & self.compilation.require([&self.scene_pipelines.fold.pipeline], startup::DOCUMENT);
-        let fill_ready=if let Some(fill)=self.fill_preview.clone() {
-            let pipeline=scene::operation_pipeline(&fill.operation.kind).unwrap_or(0);
-            self.compilation.require([&self.scene_pipelines.pipeline[pipeline],&self.layer_masks.initialize],startup::BRUSH)
-                & self.compilation.require(self.selection_clip.pipelines(),startup::BRUSH)
-        }else{true};
-        let ready=fill_ready && transforms_ready && scene_ready && self.scene_scale_ready(packet.scene) && self.startup.as_ref().is_none_or(|s| s.document.ready() && s.current.ready())
-            && self.brush_batches_ready(packet)
-            && self.prepare_raster_restores(packet) && self.bake_analyses_ready(packet) && self.retouch_analyses_ready(packet) && self.retouch_references_ready(packet)
-            && self.bake_vectors_ready(packet) && self.prepare_bakes(packet) && self.prepare_fill_edges(packet) && self.prepare_operation_masks(packet) && self.prepare_transform_cancel(packet) && self.prepare_transform_preview(packet,preview);
-        let ready=ready || self.lane_exhausted();
-        if !ready {self.upload_window_open(residency::Class::Visible);}
-        if let Some(installed) = installed { self.transform_preview = installed; }
-        ready
+    fn submission_turn(&mut self, packet: FramePacket<'_>, preview: Option<&layer_render::TransformPreview>) -> layer_render::SubmissionTurn<GpuRasterError> {
+        self.held_frame = None;
+        self.memory.next_lane_generation();
+        let operation = packet.operation();
+        self.report_lane_end(Some(operation));
+        if self.lane_waits() && !self.close_steps_past_own_reclaim(packet) { return layer_render::SubmissionTurn::Held; }
+        let claimant = self.memory.claim(Some(operation));
+        let ready = self.lane_exhausted() || self.raster_dependencies_ready(packet, preview);
+        self.memory.claim(claimant);
+        if let Some(error) = self.take_lane_failure(operation) { self.held_frame = None; return layer_render::SubmissionTurn::Refused(self.drawn.refusal(operation), error); }
+        if !ready { return layer_render::SubmissionTurn::Held; }
+        layer_render::SubmissionTurn::Ready(layer_render::ReadySubmission::new(self.memory.lane_generation(), packet))
     }
+    fn submit_ready(&mut self, ready: layer_render::ReadySubmission, packet: FramePacket<'_>) -> Result<(), Self::Error> {
+        if !ready.admits(self.memory.lane_generation(), packet) { return Err(GpuRasterError::Invariant("a submission permit does not name this turn's packet")); }
+        let operation = packet.operation();
+        let claimant = self.memory.claim(Some(operation));
+        let result = self.submit(packet);
+        self.memory.claim(claimant);
+        debug_assert!(!result.as_ref().is_err_and(Self::is_preparation_pending), "a ready frame must not defer preparation during submission");
+        let ended = self.take_lane_failure(operation).is_some();
+        match &result {
+            Ok(()) => self.drawn.record(packet),
+            Err(error) if ended || Self::is_memory_refusal(error) => self.refusals.push_back(self.drawn.refusal(operation)),
+            Err(_) => {},
+        }
+        result
+    }
+    fn take_refused_stroke(&mut self) -> Option<layer_render::Refusal> { self.refusals.pop_front() }
     fn has_pending_submission(&self) -> bool { self.settling.is_some() }
     fn next_frame(&self) -> layer_render::FrameDemand { self.frame_demand() }
     fn waits_for_frame_slot(&self) -> bool { self.frame_slot_blocked() }
-    fn stroke_waits_for_memory(&self) -> bool { self.lane_waits() }
-    fn stroke_memory_refusals(&self) -> u64 { self.memory.stroke_memory_refusals() }
     fn skipped_filter_previews(&self) -> u64 { self.filter_skips }
     fn refused_filter_bakes(&self) -> u64 { self.filter_refusals }
     fn poll_pending(&mut self, view: layer_render::ViewState) -> Result<(), Self::Error> {
+        self.settle_device_loss();
         self.observed_completions.store(self.device.completions(), std::sync::atomic::Ordering::Release);
         self.refresh_memory_limits();
-        if let Some(selection) = self.pending_display_selection.clone() { self.set_selection_outline(Some(&selection))?; }
-        let Some(mut pending) = self.settling.take() else { return Ok(()); };
-        let moving = pending.view != view;
-        pending.view = view;
-        if moving || !self.settling_ready() {
-            self.settling = Some(pending);
-            return Ok(());
+        if let Some((selection,wait)) = self.pending_display_selection.clone() && wait.eligible(self).is_some() { self.set_selection_outline(Some(&selection))?; }
+        let operation = self.settling.as_ref().map(|pending| pending.operation);
+        let claimant = self.memory.claim(operation);
+        let result = self.settle_pending(view);
+        self.memory.claim(claimant);
+        if let Some(operation) = operation && (self.take_lane_failure(operation).is_some() || result.as_ref().is_err_and(Self::is_memory_refusal)) {
+            drop(self.settling.take());
+            self.refusals.push_back(self.drawn.refusal(operation));
         }
-        let healing = self.retouch.as_ref().is_some_and(|s| s.heal_pending());
-        if !healing && pending.capture.is_none() {
-            pending.capture=match self.prepare_native_rasters(pending.frame.scene.view(),None) {
-                Ok(capture)=>capture,
-                Err(error) if error.is_preparation_pending()=>{self.settling=Some(pending);return Ok(());},
-                Err(error)=>return Err(error),
-            };
-        }
-        let work = healing || pending.capture.as_ref().is_some_and(|capture| !capture.complete());
-        if healing { self.record_restore_uploads(|r, encoder| r.drain_image_decodes(encoder))?; }
-        if !healing && let Some(capture) = &mut pending.capture {
-            match self.admit_native_window(capture) {
-                Err(error) if error.is_preparation_pending() => { self.settling = Some(pending); return Ok(()); },
-                result => result?,
-            }
-        }
-        if work {
-            let mut encoder = submission::CommandEncoder::new(&self.device, &wgpu::CommandEncoderDescriptor { label: Some("healing settle") });
-            self.telemetry.begin(&self.device, &self.queue, encoder.diagnostics(), self.metrics.submissions);
-            let stepped = if healing {
-                let mut sources = self.retouch_sources();
-                let result = sources.step_heal(self, &mut encoder);
-                self.retouch = Some(sources);
-                match result {
-                    Err(error) if error.is_preparation_pending()=>{self.settling=Some(pending);return Ok(());},
-                    result=>result?,
-                }
-            } else if let Some(capture) = &mut pending.capture { self.step_native_rasters(capture, &mut encoder)? } else { false };
-            self.telemetry.end(encoder.diagnostics());
-            debug_assert!(stepped);
-            self.apply_frame_grants(&mut encoder);
-            self.uploads.finish(&encoder);
-            self.metrics.command_passes += encoder.pass_count();
-            self.hold_background(false,&encoder);
-            self.last_submission = encoder.submit(&self.queue);
-            self.telemetry.submitted(&self.queue);
-            self.settling = Some(pending);
-        } else {
-            let mut packet = pending.frame.packet(self.document_extent);
-            packet.view = view;
-            packet.composite_all = pending.capture.is_none();
-            let native = pending.capture.take().map(|capture| capture.frame);
-            self.begin_frame_memory(packet);
-            self.submit_frame(packet, native)?;
-            self.release_unused_retouch();
-        }
-        Ok(())
+        self.report_lane_end(None);
+        result.and_then(|()| if self.refusals.is_empty() { Ok(()) } else { Err(GpuRasterError::StrokeMemory) })
     }
     fn can_submit(&self) -> bool {
         self.settling.is_none() && self.raster_ready()
@@ -4499,6 +4487,97 @@ impl CanvasRenderer for WgpuRasterizer {
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> { self.submit_frame(packet, None) }
 }
 impl WgpuRasterizer {
+    fn settle_pending(&mut self, view: layer_render::ViewState) -> Result<(), GpuRasterError> {
+        let Some(pending) = self.settling.as_mut() else { return Ok(()); };
+        let moving = std::mem::replace(&mut pending.view, view) != view;
+        if moving || !self.settling_ready() { return Ok(()); }
+        let Some(mut pending) = self.settling.take() else { return Ok(()); };
+        let healing = self.retouch.as_ref().is_some_and(|s| s.heal_pending());
+        if !healing && pending.capture.is_none() {
+            pending.capture=match self.prepare_native_rasters(pending.frame.scene.view(),None) {
+                Ok(capture)=>capture,
+                Err(error) if error.is_preparation_pending()=>{self.settling=Some(pending);return Ok(());},
+                Err(error)=>return Err(error),
+            };
+        }
+        let work = healing || pending.capture.as_ref().is_some_and(|capture| !capture.complete());
+        if healing { self.record_restore_uploads(|r, encoder| r.drain_image_decodes(encoder))?; }
+        if !healing && let Some(capture) = &mut pending.capture {
+            match self.admit_native_window(capture) {
+                Err(error) if error.is_preparation_pending() => { self.settling = Some(pending); return Ok(()); },
+                result => result?,
+            }
+        }
+        if work {
+            let mut encoder = submission::CommandEncoder::new(&self.device, &wgpu::CommandEncoderDescriptor { label: Some("healing settle") });
+            self.telemetry.begin(&self.device, &self.queue, encoder.diagnostics(), self.metrics.submissions);
+            let stepped = if healing {
+                let mut sources = self.retouch_sources();
+                let result = sources.step_heal(self, &mut encoder);
+                self.retouch = Some(sources);
+                match result {
+                    Err(error) if error.is_preparation_pending()=>{self.settling=Some(pending);return Ok(());},
+                    result=>result?,
+                }
+            } else if let Some(capture) = &mut pending.capture { self.step_native_rasters(capture, &mut encoder)? } else { false };
+            self.telemetry.end(encoder.diagnostics());
+            debug_assert!(stepped);
+            self.apply_frame_grants(&mut encoder);
+            self.uploads.finish(&encoder);
+            self.metrics.command_passes += encoder.pass_count();
+            self.hold_background(false,&encoder);
+            self.last_submission = encoder.submit(&self.queue);
+            self.telemetry.submitted(&self.queue);
+            self.settling = Some(pending);
+        } else {
+            let mut packet = pending.frame.packet(self.document_extent);
+            packet.view = view;
+            packet.composite_all = pending.capture.is_none();
+            let native = pending.capture.take().map(|capture| capture.frame);
+            self.begin_frame_memory(packet);
+            self.submit_frame(packet, native)?;
+            self.release_unused_retouch();
+        }
+        Ok(())
+    }
+    pub(crate) fn raster_dependencies_ready(&mut self, packet: FramePacket<'_>, preview: Option<&layer_render::TransformPreview>) -> bool {
+        self.activate_presentation(packet.scene);
+        if self.retained_transition_frame(packet, preview) { return true; }
+        if preview.is_some_and(|preview| preview.transform.validate().is_err()) { return true; }
+        let installed = preview.map(|preview| self.transform_preview.replace(preview.clone()));
+        self.register_tiled_sources(packet.scene);
+        self.begin_frame_memory(packet);
+        if self.bake_preflight.as_ref().is_some_and(|state|!state.matches(packet,self.document_color())) {self.bake_preflight=None;}
+        if self.fill_edges_preflight.as_ref().is_some_and(|state|!state.matches(packet,self.document_color())) {self.fill_edges_preflight=None;}
+        let mut required = compile::Needs::default();
+        self.transforms.as_ref().unwrap().require_frame(self, packet, preview, &mut required);
+        if let Some(native)=&self.native_edit {
+            let gray=packet.scene.targets().any(|t|packet.scene.color_mode(t)!=layer_core::color::LayerColorMode::FullColor);
+            required.compute.extend(native.required_pipelines(self.document_color.depth,gray).cloned());
+        }
+        if packet.scene.targets().any(SourceTarget::is_coverage) {
+            required.render.push(self.layer_masks.initialize.clone());
+            required.compute.extend(self.selection_clip.pipelines().into_iter().cloned());
+        }
+        let transforms_ready = required.require(&self.compilation,startup::BRUSH);
+        let scene_ready = self.compilation.require(self.scene_pipelines.for_scene(self,packet.scene,packet.dab_batches), startup::DOCUMENT)
+            & self.compilation.require([&self.scene_pipelines.fold.pipeline], startup::DOCUMENT);
+        let fill_ready=if let Some(fill)=self.fill_preview.clone() {
+            let pipeline=scene::operation_pipeline(&fill.operation.kind).unwrap_or(0);
+            self.compilation.require([&self.scene_pipelines.pipeline[pipeline],&self.layer_masks.initialize],startup::BRUSH)
+                & self.compilation.require(self.selection_clip.pipelines(),startup::BRUSH)
+        }else{true};
+        let prepared=fill_ready && transforms_ready && scene_ready && self.scene_scale_ready(packet.scene) && self.startup.as_ref().is_none_or(|s| s.document.ready() && s.current.ready());
+        let held=if prepared {self.brush_batches_wait(packet)} else {None};
+        let ready=prepared && held.is_none()
+            && self.prepare_raster_restores(packet) && self.bake_analyses_ready(packet) && self.retouch_analyses_ready(packet) && self.retouch_references_ready(packet)
+            && self.bake_vectors_ready(packet) && self.prepare_bakes(packet) && self.prepare_fill_edges(packet) && self.prepare_operation_masks(packet) && self.prepare_transform_cancel(packet) && self.prepare_transform_preview(packet,preview);
+        let ready=ready || self.lane_exhausted();
+        self.held_frame=held.filter(|_|!ready);
+        if !ready {self.upload_window_open(residency::Class::Visible);}
+        if let Some(installed) = installed { self.transform_preview = installed; }
+        ready
+    }
     fn empty_artwork_frame(&self, packet: FramePacket<'_>, preview: Option<&layer_render::TransformPreview>) -> bool {
         packet.commit_rasters && !packet.composite_all && !packet.reset_layers && packet.restore_rasters.is_empty()
             && packet.dabs.is_empty() && packet.dab_batches.is_empty()
@@ -4620,7 +4699,7 @@ impl WgpuRasterizer {
         self.background_frame = false;
         #[cfg(test)]
         let artwork_revision_before=self.artwork_revision;
-        if let Some(error)=self.take_lane_failure().or_else(||self.take_bake_failure()).or_else(||self.take_fill_edges_failure()).or_else(||self.take_restore_failure()) {
+        if let Some(error)=self.take_bake_failure().or_else(||self.take_fill_edges_failure()).or_else(||self.take_restore_failure()) {
             if matches!(error, GpuRasterError::WholeDrawingFilter { .. }) { self.filter_refusals += 1; }
             return Err(error);
         }
@@ -5169,7 +5248,7 @@ impl WgpuRasterizer {
                 let cooperative = !packet.reset_layers && packet.dab_batches[index + 1..].iter().all(|b| b.kind == DabBatchKind::Preview);
                 self.encode_heal(batch, &mut encoder, cooperative)?;
                 if cooperative && self.retouch.as_ref().is_some_and(|s| s.heal_pending()) {
-                    self.settling = Some(artwork::PendingFrame { frame: Arc::new(artwork::Frame::new(packet, context.clone())), view: requested_view, capture: None });
+                    self.settling = Some(artwork::PendingFrame { frame: Arc::new(artwork::Frame::new(packet, context.clone())), view: requested_view, operation: packet.operation(), capture: None });
                 }
             }
         }
@@ -5198,7 +5277,7 @@ impl WgpuRasterizer {
             None => match self.encode_native_rasters(packet.scene,&mut encoder) {
                 Ok(commit)=>commit,
                 Err(error) if error.is_preparation_pending()=>{
-                    self.settling=Some(artwork::PendingFrame {frame:Arc::new(artwork::Frame::new(packet,context.clone())),view:requested_view,capture:None});
+                    self.settling=Some(artwork::PendingFrame {frame:Arc::new(artwork::Frame::new(packet,context.clone())),view:requested_view,operation:packet.operation(),capture:None});
                     None
                 },
                 Err(error)=>return Err(error),

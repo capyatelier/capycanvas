@@ -6,6 +6,7 @@ use crate::{IdMap, IdSet};
 #[derive(Clone, Default)]
 pub(crate) struct Declared {
     pub name_wake:Option<std::task::Waker>,
+    pub declarations:u64,
     pub rasters: IdMap<SourceTarget, raster::contents::Versions>,
     pub captures: IdMap<SourceTarget, Capture>,
     pub preview_inputs: IdMap<SourceTarget, Input>,
@@ -26,7 +27,7 @@ impl Input {
         let reads=Reads::of(packet)?;let mut rasters=IdMap::default();
         for target in &reads.targets {
             #[cfg(test)] record_read();
-            match r.raster_versions(packet.scene,*target) {Ok(versions)=>{rasters.insert(*target,versions);},Err(GpuRasterError::NotReady)=>{},Err(error)=>return Err(error)}
+            match r.raster_versions(packet.scene,*target) {Ok(versions)=>{rasters.insert(*target,versions);},Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))=>{},Err(error)=>return Err(error)}
         }
         Self::from_reads(packet,rasters,&reads)
     }
@@ -222,6 +223,7 @@ pub(crate) struct Prepared {
     memo: Mutex<Keys>,
     authored: Mutex<IdMap<Expression,Authored>>,
     name_wake:Option<std::task::Waker>,
+    declarations:u64,
 }
 #[derive(Clone)]
 struct Authored {version:ContentVersion,reads:Arc<[SourceTarget]>}
@@ -240,11 +242,12 @@ impl ExpectedKey {
 impl Prepared {
     pub fn capture(r:&WgpuRasterizer,packet:FramePacket<'_>,mut declared:Declared)->Result<Self,GpuRasterError> {
         declared.name_wake=r.raster_name_waker();
+        declared.declarations=r.raster_declarations();
         let reads=Reads::of(packet)?;
         for target in &reads.targets {
             #[cfg(test)] record_read();
             if !declared.rasters.contains_key(target) {
-                match r.raster_versions(packet.scene,*target) {Ok(versions)=>{declared.rasters.insert(*target,versions);},Err(GpuRasterError::NotReady)=>{},Err(error)=>return Err(error)}
+                match r.raster_versions(packet.scene,*target) {Ok(versions)=>{declared.rasters.insert(*target,versions);},Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))=>{},Err(error)=>return Err(error)}
             }
         }
         let mut needed=Vec::new();
@@ -253,7 +256,7 @@ impl Prepared {
                 if declared.captures.contains_key(&desired.target) {continue;}
                 match r.transforms.as_ref().ok_or(GpuRasterError::NotReady).and_then(|transforms|transforms.declared_capture(r,packet.scene,&desired)) {
                     Ok(capture)=>{declared.captures.insert(desired.target,capture);},
-                    Err(GpuRasterError::NotReady)=>needed.push(desired.target),
+                    Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))=>needed.push(desired.target),
                     Err(error)=>return Err(error),
                 }
             }
@@ -261,7 +264,7 @@ impl Prepared {
         if declared.preview.is_none() {
             match PreviewDeclaration::capture(r,packet,declared.quality,declared.preview_inputs.clone(),declared.fill.clone()) {
                 Ok(preview)=>declared.preview=preview.map(Arc::new),
-                Err(GpuRasterError::NotReady)=> {
+                Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))=> {
                     if let Some(target)=packet.dab_batches.iter().find(|batch|batch.kind==DabBatchKind::Preview).map(|batch|batch.target).or_else(||declared.fill.as_ref().map(|fill|fill.target)) {needed.push(target);}
                 },
                 Err(error)=>return Err(error),
@@ -297,7 +300,7 @@ impl Prepared {
         for target in reads.targets.iter().copied() {
             #[cfg(test)] record_read();
             if !declared.rasters.contains_key(&target) {
-                match raster::contents::declared_versions(packet.scene,target) {Ok(versions)=>{declared.rasters.insert(target,versions);},Err(GpuRasterError::NotReady)=>{},Err(error)=>return Err(error)}
+                match raster::contents::declared_versions(packet.scene,target) {Ok(versions)=>{declared.rasters.insert(target,versions);},Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))=>{},Err(error)=>return Err(error)}
             }
             if let Some(data)=packet.scene.raster(target).and_then(|root|root.try_data()) {
                 if let Some(style)=data.map_err(GpuRasterError::Effect)?.watercolor {watercolor.insert(target,WatercolorLayerStyle {wet_edge:style.wet_edge,burnt_edge:style.burnt_edge,edge_width:style.edge_width});}
@@ -307,7 +310,7 @@ impl Prepared {
             Some(preview)=>Some(preview),
             None=>match PreviewDeclaration::from_scene(packet,declared.rasters.clone(),declared.preview_inputs.clone(),declared.quality,declared.fill.clone(),None) {
                 Ok(preview)=>preview.map(Arc::new),
-                Err(GpuRasterError::NotReady)=> {
+                Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))=> {
                     if let Some(target)=packet.dab_batches.iter().find(|batch|batch.kind==DabBatchKind::Preview).map(|batch|batch.target).or_else(||declared.fill.as_ref().map(|fill|fill.target)) {
                         declared.rasters.remove(&target);declared.captures.remove(&target);
                     }
@@ -331,11 +334,12 @@ impl Prepared {
         });
         let mut prepared=Self::from_snapshot(Arc::new(Snapshot {scene:packet.scene.snapshot(),rasters:declared.rasters,captures:declared.captures,
             preview,vector_preview,vector_motion,effects,moving:None,watercolor,context:context.0}));
-        prepared.name_wake=declared.name_wake;Ok(prepared)
+        (prepared.name_wake,prepared.declarations)=(declared.name_wake,declared.declarations);Ok(prepared)
     }
     #[cfg(test)]
     pub fn snapshot(&self)->Arc<Snapshot> {self.snapshot.clone()}
-    pub fn from_snapshot(snapshot:Arc<Snapshot>)->Self {Self {snapshot,memo:Mutex::new(Keys::default()),authored:Mutex::new(IdMap::default()),name_wake:None}}
+    pub fn from_snapshot(snapshot:Arc<Snapshot>)->Self {Self {snapshot,memo:Mutex::new(Keys::default()),authored:Mutex::new(IdMap::default()),name_wake:None,declarations:0}}
+    pub(super) fn declarations(&self)->u64 {self.declarations}
     pub(super) fn carry(&self,previous:&Self)->Option<Vec<(u32,DocRect)>> {
         let mut keys=std::mem::take(&mut *previous.memo.lock().unwrap());
         let (s,before)=(&*self.snapshot,&*previous.snapshot);
@@ -427,7 +431,7 @@ impl Prepared {
     pub(super) fn composed(&self,target:SourceTarget,versions:raster::contents::Versions)->Self {self.advanced(target,versions,None)}
     pub(super) fn advanced(&self,target:SourceTarget,versions:raster::contents::Versions,preview:Option<Arc<PreviewDeclaration>>)->Self {
         let mut snapshot=(*self.snapshot).clone();snapshot.rasters.insert(target,versions);snapshot.preview=preview;
-        Self {name_wake:self.name_wake.clone(),..Self::from_snapshot(Arc::new(snapshot))}
+        Self {name_wake:self.name_wake.clone(),declarations:self.declarations,..Self::from_snapshot(Arc::new(snapshot))}
     }
     fn versions(&self,target:SourceTarget)->Option<&raster::contents::Versions> {self.snapshot.rasters.get(&target)}
     pub(super) fn target_versions(&self,target:SourceTarget)->Option<raster::contents::Versions> {self.versions(target).cloned()}
@@ -648,7 +652,7 @@ fn preview_version(packet:FramePacket<'_>,batch:&DabBatch,captured:Option<&Conte
     if style.execution.retouches() {let Some(captured)=captured else {return Ok(None);};inputs.push(captured.clone());}
     if let Some(context)=&style.liquify {
         for source in [&context.current,&context.original] {
-            inputs.push(match paint_definition(source) {Ok(version)=>version,Err(GpuRasterError::NotReady)=>{let Some(captured)=captured else {return Ok(None);};captured.clone()},Err(error)=>return Err(error)});
+            inputs.push(match paint_definition(source) {Ok(version)=>version,Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))=>{let Some(captured)=captured else {return Ok(None);};captured.clone()},Err(error)=>return Err(error)});
         }
         if let Some(field)=&context.field {inputs.push(field.content_version());}
         inputs.push(ContentVersion::derive(recipe(&context.amount.map(f32::to_bits)),&[]));
@@ -856,7 +860,7 @@ impl PreviewDeclaration {
         }).collect::<Result<_,GpuRasterError>>()?;
         let fill=fill.map(|fill| {
             let operation=fill.operation;let definition=operation_version(&operation,inputs.get(&target))?;
-            let coverage=match raster::contents::declared_coverage_versions(&operation.coverage.source) {Ok(versions)=>Some(versions),Err(GpuRasterError::NotReady)=>None,Err(error)=>return Err(error)};
+            let coverage=match raster::contents::declared_coverage_versions(&operation.coverage.source) {Ok(versions)=>Some(versions),Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))=>None,Err(error)=>return Err(error)};
             Ok(PreviewFill {operation,definition,coverage})
         }).transpose()?;
         let mut wetness_before=IdMap::default();let mut first=0;
@@ -1185,7 +1189,7 @@ fn scene_version(scene:&SceneSnapshot,scope:&SceneScope)->Result<ContentVersion,
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
-    use layer_core::{Document, authored::*, raster::{CanonicalName,RasterData,RasterRevision,RasterTile,TileKey}};
+    use layer_core::{Document, authored::*, raster::{CanonicalWriter,RasterData,RasterRevision,RasterTile,TileKey}};
     use crate::test_support::{packet,dab_batch};
 
     pub(in crate::scene::scale) fn cached_len(frame:&Prepared)->usize {frame.memo.lock().unwrap().entries.len()}
@@ -1261,7 +1265,7 @@ pub(super) mod tests {
         assert_eq!(pending.authored(),before.authored());
         comparison.resolve(false).unwrap();
         assert_eq!(pending.matches(&before),Some(true));assert_eq!(pending.identity(),identity);
-        let other=CanonicalName::new(first.content_version());
+        let other=CanonicalWriter::new(first.content_version());
         assert_eq!(other.version().matches(&ContentVersion::derive(99,&[])),None);
     }
 
@@ -1547,7 +1551,7 @@ pub(super) mod tests {
         Arc::get_mut(&mut prepared.snapshot).unwrap().rasters.clear();
         assert_eq!(before.matches(&version(&prepared,&root)),Some(true));assert_eq!(authored,prepared.authored_revision(&root).unwrap());
         assert_eq!(memo,prepared.memo.lock().unwrap().entries.len());assert_eq!(definitions,prepared.authored.lock().unwrap().len());
-        assert!(matches!(prepared.expected(&root,PixelRect::new(256,0,512,256).into(),0,0),Err(GpuRasterError::NotReady)));
+        assert!(matches!(prepared.expected(&root,PixelRect::new(256,0,512,256).into(),0,0),Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
     }
 
     #[test]
@@ -1598,7 +1602,7 @@ pub(super) mod tests {
         style.rendering.accumulation=layer_core::BrushAccumulation::Uniform;
         let mut batch=dab_batch(target,style,layer_core::Rect::from_extent([64;2]));batch.kind=DabBatchKind::Preview;
         let program=declaration(&document,&[batch],&[preview_dab(32.)],None);
-        assert!(matches!(program.authored_version(),Err(GpuRasterError::NotReady)));
+        assert!(matches!(program.authored_version(),Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
         let histories=program.required_seed_inputs();assert!(!histories.is_empty());
         let initial:ContentVersion=layer_core::raster::ContentName::fresh().into();
         let seeds=histories.iter().map(|(plane,coordinate,pass)|PreviewSeed {plane:*plane,coordinate:*coordinate,pass:*pass,versions:vec![initial.clone()],committed:false}).collect();
@@ -1645,7 +1649,7 @@ pub(super) mod tests {
         let mut wet=dab_batch(target,crate::tests::test_style(BrushExecution::Wet),PixelRect::new(0,0,64,64).to_rect());
         wet.kind=DabBatchKind::Preview;wet.stroke_start=false;
         let held=declaration(&document,&[wet],&[preview_dab(32.)],None);
-        assert!(matches!(held.authored_version(),Err(GpuRasterError::NotReady)),"a continuation names no source before its stroke's reservoir is captured");
+        assert!(matches!(held.authored_version(),Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))),"a continuation names no source before its stroke's reservoir is captured");
         assert!(held.with_reservoir_seed(Some(ContentVersion::derive(7,&[]))).authored_version().is_ok());
     }
 
@@ -1678,8 +1682,8 @@ pub(super) mod tests {
         let (document,target)=document();let mut style=layer_render::DabStyle::for_brush(&layer_core::BrushSnapshot::default(),layer_core::StrokeTool::Brush);style.execution=BrushExecution::Clone;style.retouch=Some(Default::default());
         let mut batch=dab_batch(target,style,layer_core::Rect::from_extent([64;2]));batch.kind=DabBatchKind::Preview;
         let program=declaration(&document,&[batch],&[preview_dab(32.)],None);
-        assert!(matches!(program.authored_version(),Err(GpuRasterError::NotReady)));
-        assert!(matches!(program.version(target,RasterPlane::Color,[0;2],PreviewStage::Final),Err(GpuRasterError::NotReady)));
+        assert!(matches!(program.authored_version(),Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
+        assert!(matches!(program.version(target,RasterPlane::Color,[0;2],PreviewStage::Final),Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
         assert!(program.memo.lock().unwrap().is_empty());
         assert!(program.version(target,RasterPlane::Color,[0;2],PreviewStage::Seed).is_ok());
     }
@@ -1724,7 +1728,7 @@ pub(super) mod tests {
         let packet=FramePacket {dab_batches:std::slice::from_ref(&batch),dabs:std::slice::from_ref(&dab),..packet(document.scene(),document.composition().size)};
         let frame=Prepared::from_scene(packet,Declared::default()).expect("pending metadata is target-local preparation data");
         assert!(frame.preview_for(target).is_none());
-        assert!(matches!(frame.expected(&source(target),PixelRect::new(0,0,256,256).into(),0,0),Err(GpuRasterError::NotReady)));
+        assert!(matches!(frame.expected(&source(target),PixelRect::new(0,0,256,256).into(),0,0),Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))));
         assert!(frame.expected(&source(ready),PixelRect::new(0,0,256,256).into(),0,0).is_ok());
         let invalid_batch=DabBatch {first_dab:1,..batch.clone()};
         let invalid=FramePacket {dab_batches:std::slice::from_ref(&invalid_batch),..packet};

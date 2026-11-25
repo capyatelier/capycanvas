@@ -248,17 +248,34 @@ impl PreparationSignal {
     }
 }
 fn submit_ready_frame<R: CanvasRenderer>(renderer: &mut R, packet: FramePacket<'_>, preview: Option<&layer_render::TransformPreview>,
-    draw_start: &mut std::time::Instant, report: &FrameReport) -> std::task::Poll<Result<bool, R::Error>> {
+    draw_start: &mut std::time::Instant, report: &FrameReport) -> std::task::Poll<Result<Option<layer_render::Refusal>, R::Error>> {
     let checking = std::time::Instant::now();
-    let Some(ready) = renderer.ready_submission(packet, preview) else { return std::task::Poll::Pending; };
-    *draw_start += checking.elapsed();
-    let result = renderer.submit_ready(ready, packet);
+    let result = match renderer.submission_turn(packet, preview) {
+        layer_render::SubmissionTurn::Ready(ready) => { *draw_start += checking.elapsed(); renderer.submit_ready(ready, packet).map_err(|error| (None, error)) },
+        layer_render::SubmissionTurn::Held => return std::task::Poll::Pending,
+        layer_render::SubmissionTurn::Refused(refusal, error) => Err((Some(refusal), error)),
+    };
     report.filter_skips.store(renderer.skipped_filter_previews(), Ordering::Release);
     report.filter_refusals.store(renderer.refused_filter_bakes(), Ordering::Release);
     std::task::Poll::Ready(match result {
-        Err(error) if R::is_memory_refusal(&error) => { report.memory_refusals.fetch_add(1, Ordering::AcqRel); Ok(false) }
-        result => result.map(|()| true),
+        Ok(()) => Ok(None),
+        Err((refusal, error)) if R::is_memory_refusal(&error) => Ok(Some(refusal.or_else(|| renderer.take_refused_stroke())
+            .unwrap_or(layer_render::Refusal { stroke: packet.operation(), drawn: 0 }))),
+        Err((_, error)) => Err(error),
     })
+}
+fn submit_frame<R: CanvasRenderer>(renderer: &mut R, frame: &mut Frame, draw_start: &mut std::time::Instant, report: &FrameReport)
+    -> std::task::Poll<Result<Option<layer_render::Refusal>, R::Error>> {
+    loop {
+        match submit_ready_frame(renderer, frame.packet(), frame.transform_preview.as_ref(), draw_start, report) {
+            std::task::Poll::Ready(Ok(Some(refusal))) => match frame.refuse(report, refusal) {
+                std::task::Poll::Ready(true) => {},
+                std::task::Poll::Ready(false) => return std::task::Poll::Ready(Ok(Some(refusal))),
+                std::task::Poll::Pending => return std::task::Poll::Pending,
+            },
+            submitted => return submitted,
+        }
+    }
 }
 fn admit_frame<T, E>(frame: Option<T>, pending: &mut VecDeque<T>, mut draw: impl FnMut(&mut T) -> Result<bool, E>) -> Result<usize, E> {
     let mut admitted = 0;
@@ -374,16 +391,32 @@ struct Frame {
     queued_ns: u64,
 }
 impl Drop for Frame {
-    fn drop(&mut self) {
-        for raster in &self.pending_rasters {
-            if raster.try_data().is_none() {
-                let _ = raster.publish(Err("GPU worker stopped before raster capture".into()));
-            }
-        }
-    }
+    fn drop(&mut self) { self.fail_rasters("GPU worker stopped before raster capture"); }
 }
 impl Frame {
-    fn refused(&self, report: &FrameReport) -> bool { self.memory_refusals != report.memory_refusals.load(Ordering::Acquire) }
+    fn fail_rasters(&mut self, cause: &str) {
+        for raster in self.pending_rasters.drain(..).filter(|raster| raster.try_data().is_none()) {
+            let _ = raster.publish(Err(cause.into()));
+        }
+    }
+    fn withdraw_refused(&mut self, report: &FrameReport) -> bool {
+        let mut refusals = report.refusals.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        refusals.retain(|refusal| refusal.number > self.memory_refusals);
+        let mut withdrew = false;
+        for refusal in refusals.iter_mut().filter(|refusal| refusal.stroke.0 != 0 || refusal.steps) {
+            withdrew |= layer_render::withdraw_stroke(&mut self.batches, &mut self.dabs, refusal.stroke, refusal.drawn != 0);
+            refusal.steps &= !self.commit_rasters;
+        }
+        withdrew && self.batches.is_empty()
+    }
+    fn refuse(&mut self, report: &FrameReport, refusal: layer_render::Refusal) -> std::task::Poll<bool> {
+        let trimmed = layer_render::withdraw_stroke(&mut self.batches, &mut self.dabs, refusal.stroke, refusal.drawn != 0);
+        if !trimmed && refusal.drawn != 0 && !self.batches.is_empty() { return std::task::Poll::Pending; }
+        let retries = trimmed && !self.batches.is_empty();
+        if !retries { self.fail_rasters("Not enough memory to submit the raster edit"); }
+        report.refuse(Refusal { number: 0, stroke: refusal.stroke, drawn: refusal.drawn, steps: !self.commit_rasters });
+        std::task::Poll::Ready(retries)
+    }
     fn waits_for_raster(&self) -> bool {
         self.scene.view().targets().any(|t| self.scene.view().raster(t).is_some_and(|r| r.try_data().is_none()))
     }
@@ -594,11 +627,22 @@ struct FrameReport {
     retouch_miss: std::sync::atomic::AtomicU64,
     retouch_waiting: std::sync::atomic::AtomicU64,
     memory_refusals: std::sync::atomic::AtomicU64,
+    refusals: std::sync::Mutex<Vec<Refusal>>,
     filter_skips: std::sync::atomic::AtomicU64,
     filter_refusals: std::sync::atomic::AtomicU64,
     paper_drawn: std::sync::atomic::AtomicU64,
     showing_drawing: AtomicBool,
     showing_navigator: AtomicBool,
+}
+#[derive(Clone, Copy)]
+struct Refusal { number: u64, stroke: layer_core::StrokeId, drawn: u64, steps: bool }
+impl FrameReport {
+    fn refuse(&self, refusal: Refusal) {
+        let mut refusals = self.refusals.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let number = self.memory_refusals.load(Ordering::Acquire) + 1;
+        refusals.push(Refusal { number, ..refusal });
+        self.memory_refusals.store(number, Ordering::Release);
+    }
 }
 enum Reply {
     LaunchPresented(LaunchRequest),
@@ -686,6 +730,7 @@ pub struct RenderWorker {
     context_seed: EvaluationContext,
     selection_overlays: Arc<layer_core::authored::SelectionOverlays>,
     settling_roots: Vec<layer_core::raster::RasterRevision>,
+    guarded_rasters: Vec<(layer_core::raster::RasterRevision, layer_core::StrokeId)>,
     settling_view: Option<Presentation>,
     memory_refusals: u64,
     pub(super) startup: layer_render_wgpu::StartupProgress,
@@ -986,6 +1031,7 @@ impl RenderWorker {
             launch_requested: None,
             launch_presented: Vec::new(),
             settling_roots: Vec::new(),
+            guarded_rasters: Vec::new(),
             settling_view: None,
             memory_refusals: 0,
             startup: Default::default(),
@@ -1288,12 +1334,23 @@ impl CanvasRenderer for RenderWorker {
             .preflight_image_object_affine(scene,object,affine,view).map_err(|_|BackendError("Image sampling request is unsupported"))
     }
     fn is_memory_refusal(error: &Self::Error) -> bool { *error == MEMORY_REFUSED }
-    fn stroke_memory_refusals(&self) -> u64 { self.memory_refusals }
+    fn take_refused_stroke(&mut self) -> Option<layer_render::Refusal> {
+        let next = self.memory_refusals + 1;
+        let refusals = self.report.refusals.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let refusal = refusals.iter().find(|refusal| refusal.number == next).map(|refusal| layer_render::Refusal { stroke: refusal.stroke, drawn: refusal.drawn })?;
+        drop(refusals);
+        self.memory_refusals = next;
+        if refusal.drawn == 0 && refusal.stroke.0 != 0 {
+            for (raster, _) in self.guarded_rasters.iter().filter(|(raster, closing)| *closing == refusal.stroke && raster.try_data().is_none()) {
+                let _ = raster.publish(Err("Not enough memory to submit the raster edit".into()));
+            }
+        }
+        Some(refusal)
+    }
     fn skipped_filter_previews(&self) -> u64 { self.report.filter_skips.load(Ordering::Acquire) }
     fn refused_filter_bakes(&self) -> u64 { self.report.filter_refusals.load(Ordering::Acquire) }
     fn poll_pending(&mut self, view: ViewState) -> Result<(), Self::Error> {
-        let refusals = self.report.memory_refusals.load(Ordering::Acquire);
-        if std::mem::replace(&mut self.memory_refusals, refusals) != refusals { return Err(MEMORY_REFUSED); }
+        if self.report.memory_refusals.load(Ordering::Acquire) != self.memory_refusals { return Err(MEMORY_REFUSED); }
         if self.has_pending_submission() && let Some(geometry) = self.geometry
             && self.settling_view.as_ref().is_none_or(|old| !old.matches(view, geometry, &self.cursor, self.picker)) {
             let next = Presentation { view, geometry, cursor: self.cursor.clone(), picker: self.picker };
@@ -1630,6 +1687,11 @@ impl CanvasRenderer for RenderWorker {
             None if *self.selection_overlays != layer_core::authored::SelectionOverlays::default() => self.selection_overlays = Arc::default(),
             _ => (),
         }
+        self.guarded_rasters.retain(|(raster, _)| raster.try_data().is_none());
+        let pending_rasters: Vec<_> = packet.scene.targets().filter_map(|target| packet.scene.raster(target))
+            .filter(|raster| packet.commit_rasters && raster.try_data().is_none() && !self.guarded_rasters.iter().any(|(guarded, _)| guarded == *raster)).cloned().collect();
+        let closing = packet.dab_batches.iter().find(|batch| batch.stroke_end).map_or(layer_core::StrokeId(0), |batch| batch.stroke_id);
+        self.guarded_rasters.extend(pending_rasters.iter().map(|raster| (raster.clone(), closing)));
         let input_order = if self.present_frames {
             input_frame_order(&mut self.input_order, packet.dabs.len(), packet.dab_batches.iter().any(|batch| batch.stroke_end))
         } else { 0 };
@@ -1644,8 +1706,7 @@ impl CanvasRenderer for RenderWorker {
             fill_preview: self.fill_preview.clone(),
             fill_reveal: self.fill_reveal,
             selection_overlays: self.selection_overlays.clone(),
-            pending_rasters: packet.scene.targets().filter_map(|target| packet.scene.raster(target))
-                .filter(|r| packet.commit_rasters && r.try_data().is_none()).cloned().collect(),
+            pending_rasters,
             memory_refusals: self.memory_refusals,
             dabs: packet.dabs.to_vec(),
             batches: packet.dab_batches.to_vec(),
@@ -1921,7 +1982,12 @@ impl Worker {
                 }
             }
             if self.initial_completion.is_none() && self.renderer.has_pending_submission() && let Some(view) = self.last_view {
-                self.renderer.poll_pending(view).map_err(error)?;
+                match self.renderer.poll_pending(view) {
+                    Err(refused) if WgpuRasterizer::is_memory_refusal(&refused) => while let Some(refusal) = self.renderer.take_refused_stroke() {
+                        report.refuse(Refusal { number: 0, stroke: refusal.stroke, drawn: refusal.drawn, steps: false });
+                    },
+                    result => result.map_err(error)?,
+                }
                 if !self.renderer.has_pending_submission() {
                     self.pending_present |= self.presenter.needs_present(&self.renderer, view, self.surround);
                 }
@@ -2526,7 +2592,7 @@ impl Worker {
         report: &FrameReport,
         #[cfg(test)] timing: &mut crate::timing::Timing,
     ) -> Result<bool, String> {
-        if frame.refused(report) { return Ok(true); }
+        if frame.withdraw_refused(report) { return Ok(true); }
         if self.initial_completion.is_some() || !startup.canvas_ready
             || !self.renderer.can_submit() || !frame.dabs.is_empty() && !startup.brush_ready
             || frame.waits_for_raster() && !self.renderer.raster_ready() {
@@ -2642,9 +2708,9 @@ impl Worker {
         self.renderer.set_fill_preview(frame.fill_preview.clone());
         self.renderer.set_transform_preview(frame.transform_preview.as_ref()).map_err(error)?;
         self.renderer.set_fill_reveal(frame.fill_reveal);
-        match submit_ready_frame(&mut self.renderer, frame.packet(), frame.transform_preview.as_ref(), &mut draw_start, report) {
+        match submit_frame(&mut self.renderer, frame, &mut draw_start, report) {
             std::task::Poll::Pending => return Ok(false),
-            std::task::Poll::Ready(result) => if !result.map_err(error)? {
+            std::task::Poll::Ready(result) => if result.map_err(error)?.is_some() {
                 wake_canvas(&self.area, &self.presented_chrome);
                 return Ok(true);
             },

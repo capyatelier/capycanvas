@@ -438,10 +438,10 @@ fn whole_image_selections_reserve_one_transform_input_pyramid() {
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         let result = transforms.prepare_preview(&mut r, &mut encoder, &preview, doc.scene(), plan.level, false);
         if kept {
-            assert!(matches!(result, Err(GpuRasterError::NotReady | GpuRasterError::SourceWorkingSetExceeded)) && r.test.source_captures.get() == 0,
+            assert!(matches!(result, Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_) | GpuRasterError::SourceWorkingSetExceeded)) && r.test.source_captures.get() == 0,
                 "{label}: a partial selection needs a second input pyramid: {result:?}");
         } else {
-            assert!(matches!(result, Ok(()) | Err(GpuRasterError::NotReady)) && r.test.source_captures.get() == 1,
+            assert!(matches!(result, Ok(()) | Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))) && r.test.source_captures.get() == 1,
                 "{label}: one input pyramid must admit an entire-image preview: {result:?}");
         }
     }
