@@ -1106,8 +1106,9 @@ impl Cache {
         let stroking=!packet.dab_batches.is_empty();
         let from=self.pointer;
         if view && let Some(centre)=dab_centre(packet) {self.pointer=Some(centre);}
-        let reached=if self.gesture.is_some() {self.contact_continues(scene,r,packet,encoder)}else {None};
-        if self.gesture.is_some() && reached.is_none() {
+        let holding=self.gesture.is_some();
+        let reached=if holding {self.contact_continues(scene,r,packet,encoder)}else {None};
+        if holding && reached.is_none() {
             self.end_held_frame(r,packet)?;self.end_contact(encoder);self.commit_window(r,encoder)?;
         }
         self.contact=stroking;
@@ -1117,7 +1118,7 @@ impl Cache {
         if let Some(reached)=reached.filter(|_|live) && !self.grow_contact(scene,r,packet,encoder,*retained,budget,&reached,from)? {
             self.end_held_frame(r,packet)?;self.end_contact(encoder);self.commit_window(r,encoder)?;
         }
-        if view && self.gesture.is_none() && stroking {self.begin_contact(scene,r,packet,encoder,*retained,budget)?;}
+        if view && !holding && stroking {self.begin_contact(scene,r,packet,encoder,*retained,budget)?;}
         let live=self.gesture.is_some();
         let lane=if view && stroking && !live {self.lane_cells(packet)}else {Vec::new()};
         if !lane.is_empty() {
@@ -1336,6 +1337,7 @@ impl Cache {
         if !self.cohort.is_empty() && self.coverage_complete() {self.cohort=Default::default();}
         if view && !live && !stroking {self.pivot_pending=self.pivot_inputs_pending(scene,r,packet);}
         if view && live && self.ends_contact(packet) {self.end_contact(encoder);}
+        else if view && holding && !live && stroking {self.begin_contact(scene,r,packet,encoder,*retained,budget)?;}
         self.project_above(scene,r,packet,encoder,commands)?;
         for region in &composed {
             let [_, _, width, height] = paint_transform::texel_rect(region.window_local(output_bounds), side);
