@@ -31,7 +31,8 @@ fn photo_document(extent:[u32;2])->layer_core::Document {
 
 impl Fit {
     fn new(document:layer_core::Document)->Self {
-        let renderer=crate::memory::memory_tests::legacy_scene_renderer(document.composition().color);
+        let mut renderer=crate::memory::memory_tests::legacy_scene_renderer(document.composition().color);
+        renderer.set_preparation_wake(Arc::new(||{}));
         let presenter=crate::test_support::float_presenter(&renderer);
         let (_texture,target)=create_target(&renderer.device,[2400,1600],wgpu::TextureFormat::Rgba32Float,"reduced settle target");
         let working=document.working.occurrence;

@@ -301,6 +301,24 @@ mod tests {
         r.device.poll_binding().retire_lost(|| {});
         assert_eq!(UnitWait::Parked(need).observe(&r), Turn::Dormant, "a retired release service granted a parked unit an attempt no released room backs");
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_frame_held_on_its_document_pipelines_sleeps_on_their_compile_and_asks_for_work_when_they_finish() {
+        let document = layer_core::Document::new(layer_core::PortableId::random(), 512, 512, layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+        let mut r = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        let (signal, woken) = std::sync::mpsc::channel();
+        r.set_preparation_wake(Arc::new(move || { let _ = signal.send(()); }));
+        let packet = crate::test_support::packet(document.scene(), [512; 2]);
+        let paused = r.compilation.batch();
+        assert!(matches!(layer_render::CanvasRenderer::submission_turn(&mut r, packet, None), layer_render::SubmissionTurn::Held), "a fresh renderer holds its first frame for its pipelines");
+        assert!(r.outstanding_terms().contains(&("held frame", Outstanding::Blocked(Input::Compile))), "the held frame sleeps on the compile it waits for: {:?}", r.outstanding_terms());
+        drop(paused);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while r.frame_demand() != FrameDemand::Work {
+            assert!(woken.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).is_ok(), "the compile that held the frame never asked for it again: {:?}", r.outstanding_terms());
+        }
+        assert!(matches!(layer_render::CanvasRenderer::submission_turn(&mut r, packet, None), layer_render::SubmissionTurn::Ready(_)), "the frame enters once its pipelines compile");
+    }
     #[test]
     fn a_reply_whose_producer_leaves_without_sending_has_arrived_as_a_disconnect() {
         let (tx, delivery) = Delivery::<u32>::channel(&Default::default());

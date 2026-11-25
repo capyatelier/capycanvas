@@ -445,9 +445,11 @@ impl WgpuRasterizer {
     fn scene_scale_pipelines(&self,scene:SceneView<'_>)->impl Iterator<Item=&Deferred<wgpu::ComputePipeline>> {
         self.scene_pipelines.scale_pipelines(self.display_precision(scene).format())
     }
+    pub(super) fn scene_scale_recipes(&self,scene:SceneView<'_>)->impl Iterator<Item=&Deferred<wgpu::ComputePipeline>> {
+        self.scene_scale_pipelines(scene).chain([&self.scene_pipelines.constant.2,&self.recipes.display.reduce,&self.recipes.display.fused_reduce])
+    }
     pub(super) fn scene_scale_ready(&self,scene:SceneView<'_>) -> bool {
-        self.compilation.require(self.scene_scale_pipelines(scene).chain([
-            &self.scene_pipelines.constant.2,&self.recipes.display.reduce,&self.recipes.display.fused_reduce]), DOCUMENT)
+        self.compilation.require(self.scene_scale_recipes(scene), DOCUMENT)
     }
 
     pub fn shader_input(&self) {

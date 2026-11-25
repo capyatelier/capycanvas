@@ -4582,16 +4582,20 @@ impl WgpuRasterizer {
             required.render.push(self.layer_masks.initialize.clone());
             required.compute.extend(self.selection_clip.pipelines().into_iter().cloned());
         }
-        let transforms_ready = required.require(&self.compilation,startup::BRUSH);
-        let scene_ready = self.compilation.require(self.scene_pipelines.for_scene(self,packet.scene,packet.dab_batches), startup::DOCUMENT)
-            & self.compilation.require([&self.scene_pipelines.fold.pipeline], startup::DOCUMENT);
-        let fill_ready=if let Some(fill)=self.fill_preview.clone() {
+        if let Some(fill)=&self.fill_preview {
             let pipeline=scene::operation_pipeline(&fill.operation.kind).unwrap_or(0);
-            self.compilation.require([&self.scene_pipelines.pipeline[pipeline],&self.layer_masks.initialize],startup::BRUSH)
-                & self.compilation.require(self.selection_clip.pipelines(),startup::BRUSH)
-        }else{true};
-        let prepared=fill_ready && transforms_ready && scene_ready && self.scene_scale_ready(packet.scene) && self.startup.as_ref().is_none_or(|s| s.document.ready() && s.current.ready());
-        let held=if prepared {self.brush_batches_wait(packet)} else {None};
+            required.render.extend([self.scene_pipelines.pipeline[pipeline].clone(),self.layer_masks.initialize.clone()]);
+            required.compute.extend(self.selection_clip.pipelines().into_iter().cloned());
+        }
+        let compiled=required.require(&self.compilation,startup::BRUSH)
+            & self.compilation.require(self.scene_pipelines.for_scene(self,packet.scene,packet.dab_batches), startup::DOCUMENT)
+            & self.compilation.require(self.scene_scale_recipes(packet.scene).chain([&self.scene_pipelines.fold.pipeline]), startup::DOCUMENT);
+        let prepared=compiled && self.startup.as_ref().is_none_or(|s| s.document.ready() && s.current.ready());
+        let held=if !compiled {
+            required.render.extend(self.scene_pipelines.for_scene(self,packet.scene,packet.dab_batches).cloned());
+            required.compute.extend(self.scene_scale_recipes(packet.scene).chain([&self.scene_pipelines.fold.pipeline]).cloned());
+            Some(frame_demand::UnitWait::input(frame_demand::Producer::Compile(Arc::new(required))))
+        } else if prepared {self.brush_batches_wait(packet)} else {None};
         let ready=prepared && held.is_none()
             && self.prepare_raster_restores(packet) && self.bake_analyses_ready(packet) && self.retouch_analyses_ready(packet) && self.retouch_references_ready(packet)
             && self.bake_vectors_ready(packet) && self.prepare_bakes(packet) && self.prepare_fill_edges(packet) && self.prepare_operation_masks(packet) && self.prepare_transform_cancel(packet) && self.prepare_transform_preview(packet,preview);
