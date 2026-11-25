@@ -63,11 +63,9 @@ fn a_ready_parent_commits_before_unrelated_cold_source_preparation_spends_its_fr
         let input=attempt.cache.pages.lock().unwrap().get(&key,middle,pages::Accuracy::Display,key.level,crate::residency::Class::Visible).expect("unrelated gathering cannot invalidate the isolated ready inputs");
         assert!(Arc::ptr_eq(input.image(),ready[index].image()));
     }
-    let coverage=attempt.cache.coverage_snapshot();
-    assert!(coverage.ready(middle,pages::Accuracy::Display),"the already ready nearest parent must commit before unrelated cold gathering consumes its frame");
-    for x in [0,1,3,4] {assert!(!coverage.ready(PixelRect::new(x*512,0,(x+1)*512,512),pages::Accuracy::Display));}
-    let key=attempt.cache.page_key(attempt.cache.graph.root.clone().unwrap(),middle);
-    let image=attempt.cache.pages.lock().unwrap().get(&key,middle,pages::Accuracy::Display,key.level,crate::residency::Class::Visible).unwrap();
+    let shown=attempt.cache.shown_cells();
+    assert!(shown.iter().all(|(coordinate,shown)|shown.is_some()==(*coordinate==[2,0])),"the already ready nearest parent must commit before unrelated cold gathering consumes its frame: {shown:?}");
+    let image=attempt.cache.pixels.root().unwrap();let width=image.texture.width() as usize;
     let actual=pixels(&attempt.r,&image.texture);let alpha=193./255.;
     let rgb=layer_core::color::RgbSpace::Srgb;
     for [x,y] in [[0,0],[128,128],[255,255]] {
@@ -82,7 +80,7 @@ fn a_ready_parent_commits_before_unrelated_cold_source_preparation_spends_its_fr
             for c in 0..4 {expected[c]=source[c]+expected[c]*(1.-alpha);}
         }
         let expected=committed_color(image.texture.format(),expected);
-        assert!(crate::test_support::max_error(&[actual[(y*256+x) as usize]],&[expected])<2e-5,"ready parent pixels must contain all28 real source inputs");
+        assert!(crate::test_support::max_error(&[actual[y as usize*width+512+x as usize]],&[expected])<2e-5,"ready parent pixels must contain all28 real source inputs");
     }
     attempt.r.scale_display=Some(attempt.cache);attempt.r.scene=Some(attempt.scene);
     let mut presenter=crate::test_support::float_presenter(&attempt.r);
@@ -299,8 +297,8 @@ impl Attempt {
         let mut r=if staged {crate::test_support::staged_renderer(&reference,doc.composition().color)}else{reference};
         pollster::block_on(r.compilation.prepare_all([r.scene_pipelines.source.for_format(wgpu::TextureFormat::Rgba8Unorm)])).unwrap();
         pollster::block_on(r.compilation.prepare_all(r.scene_pipelines.for_scene(&r,doc.scene(),&[]))).unwrap();
-        pollster::block_on(r.compilation.prepare_all([&r.scene_pipelines.constant.2,&r.scene_pipelines.fold.pipeline,&r.scene_pipelines.scale.full.reduce,
-            &r.scene_pipelines.scale.output(r.display_precision(doc.scene()).format()).reduce_pair])).unwrap();
+        pollster::block_on(r.compilation.prepare_all([&r.scene_pipelines.constant.2,&r.scene_pipelines.fold.pipeline].into_iter()
+            .chain(r.scene_pipelines.scale.display(r.display_precision(doc.scene()).format())))).unwrap();
         r.ensure_document_metadata(extent,doc.scene()).unwrap();
         working_scene_frame(&mut r,frame(&doc,level));
         if let Some(region)=ready {
