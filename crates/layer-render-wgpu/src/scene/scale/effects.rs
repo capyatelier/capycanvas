@@ -145,17 +145,17 @@ impl Evaluator<'_> {
         let previous = self.scene.images.doc_bounds;
         self.scene.images.doc_bounds = previous.translated(origin.map(|v| -v));
         let display = std::mem::replace(&mut self.scene.placement_display, false);
-        let result = (|| {
+        let result = self.accepted.translated(origin, |accepted| {
             for tile in regions.iter().flat_map(|region| page_coordinates(*region)) {
                 let covered = regions.iter().fold(PixelRect::EMPTY, |bounds, region| bounds.union(page_rect(tile).intersect(*region))).intersect(plan.bounds);
                 if covered.is_empty() { continue; }
-                match self.scene.capture_prepared_tile_jobs(self.r, packet, &destination, tile, covered, scene::Output::EffectComposite(handle), initialized.as_ref(), self.accepted) {
+                match self.scene.capture_prepared_tile_jobs(self.r, packet, &destination, tile, covered, scene::Output::EffectComposite(handle), initialized.as_ref(), accepted) {
                     Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished) => self.unit.waiting = true,
                     result => result?,
                 }
             }
             Ok(())
-        })();
+        });
         self.scene.images.doc_bounds = previous;
         self.scene.placement_display = display;
         result

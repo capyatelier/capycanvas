@@ -192,6 +192,7 @@ fn filters_its_far_edge_like_its_origin(id: &str, key: &str, values: [f32; 2], t
             let context = format!("{id} {key}={value} at {scale}");
             let near = displayed(&mut engine, next(), *scale, pages[0], &context);
             let far = displayed(&mut engine, next(), *scale, pages[1], &context);
+            assert!(near.iter().any(|pixel| pixel[3] > 0.01), "{context} must show the paint");
             assert!(crate::test_support::max_error(&near, before) > 0.01, "{context} must change the picture");
             let error = crate::test_support::max_error(&near, &far);
             assert!(error <= tolerance, "{context}: the far edge differs from the same paint near the origin by {error}");

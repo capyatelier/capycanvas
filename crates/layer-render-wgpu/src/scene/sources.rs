@@ -239,6 +239,10 @@ impl PlacementSet {
         }
         other.overrides.into_iter().try_for_each(|(id,placement)|self.insert(id,placement))
     }
+    fn translated(&self,origin:[i64;2])->Self {
+        let view=|placements:&Placements|placements.iter().map(|(id,placement)|(*id,placement.material_view(origin))).collect::<Placements>();
+        Self {frame:Arc::new(view(&self.frame)),overrides:view(&self.overrides)}
+    }
     fn retain(&mut self,kept:&Self) {
         self.overrides.retain(|id,_|kept.get(id).is_some());
         if !Arc::ptr_eq(&self.frame,&kept.frame) {self.frame=Arc::new(self.frame.iter().filter(|(id,_)|kept.get(id).is_some()).map(|(id,placement)|(*id,placement.clone())).collect());}
@@ -894,6 +898,15 @@ impl AcceptedInputs {
     pub(in crate::scene) fn placement(&self,target:SourceTarget)->Result<Arc<super::placement::Placement>,GpuRasterError> {
         self.declaring.as_ref().map_or(&self.placements,|declaring|&declaring.0.placements).get(&target).cloned()
             .ok_or(GpuRasterError::Invariant("accepted source placement is missing"))
+    }
+    fn placements_mut(&mut self)->&mut PlacementSet {self.declaring.as_deref_mut().map_or(&mut self.placements,|declaring|&mut declaring.0.placements)}
+    pub(in crate::scene) fn translated<T>(&mut self,origin:[i64;2],evaluate:impl FnOnce(&mut Self)->T)->T {
+        if origin==[0;2] {return evaluate(self);}
+        let held=std::mem::take(self.placements_mut());
+        *self.placements_mut()=held.translated(origin);
+        let value=evaluate(self);
+        *self.placements_mut()=held;
+        value
     }
     pub(crate) fn extend(&mut self,other:Self)->Result<(),GpuRasterError> {
         merge_unit(&mut self.unit,other.unit)?;
