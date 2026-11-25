@@ -3437,7 +3437,7 @@ mod tests {
         for cancel in [false, true] {
             let (mut input, mut engine) = engine("momentum correction", 256, 128);
             let mut brush = default_brush(DefaultBrushPreset::LiquifyPush);
-            brush.diameter = 64.; brush.deform.momentum = 1.;
+            brush.diameter = 64.; brush.deform.momentum = 1.; brush.stabilization.strength = 0.03;
             engine.set_brush(brush).unwrap();
             engine.settings.instant_feedback.enabled = false;
             input.push(event(1, PenPhase::Down, 32.)).unwrap();
@@ -7356,7 +7356,7 @@ mod tests {
         let (mut input, mut engine) = engine("recorded curve tail", 8192, 8192);
         let mut brush = default_brush(DefaultBrushPreset::GPen);
         brush.diameter = 8.;
-        brush.stabilization.strength = 1.;
+        brush.stabilization.strength = 0.5;
         engine.set_brush(brush).unwrap();
         let mut start = 0;
         let mut last_time = 0;

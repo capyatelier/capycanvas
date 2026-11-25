@@ -1,6 +1,6 @@
 use layer_core::{BrushStabilization, Point, StrokePoint};
 
-const MAX_TIME_SECONDS: f64 = 0.1;
+const MAX_TIME_SECONDS: f64 = 0.2;
 const INTERVAL_RESPONSE_SECONDS: f64 = 0.015;
 
 mod curve;

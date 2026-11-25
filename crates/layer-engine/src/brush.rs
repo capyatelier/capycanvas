@@ -2115,12 +2115,12 @@ mod tests {
 
     #[test]
     fn smoothed_width_changes_where_the_pen_eased_off_and_narrows_to_the_end() {
-        for strength in [0.06, 0.38, 1.] {
+        for strength in [0.06, 0.19, 1.] {
             let (points, dabs) = flick(&easing_off(0.056), strength);
             let width = |x: f32| dabs.iter().filter(|dab| (dab.center.x - x).abs() < 3.5).map(|dab| dab.radii[0] * 2.).fold(f32::NAN, f32::max);
             let half = points.iter().find(|point| point.pressure < 0.55).unwrap();
             let expected = 18. * (0.01 + 0.99 * half.pressure.powf(1.2));
-            assert!(strength > 0.38 || (width(half.position.x) - expected).abs() < 2., "strength {strength}: {} px where the pen drew {expected} px", width(half.position.x));
+            assert!(strength > 0.19 || (width(half.position.x) - expected).abs() < 2., "strength {strength}: {} px where the pen drew {expected} px", width(half.position.x));
             let tail: Vec<_> = dabs.iter().filter(|dab| dab.center.x > 455.).map(|dab| dab.radii[0] * 2.).collect();
             assert!(tail.windows(2).all(|pair| pair[1] <= pair[0] + 1e-4), "strength {strength}: {tail:?}");
             assert!(*tail.last().unwrap() < 0.1 * 18., "strength {strength}: {tail:?}");
@@ -2376,7 +2376,8 @@ mod tests {
 
     #[test]
     fn a_held_fan_spreads_with_pressure_and_rolls_through_short_arcs() {
-        let (brush, mut generator) = bristle_generator(true);
+        let (mut brush, mut generator) = bristle_generator(true);
+        brush.stabilization.strength = 0.03;
         let mut dabs = Vec::new();
         let mut light = point(0., 0.05, 0);
         light.twist = 0.02;
