@@ -632,12 +632,11 @@ fn source_coarse_level(plan: display_mips::Plan) -> u32 {
     display_mips::Plan::new(plan.extent).map_or(8, |p| p.level).max(plan.level + 2)
 }
 
-fn dab_reach(packet:FramePacket<'_>,extent:[u32;2])->impl Iterator<Item=PixelRect>+'_ {
+fn dab_reach(packet:FramePacket<'_>)->impl Iterator<Item=DocRect>+'_ {
     packet.dab_batches.iter().map(move|batch| {
         let offset=packet.scene.target_offset(batch.target).map(|value|value as f64);
-        let clamp=|value:f64,axis:usize|value.clamp(0.,f64::from(extent[axis])) as u32;
-        PixelRect::new(clamp((batch.damage.min.x as f64+offset[0]).floor(),0),clamp((batch.damage.min.y as f64+offset[1]).floor(),1),
-            clamp((batch.damage.max.x as f64+offset[0]).ceil(),0),clamp((batch.damage.max.y as f64+offset[1]).ceil(),1))
+        let at=|value:f32,axis:usize,round:fn(f64)->f64|round(f64::from(value)+offset[axis]) as i64;
+        DocRect {min:[at(batch.damage.min.x,0,f64::floor),at(batch.damage.min.y,1,f64::floor)],max:[at(batch.damage.max.x,0,f64::ceil),at(batch.damage.max.y,1,f64::ceil)]}
     }).filter(|reach|!reach.is_empty())
 }
 

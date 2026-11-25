@@ -135,17 +135,16 @@ fn reductions<'a>(source:&'a sources::Source,r:&'a WgpuRasterizer,target:SourceT
     let valid=PixelRect::full(source.valid_extent(level));
     tiles.iter().map(move |tile|(source.key(r,target,level,tile.map(|value|value>>level)),page_rect(*tile).intersect(valid),*tile)).filter(|(_,region,_)|!region.is_empty())
 }
-fn native_tiles(area:PixelRect,phase:[u32;2],extent:[u32;2])->impl Iterator<Item=[u32;2]> {
-    page_coordinates(DocRect::from(area).translated(phase.map(|by|-i64::from(by))).in_frame(extent))
+fn native_tiles(area:DocRect,phase:[u32;2],extent:[u32;2])->impl Iterator<Item=[u32;2]> {
+    page_coordinates(area.translated(phase.map(|by|-i64::from(by))).in_frame(extent))
 }
 fn members(wet:bool,tiles:impl Iterator<Item=[u32;2]>)->BTreeSet<[u32;2]> {
     if wet {tiles.flat_map(crate::scene::watercolor_stencil).flatten().collect()}else {tiles.collect()}
 }
-fn swept(reach:PixelRect,[dx,dy]:[f32;2],stride:u32)->impl Iterator<Item=PixelRect> {
+fn swept(reach:DocRect,[dx,dy]:[f32;2],stride:u32)->impl Iterator<Item=DocRect> {
     let steps=(dx.abs().max(dy.abs())/stride as f32).ceil() as u32;
-    (0..=steps).map(move|step|{let t=step as f32/steps.max(1) as f32;let [x,y]=[(dx*t).round() as i64,(dy*t).round() as i64];
-        let shift=|value:u32,by:i64|(i64::from(value)+by).clamp(0,i64::from(u32::MAX)) as u32;
-        PixelRect::new(shift(reach.min_x(),x),shift(reach.min_y(),y),shift(reach.max_x(),x),shift(reach.max_y(),y))})
+    (0..=steps).map(move|step|{let t=step as f32/steps.max(1) as f32;let by=[(dx*t).round() as i64,(dy*t).round() as i64];
+        DocRect {min:[0,1].map(|axis|reach.min[axis].saturating_add(by[axis])),max:[0,1].map(|axis|reach.max[axis].saturating_add(by[axis]))}})
 }
 fn request_ahead(r:&mut WgpuRasterizer,scene:SceneView<'_>,frame:&Arc<SignatureFrame>,encoder:&mut submission::CommandEncoder,target:SourceTarget,phase:[u32;2],
     tiles:impl Iterator<Item=[u32;2]>,
@@ -154,7 +153,7 @@ fn request_ahead(r:&mut WgpuRasterizer,scene:SceneView<'_>,frame:&Arc<SignatureF
     let read=members(wet,tiles);
     if read.is_empty() {return;}
     let declared=crate::scene::sources::declare(Default::default(),crate::scene::sources::Declaration::scene(frame.clone(),Some(encoder.submission())),|accepted| {
-        for tile in read.into_iter().flat_map(|tile|native_tiles(page_rect(tile),phase,extent)) {
+        for tile in read.into_iter().flat_map(|tile|native_tiles(page_rect(tile).into(),phase,extent)) {
             accepted.color(r,scene,target,tile)?;
             if wet {accepted.scalar(r,scene,target,layer_core::raster::RasterPlane::WatercolorWetness,tile)?;}
         }
@@ -219,13 +218,12 @@ impl Cache {
     pub(super) fn holds_advanced_frame(&self)->bool {self.gesture.as_ref().is_some_and(|contact|contact.exit.get().is_none() && contact.diverged)}
     pub(super) fn stroke_scope(&self,packet:FramePacket<'_>,touched:&[PixelRect],from:Option<[f32;2]>)->Vec<PixelRect> {
         let (level,extent,bounds)=(self.plan.level,self.plan.extent,self.plan.bounds);let span=PAGE_SIZE<<level;
-        let near=|reach:PixelRect|PixelRect::new(reach.min_x().saturating_sub(span),reach.min_y().saturating_sub(span),
-            reach.max_x().saturating_add(span),reach.max_y().saturating_add(span)).intersect(bounds);
-        let back=|reach:PixelRect|{
-            let centre=[(reach.min_x()+reach.max_x()) as f32*0.5,(reach.min_y()+reach.max_y()) as f32*0.5];
+        let near=|reach:DocRect|reach.expand(span).in_frame(extent).intersect(bounds);
+        let back=|reach:DocRect|{
+            let centre=[0,1].map(|axis|(reach.min[axis] as f32+reach.max[axis] as f32)*0.5);
             swept(reach,from.map_or([0.;2],|[x,y]|[x-centre[0],y-centre[1]]),span)
         };
-        let coordinates:BTreeSet<[u32;2]>=dab_reach(packet,extent).flat_map(back).map(near).chain(touched.iter().map(|cell|cell.intersect(bounds)))
+        let coordinates:BTreeSet<[u32;2]>=dab_reach(packet).flat_map(back).map(near).chain(touched.iter().map(|cell|cell.intersect(bounds)))
             .flat_map(|reach|pages::coordinates(reach,level)).collect();
         coordinates.into_iter().map(|coordinate|pages::bounds(coordinate,level,extent)).collect()
     }
@@ -233,7 +231,7 @@ impl Cache {
         let Some(source)=scene.scale_sources.entries.get(&target) else {return BTreeSet::new();};
         let heading=self.pointer.zip(from).map_or([0.;2],|(now,from)|[now[0]-from[0],now[1]-from[1]]);
         let placed=source_frame(Some(&scene.scale_sources),view,target);
-        let tiles=source.damage.regions.iter().flat_map(|damage|swept(*damage,heading,PAGE_SIZE))
+        let tiles=source.damage.regions.iter().flat_map(|damage|swept((*damage).into(),heading,PAGE_SIZE))
             .flat_map(|damage|native_tiles(damage,source.phase,source.extent)).flat_map(|tile|phased_tiles(tile,source.phase));
         let mut lead=members(wet,tiles);
         lead.retain(|tile| {
@@ -245,7 +243,7 @@ impl Cache {
     pub(super) fn dab_cells(&self,packet:FramePacket<'_>)->Vec<PixelRect> {
         if stroke(packet).is_none() {return Vec::new();}
         let (level,extent,bounds)=(self.plan.level,self.plan.extent,self.plan.bounds);
-        dab_reach(packet,extent).flat_map(|reach|pages::coordinates(reach.intersect(bounds),level)).collect::<BTreeSet<_>>()
+        dab_reach(packet).flat_map(|reach|pages::coordinates(reach.in_frame(extent).intersect(bounds),level)).collect::<BTreeSet<_>>()
             .into_iter().map(|coordinate|pages::bounds(coordinate,level,extent)).collect()
     }
     pub(super) fn contact_composes(&self)->Vec<PixelRect> {
