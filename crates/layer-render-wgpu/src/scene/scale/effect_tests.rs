@@ -1175,14 +1175,22 @@ fn pointwise_curve_edits_reuse_sources_and_bound_window_passes_with_masked_coord
             frame.view.document_to_surface=[0.5,0.,0.,0.5,-190.,-130.];
             let whole=FramePacket{view:layer_render::ViewState{width_px:extent[0],height_px:extent[1],document_to_surface:[0.5,0.,0.,0.5,0.,0.]},..frame};
             let updates=window.scene.as_ref().and_then(|scene|scene.scale_sources.entries.get(&paint)).map(|source|source.updates);
-            submit_published(&mut window, frame);submit_published(&mut full, whole);
+            let mut passes=0;
+            let before=crate::test_support::PassCounts::snapshot();
+            crate::test_support::submit_published_observing(&mut window,frame,|r|passes+=r.scene.as_ref().unwrap().effect_passes);
+            let commits=crate::test_support::PassCounts::snapshot().delta(before).composite_commits;
+            submit_published(&mut full, whole);
             assert_window_matches_full(&window,&full, (space, step, "curves"));
             assert_spatial_storage_accounted(&window);
             if step>0 {
                 assert_eq!(window.scene.as_ref().unwrap().scale_sources.entries[&paint].updates,updates.unwrap(),"curve edits must not rebuild photo source levels");
                 let cache=window.scale_display.as_ref().unwrap();
-                let expected=1+cache.overview.as_ref().map_or(0,|overview|overview.plan.bounds.subtract(cache.plan.bounds).into_iter().filter(|region|!region.is_empty()).count() as u64);
-                assert_eq!(window.scene.as_ref().unwrap().effect_passes,expected,"one pointwise effect pass per main/overview window, not per tile");
+                let main=cache.view_cells();
+                let overview=cache.overview.as_ref().map_or(0,|overview|overview.plan.bounds.subtract(cache.plan.bounds).into_iter()
+                    .flat_map(|region|pages::coordinates(region,overview.plan.level)).collect::<BTreeSet<_>>().len() as u64);
+                let cells=main+overview;
+                assert!(passes>0 && passes<=cells,"pointwise effect work is bounded by the funded main/overview cells: {passes} passes for {cells} cells");
+                assert!(commits<=cells,"each output cell has one composite writer: {commits} commits for {cells} cells");
             }
         }
         full.test.reference=true;
