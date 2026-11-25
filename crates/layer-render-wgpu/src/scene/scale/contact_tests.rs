@@ -689,6 +689,7 @@ fn a_stroke_started_before_its_halves_exist_enters_contact_within_its_half_units
     for r in [&mut r,&mut twin] {crate::test_support::submit_settled(r,frame);}
     let cache=r.scale_display.as_ref().unwrap();
     let cell=pages::bounds([0,0],cache.plan.level,extent);
+    evict_composite_pages(cache,&[cell]);
     assert!(cache.pivot_missing(cell),"the stroke starts before its cell has halves");
     let bound=cache.pivot_halves().len()*pages::coordinates(cell,0).count()+2;
     let mut entered=None;

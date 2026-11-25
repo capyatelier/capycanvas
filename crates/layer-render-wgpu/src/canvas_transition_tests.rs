@@ -54,14 +54,10 @@ fn retained_fade_preserves_pending_refinement_and_accepts_camera_and_paint() {
         ..packet(document.scene(), extent)
     };
     let idle = FramePacket { composite_all: false, ..frame };
-    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
-    let mut first = true;
-    while !r.showing_drawing() || !r.showing_navigator() || !refining(&r) {
-        submit_ready(&mut r, if first { frame } else { idle }).unwrap();
-        first = false;
-        r.wait_idle().unwrap();
-        assert!(std::time::Instant::now() < deadline, "the source-backed drawing must expose a meaningful partial result");
-    }
+    submit_settled(&mut r, frame);
+    assert!(r.showing_drawing() && r.showing_navigator());
+    crate::scene::scale::tests::evict_view(&r);
+    assert!(refining(&r), "evicted coverage leaves refinement pending");
     let submissions = r.metrics.submissions;
     let preparation = r.preparation_progress();
     let damage = r.document_damage.clone();
