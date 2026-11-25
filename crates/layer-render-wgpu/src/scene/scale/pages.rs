@@ -2904,7 +2904,7 @@ pub(super) mod query_tests {
     }
 
     #[test]
-    fn a_stroke_across_two_cells_streams_the_halves_of_one_while_its_sources_wait() {
+    fn a_stroke_across_two_cells_owes_both_while_their_sources_wait_and_draws_them_like_a_twin_once_they_arrive() {
         use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey};
         let extent=[2048,1024];
         let mut artwork=layer_core::Document::new(layer_core::PortableId::random(),extent[0],extent[1],
@@ -2928,15 +2928,49 @@ pub(super) mod query_tests {
         crate::test_support::submit_ready(&mut r,frame).unwrap();r.wait_idle().unwrap();
         let style=crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::GPen);
         let dabs=[[300.,300.],[1500.,700.]].map(|centre|crate::tests::test_dab(centre,[0.9,0.1,0.3,1.],0.8));
-        let batch=|index:usize,kind|layer_render::DabBatch {kind,first_dab:index as u32,stroke_start:index==0,stroke_end:false,
+        let batch=|index:usize,kind,start,end|layer_render::DabBatch {kind,first_dab:index as u32,stroke_start:start,stroke_end:end,
             ..crate::test_support::dab_batch(target,style.clone(),dabs[index].bounds())};
-        let batches=[batch(0,layer_render::DabBatchKind::Persistent),batch(1,layer_render::DabBatchKind::Preview)];
-        crate::test_support::submit_ready(&mut r,FramePacket {dabs:&dabs,dab_batches:&batches,..frame}).unwrap();
-        let cache=r.scale_display.as_ref().unwrap();
-        let parent=cache.page_key(cache.graph.root.clone().unwrap(),cache.plan.bounds);
-        let streaming=cache.pages.lock().unwrap().inputs.iter().filter(|(key,_)|**key==Key {coordinate:key.coordinate,..parent.clone()})
-            .flat_map(|(_,inputs)|inputs.iter().filter(|input|input.stream.pending()).map(|input|input.region)).collect::<Vec<_>>();
-        assert!(cache.pivot_halves().len()==2 && streaming.len()==1,"the stroke's two cells stream {streaming:?}; the second cell's halves wait for the cell streaming ahead of it");
+        use layer_render::DabBatchKind::{Persistent,Preview};
+        let (down,held,up)=([batch(0,Persistent,true,false),batch(1,Preview,false,false)],[batch(1,Preview,false,false)],[batch(1,Persistent,false,true)]);
+        let frames=[(&down[..],0.01),(&held[..],0.02),(&up[..],0.03)].map(|(dab_batches,time_seconds)|FramePacket {dabs:&dabs,dab_batches,time_seconds,..frame});
+        crate::test_support::submit_ready(&mut r,frames[0]).unwrap();
+        let (plan,contact)=(r.scale_display.as_ref().unwrap().plan,r.scale_display.as_ref().unwrap().contact_id());
+        let cells=dabs.map(|dab|bounds([dab.center.x as u32,dab.center.y as u32].map(|side|side/(PAGE_SIZE<<plan.level)),plan.level,plan.extent));
+        let progress=|r:&WgpuRasterizer|r.scale_display.as_ref().unwrap().contact_declared_and_owed().unwrap_or_default();
+        for step in 0..3 {
+            let (declared,owed)=progress(&r);
+            assert!(contact.is_some() && r.scale_display.as_ref().unwrap().contact_id()==contact && declared.is_empty() && cells.iter().all(|cell|owed.contains(cell)),
+                "frame {step}: the contact begun at pen down owes both cells the stroke reaches while their sources wait: {cells:?}, declared {declared:?}, owed {owed:?}");
+            crate::test_support::submit_ready(&mut r,frames[1]).unwrap();r.wait_idle().unwrap();
+        }
+        store.gate.release();
+        let (signal,woken)=std::sync::mpsc::channel();
+        r.set_preparation_wake(Arc::new(move||{let _=signal.send(());}));
+        let deadline=std::time::Instant::now()+crate::test_support::WAIT_BOUND;
+        loop {
+            crate::test_support::submit_ready(&mut r,frames[1]).unwrap();crate::test_support::complete(&r);
+            assert_eq!(r.scale_display.as_ref().unwrap().contact_id(),contact,"the held pen keeps its contact while the sources arrive");
+            let (declared,owed)=progress(&r);
+            if owed.is_empty() && cells.iter().all(|cell|declared.contains(cell)) && !super::super::tests::publication_pending(&r) {break;}
+            assert!(std::time::Instant::now()<deadline,"the contact declares and shows both cells once their sources arrive: declared {declared:?}, owed {owed:?}");
+            let _=woken.recv_timeout(std::time::Duration::from_millis(5));
+        }
+        let mut twin=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        layer_render::CanvasRenderer::set_working_layer(&mut twin,Some(working));
+        crate::test_support::submit_settled(&mut twin,frame);
+        let blank=super::super::tests::display_pixels(&twin);
+        for packet in &frames[..2] {crate::test_support::submit_ready(&mut twin,FramePacket {composite_all:true,..*packet}).unwrap();}
+        let at=|dab:&layer_render::Dab|((dab.center.y as u32>>plan.level)*plan.size[0]+(dab.center.x as u32>>plan.level)) as usize;
+        let [shown,expected]=[&r,&twin].map(super::super::tests::display_pixels);
+        for (dab,cell) in dabs.iter().zip(cells) {
+            let ink=crate::test_support::max_error(&shown[at(dab)..=at(dab)],&blank[at(dab)..=at(dab)]);
+            assert!(ink>0.05,"the held stroke shows its ink in cell {cell:?}: {ink}");
+        }
+        let error=crate::test_support::max_error(&shown,&expected);
+        assert!(error<1e-4,"the held stroke differs from a twin that composes every frame by {error}");
+        for r in [&mut r,&mut twin] {crate::test_support::submit_settled(r,frames[2]);}
+        let error=crate::test_support::max_error(&super::super::tests::display_pixels(&r),&super::super::tests::display_pixels(&twin));
+        assert!(error<1e-4,"after pen up the stroke differs from a twin that composed every frame by {error}");
         drop(store);
     }
 

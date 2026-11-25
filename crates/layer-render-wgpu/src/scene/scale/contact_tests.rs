@@ -1366,13 +1366,38 @@ fn a_stroke_crossing_into_a_cell_without_its_halves_keeps_every_dab_and_shows_th
     assert!(error<1e-4,"every dab keeps its ink across the crossing: {error}");
 }
 
-#[test]
-fn a_stroke_over_a_cold_fit_view_keeps_one_contact_from_pen_down_while_its_holes_fill() {
-    let extent=[4096,2048];
+fn over_a_photo(extent:[u32;2])->(Document,layer_core::OccurrenceHandle) {
     let mut doc=Document::new(PortableId::random(),extent[0],extent[1],layer_core::DocumentNames {paint:"Current ink".into(),paper:"Paper".into()});
     let below=paint_occurrence(&mut doc,"Below",Some(rgba8_source(extent,|x,y|[(x/17) as u8,(y/9) as u8,140,255])));
     let working=doc.scene().position(doc.working.occurrence.unwrap()).unwrap();
     insert_occurrence(&mut doc,below,working+1);
+    (doc,below)
+}
+fn chill(r:&WgpuRasterizer,doc:&Document,lower:SourceTarget,holes:&[PixelRect])->crate::test_support::GatedStore {
+    let cache=r.scale_display.as_ref().unwrap();
+    evict_composite_pages(cache,holes);
+    for hole in holes {
+        cache.evict_window(*hole);
+        for level in 0..=cache.plan.level {cache.pages.lock().unwrap().discard_source_chunks(lower,level,*hole);}
+    }
+    let photo=doc.scene().paint_base(lower).unwrap().image.storage().clone();
+    let stored=SourceImage {tiles:photo.tiles.iter().filter(|(tile,_)|holes.iter().any(|hole|!page_rect(**tile).intersect(*hole).is_empty())).map(|(tile,blob)|(*tile,blob.clone())).collect(),..(*photo).clone()};
+    let store=crate::test_support::GatedStore::new(&layer_core::raster_storage::RetainedTiles::from_sources([&stored]),false);
+    let samples=r.device.source_samples.clone();let limit=samples.stats().limit_bytes;
+    samples.set_limit(0);samples.trim_unused(usize::MAX);samples.set_limit(limit);
+    r.source_tiles.borrow().release_ready();r.source_tiles.borrow_mut().retire_evicted();
+    store
+}
+fn shows_cell(r:&WgpuRasterizer,coordinate:[u32;2])->bool {
+    let cache=r.scale_display.as_ref().unwrap();
+    let index=pages::coordinates(cache.plan.bounds,cache.plan.level).position(|cell|cell==coordinate).unwrap();
+    crate::test_support::published_coverage(crate::test_support::coverage_hash(&cache.geometry)).is_some_and(|coverage|coverage.written[index/32]>>(index%32)&1==1)
+}
+
+#[test]
+fn a_stroke_over_a_cold_fit_view_keeps_one_contact_from_pen_down_while_its_holes_fill() {
+    let extent=[4096,2048];
+    let (mut doc,below)=over_a_photo(extent);
     let above=paint_occurrence(&mut doc,"Above",Some(rgba8_source(extent,|x,y|[90,(x/13) as u8,(y/7) as u8,128])));
     coverage_mask(&mut doc,above,[0,0],Some(layer_core::Selection::polygon(vec![
         layer_core::Point {x:1800.,y:300.},layer_core::Point {x:2600.,y:300.},layer_core::Point {x:2600.,y:700.},layer_core::Point {x:1800.,y:700.},
@@ -1397,28 +1422,8 @@ fn a_stroke_over_a_cold_fit_view_keeps_one_contact_from_pen_down_while_its_holes
     assert!(plan.level==2 && r.scale_display.as_ref().unwrap().overview.is_none(),"the fit view is one level-2 window without an overview");
     let kept=[[0,0],[1,0],[0,1]];
     let holes=pages::coordinates(plan.bounds,plan.level).filter(|coordinate|!kept.contains(coordinate)).map(|coordinate|pages::bounds(coordinate,plan.level,plan.extent)).collect::<Vec<_>>();
-    {
-        let cache=r.scale_display.as_ref().unwrap();
-        evict_composite_pages(cache,&holes);
-        for hole in &holes {
-            cache.evict_window(*hole);
-            for level in 0..=plan.level {cache.pages.lock().unwrap().discard_source_chunks(lower,level,*hole);}
-        }
-    }
-    let photo=doc.scene().paint_base(lower).unwrap().image.storage().clone();
-    let stored=SourceImage {tiles:photo.tiles.iter().filter(|(tile,_)|holes.iter().any(|hole|!page_rect(**tile).intersect(*hole).is_empty())).map(|(tile,blob)|(*tile,blob.clone())).collect(),..(*photo).clone()};
-    let store=crate::test_support::GatedStore::new(&layer_core::raster_storage::RetainedTiles::from_sources([&stored]),false);
-    {
-        let samples=r.device.source_samples.clone();let limit=samples.stats().limit_bytes;
-        samples.set_limit(0);samples.trim_unused(usize::MAX);samples.set_limit(limit);
-        r.source_tiles.borrow().release_ready();r.source_tiles.borrow_mut().retire_evicted();
-    }
-    let written=|r:&WgpuRasterizer,coordinate:[u32;2]| {
-        let cache=r.scale_display.as_ref().unwrap();
-        let index=pages::coordinates(cache.plan.bounds,cache.plan.level).position(|cell|cell==coordinate).unwrap();
-        crate::test_support::published_coverage(crate::test_support::coverage_hash(&cache.geometry)).is_some_and(|coverage|coverage.written[index/32]>>(index%32)&1==1)
-    };
-    let complete=|r:&WgpuRasterizer|pages::coordinates(plan.bounds,plan.level).all(|coordinate|written(r,coordinate));
+    let store=chill(&r,&doc,lower,&holes);
+    let complete=|r:&WgpuRasterizer|pages::coordinates(plan.bounds,plan.level).all(|coordinate|shows_cell(r,coordinate));
     let original=display_pixels(&r);
     let texel=|x:f32|(500/4*(extent[0]/4)+x as u32/4) as usize;
     let (signal,woken)=std::sync::mpsc::channel();
@@ -1431,14 +1436,14 @@ fn a_stroke_over_a_cold_fit_view_keeps_one_contact_from_pen_down_while_its_holes
         assert_eq!(id,contact,"frame {step} keeps the contact begun at pen down");
         if step<5 {assert!(max_error(&display_pixels(&r)[texel(xs[step])..=texel(xs[step])],&original[texel(xs[step])..=texel(xs[step])])>0.1,"frame {step} shows its dab in the written cell");continue;}
         gated+=usize::from(store.gate.reads.load(std::sync::atomic::Ordering::Acquire)>0);
-        assert!(!written(&r,[2,0]),"the masked hole the stroke reaches keeps its coverage while its decode is held at frame {step}");
+        assert!(!shows_cell(&r,[2,0]),"the masked hole the stroke reaches keeps its coverage while its decode is held at frame {step}");
     }
     assert!(gated>0,"the hole's decode is held while the stroke reaches it");
     store.gate.release();
     let (idle,deadline)=(FramePacket {dabs:&[],dab_batches:&[],..frame},std::time::Instant::now()+crate::test_support::WAIT_BOUND);
     while !complete(&r) {
         assert!(std::time::Instant::now()<deadline,"the contact fills every hole while the pen rests before pen up: {:?}",
-            pages::coordinates(plan.bounds,plan.level).filter(|coordinate|!written(&r,*coordinate)).collect::<Vec<_>>());
+            pages::coordinates(plan.bounds,plan.level).filter(|coordinate|!shows_cell(&r,*coordinate)).collect::<Vec<_>>());
         let _=woken.recv_timeout(std::time::Duration::from_millis(5));
         crate::test_support::submit_ready(&mut r,idle).unwrap();crate::test_support::complete(&r);
         assert_eq!(r.scale_display.as_ref().unwrap().contact_id(),contact,"the resting pen keeps its contact while the holes fill");
@@ -1447,6 +1452,32 @@ fn a_stroke_over_a_cold_fit_view_keeps_one_contact_from_pen_down_while_its_holes
     crate::test_support::submit_settled(&mut r,frame);
     let error=max_error(&display_pixels(&r),&expected);
     assert!(error<1e-4,"after pen up the cold view matches a twin that composed every frame: {error}");
+}
+
+#[test]
+fn view_publishes_every_dab_of_a_contact_over_a_cold_fit_view_while_a_remote_hole_waits() {
+    let extent=[4096,2048];
+    let (doc,below)=over_a_photo(extent);
+    let (ink,lower)=(doc.active_target().unwrap(),doc.scene().source_target(below).unwrap());
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,4);
+    let mut r=renderer(&doc);
+    crate::test_support::submit_settled(&mut r,frame);
+    let plan=r.scale_display.as_ref().unwrap().plan;
+    let _store=chill(&r,&doc,lower,&[pages::bounds([3,1],plan.level,plan.extent)]);
+    let mut contact=None;
+    for step in 0..8 {
+        let dab=stroke_dab(1300.+60.*step as f32,500.);let batch=stroke_batch(ink,&dab,step==0,false);
+        let (revision,before)=(r.composite_revision,display_pixels(&r));
+        crate::test_support::submit_ready(&mut r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),time_seconds:0.01*(step+1) as f32,..frame}).unwrap();
+        crate::test_support::complete(&r);
+        let (painted,damage)=(crate::pixel_rect::pixel_rect(dab.bounds(),extent),r.composite_damage_since(revision).unwrap_or(PixelRect::EMPTY));
+        assert!(damage.intersect(painted)==painted,"frame {step} publishes its dab {painted:?} from the view, not {damage:?}");
+        let at=(500/4*(extent[0]/4)+dab.center.x as u32/4) as usize;
+        assert!(max_error(&display_pixels(&r)[at..=at],&before[at..=at])>0.1,"frame {step} shows its dab");
+        if step==0 {contact=r.scale_display.as_ref().unwrap().contact_id();}
+        assert!(contact.is_some() && r.scale_display.as_ref().unwrap().contact_id()==contact,"frame {step} draws in the contact begun at pen down");
+        assert!(!shows_cell(&r,[3,1]),"the remote hole still waits at frame {step}");
+    }
 }
 
 #[test]

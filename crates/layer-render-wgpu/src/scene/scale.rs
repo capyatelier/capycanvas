@@ -1034,7 +1034,7 @@ impl Cache {
         Ok(self.used[slot].lease(slot))
     }
     pub(super) fn render_preview(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>, encoding: &mut Encoding<'_>) -> Result<bool, GpuRasterError> {
-        if self.overview.is_some() {return Ok(false);}
+        if self.overview.is_some() || self.gesture.is_some() || !packet.dab_batches.is_empty() {return Ok(false);}
         self.render_coarse_preview(scene,r,packet,encoding)
     }
     fn render_coarse_preview(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>, encoding: &mut Encoding<'_>) -> Result<bool, GpuRasterError> {
