@@ -96,10 +96,10 @@ Measured against v1.0.15 in November 2026 benchmark rounds; rerun before startin
    - On the TCL, a cold Fit open of the 12 MP photo reaches its complete picture about 0.6 s later than main: 5.49 against 4.88 s; v1.0.15 took 27.6 s.
    - On the Pro 14 at 61 MP, native Paintbrush is about 4% below main, and pen-down is one or two frames later.
 7. **Web memory budget.** The Web budget is `navigator.deviceMemory / 4` (at most 2 GiB) and is shared by GPU and RAM as one unified device. This undercounts discrete-GPU machines and overcounts phones; model the browser's real limits.
-8. **Web strokes at Fit over a cold view.** At pen-down the Web view is often still incomplete, for example 3 of 24 level-2 cells written on a MovinkPad 11. `begin_contact` then never begins, because `contact_ready` needs every scope cell written. Ordinary selection re-selects every visible cell each frame and completes about one, so strokes run at 3–15% of v1.0.15.
-   - A written fix keeps three commits on the local branch `release-with-contact`: own the stroke from its first dab with owed cells and one hole cursor, publish every contact write from the view, and reduce claimed pages only from accepted inputs.
-   - On the Surface Pro, Edge reached 61–64% of v1.0.15, where main hangs. Pro 14 Chrome beat v1.0.15 on both brushes.
-   - It was held because nine contact tests still raise `Renderer invariant failed: accepted source input is missing` at `AcceptedInputs::selection` (`scene/sources.rs`). A release build turns that into a stopped canvas. Every contact read must go through an accepted declaration, owed cells included, before it lands.
+8. **Web strokes at Fit over a cold view, what is left.** The contact series 51204171f–00df4d341 owns a stroke from its first dab. On Pro 14 Chrome it took ink at the pen-down point from 12–13 s to 1.1 s after a cold 61 MP open.
+   - A page the contact claims whole is reduced into but never gets Store written coverage (`contact.written`, `end_contact`, `Store::materialize_source` in `scene/scale/pages.rs`). After pen up the view reduces 14 of its tiles again and decodes 12 again on that row. Record the contact's accepted writes as Store coverage when it ends.
+   - Immediate strokes on that row still make only 3–4 updates/s in Chrome while the photo decodes.
+   - Inking owed cells over a coarser resident photo level is parked as `artifacts/renderer-plan/parked/provisional-contact-over-coarser-photo-f9ee502ea.patch`. No measured row has reached its case, a coarser level under the pen.
 9. **Settling a finished capture without its tip.** A settlement whose only wait is its predicted tip could publish the capture without the tip; a written version is commit 27a385a98 on the `p2-release-web` branch. On Pro 14 Chrome it raised Paintbrush from 21.6 to 28.0 updates/s, but lowered G-Pen from 20.0 to 12.4. Understand the trade-off before landing it.
 
 ## Open after the release candidate
