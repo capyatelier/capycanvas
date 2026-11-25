@@ -201,7 +201,7 @@ impl Cache {
         requests:&[(SourceTarget,SourceRequest)],retained:u64,tiled:bool,roots:&[graph::Node],target:Root,preview:bool,class:Class,objects:Class,allowance:crate::frame_demand::Allowance,closed:Option<&crate::residency::Blocked>,encoder:&mut submission::CommandEncoder,
     )->Result<Result<pages::Accepted,Option<crate::residency::Blocked>>,GpuRasterError> {
         let interest=self.parent_interest(region);let parent=interest.key.clone();
-        let selection=Selection {roots:roots.to_vec(),preview,target,at_rest:self.at_rest(r,packet)};
+        let selection=Selection {roots:roots.to_vec(),target,at_rest:self.at_rest(r,packet)};
         {
             let mut store=self.pages.lock().unwrap();
             if let Some(held)=store.streaming(&interest)? {
@@ -540,7 +540,7 @@ pub(super) struct SourceWrite {id:SourceTarget,plan:display_mips::Plan,coordinat
 struct Step {page:[u32;2],writes:Vec<SourceWrite>,native:super::super::sources::Inputs,pins:Vec<crate::scene::sources::Lease>,acquired:Option<crate::scene::sources::AcceptedInputs>,bytes:u64}
 pub(super) enum Streamed {Complete,Waiting(Option<crate::frame_demand::UnitWait>),Refused(crate::residency::Blocked)}
 #[derive(Clone,PartialEq)]
-pub(super) struct Selection {roots:Vec<graph::Node>,preview:bool,target:Root,at_rest:bool}
+pub(super) struct Selection {roots:Vec<graph::Node>,target:Root,at_rest:bool}
 #[derive(Default)]
 pub(super) struct Stream {steps:std::collections::VecDeque<Step>,workspace:Option<crate::residency::Reservation>,cohort:crate::scene::sources::Cohort,class:Option<Class>,selection:Option<Selection>}
 impl Stream {
