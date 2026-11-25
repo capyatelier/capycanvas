@@ -1117,7 +1117,7 @@ impl Cache {
         let live=self.gesture.is_some();
         let lane=if view && stroking {self.lane_cells(packet)}else {Vec::new()};
         if !lane.is_empty() {
-            let exact=self.build_halves(scene,r,packet,encoder,budget,*retained,lane,Class::Authored,true)?;
+            let exact=self.build_halves(scene,r,packet,encoder,budget,*retained,lane,Class::Authored,true,Some(crate::frame_demand::Allowance::Fresh))?;
             for (key,wait) in exact.blocks {self.block(key.plan().bounds,wait);}
             for (region,refusal,allowance) in exact.refusals {self.refuse(region,&refusal,allowance);}
         }
@@ -1138,6 +1138,7 @@ impl Cache {
         let direct=if view {self.stroke_only(packet)}else {stroking};
         let pages::Selection {mut copies,mut composes,..}=selection;
         let halves=if view && !live {self.edit_cells(packet,budget)}else {Vec::new()};
+        let pivot=if halves.is_empty() {None}else {self.pivot_allowance(r)};
         let own=if view && stroking && !packet.dab_batches.iter().any(|batch|batch.target.is_coverage()) {self.dab_cells(packet)}else {Vec::new()};
         let target=if transition && !direct {Root::Store}else {Root::Window};
         let mut blocks=Vec::new();let mut refusals=Vec::new();
@@ -1165,8 +1166,9 @@ impl Cache {
             let tiled = use_tiles(r, self.plan, packet, Some(scene)) && !(self.plan.level > 0 && root.fused_transform(r));
             let view=work_view(packet,0);
             composes.sort_by_cached_key(|region|(!budget.required(class(*region)),!self.streaming(*region).is_ok_and(|streaming|streaming),centre_distance(view,*region)));
-            if !stroking && !halves.is_empty() {self.prepare_edit_sources(scene,r,packet,encoder,budget)?;}
-            let exact=self.build_halves(scene,r,packet,encoder,budget,*retained,halves,Class::Refinement,false)?;
+            let sources=match pivot {Some(allowance) if !stroking=>self.prepare_edit_sources(scene,r,packet,encoder,budget,allowance)?,_=>Default::default()};
+            let exact=self.build_halves(scene,r,packet,encoder,budget,*retained,halves,Class::Refinement,false,pivot)?;
+            if let Some(allowance)=pivot {self.settle_pivot(sources.or(exact.pivot),allowance);}
             blocks.extend(exact.blocks.into_iter().map(|(key,input)|(key.plan().bounds,input)));
             refusals.extend(exact.refusals);
             let (prepared,more) = self.prepared_regions(scene, packet, &destination, budget);
@@ -1291,7 +1293,7 @@ impl Cache {
                 if class(region).demanded() {self.pages.lock().unwrap().hold_inputs(&handle,sources)?;}else {self.pages.lock().unwrap().finish_inputs(&handle);}
             }
             let before=completed.len();
-            let built=self.half_units(scene,r,packet,encoder,*retained,budget,prepared,&halves,Class::Prefetch,&mut completed)?;
+            let built=self.half_units(scene,r,packet,encoder,*retained,budget,prepared,&halves,Class::Prefetch,Some(crate::frame_demand::Allowance::Fresh),&mut completed)?;
             self.preparing.extend((built.deferred || more && completed.len()>before).then(crate::frame_demand::UnitWait::default));
             self.preparing.extend(built.blocks.into_iter().map(|(_,wait)|wait.unwrap_or_default()));
             self.preparing.extend(built.refusals.into_iter().map(|(_,refusal,allowance)|crate::frame_demand::UnitWait::parked(refusal,allowance)));
@@ -1377,7 +1379,7 @@ impl Cache {
     }
     #[expect(clippy::too_many_arguments, reason = "Half units share the frame's scene, encoding and budget with the pass that wants them")]
     fn half_units(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>, encoder: &mut submission::CommandEncoder, retained: u64,
-        budget: &mut WorkBudget, regions: Vec<PixelRect>, halves: &[graph::Node], class: Class, completed: &mut Vec<ReadyUnit>,
+        budget: &mut WorkBudget, regions: Vec<PixelRect>, halves: &[graph::Node], class: Class, pivot: Option<crate::frame_demand::Allowance>, completed: &mut Vec<ReadyUnit>,
     ) -> Result<HalfUnits, GpuRasterError> {
         let mut built=HalfUnits::default();
         let Some(root)=self.graph.root.clone() else {return Ok(built);};
@@ -1392,8 +1394,10 @@ impl Cache {
             if !budget.fits(class,!completed.is_empty(),object_cache::PASS_TAPS) {built.deferred=true;break;}
             let missing=halves.iter().filter(|half|!self.branch_ready(half,region,class)).cloned().collect::<Vec<_>>();
             if missing.is_empty() {continue;}
-            let requests=self.region_sources(scene,r,packet,region,tiled);
             let streaming=self.streaming(region)?;
+            if !streaming && pivot.is_none() {continue;}
+            let allowance=if pivot==Some(crate::frame_demand::Allowance::Fresh) {self.cell_allowance(r,region)}else {crate::frame_demand::Allowance::Spent};
+            let requests=self.region_sources(scene,r,packet,region,tiled);
             if !streaming && !requests.iter().all(|(id,request)|self.source_ready(scene,r,*id,request)) {
                 if let Some(wait)=&producing {built.blocks.push((region,Option::clone(wait)));continue;}
                 if budget.source_pages(class)==0 {built.deferred=true;break;}
@@ -1401,11 +1405,10 @@ impl Cache {
             if !streaming && missing.iter().any(|half|cell_plan::Footprint::captures(half,packet.scene,self.plan.level,at_rest)) {
                 match self.prepare_native(scene,r,packet,encoder,region,input) {
                     Err(error@(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished))=>{built.blocks.push((region,waiting_on(scene,r,declarations,&error)));continue;},
-                    Err(GpuRasterError::SourceWorkingSetExceeded)=>{built.refusals.push((region,outgrown(r,class),self.cell_allowance(r,region)));continue;},
+                    Err(GpuRasterError::SourceWorkingSetExceeded)=>{built.refusals.push((region,outgrown(r,class),allowance));continue;},
                     result=>result?,
                 }
             }
-            let allowance=self.cell_allowance(r,region);
             let handle=match self.accept_parent(scene,r,packet,region,&requests,retained,tiled,&missing,Root::Store,false,class,if budget.required(class) {class} else {Class::Prefetch},allowance,closed.as_ref(),encoder) {
                 Ok(Ok(handle))=>handle,
                 Ok(Err(Some(refusal)))=>{closed=Some(refusal.clone());built.refusals.push((region,refusal,allowance));continue;},
@@ -1447,7 +1450,7 @@ impl Cache {
                 },
                 Err(GpuRasterError::SourceWorkingSetExceeded) => {
                     self.pages.lock().unwrap().finish_inputs(&handle);scene.discard_jobs_from(start);
-                    built.refusals.push((region,outgrown(r,class),self.cell_allowance(r,region)));
+                    built.refusals.push((region,outgrown(r,class),allowance));
                 },
                 Ok(false) => {
                     self.pages.lock().unwrap().finish_inputs(&handle);scene.discard_jobs_from(start);

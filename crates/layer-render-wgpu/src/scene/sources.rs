@@ -943,6 +943,9 @@ impl AcceptedInputs {
         let key=Key::Image(Arc::downgrade(source),coordinate);
         self.leases.retain(|input|input.read.as_ref().is_none_or(|read|!read.key.matches(&key)));
     }
+    pub(crate) fn decodes(&self)->Vec<crate::object_image_mips::DecodeKey> {
+        self.iter().filter_map(|input|input.read.as_ref()).flat_map(|read|&read.pending).filter(|pending|!pending.ready()).filter_map(|pending|pending.decode()).collect()
+    }
     pub(crate) fn ready_for(&self,inputs:&Inputs)->bool {
         inputs.tiles.iter().all(|(key,_,_,_)|self.iter().filter_map(|input|input.read.as_ref())
             .any(|read|read.key.matches(key) && read.pending.iter().all(|pending|pending.ready())))
@@ -1265,6 +1268,14 @@ impl PendingTile {
     }
     pub fn recorded(&self)->bool {self.write.recorded()}
     pub(super) fn dependency(&self)->Option<&Arc<Self>> {self.dependency.as_ref().filter(|input|!input.recorded())}
+    fn decode(&self)->Option<crate::object_image_mips::DecodeKey> {
+        if let Some(input)=self.dependency() {return input.decode();}
+        match &self.pixels {
+            Pixels::Image(source,coordinate)=>Some(crate::object_image_mips::DecodeKey::Image(Arc::downgrade(source),*coordinate)),
+            Pixels::Raster(blob,space,destination)=>Some(crate::object_image_mips::DecodeKey::Raster(Arc::downgrade(blob),*space,*destination,false)),
+            Pixels::Resident=>None,
+        }
+    }
     pub fn ready(&self) -> bool {self.dependency().is_none_or(|input|input.ready()) && (self.input.is_some() || self.prepared().is_some())}
     pub(super) fn validate_prepared(&self)->Result<(),GpuRasterError> {
         if self.input.is_some() {return Ok(());}

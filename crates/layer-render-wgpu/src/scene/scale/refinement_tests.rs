@@ -1645,3 +1645,58 @@ fn a_half_unit_in_flight_is_driven_to_its_commit_while_a_sibling_refusal_is_park
     let store=r.scale_display.as_ref().unwrap().pages.lock().unwrap();
     assert!(admitted.iter().all(|key|store.retained_pages().into_iter().any(|page|page.key==*key && !page.written.is_empty())),"the admitted half units commit");
 }
+
+#[cfg(not(target_arch="wasm32"))]
+#[test]
+fn a_stroked_fit_photo_whose_pivot_was_refused_after_its_reclaim_parks_and_an_unrelated_decode_wakes_it_once() {
+    use crate::frame_demand::{Allowance,UnitWait};
+    let extent=[4096,2732];let doc=document_at(extent);
+    let ram=1<<30;
+    let budget=layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {host_default_bytes:Some(ram),override_bytes:Some(ram),..Default::default()});
+    let mut r=crate::memory::memory_tests::renderer_in_budget(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(1<<30),unified:true,..Default::default()},budget).unwrap();
+    layer_render::CanvasRenderer::set_working_layer(&mut r,Some(doc.scene().order()[0]));
+    let zoom=0.2f32;
+    let view=layer_render::ViewState {width_px:(extent[0] as f32*zoom).ceil() as u32,height_px:(extent[1] as f32*zoom).ceil() as u32,document_to_surface:[zoom,0.,0.,zoom,0.,0.]};
+    let frame=FramePacket {view,..packet(doc.scene(),extent)};
+    let _pressure=crate::memory::memory_tests::display_frame_with_budget(&mut r,frame,40<<20);
+    crate::test_support::submit_settled(&mut r,frame);
+    assert_eq!(r.scale_display.as_ref().unwrap().plan.level,2,"the photo settles at Fit on level 2");
+    let (send,woken)=std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move||{let _=send.send(());}));
+    let idle=FramePacket {composite_all:false,..frame};
+    let drive=|r:&mut WgpuRasterizer|{
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(3);
+        let mut frames=0;
+        while std::time::Instant::now()<deadline {
+            r.poll_pending(view).unwrap();
+            if r.next_frame()==layer_render::FrameDemand::Work {
+                crate::test_support::submit_ready(r,idle).unwrap();crate::test_support::complete(r);frames+=1;continue;
+            }
+            if woken.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).is_err() {break;}
+        }
+        frames
+    };
+    stroke_once(&mut r,frame,source_at(&doc,0),[2048.,1366.]);
+    crate::test_support::complete(&r);
+    drive(&mut r);
+    {
+        let cache=r.scale_display.as_ref().unwrap();let mut store=cache.pages.lock().unwrap();
+        for level in 0..=cache.plan.level {store.remove_source_level(source_at(&doc,0),level);}
+    }
+    crate::test_support::complete(&r);r.device.retirement_handle().flush().unwrap();
+    let display=r.scene_tiers.display.clone();
+    let pages={
+        let mut store=r.scale_display.as_ref().unwrap().pages.lock().unwrap();
+        store.retained_pages().into_iter().map(|page|store.allocated(&page.key,crate::residency::Class::Visible).unwrap()).collect::<Vec<_>>()
+    };
+    let _held=(display.charge(display.headroom(crate::residency::Class::Refinement)),pages);
+    let reclaimed=display.wanting(crate::residency::Class::Refinement,1<<20).reclaiming(Some(crate::residency::Search::open([]).seal()));
+    r.scale_display.as_mut().unwrap().pivot_refusal=Some(UnitWait::Reclaim(reclaimed,Allowance::Spent));
+    let target=Arc::new(std::sync::Mutex::new(crate::object_image_mips::CoordinateSlot::new(&Default::default())));
+    assert!(r.request_nearest_coordinates([1.,0.,0.,1.,0.,0.],[PAGE_SIZE;2],0,1,Arc::downgrade(&target)).unwrap());
+    let frames=drive(&mut r);
+    assert!(frames<=3,"a pivot refused after its reclaim and an unrelated decode asked for {frames} frames: {:?}",r.outstanding_terms());
+    assert!(matches!(r.scale_display.as_ref().unwrap().pivot_refusal,Some(UnitWait::Parked(_))),"the refused pivot parks on room: {:?}",r.scale_display.as_ref().unwrap().pivot_refusal);
+    assert_ne!(r.next_frame(),layer_render::FrameDemand::Work,"the renderer goes idle: {:?}",r.outstanding_terms());
+    assert!(!r.moving_decode.as_ref().is_some_and(|(_,queue)|queue.pending()),"the refused pivot keeps no decode owed");
+}

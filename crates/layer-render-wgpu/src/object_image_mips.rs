@@ -584,6 +584,14 @@ impl PreparedImageWork {
     pub(crate) fn raise(&mut self,class:Class) {
         match self {Self::Image(tile)=>tile.class=tile.class.min(class),Self::Raster(tile)=>tile.class=tile.class.min(class),Self::Paper {..}|Self::Coordinates {..}=>{}}
     }
+    pub(crate) fn decodes(&self,key:&DecodeKey)->bool {
+        match self {
+            Self::Image(tile)=>DecodeKey::Image(Arc::downgrade(&tile.source),tile.coordinate).matches(key),
+            Self::Raster(tile)=>DecodeKey::Raster(Arc::downgrade(&tile.blob),tile.space,tile.destination,tile.scalar).matches(key),
+            Self::Paper {blob,coordinate,..}=>DecodeKey::Paper(Arc::downgrade(blob),*coordinate).matches(key),
+            Self::Coordinates {..}=>false,
+        }
+    }
 }
 pub fn prepare_image_tile(source:&SourceImage,coordinate:[u32;2],destination:RgbSpace,cache:&layer_core::raster::DecodedTileCache,decoder:Option<&layer_color::WorkingDecoder>)->Result<crate::scene::sources::PreparedSourcePixels,String> {
     prepare_image_tile_with(source,coordinate,destination,decoder,|tile| {
@@ -645,7 +653,7 @@ pub(crate) fn image_decode_failure<'a>(failures:&'a [crate::moving_projection::F
 }
 
 #[derive(Clone)]
-enum DecodeKey {
+pub(crate) enum DecodeKey {
     Image(Weak<SourceImage>,[u32;2]),
     Raster(Weak<layer_core::raster::TileBlob>,RgbSpace,RgbSpace,bool),
     Paper(Weak<layer_core::raster::TileBlob>,[u32;2]),
@@ -1012,6 +1020,7 @@ impl MipDecodeQueue {
         if self.waiting.is_some_and(|epoch|epoch==self.pool.epoch.load(Ordering::Acquire)) {return true;}
         !self.outstanding.is_empty()
     }
+    pub(crate) fn decodes(&self,key:&DecodeKey)->bool {self.outstanding.iter().any(|stored|stored.key.as_ref().is_some_and(|stored|stored.matches(key)))}
     pub(crate) fn ready(&self)->bool {self.ready.load(Ordering::Acquire)>0}
     pub(crate) fn awaits(&self,class:Class)->bool {self.outstanding.iter().any(|stored|stored.class==class)}
     #[cfg(target_arch="wasm32")]

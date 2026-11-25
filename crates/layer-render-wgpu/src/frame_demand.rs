@@ -16,10 +16,10 @@ impl Outstanding {
 pub(crate) enum Allowance { Fresh, Spent }
 
 #[derive(Clone)]
-pub(crate) enum Producer { Compile(Arc<compile::Needs>), Texture(AssetId), Name(layer_core::raster::ContentVersion), Declaration(u64), Gpu(submission::Submission), Class(Input) }
+pub(crate) enum Producer { Compile(Arc<compile::Needs>), Texture(AssetId), Name(layer_core::raster::ContentVersion), Declaration(u64), Gpu(submission::Submission), Decode(Arc<[crate::object_image_mips::DecodeKey]>), Class(Input) }
 impl Producer {
     fn input(&self) -> Input {
-        match self { Self::Compile(_) | Self::Texture(_) => Input::Compile, Self::Name(_) | Self::Declaration(_) => Input::Name, Self::Gpu(_) => Input::Gpu, Self::Class(input) => *input }
+        match self { Self::Compile(_) | Self::Texture(_) => Input::Compile, Self::Name(_) | Self::Declaration(_) => Input::Name, Self::Gpu(_) => Input::Gpu, Self::Decode(_) => Input::Decode, Self::Class(input) => *input }
     }
     fn pending(&self, r: &WgpuRasterizer) -> bool {
         match self {
@@ -31,6 +31,7 @@ impl Producer {
                 if let Some(wake) = &r.preparation_wake { r.device.on_next_completion(wake); }
                 submission.pending()
             },
+            Self::Decode(keys) => keys.iter().any(|key| r.decoding(key)),
             Self::Class(input) => r.waits_on(*input),
         }
     }
@@ -43,6 +44,7 @@ impl PartialEq for Producer {
             (Self::Name(first), Self::Name(second)) => first.identity() == second.identity(),
             (Self::Declaration(first), Self::Declaration(second)) => first == second,
             (Self::Gpu(first), Self::Gpu(second)) => first.same(second),
+            (Self::Decode(first), Self::Decode(second)) => Arc::ptr_eq(first, second),
             (Self::Class(first), Self::Class(second)) => first == second,
             _ => false,
         }

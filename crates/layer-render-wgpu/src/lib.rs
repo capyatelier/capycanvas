@@ -3618,6 +3618,9 @@ impl WgpuRasterizer {
     pub(crate) fn decode_queue_has_room(&self) -> bool {
         self.moving_decode.as_ref().is_none_or(|(_,queue)|queue.has_room())
     }
+    pub(crate) fn decoding(&self,key:&object_image_mips::DecodeKey)->bool {
+        self.moving_decode.as_ref().is_some_and(|(_,queue)|queue.decodes(key)) || self.source_results.iter().any(|(_,result,_)|result.decodes(key))
+    }
     pub(crate) fn image_decode_waiting(&self) -> bool {
         if self.held_result_ready() {return false;}
         if self.bake_preflight.as_ref().is_some_and(|state|state.waiting()) {return true;}

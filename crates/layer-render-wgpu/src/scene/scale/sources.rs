@@ -56,7 +56,12 @@ impl Source {
 }
 
 #[derive(Default)]
-pub(super) struct Prepared {pub(super) unpublished:bool,pub(super) refusal:Option<crate::residency::Blocked>}
+pub(super) struct Prepared {pub(super) unpublished:bool,pub(super) refusal:Option<crate::residency::Blocked>,pub(super) waiting:Option<crate::frame_demand::UnitWait>}
+impl Prepared {
+    pub(super) fn or(self,later:Self)->Self {
+        Self {unpublished:self.unpublished || later.unpublished,refusal:self.refusal.or(later.refusal),waiting:self.waiting.or(later.waiting)}
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct Sources {
@@ -505,7 +510,12 @@ impl Cache {
                     budget.spend((r.metrics.display_reduction_reads-reads).max(u64::from(PAGE_SIZE).pow(2)));
                     ready.push(unit);handles.push(handle);
                 },
-                Ok(false)|Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished)=>{
+                stopped@(Ok(false)|Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished))=>{
+                    if prepared.waiting.is_none() {
+                        let decodes=unit.sources.decodes().into_iter().filter(|key|r.decoding(key)).collect::<Vec<_>>();
+                        prepared.waiting=if decodes.is_empty() {waiting_on(scene,r,self.declarations(),&stopped.err().unwrap_or(GpuRasterError::NotReady))}
+                            else {Some(crate::frame_demand::UnitWait::Input(crate::frame_demand::Producer::Decode(decodes.into()),allowance))};
+                    }
                     if class.demanded() {self.pages.lock().unwrap().hold_inputs(&handle,unit.sources)?;}
                     else {self.pages.lock().unwrap().finish_inputs(&handle);}
                     scene.discard_jobs_from(start);if !r.decode_queue_has_room() {break;}

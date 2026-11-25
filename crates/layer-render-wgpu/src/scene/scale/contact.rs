@@ -295,9 +295,11 @@ impl Cache {
     pub(super) fn edit_cells(&self,packet:FramePacket<'_>,budget:&WorkBudget)->Vec<PixelRect> {
         if !packet.dab_batches.is_empty() || budget.motion || !self.pivot_edited() {Vec::new()}else {self.wanted_cells(self.plan.bounds,packet.view)}
     }
-    pub(super) fn prepare_edit_sources(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,budget:&mut WorkBudget)
-        ->Result<(),GpuRasterError> {
-        let (Some([x,y]),Some(root))=(self.pointer,self.graph.root.clone()) else {return Ok(());};
+    pub(super) fn prepare_edit_sources(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,budget:&mut WorkBudget,
+        allowance:crate::frame_demand::Allowance,
+    )->Result<sources::Prepared,GpuRasterError> {
+        let mut prepared=sources::Prepared::default();
+        let (Some([x,y]),Some(root))=(self.pointer,self.graph.root.clone()) else {return Ok(prepared);};
         let span=(PAGE_SIZE<<self.plan.level) as f32;
         let near=PixelRect::new((x-span).max(0.) as u32,(y-span).max(0.) as u32,(x+span).max(0.) as u32+1,(y+span).max(0.) as u32+1).intersect(self.plan.bounds);
         let tiled=self.tiled(r,packet,scene,&root);
@@ -306,12 +308,12 @@ impl Cache {
             let cell=pages::bounds(coordinate,self.plan.level,self.plan.extent);
             if self.pivot_missing(cell) {continue;}
             for (id,request) in self.region_sources(scene,r,packet,cell,tiled) {
-                if budget.source_pages(Class::Refinement)==0 {return Ok(());}
+                if budget.source_pages(Class::Refinement)==0 || prepared.refusal.is_some() {return Ok(prepared);}
                 if inside.contains(&id) || self.source_ready(scene,r,id,&request) {continue;}
-                self.prepare_source(scene,r,packet,encoder,id,request,Class::Refinement,crate::frame_demand::Allowance::Fresh,budget)?;
+                prepared=prepared.or(self.prepare_source(scene,r,packet,encoder,id,request,Class::Refinement,allowance,budget)?);
             }
         }
-        Ok(())
+        Ok(prepared)
     }
     #[expect(clippy::too_many_arguments,reason="A contact begins from the frame's composed cells, encoding and budget")]
     pub(super) fn begin_contact(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,retained:u64,budget:&mut WorkBudget,

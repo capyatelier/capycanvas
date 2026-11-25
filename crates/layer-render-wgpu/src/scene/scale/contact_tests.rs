@@ -1594,7 +1594,7 @@ fn an_edited_pivot_prepares_its_next_stroke_sources_when_the_frame_budget_is_spe
         let mut budget=crate::test_support::work(false);budget.spend(budget.remaining());
         let spent=budget.spent();
         scene.begin_frame();scene.scale_sources.prepare(&r,frame,&[]);
-        cache.prepare_edit_sources(&mut scene,&mut r,frame,&mut encoder,&mut budget).unwrap();
+        cache.prepare_edit_sources(&mut scene,&mut r,frame,&mut encoder,&mut budget,crate::frame_demand::Allowance::Fresh).unwrap();
         budget.spent()-spent
     };
     r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);

@@ -46,10 +46,10 @@ fn asleep(wait:Option<&crate::frame_demand::UnitWait>,r:&WgpuRasterizer)->crate:
 
 #[derive(Default)]
 pub(super) struct Exact {pub(super) committed:bool,pub(super) blocks:Vec<(pages::Key,Option<crate::frame_demand::UnitWait>)>,pub(super) refusals:Vec<(PixelRect,crate::residency::Blocked,Allowance)>,
-    pub(super) pivot_refusal:Option<crate::residency::Blocked>}
+    pub(super) pivot:sources::Prepared}
 impl Exact {
     fn refuse(&mut self,region:PixelRect,refusal:crate::residency::Blocked,allowance:Allowance,pivot:bool) {
-        if pivot {self.pivot_refusal.get_or_insert_with(||refusal.clone());}
+        if pivot {self.pivot.refusal.get_or_insert_with(||refusal.clone());}
         self.refusals.push((region,refusal,allowance));
     }
 }
@@ -114,12 +114,18 @@ impl Cache {
     pub(super) fn note_pivot_edit(&mut self) {
         let Some((owner,active))=self.graph.active().zip(self.graph.parts.as_ref().map(|parts|parts.nodes[1].clone())) else {return;};
         let Some(stamp)=self.pages.lock().unwrap().expected().and_then(|frame|frame.authored_revision(&active).ok()) else {return;};
+        if self.pivot_edit.is_some_and(|(held,..)|held!=owner) {self.pivot_refusal=None;}
         self.pivot_edit=Some(match self.pivot_edit {
             Some((held,base,edited)) if held==owner=>(held,base,edited || base!=stamp),
             selected=>(owner,stamp,selected.is_some()),
         });
     }
     pub(super) fn pivot_edited(&self)->bool {self.pivot_edit.is_some_and(|(_,_,edited)|edited)}
+    pub(super) fn pivot_allowance(&self,r:&WgpuRasterizer)->Option<Allowance> {self.pivot_refusal.as_ref().map_or(Some(Allowance::Fresh),|wait|wait.eligible(r))}
+    pub(super) fn settle_pivot(&mut self,prepared:sources::Prepared,allowance:Allowance) {
+        self.pivot_refusal=prepared.refusal.map(|refusal|crate::frame_demand::UnitWait::parked(refusal,allowance));
+        if prepared.waiting.is_some() {self.pivot_waiting=prepared.waiting;}
+    }
     fn folds_halves(&self,key:&pages::Key,class:Class)->bool {
         let halves=self.pivot_halves();
         let region=key.plan().bounds;
@@ -142,17 +148,17 @@ impl Cache {
     pub(super) fn build_halves(
         &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
         encoder: &mut crate::submission::CommandEncoder, budget: &mut WorkBudget, retained: u64,
-        cells: Vec<PixelRect>, class: Class, owed: bool,
+        cells: Vec<PixelRect>, class: Class, owed: bool, pivot: Option<Allowance>,
     ) -> Result<Exact, GpuRasterError> {
         if cells.is_empty() {return Ok(Exact::default());}
         if !exact_at_view_level(packet.scene,self.plan.level) {
             let keys=self.half_keys(&cells);
-            return self.exact_units(scene,r,packet,encoder,budget,keys,&|_|class,owed);
+            return self.exact_units(scene,r,packet,encoder,budget,keys,&|_|class,owed,pivot);
         }
         let halves=self.pivot_halves();
         let cells=cells.into_iter().filter(|cell|self.pivot_missing(*cell)).collect::<Vec<_>>();
         let mut completed=Vec::new();
-        let built=self.half_units(scene,r,packet,encoder,retained,budget,cells,&halves,class,&mut completed)?;
+        let built=self.half_units(scene,r,packet,encoder,retained,budget,cells,&halves,class,pivot,&mut completed)?;
         self.encode_units(scene,r,encoder,completed.iter_mut().map(|ready|std::mem::take(&mut ready.unit)))?;
         for ready in completed {self.pages.lock().unwrap().finish_inputs(&ready.handle);}
         let mut exact=Exact::default();
@@ -169,7 +175,7 @@ impl Cache {
         let waiting=||Some(asleep(self.pivot_waiting.as_ref(),r));
         let flying=self.pivot_halves();
         if self.streaming.units.iter().any(|unit|flying.contains(&unit.interest.key.expression)) {return waiting();}
-        if self.pivot_refusal.as_ref().is_some_and(|wait|wait.eligible(r).is_none()) {return None;}
+        self.pivot_allowance(r)?;
         let halves=if self.pivot_edited() {self.pivot_halves()}else {Vec::new()};
         if halves.is_empty() {return self.pivot_input(r);}
         let held=self.half_cells(self.plan.bounds);
@@ -190,10 +196,7 @@ impl Cache {
         if naming {return Some(Blocked(crate::frame_demand::Input::Name));}
         self.pivot_input(r)
     }
-    fn pivot_input(&self,r:&WgpuRasterizer)->Option<crate::frame_demand::Outstanding> {
-        use crate::frame_demand::{Input,Outstanding::{Blocked,Runnable}};
-        self.pivot_pending.then(||if r.image_decode_waiting() {Blocked(Input::Decode)}else {Runnable})
-    }
+    fn pivot_input(&self,r:&WgpuRasterizer)->Option<crate::frame_demand::Outstanding> {self.pivot_pending.then(||asleep(self.pivot_waiting.as_ref(),r))}
     pub(super) fn pivot_inputs_pending(&self,scene:&Scene,r:&WgpuRasterizer,packet:FramePacket<'_>)->bool {
         if self.graph.parts.is_none() || self.pivot_missing(self.plan.bounds) {return false;}
         let root=self.graph.root.clone().unwrap();
@@ -207,27 +210,30 @@ impl Cache {
     ) -> Result<PixelRect, GpuRasterError> {
         if self.gesture.is_some() || !refining(r) || self.graph.root.is_none() {return Ok(PixelRect::EMPTY);}
         self.pairing=self.overview.as_deref().filter(|_|self.plan.level==0).map_or_else(Default::default,Cache::pairing);
+        let pivot=self.pivot_allowance(r);
         let halves=if self.pivot_edited() {self.pivot_halves()}else {Vec::new()};
         let wanted=if halves.is_empty() {Vec::new()}else {self.wanted_cells(self.plan.bounds,packet.view)};
         let mut exact=if exact_at_view_level(packet.scene,self.plan.level) {
-            self.build_halves(scene,r,packet,encoder,budget,0,wanted,Class::Refinement,false)?
+            self.build_halves(scene,r,packet,encoder,budget,0,wanted,Class::Refinement,false,pivot)?
         } else {
             let mut coordinates=pages::coordinates(self.plan.bounds,self.plan.level)
                 .filter(|coordinate|!self.awaits_compose(pages::bounds(*coordinate,self.plan.level,self.plan.extent))).collect::<Vec<_>>();
             coordinates.sort_by_key(|coordinate|centre_distance(packet.view,pages::bounds(*coordinate,self.plan.level,self.plan.extent)));
             let mut keys=coordinates.into_iter().map(|coordinate|self.refinement_interest(self.plan.level,pages::bounds(coordinate,self.plan.level,self.plan.extent)).key).collect::<Vec<_>>();
             keys.extend(self.half_keys(&wanted));
-            self.exact_units(scene,r,packet,encoder,budget,keys,&|_|Class::Refinement,false)?
+            self.exact_units(scene,r,packet,encoder,budget,keys,&|_|Class::Refinement,false,pivot)?
         };
-        self.pivot_refusal=exact.pivot_refusal.take().map(|refusal|crate::frame_demand::UnitWait::parked(refusal,crate::frame_demand::Allowance::Fresh));
         self.pivot_waiting=exact.blocks.iter().find(|(key,_)|halves.contains(&key.expression)).and_then(|(_,wait)|wait.clone());
         for (key,wait) in &exact.blocks {self.block(key.plan().bounds,wait.clone());}
         for (region,refusal,allowance) in &exact.refusals {self.refuse(*region,refusal,*allowance);}
         self.pivot_pending=self.pivot_inputs_pending(scene,r,packet);
-        if self.pivot_pending {
-            let refusal=self.prepare_pivot(scene,r,packet,encoder,budget,self.plan.bounds,&|_|Class::Refinement)?;
-            self.pivot_refusal=self.pivot_refusal.take().or(refusal.map(|refusal|crate::frame_demand::UnitWait::parked(refusal,crate::frame_demand::Allowance::Fresh)));
-            self.pivot_pending=self.pivot_inputs_pending(scene,r,packet);
+        if let Some(allowance)=pivot {
+            let mut prepared=std::mem::take(&mut exact.pivot);
+            if self.pivot_pending && prepared.refusal.is_none() {
+                prepared=prepared.or(self.prepare_pivot(scene,r,packet,encoder,budget,self.plan.bounds,&|_|Class::Refinement,allowance)?);
+                self.pivot_pending=self.pivot_inputs_pending(scene,r,packet);
+            }
+            self.settle_pivot(prepared,allowance);
         }
         if exact.committed {self.project_exact(scene,r,encoder,commands)}else {Ok(PixelRect::EMPTY)}
     }
@@ -236,7 +242,7 @@ impl Cache {
     pub(super) fn exact_units(
         &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
         encoder: &mut crate::submission::CommandEncoder, budget: &mut WorkBudget,
-        cells: Vec<pages::Key>, class: &dyn Fn(PixelRect)->Class, owed: bool,
+        cells: Vec<pages::Key>, class: &dyn Fn(PixelRect)->Class, owed: bool, pivot: Option<Allowance>,
     ) -> Result<Exact, GpuRasterError> {
         let mut exact=Exact::default();
         let halves=self.pivot_halves();
@@ -247,13 +253,14 @@ impl Cache {
         let mut pass=Pass {started:false,owed,closed:None};
         let flying=admitted.len();
         for (index,cell) in admitted.into_iter().chain(cells).enumerate() {
-            if index>=flying && self.refused(r,cell.plan().bounds) {continue;}
-            if index>=flying && !halves.contains(&cell.expression) && let Some(wait)=self.pairing.awaits(cell.plan().bounds) {exact.blocks.push((cell,wait));continue;}
-            let allowance=if !owed && self.cell_allowance(r,cell.plan().bounds)==Allowance::Spent {Allowance::Spent}else {Allowance::Fresh};
+            let half=halves.contains(&cell.expression);
+            if index>=flying && (self.refused(r,cell.plan().bounds) || half && pivot.is_none()) {continue;}
+            if index>=flying && !half && let Some(wait)=self.pairing.awaits(cell.plan().bounds) {exact.blocks.push((cell,wait));continue;}
+            let allowance=if !owed && self.cell_allowance(r,cell.plan().bounds)==Allowance::Spent || half && pivot!=Some(Allowance::Fresh) {Allowance::Spent}else {Allowance::Fresh};
             if index>=flying && let Some(closed)=pass.closed.as_ref().filter(|closed|closed.applies(class(cell.plan().bounds),allowance)) {
                 match self.flight(cell.plan().bounds,closed) {
                     Outcome::Waiting(input)=>exact.blocks.push((cell.clone(),Some(input))),
-                    Outcome::Refused(region,refusal)=>exact.refuse(region,refusal,allowance,halves.contains(&cell.expression)),
+                    Outcome::Refused(region,refusal)=>exact.refuse(region,refusal,allowance,half),
                     _=>{},
                 }
                 continue;
@@ -271,7 +278,7 @@ impl Cache {
                     Outcome::Committed=>{exact.committed=true;None},
                     Outcome::Waiting(input)=>Some(input),
                     Outcome::Deferred=>None,
-                    Outcome::Refused(region,refusal)=>{exact.refuse(region,refusal,allowance,halves.contains(&cell.expression));if allowance==Allowance::Spent {break;}continue;},
+                    Outcome::Refused(region,refusal)=>{exact.refuse(region,refusal,allowance,half);if allowance==Allowance::Spent {break;}continue;},
                     Outcome::Skipped=>continue,
                 };
                 pending|=held;waiting=waiting.or_else(||input.clone());
@@ -279,8 +286,9 @@ impl Cache {
             }
             for page in pinned {page.track(encoder);}
             if waiting.is_some() {exact.blocks.push((cell,waiting));}
-            else if !pending && let Some(refusal)=self.prepare_pivot(scene,r,packet,encoder,budget,cell.plan().bounds,class)? {
-                exact.pivot_refusal.get_or_insert(refusal);
+            else if !pending && let Some(allowance)=pivot.filter(|_|exact.pivot.refusal.is_none()) {
+                let prepared=self.prepare_pivot(scene,r,packet,encoder,budget,cell.plan().bounds,class,allowance)?;
+                exact.pivot=std::mem::take(&mut exact.pivot).or(prepared);
             }
         }
         Ok(exact)
@@ -306,16 +314,17 @@ impl Cache {
     #[expect(clippy::too_many_arguments, reason = "The pivot's display sources share the frame's scene, encoding and budget with the exact cell they follow")]
     fn prepare_pivot(
         &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
-        encoder: &mut crate::submission::CommandEncoder, budget: &mut WorkBudget, region: PixelRect, class: &dyn Fn(PixelRect)->Class,
-    ) -> Result<Option<crate::residency::Blocked>, GpuRasterError> {
-        if self.graph.parts.is_none() || self.pivot_missing(region) {return Ok(None);}
+        encoder: &mut crate::submission::CommandEncoder, budget: &mut WorkBudget, region: PixelRect, class: &dyn Fn(PixelRect)->Class, allowance: Allowance,
+    ) -> Result<sources::Prepared, GpuRasterError> {
+        let mut prepared=sources::Prepared::default();
+        if self.graph.parts.is_none() || self.pivot_missing(region) {return Ok(prepared);}
         let root=self.graph.root.clone().unwrap();
         let tiled=use_tiles(r,self.plan,packet,Some(scene)) && !(self.plan.level>0 && root.fused_transform(r));
-        let mut refusal=None;
         for (id,request) in self.region_sources(scene,r,packet,region,tiled) {
-            if !self.source_ready(scene,r,id,&request) {refusal=refusal.or(self.prepare_source(scene,r,packet,encoder,id,request,class(region),Allowance::Fresh,budget)?.refusal);}
+            if prepared.refusal.is_some() {break;}
+            if !self.source_ready(scene,r,id,&request) {prepared=prepared.or(self.prepare_source(scene,r,packet,encoder,id,request,class(region),allowance,budget)?);}
         }
-        Ok(refusal)
+        Ok(prepared)
     }
 
     #[expect(clippy::too_many_arguments, reason = "An exact unit shares the frame's scene, encoding and budget with its cell")]
