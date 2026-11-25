@@ -4142,12 +4142,12 @@ impl CanvasRenderer for WgpuRasterizer {
         self.memory.next_lane_generation();
         let operation = packet.operation();
         self.report_lane_end(Some(operation));
-        if self.lane_waits() && !self.close_steps_past_own_reclaim(packet) { return layer_render::SubmissionTurn::Held; }
+        if self.lane_waits() && !self.close_steps_past_own_reclaim(packet) { self.held_frame = self.lane_hold(); return layer_render::SubmissionTurn::Held; }
         let claimant = self.memory.claim(Some(operation));
         let ready = self.lane_exhausted() || self.raster_dependencies_ready(packet, preview);
         self.memory.claim(claimant);
         if let Some(error) = self.take_lane_failure(operation) { self.held_frame = None; return layer_render::SubmissionTurn::Refused(self.drawn.refusal(operation), error); }
-        if !ready { return layer_render::SubmissionTurn::Held; }
+        if !ready { self.held_frame = self.held_frame.take().or_else(|| self.lane_hold()); return layer_render::SubmissionTurn::Held; }
         layer_render::SubmissionTurn::Ready(layer_render::ReadySubmission::new(self.memory.lane_generation(), packet))
     }
     fn submit_ready(&mut self, ready: layer_render::ReadySubmission, packet: FramePacket<'_>) -> Result<(), Self::Error> {

@@ -408,6 +408,7 @@ impl WgpuRasterizer {
         wait.observe(self)
     }
     pub(crate) fn lane_waits(&self)->bool {matches!(self.lane_turn(),crate::frame_demand::Turn::Sleep(_))}
+    pub(crate) fn lane_hold(&self)->Option<crate::frame_demand::UnitWait> {self.lane_waits().then(||self.memory.lane.borrow().wait.clone())}
     fn end_lane_wait(&self) {
         let (ended,end)={let mut lane=self.memory.lane.borrow_mut();lane.wanted=0;lane.wait=Default::default();lane.owner=None;(lane.refused.take().is_some(),lane.end.take())};
         drop(end);

@@ -296,6 +296,7 @@ impl TargetRestore {
         }
         source.inputs(r.document_color().space).ok().flatten().is_some_and(|inputs|self.inputs.ready_for(&inputs))
     }
+    fn decoding(&self,r:&WgpuRasterizer)->bool {self.next<self.allocated && !self.ready(r)}
 
     fn advance(&mut self,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,room:&mut Option<crate::residency::Reservation>)->Result<(),GpuRasterError> {
         self.inputs.clone().track(encoder);
@@ -896,7 +897,8 @@ impl WgpuRasterizer {
         Some(match restore.wait.observe(self) {
             Turn::Sleep(input)=>Outstanding::Blocked(input),
             Turn::Dormant=>Outstanding::Blocked(Input::Residency),
-            Turn::Enter(_) if self.image_decode_waiting()=>Outstanding::Blocked(Input::Decode),
+            Turn::Enter(_) if restore.refused.is_none() && self.image_decode_waiting()
+                && restore.targets.iter().flatten().find(|target|!target.complete()).is_some_and(|target|target.decoding(self))=>Outstanding::Blocked(Input::Decode),
             Turn::Enter(_)|Turn::Deliver=>Outstanding::Runnable,
         })
     }

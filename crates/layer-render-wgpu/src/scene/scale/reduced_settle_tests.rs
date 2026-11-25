@@ -162,3 +162,77 @@ fn a_stroke_at_fit_over_a_photo_builds_view_level_halves_and_keeps_one_contact()
     assert_eq!(stroke.level_zero_captures,0,"a stroke below 100% builds its halves at the view level: {stroke:?}");
     assert!(!stroke.contacts.is_empty() && !stroke.ended,"the stroke enters contact and keeps it across cells: {stroke:?}");
 }
+
+fn web_renderer(session:&UiSession<crate::AttachedRenderer>)->&WgpuRasterizer {session.engine().backend().0.as_deref().unwrap()}
+
+#[test]
+fn a_stroke_held_on_its_memory_under_a_web_budget_ends_with_its_commit_or_one_notice() {
+    let ellipse=|count:u64,turns:f32,center:[f32;2],radius:[f32;2]|move|step:u64|{
+        let angle=step as f32/count as f32*turns*std::f32::consts::TAU;
+        [center[0]+radius[0]*angle.cos(),center[1]+radius[1]*angle.sin()]
+    };
+    let cases:[(&str,[i64;2],layer_core::DefaultBrushPreset,f32,bool,u64,Box<dyn Fn(u64)->[f32;2]>);2]=[
+        ("G-Pen on a moved photo",[2112,0],layer_core::DefaultBrushPreset::GPen,2048.,true,250,Box::new(ellipse(250,1.25,[4752.,3168.],[3963.5,1408.]))),
+        ("Liquify after a primer",[0,0],layer_core::DefaultBrushPreset::LiquifyPush,512.,false,150,Box::new(ellipse(150,1.,[4752.,3168.],[2851.2,1900.8]))),
+    ];
+    for (case,offset,brush,size,feedback,count,point) in cases {
+        let mut document=photo_document([9504,6336]);
+        let photo=document.scene().order()[1];
+        document.artwork.occurrences.get_mut(photo).unwrap().offset=offset;
+        let mut document=layer_core::Document::from_artwork(document.artwork).unwrap();
+        (document.working.occurrence,document.working.target)=(Some(photo),document.scene().source_target(photo));
+        let budget=layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {host_default_bytes:Some(2<<30),override_bytes:Some(2<<30),..Default::default()});
+        let mut r=crate::memory::memory_tests::renderer_in_budget(document.composition().color,
+            layer_core::DeviceMemoryFacts {unified:true,budget_bytes:Some(2<<30),..Default::default()},budget).unwrap();
+        r.set_preparation_wake(Arc::new(||{}));
+        let mut presenter=crate::test_support::float_presenter(&r);
+        let (_texture,target)=create_target(&r.device,[2880,1590],wgpu::TextureFormat::Rgba32Float,"Web budget stroke target");
+        let mut session=UiSession::new(crate::AttachedRenderer(Some(Box::new(r))),document,[2880,1590],Platform::Web).unwrap();
+        for action in [UiAction::Layer {action:layer_ui::LayerAction::Select {id:layer_ui::occurrence_token(photo),mask:false}},
+            UiAction::Preferences {action:PreferenceAction::Edit {id:PreferenceId::Feedback,value:PreferenceValue::Bool(false)}},
+            UiAction::SelectBrush {id:brush as u32},UiAction::SetBrushSize {value:size},UiAction::Invoke {command:CommandId::FitCanvas}] {session.dispatch(action).unwrap();}
+        let clock=std::time::Instant::now();
+        let now=||1_000_000_000+clock.elapsed().as_nanos() as u64;
+        let mut frame=|session:&mut UiSession<crate::AttachedRenderer>,complete:bool| {
+            let at=now();
+            session.frame(at,at).unwrap();
+            let r=web_renderer(session);
+            if complete {crate::test_support::complete(r);}
+            let view=session.camera().view();
+            if presenter.needs_present(r,view,[0.;4]) {presenter.present(r,&target,view,[0.;4]).unwrap();if complete {crate::test_support::complete(r);}}
+            session.renderer_mut().0.as_deref_mut().unwrap().after_present();
+        };
+        let idle=|session:&UiSession<crate::AttachedRenderer>|session.frame_demand()==layer_render::FrameDemand::Wait && !session.engine().has_pending_input()
+            && !session.engine().has_active_stroke() && web_renderer(session).settled();
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(120);
+        while !idle(&session) {assert!(std::time::Instant::now()<deadline,"{case}: the photo opens");frame(&mut session,true);}
+        session.dispatch(UiAction::Preferences {action:PreferenceAction::Edit {id:PreferenceId::Feedback,value:PreferenceValue::Bool(feedback)}}).unwrap();
+        let pen=|session:&mut UiSession<crate::AttachedRenderer>,sequence:u64,phase:PenPhase,point:[f32;2]| {
+            let [a,b,c,d,x,y]=session.camera().document_to_surface();
+            session.pen(PenEvent {timestamp_ns:now(),view_revision:session.camera().revision,pressure:if phase==PenPhase::Up {0.}else {1.},
+                ..crate::test_support::pen(sequence,phase,[a*point[0]+c*point[1]+x,b*point[0]+d*point[1]+y],SampleFlags::PRIMARY)});
+        };
+        let opened=session.engine().document().revision;
+        for step in 0..=8u64 {
+            pen(&mut session,step+1,match step {0=>PenPhase::Down,8=>PenPhase::Up,_=>PenPhase::Move},[9504.*(0.5+0.025*step as f32/8.),3168.]);
+            frame(&mut session,true);
+        }
+        while session.engine().document().revision==opened {assert!(std::time::Instant::now()<deadline,"{case}: the primer commits");frame(&mut session,true);}
+        let (start,told)=(session.engine().document().revision,session.engine().metrics().stroke_memory_refusals);
+        for step in 0..=count {
+            pen(&mut session,step+10,if step==0 {PenPhase::Down}else if step==count {PenPhase::Up}else {PenPhase::Move},point(step));
+            if (step%10==0 || step==count) && session.frame_demand()!=layer_render::FrameDemand::Wait {frame(&mut session,false);}
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let ended=|session:&UiSession<crate::AttachedRenderer>|!session.engine().has_pending_input() && !session.engine().has_active_stroke();
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(120);
+        while !ended(&session) && std::time::Instant::now()<deadline {
+            if session.frame_demand()!=layer_render::FrameDemand::Wait {frame(&mut session,false);} else {std::thread::sleep(std::time::Duration::from_millis(5));}
+        }
+        let (engine,r)=(session.engine(),web_renderer(&session));
+        let (told,committed)=(engine.metrics().stroke_memory_refusals-told,engine.document().revision-start);
+        assert!(ended(&session),"{case}: the stroke ends instead of waiting with no frame asked: active {}, revision {start} -> {}, notices {told}, {:?}, {}",
+            engine.has_active_stroke(),engine.document().revision,r.outstanding_terms(),session.rendering_diagnostics());
+        assert!(told<=1 && committed<=1 && (told==1 || committed==1),"{case}: the stroke commits once or the painter is told once: {told} notices, {committed} revisions");
+    }
+}

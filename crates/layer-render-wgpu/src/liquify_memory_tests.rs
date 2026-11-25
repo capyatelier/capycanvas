@@ -242,6 +242,44 @@ fn a_drawn_stroke_closes_and_finalizes_once_with_all_other_room_pinned() {
 }
 
 #[test]
+fn a_stroke_frame_held_on_its_lane_reclaim_asks_for_its_turn_once_the_reclaim_settles() {
+    let mut canvas = Canvas::photo(1024);
+    canvas.brush(layer_core::DefaultBrushPreset::GPen, 60.);
+    canvas.engine.backend_mut().set_preparation_wake(Arc::new(|| {}));
+    let (start, told) = (canvas.engine.document().revision, canvas.engine.metrics().stroke_memory_refusals);
+    let view = canvas.engine.view();
+    let pen =|canvas: &mut Canvas, phase: PenPhase, x: f32| {
+        canvas.sequence += 1;
+        let timestamp_ns = canvas.clock.max(60_000_000_000) + FRAME_NS;
+        canvas.input.push(PenEvent { timestamp_ns, view_revision: 1, pressure: if phase == PenPhase::Up { 0. } else { 1. },
+            ..crate::test_support::pen(canvas.sequence, phase, [view.width_px as f32 * x, view.height_px as f32 * 0.5], SampleFlags::PRIMARY) }).unwrap();
+        canvas.frame(timestamp_ns);
+        for _ in 0..SAMPLE_FRAMES { if !canvas.engine.has_pending_input() { break; } canvas.frame(canvas.clock + FRAME_NS); }
+    };
+    for (phase, x) in [(PenPhase::Down, 0.2), (PenPhase::Move, 0.25), (PenPhase::Move, 0.3)] { pen(&mut canvas, phase, x); }
+    let stroke = canvas.engine.backend().drawn.prefix().map(|(stroke, _)| stroke).expect("the stroke draws before its room is pinned");
+    let pinned = crate::memory::memory_tests::pin_every_free_byte(canvas.engine.backend_mut());
+    let victim = canvas.engine.backend().scene_tiers.display.heap().lease(&Arc::default());
+    victim.offer(1 << 30, 0);
+    let r = canvas.engine.backend_mut();
+    let claimant = r.memory.claim(Some(stroke));
+    assert!(r.admit_raster_working(1 << 20, crate::frame_demand::Allowance::Fresh).is_err() && r.lane_waits(), "the stroke's reclaim waits on its victim");
+    r.memory.claim(claimant);
+    pen(&mut canvas, PenPhase::Move, 0.8);
+    for _ in 0..SETTLE_FRAMES { if canvas.engine.canvas_demand() != layer_render::FrameDemand::Work { break; } canvas.frame(canvas.clock + FRAME_NS); }
+    assert!(canvas.engine.has_active_stroke() && canvas.engine.backend().lane_waits() && canvas.engine.canvas_demand() != layer_render::FrameDemand::Work,
+        "the held frame sleeps while its reclaim waits: {:?}", canvas.engine.backend().outstanding_terms());
+    drop(victim);
+    assert_eq!(canvas.engine.canvas_demand(), layer_render::FrameDemand::Work, "the settled reclaim asks for the held frame's turn: {:?}", canvas.engine.backend().outstanding_terms());
+    canvas.frame(canvas.clock + FRAME_NS);
+    drop(pinned);
+    if canvas.engine.has_active_stroke() { pen(&mut canvas, PenPhase::Up, 0.85); }
+    assert!(canvas.settle(), "the stroke ends, not wait on {:?}", canvas.engine.backend().outstanding_terms());
+    let told = canvas.engine.metrics().stroke_memory_refusals - told;
+    assert!(canvas.engine.document().revision == start + 1 && told <= 1, "what the stroke drew commits once and the painter is told at most once: {told} notices");
+}
+
+#[test]
 fn back_to_back_contacts_commit_the_revisions_a_roomy_run_commits() {
     let revisions = |budget: u64| {
         let mut canvas = Canvas::photo(budget);
