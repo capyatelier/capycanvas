@@ -2065,7 +2065,7 @@ impl Cache {
         else {Some(Outstanding::Runnable)}
     }
     pub(super) fn ask(&mut self,asked:Asked) {
-        if !self.asked.replace(asked).is_some_and(|earlier|asked.no_higher_than(earlier)) {
+        if self.asked.replace(asked).is_some_and(|earlier|!asked.no_higher_than(earlier)) {
             for cell in &mut self.cells.lock().unwrap().cells {cell.release();cell.waits.clear();}
         }
     }
