@@ -596,6 +596,59 @@ int main() {
     assert(CanvasPointerButton(1,false,false,true)==2);
     for(bool right:{false,true})assert(CanvasPointerButton(0,false,right,true)==0);
     std::cout<<"Canvas pen/eraser side buttons ignored; mouse pan buttons preserved\n";
+    {
+        CanvasPenContacts contacts;std::vector<CapyPointer> out;
+        using Phases=std::vector<uint32_t>;
+        auto admit=[&](uint32_t id,uint32_t phase,bool contact,bool range,float pressure,bool barrel,float x=0){
+            CapyPointer p{};p.id=id;p.phase=phase;p.pressure=pressure;p.x=x;
+            auto before=out.size();contacts.Admit(out,p,contact,range,barrel);
+            Phases phases;for(auto i=before;i<out.size();++i)phases.push_back(out[i].phase);
+            return phases;
+        };
+        assert(admit(7,0,false,true,0,false)==Phases{0});
+        assert(admit(7,1,true,true,.2f,false)==Phases{1});
+        assert(admit(7,2,true,true,.3f,false)==Phases{2});
+        assert(admit(7,3,false,true,.3f,false)==Phases{});
+        assert(admit(7,1,true,true,.3f,true)==Phases{2});
+        assert(admit(7,2,true,true,.3f,true)==Phases{2});
+        assert(admit(7,3,false,true,.3f,false)==Phases{2});
+        assert(admit(7,0,false,true,.3f,false)==Phases{2});
+        assert(admit(7,0,false,true,0,false,9)==Phases{3}&&out.back().x==9);
+        assert(admit(7,0,false,true,0,false)==Phases{0});
+        std::cout<<"A Windows barrel press and release mid-contact keep one pen contact until the tip lifts\n";
+
+        assert(admit(7,1,true,true,.2f,true)==Phases{1});
+        assert(admit(7,3,false,true,.2f,true,4)==Phases{});
+        assert(admit(7,0,false,true,0,true)==(Phases{3,0})&&out[out.size()-2].x==4);
+        assert(admit(7,1,true,true,.2f,false)==Phases{1});
+        assert(admit(7,3,false,true,0,false)==Phases{3});
+        assert(admit(7,1,true,true,.2f,false)==Phases{1});
+        assert(admit(7,3,false,true,.5f,false)==Phases{});
+        assert(admit(7,1,true,true,.5f,false)==(Phases{3,1}));
+        assert(admit(7,3,false,true,.5f,false)==Phases{});
+        assert(admit(7,0,false,true,.5f,false)==(Phases{3,0}));
+        std::cout<<"Pen lifts with or without trailing pressure end the contact, and a re-touch without a barrel change starts another\n";
+
+        assert(admit(8,1,true,true,.4f,false)==Phases{1});
+        assert(admit(8,3,false,false,.4f,false)==Phases{3});
+        assert(admit(9,1,true,true,.4f,false)==Phases{1});
+        assert(admit(9,4,false,true,.4f,false)==Phases{4});
+        assert(admit(9,0,false,true,.4f,true)==Phases{0});
+        assert(admit(9,1,true,true,.4f,false)==Phases{1});
+        assert(admit(9,3,false,true,.4f,false)==Phases{});
+        assert(admit(9,4,false,true,.4f,false)==(Phases{3,4}));
+        std::cout<<"A pen that leaves range or is canceled ends its contact even while pressure remains\n";
+
+        assert(!contacts.End(10));
+        assert(admit(10,1,true,true,.4f,false)==Phases{1});
+        assert(admit(11,1,true,true,.4f,true)==Phases{1});
+        assert(admit(10,3,false,true,.4f,false,5)==Phases{});
+        assert(admit(11,3,false,true,.4f,false,6)==Phases{2});
+        auto lifted=contacts.End(10);assert(lifted&&lifted->phase==3&&lifted->x==5);
+        assert(admit(11,0,false,true,.4f,false,7)==Phases{2});
+        auto exited=contacts.End(11);assert(exited&&exited->phase==3&&exited->x==7&&!contacts.End(11));
+        std::cout<<"Pen contacts stay per pointer and an exit ends a held or bridged contact at its last sample\n";
+    }
     CapyPointer actual{};actual.pressure=0.37f;actual.x=42.25f;actual.timestamp_ns=12345;
     auto real=actual;
     assert(PrepareCanvasPrediction(real));

@@ -21,6 +21,7 @@
 #include "GamepadInput.h"
 #include "NativeHandles.h"
 #include "PenSourceCache.h"
+#include "CanvasPointerSample.h"
 #include <winrt/Windows.Devices.Haptics.h>
 #include "PointerModality.h"
 #include "NativeInputReceipt.h"
@@ -147,6 +148,7 @@ private:
     std::unordered_map<uint32_t,std::pair<std::wstring,std::wstring>> heldKeys; // UI thread
     std::unordered_set<uint32_t> penButtons; // input thread
     PenSourceCache penSources;
+    CanvasPenContacts penContacts;
     HWND orderedKeys=nullptr; // input thread
     bool orderingKeys=false; // input thread
     std::unordered_set<uint32_t> rawKeys; // key reader thread
@@ -287,6 +289,7 @@ private:
     bool ClaimsDeviceKey(std::wstring const& name)const;
     bool PenButtons(winrt::Microsoft::UI::Input::PointerPoint const& point,uint32_t phase);
     bool PenButtons(uint32_t id,bool primary);
+    void EndPenContact(uint32_t id);
     void Wheel(winrt::Microsoft::UI::Input::PointerEventArgs const&);
     void ObservePointerModality(winrt::Microsoft::UI::Input::PointerPoint const&);
     CanvasScroll ScrollSample(winrt::Windows::Foundation::Point,int32_t,bool,winrt::Windows::System::VirtualKeyModifiers);

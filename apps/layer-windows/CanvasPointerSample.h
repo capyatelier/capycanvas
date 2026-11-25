@@ -2,6 +2,9 @@
 #include "native/include/capy_windows.h"
 #include <algorithm>
 #include <cmath>
+#include <optional>
+#include <unordered_map>
+#include <vector>
 
 template<typename Device,typename Eraser,typename Inverted>
 uint32_t CanvasPointerTool(Device type,Eraser eraser,Inverted inverted) {
@@ -27,6 +30,36 @@ bool CanvasPointerHistoryNewestFirst(Points const& points,uint32_t count,Point c
 inline uint32_t CanvasPointerButton(uint32_t tool, bool middle, bool right, bool extra=false) {
     return tool==1?(middle||right?1:extra?2:0):0;
 }
+
+class CanvasPenContacts {
+    struct Tip {bool barrel;bool released;std::optional<CapyPointer> lifted;CapyPointer last;};
+    std::unordered_map<uint32_t,Tip> tips;
+public:
+    void Admit(std::vector<CapyPointer>& out,CapyPointer p,bool contact,bool range,bool barrel){
+        auto id=uint32_t(p.id);auto found=tips.find(id);
+        if(found!=tips.end()&&found->second.lifted){
+            auto& tip=found->second;
+            if(p.phase==1&&contact&&barrel!=tip.barrel){tip.lifted.reset();tip.barrel=barrel;p.phase=2;tip.last=p;out.push_back(p);return;}
+            out.push_back(*tip.lifted);tips.erase(found);found=tips.end();
+        }
+        if(found==tips.end()){
+            if(p.phase==1&&contact)tips.emplace(id,Tip{barrel,false,std::nullopt,p});
+            out.push_back(p);return;
+        }
+        auto& tip=found->second;bool pressed=range&&p.pressure>0;
+        if(p.phase==4){tips.erase(found);out.push_back(p);return;}
+        if(contact){tip.barrel=barrel;tip.released=false;p.phase=2;}
+        else if(p.phase==3&&pressed&&tip.barrel&&!barrel){tip.barrel=false;tip.released=true;p.phase=2;}
+        else if(p.phase==3&&pressed&&!tip.released){tip.lifted=p;return;}
+        else if(tip.released&&pressed)p.phase=2;
+        else{p.phase=3;out.push_back(p);tips.erase(found);return;}
+        tip.last=p;out.push_back(p);
+    }
+    std::optional<CapyPointer> End(uint32_t id){
+        auto found=tips.find(id);if(found==tips.end())return std::nullopt;
+        auto p=found->second.lifted.value_or(found->second.last);tips.erase(found);p.phase=3;return p;
+    }
+};
 
 // Windows' predictor extrapolates axes: pressure can exceed the sensor's [0,1]
 // range. Optional predictions must not invalidate the real history sharing a

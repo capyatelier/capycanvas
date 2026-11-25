@@ -374,7 +374,7 @@ void CanvasWindow::Open() {
     }});
     panel.PointerExited([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->inputDispatcher&&!e.Handled()){
         auto point=e.GetCurrentPoint(self->panel);auto id=point.PointerId();bool pen=point.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Pen;
-        if(!point.IsInContact())self->inputDispatcher.TryEnqueue([weak,id,pen]{if(auto self=weak.lock();self&&!self->closing){if(pen){self->PenButtons(id,false);std::lock_guard lock(self->mutex);self->penSources.Forget(id);}self->LeaveHover(HoverRoute::Xaml);}});
+        if(!point.IsInContact())self->inputDispatcher.TryEnqueue([weak,id,pen]{if(auto self=weak.lock();self&&!self->closing){if(pen){self->EndPenContact(id);self->PenButtons(id,false);std::lock_guard lock(self->mutex);self->penSources.Forget(id);}self->LeaveHover(HoverRoute::Xaml);}});
     }});
     textFocus=FocusManager::GettingFocus(auto_revoke,[weak=weak_from_this()](auto&&,GettingFocusEventArgs const& e){
         if(auto self=weak.lock();self&&!self->closed&&CapyUi::flag(CapyUi::object(self->lastModel,L"launch"),L"visible",true)){
@@ -1007,8 +1007,10 @@ void CanvasWindow::StartInput() {
         });
         inputSource.PointerExited([weak=weak_from_this()](auto&&,PointerEventArgs const& e){
             if(auto self=weak.lock();self&&!e.CurrentPoint().IsInContact()){
-                auto point=e.CurrentPoint();self->PenButtons(point,4);
-                if(point.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Pen){std::lock_guard lock(self->mutex);self->penSources.Forget(point.PointerId());}
+                auto point=e.CurrentPoint();bool pen=point.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Pen;
+                if(pen)self->EndPenContact(point.PointerId());
+                self->PenButtons(point,4);
+                if(pen){std::lock_guard lock(self->mutex);self->penSources.Forget(point.PointerId());}
                 self->LeaveHover(HoverRoute::Independent);
             }
         });
@@ -1103,8 +1105,9 @@ void CanvasWindow::Pointer(Microsoft::UI::Input::PointerEventArgs const& e,uint3
     if(phase<=2)hoverRoute=HoverRoute::Independent;
     auto current=e.CurrentPoint();
     if(phase<=2)ObservePointerModality(current);
-    auto down=phase==1&&independentDownReceipt?CanvasDown(current):std::nullopt;
-    bool accepted=Pointer(PointerSamples(current,e.GetIntermediatePoints(),phase,true),e.KeyModifiers(),
+    auto samples=PointerSamples(current,e.GetIntermediatePoints(),phase,true);
+    auto down=independentDownReceipt&&std::any_of(samples.begin(),samples.end(),[](auto const& p){return p.phase==1;})?CanvasDown(current):std::nullopt;
+    bool accepted=Pointer(std::move(samples),e.KeyModifiers(),
         current.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Pen,current.Properties().IsBarrelButtonPressed(),latencyTrace.enabled?Now():0);
     if(down){down->admitted=accepted&&!current.Properties().IsCanceled()?CapyUi::NativeInputAdmission::Accepted:CapyUi::NativeInputAdmission::Rejected;independentDownReceipt(*down);}
     e.Handled(true);
@@ -1142,12 +1145,13 @@ void CanvasWindow::XamlPointer(PointerRoutedEventArgs const& e,uint32_t phase){
 }
 std::vector<CapyPointer> CanvasWindow::PointerSamples(Microsoft::UI::Input::PointerPoint const& current,PointerPoints const& points,uint32_t phase,bool predict){
     phase=CanvasPointerPhase(phase,current.Properties().IsCanceled());
+    bool penPointer=current.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Pen;
     if(phase==1){
         Windows::Devices::Haptics::SimpleHapticsController controller{nullptr};
-        try{if(current.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Pen)if(auto pen=Microsoft::UI::Input::Interop::PenDeviceInterop::FromPointerPoint(current))controller=pen.SimpleHapticsController();}catch(hresult_error const&) {}
+        try{if(penPointer)if(auto pen=Microsoft::UI::Input::Interop::PenDeviceInterop::FromPointerPoint(current))controller=pen.SimpleHapticsController();}catch(hresult_error const&) {}
         inputDispatcher.TryEnqueue([weak=weak_from_this(),controller]{if(auto self=weak.lock())self->fillHaptics=controller;});
     }
-    if(current.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Pen){
+    if(penPointer){
         bool describe;
         {std::lock_guard lock(mutex);describe=penSources.Describe(current.PointerId(),phase==1);}
         if(describe){
@@ -1159,7 +1163,7 @@ std::vector<CapyPointer> CanvasWindow::PointerSamples(Microsoft::UI::Input::Poin
     }
     uint64_t view;float scale;{std::lock_guard lock(mutex);view=inputView.revision;scale=inputScale;}
     uint32_t deviceFlags=0;
-    if(current.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Pen){
+    if(penPointer){
         POINTER_INFO info{};POINTER_DEVICE_INFO device{};
         if(GetPointerInfo(current.PointerId(),&info)&&GetPointerDevice(info.sourceDevice,&device)&&device.pointerDeviceType==POINTER_DEVICE_TYPE_EXTERNAL_PEN)deviceFlags=0x40;
         POINTER_PEN_INFO pen{};if(GetPointerPenInfo(current.PointerId(),&pen)&&(pen.penMask&PEN_MASK_ROTATION))deviceFlags|=0x80;
@@ -1175,7 +1179,9 @@ std::vector<CapyPointer> CanvasWindow::PointerSamples(Microsoft::UI::Input::Poin
         p.tilt_x=radians(props.XTilt());p.tilt_y=radians(props.YTilt());p.twist=radians(props.Twist());p.phase=phase;p.tool=tool;
         p.button=CanvasPointerButton(tool,props.IsMiddleButtonPressed(),props.IsRightButtonPressed(),props.IsXButton1Pressed()||props.IsXButton2Pressed());
         p.flags=deviceFlags|(predicted?1:0)|(props.IsPrimary()?2:0);
-        if(PrepareCanvasPrediction(p))samples.push_back(p);
+        if(!PrepareCanvasPrediction(p))return;
+        if(predicted||!penPointer){samples.push_back(p);return;}
+        std::lock_guard lock(mutex);penContacts.Admit(samples,p,point.IsInContact(),props.IsInRange(),props.IsBarrelButtonPressed());
     };
     bool newestFirst=CanvasPointerHistoryNewestFirst(points,count,current);
     if(!count)capture(current,false);
@@ -1192,17 +1198,19 @@ std::vector<CapyPointer> CanvasWindow::PointerSamples(Microsoft::UI::Input::Poin
 bool CanvasWindow::Pointer(std::vector<CapyPointer> samples,Windows::System::VirtualKeyModifiers modifiers,bool pen,bool barrel,uint64_t arrival){
     if(samples.empty())return false;auto first=samples.front();auto id=uint32_t(first.id);
     {std::lock_guard lock(mutex);if(closing)return false;}
-    if(first.phase==1){
-        if(!SyncContactModifiers(modifiers))return false;
-    }
-    if(pen&&!PenButtons(id,first.phase!=4&&barrel))return false;
+    auto has=[&](auto test){return std::any_of(samples.begin(),samples.end(),test);};
+    bool starts=has([](auto const& p){return p.phase==1;}),ends=has([](auto const& p){return p.phase>=3;}),touch=first.tool==3;
+    if(starts&&!SyncContactModifiers(modifiers))return false;
+    if(pen&&!PenButtons(id,samples.back().phase!=4&&barrel))return false;
     for(auto& p:samples){p.sequence=++sequence;latencyTrace.Input(p,arrival);}
     if(samples.size()<=CanvasWorkBuffer::PointerBatch){if(!SendIndependent(std::move(samples)))return false;}
     else for(size_t at=0;at<samples.size();at+=CanvasWorkBuffer::PointerBatch){
         auto end=std::min(samples.size(),at+CanvasWorkBuffer::PointerBatch);
         if(!SendIndependent(std::vector<CapyPointer>(samples.begin()+at,samples.begin()+end)))return false;
     }
-    TrackContact(id,first.phase,first.tool==3);return true;
+    if(ends)TrackContact(id,3,touch);
+    if(starts)TrackContact(id,1,touch);
+    return true;
 }
 void CanvasWindow::Wheel(Microsoft::UI::Input::PointerEventArgs const& e){
     ObservePointerModality(e.CurrentPoint());
@@ -1319,6 +1327,11 @@ void CanvasWindow::ReleaseKeyHold(){
 bool CanvasWindow::PenButtons(Microsoft::UI::Input::PointerPoint const& point,uint32_t phase){
     if(point.PointerDeviceType()!=Microsoft::UI::Input::PointerDeviceType::Pen)return true;
     return PenButtons(point.PointerId(),phase!=4&&point.Properties().IsBarrelButtonPressed());
+}
+void CanvasWindow::EndPenContact(uint32_t id){
+    std::optional<CapyPointer> end;
+    {std::lock_guard lock(mutex);end=penContacts.End(id);}
+    if(end)Pointer(std::vector<CapyPointer>{*end},{},true,false,0);
 }
 bool CanvasWindow::PenButtons(uint32_t id,bool primary){
     auto held=penButtons.contains(id);
