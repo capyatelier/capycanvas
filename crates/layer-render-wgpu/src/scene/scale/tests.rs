@@ -2233,12 +2233,14 @@ fn display_and_native_evaluation_share_the_display_cache() {
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
+    let mut unfiltered_bytes = None;
     for filtered in [true, false, true, false] {
         let mut entries=doc.scene().children(None).iter().copied().filter(|handle|*handle!=effect).collect::<Vec<_>>();
         if filtered {entries.insert(0,effect);}
         set_root_entries(&mut doc,entries);
         let mut p = packet(doc.scene(), extent);
         p.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
+        let work = r.scene.as_ref().map_or(0, |scene| scene.image_pass_pixels());
         submit_published(&mut r, p);
         submit_published(&mut exact, p);
         assert!(r.scale_display.is_some());
@@ -2246,7 +2248,14 @@ fn display_and_native_evaluation_share_the_display_cache() {
         assert!(r.scale_display.as_ref().unwrap().evaluation == Evaluation::Display, "a reduced view captures a native effect at its own node, not the whole view natively");
         assert_settled(&mut r, p, &pixels(&exact, crate::test_support::document_texture(&exact)));
         if !filtered {
-            assert_eq!(r.scene.as_ref().unwrap().image_cache_bytes(), 0);
+            let scene = r.scene.as_ref().unwrap();
+            let bytes = scene.image_cache_bytes();
+            assert_eq!(scene.image_pass_pixels(), work, "removing the native effect executes no image passes");
+            assert!(bytes <= scene.usage().working, "retained native image storage is charged to scene working memory");
+            if let Some(previous) = unfiltered_bytes {
+                assert!(bytes <= previous, "repeated removal grows retained image storage from {previous} to {bytes}");
+            }
+            unfiltered_bytes = Some(bytes);
         }
         let a = r.readback_srgb_rgba8().unwrap();
         let b = exact.readback_srgb_rgba8().unwrap();

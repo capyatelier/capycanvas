@@ -32,8 +32,12 @@ fn analysis_admits_new_and_replacement_guides_before_the_next_frame() {
             document.artwork.occurrences.get_mut(paint).unwrap().opacity = opacity;
             let pressure=crate::memory::memory_tests::display_frame_with_budget(&mut renderer,
                 crate::test_support::packet(document.scene(),document.composition().size),required/2);
-            assert!(required > renderer.scene_tiers.display.limit().saturating_sub(renderer.scene_tiers.display.used()),
-                "the constrained Display tier must lack the next guide's allocation bound");
+            let owner = renderer.memory.display_owner();
+            let grant = renderer.memory.display_grant();
+            let pinned = owner.reported().pinned_gpu_bytes;
+            let device = renderer.factory.memory_budget().snapshot().devices[0];
+            assert!(required > grant.saturating_sub(pinned) && required > device.limit_bytes.saturating_sub(device.pinned_bytes.max(device.physical_bytes)),
+                "the constrained device must lack the next guide's allocation bound: required {required}, grant {grant}, pinned {pinned}, device {device:?}");
             drop(pressure);
             let query = ArtworkQuery::new(&document, ArtworkSource::EffectInput(target));
             assert!(renderer.request_effect_analysis(query).unwrap());

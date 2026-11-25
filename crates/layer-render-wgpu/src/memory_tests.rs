@@ -1048,30 +1048,33 @@ fn a_modified_pages_spare_is_evictable_and_not_pinned() {
 
 #[test]
 fn a_restore_drops_an_evictable_hierarchy_before_refusing_working_memory() {
-    let doc = layer_core::Document::new(layer_core::PortableId::random(), 4096, 4096,
-        layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+    let doc = layered_raster_document(12, 16);
     let mut r = renderer(doc.composition().color,
         layer_core::DeviceMemoryFacts { unified: true, ..Default::default() }).unwrap();
     r.factory.memory_budget().set_ram_override(Some(8 << 30));
     let mut frame = packet(doc.scene(), doc.composition().size);
-    frame.view = crate::test_support::view([512; 2]);
-    frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
+    frame.view = crate::test_support::view([2048; 2]);
+    frame.view.document_to_surface = [0.5, 0., 0., 0.5, 0., 0.];
     submit_settled(&mut r, frame);
     complete(&r);
     let hierarchy = |r: &WgpuRasterizer| r.scene.as_ref().unwrap().retained_scale_bytes()[0];
-    assert!(hierarchy(&r) > 256 * MIB);
+    let [before, pinned] = r.scene.as_ref().unwrap().retained_scale_bytes();
+    assert!(before > pinned, "setup: retained hierarchy {before} must include evictable pages beyond {pinned} pinned bytes");
     let presented = r.scale_display.as_ref().unwrap().resident_bytes();
     let budget = r.factory.memory_budget().clone();
-    budget.set_ram_override(Some(384 * MIB));
     r.publish_memory();
     budget.flush_reports();
+    let used = r.scene_tiers.display.used();
+    budget.set_ram_override(Some(384 * MIB));
+    budget.flush_reports();
+    assert!(used > r.memory.retention_grant(), "the lowered grant must require reclamation: used {used}, grant {}", r.memory.retention_grant());
     r.refresh_memory_limits();
     let result = r.admit_preparation_bytes(64 * MIB, 0);
     assert!(result.is_ok() || result.as_ref().is_err_and(|error| error.is_preparation_pending()),
         "evictable hierarchy must not cause terminal restore refusal: {result:?}");
     assert!(r.scene_tiers.display.used() <= r.memory.retention_grant() + r.scene_tiers.retiring.used(),
         "the hierarchy above the lowered grant is released: {} of {}", r.scene_tiers.display.used(), r.memory.retention_grant());
-    assert!(hierarchy(&r) < 256 * MIB);
+    assert!(hierarchy(&r) < before, "the evictable hierarchy shrinks from {before} to {}", hierarchy(&r));
     assert_eq!(r.scale_display.as_ref().unwrap().resident_bytes(), presented, "the presented picture stays");
     assert!(r.has_presentable_frame());
     complete(&r);

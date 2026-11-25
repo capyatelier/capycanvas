@@ -118,7 +118,9 @@ fn a_revoked_warm_display_cannot_spend_disjoint_page_retirement_credit() {
 fn a_parked_drawing_keeps_the_halves_nearest_its_last_dab_and_its_next_dab_builds_none() {
     use crate::scene::scale::tests::contact::{layered_fit, named, pencil_frame, pencil_lift};
     let doc = crate::memory::memory_tests::layered_raster_document(8, 16);
-    let (mut r, frame) = layered_fit(&doc);
+    let (_, frame) = layered_fit(&doc);
+    let budget = layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts { total_bytes: Some(12 << 30), available_bytes: Some(6 << 30), tablet: true, ..Default::default() });
+    let mut r = crate::memory::memory_tests::renderer_in_budget(doc.composition().color, layer_core::DeviceMemoryFacts { unified: true, ..Default::default() }, budget).unwrap();
     let layer = named(&doc, "Layer 5");
     let target = doc.scene().source_target(layer).unwrap();
     layer_render::CanvasRenderer::set_working_layer(&mut r, Some(layer));
@@ -128,6 +130,12 @@ fn a_parked_drawing_keeps_the_halves_nearest_its_last_dab_and_its_next_dab_build
     pencil_lift(&mut r, frame, target, 1, at, 12.);
     submit_settled(&mut r, frame);
     let halves = r.scale_display.as_ref().unwrap().half_pages();
+    let bytes_per_texel = u64::from(r.scale_display.as_ref().unwrap().texture().format().block_copy_size(None).unwrap());
+    let half_bytes = halves.iter().map(|(level, bounds)| {
+        let size = [bounds.width(), bounds.height()].map(|side| u64::from(side.div_ceil(1u32 << *level)));
+        size.into_iter().product::<u64>() * bytes_per_texel
+    }).sum::<u64>();
+    assert!(half_bytes > r.warm_tab_bytes() / 4, "setup: {half_bytes} bytes of halves must exceed their warm allowance");
     assert!(r.park_warm(&doc, frame.view, false), "warm {} cap {}", r.warm_bytes(), r.warm_tab_bytes());
     let kept = r.scale_display.as_ref().unwrap().half_pages();
     let under = |(_, cell): &(u32, PixelRect)| cell.min_x() as f32 <= at[0] && at[0] < cell.max_x() as f32 && cell.min_y() as f32 <= at[1] && at[1] < cell.max_y() as f32;
