@@ -287,6 +287,7 @@ impl PhoneLayout {
         else { (0., tile, tile + gap) }
     }
     pub const MENU_GAP: f32 = 1.;
+    pub const MENU_MIN_WIDTH: f32 = 320.;
     pub const MENU_MARGIN: f32 = 8.;
     pub const MENU_TILE_GAP: f32 = 2.;
     pub const SETTINGS: ToolbarControl = ToolbarControl::Panel { panel: crate::Panel::ToolSettings };
@@ -295,7 +296,7 @@ impl PhoneLayout {
     fn menu_strip_extent(row_height: f32) -> f32 { row_height.max(1.) + 2. * Self::MENU_MARGIN }
     pub fn menu_width(&self, minimum: f32, natural: f32, row_height: f32) -> f32 {
         if self.edge == Edge::Top { self.bars[0].width }
-        else { natural.max(minimum).max(crate::PANEL_MIN_WIDTH).min((self.work_area.width - Self::menu_strip_extent(row_height) - Self::MENU_GAP).max(1.)) }
+        else { natural.max(minimum).max(Self::MENU_MIN_WIDTH).min((self.work_area.width - Self::menu_strip_extent(row_height) - Self::MENU_GAP).max(1.)) }
     }
     pub fn menu(&self, viewport: [f32; 2], width: f32, height: f32, row_height: f32) -> Option<DrawerPlacement> {
         let vertical = self.edge != Edge::Top;
@@ -599,7 +600,7 @@ mod tests {
         for preset in crate::WorkspacePreset::ALL { assert!(!preset.phone_controls().contains(&ToolbarControl::Divider)); }
         let paint = crate::WorkspacePreset::Illustrator.phone_controls();
         let position = |control| paint.iter().position(|value| *value == control).unwrap();
-        let fill = position(ToolbarControl::ToolSlot { slot: crate::ToolSlotId::Fill });
+        let fill = position(ToolbarControl::ToolSlot { slot: crate::ToolSlotId::Bucket });
         assert_eq!(fill, position(ToolbarControl::Command { command: crate::CommandId::Eraser }) + 1);
         assert_eq!(position(ToolbarControl::Panel { panel: crate::Panel::Layers }), fill + 1);
         for (short, long, expected) in [
@@ -759,7 +760,7 @@ pub struct PhoneMenuContact {
 }
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", content = "position", rename_all = "snake_case")]
-pub enum PhoneMenuHit { Back, Row([u32; 2]), Close([u32; 2]), Strip(u32) }
+pub enum PhoneMenuHit { Back, Row([u32; 2]), Close([u32; 2]), Strip(u32), Switcher, SwitcherChoice(u32), SwitcherOptions }
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct PhoneMenuSettle { pub action: Option<PhoneAction>, pub duration_ms: u32 }
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -928,6 +929,14 @@ pub struct PhoneMenu {
     pub strip: Vec<crate::ContextMenuItem>,
     pub list: crate::ContextMenu,
     pub finger: crate::ContextMenu,
+    pub switcher: Option<PhoneMenuSwitcher>,
+}
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct PhoneMenuSwitcher {
+    pub label: String,
+    pub action: crate::UiAction,
+    pub choices: Vec<crate::ContextMenuItem>,
+    pub options: crate::ContextMenuItem,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -961,6 +970,7 @@ pub struct PhoneMenuPageView {
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct PhoneMenuView {
     pub strip: Vec<crate::ContextMenuItem>,
+    pub switcher: Option<PhoneMenuSwitcher>,
     pub pages: Vec<PhoneMenuPageView>,
     pub close_width: f32,
 }
@@ -998,7 +1008,14 @@ impl PhoneMenu {
             PhoneMenuPageView { id: page.route, parent: page.parent, title: page.menu.title,
                 checks: sections.iter().flatten().any(|row| row.selected.is_some()), sections }
         }).collect();
-        PhoneMenuView { strip: self.strip.clone(), pages, close_width: 34. }
+        let switcher = self.switcher.clone().map(|mut switcher| {
+            for choice in &mut switcher.choices {
+                choice.action = choice.action.take().map(|action| crate::UiAction::Phone {
+                    action: PhoneAction::MenuActivate { route: PhoneMenuRoute::default(), action: Box::new(action) } });
+            }
+            switcher
+        });
+        PhoneMenuView { strip: self.strip.clone(), switcher, pages, close_width: 34. }
     }
 }
 
@@ -1012,11 +1029,25 @@ impl<R: layer_render::CanvasRenderer> crate::UiSession<R> {
             ..crate::ContextMenuItem::command(settings.label.to_string(), crate::UiAction::Invoke { command: crate::CommandId::Settings }) }];
         strip.extend(primary.sections.into_iter().flatten());
         let zen = format!("layer-{}-symbolic", self.state().settings.zen_icon.icon());
-        for (index, (item, icon)) in strip.iter_mut().zip(["layer-settings-symbolic", "layer-search-symbolic", "layer-finger-draw-symbolic", &zen, "layer-swap-orientation-symbolic"]).enumerate() {
+        for (index, (item, icon)) in strip.iter_mut().zip(["layer-settings-symbolic", "layer-search-symbolic", "layer-finger-draw-symbolic", &zen, "layer-swap-sides-symbolic"]).enumerate() {
             item.icon = Some(icon.into());
             if index != 4 { item.selected = None; }
         }
-        Some(PhoneMenu { strip, list, finger: self.one_finger_drag_menu() })
+        Some(PhoneMenu { strip, list, finger: self.one_finger_drag_menu(), switcher: self.phone_menu_switcher() })
+    }
+    fn phone_menu_switcher(&self) -> Option<PhoneMenuSwitcher> {
+        let workspace = self.managed_workspace.as_ref().filter(|workspace| !workspace.switcher.is_empty())?;
+        let localization = self.localization();
+        let choices = workspace.switcher.iter().map(|choice| {
+            let mut item = crate::ContextMenuItem::command(&choice.name,
+                crate::UiAction::WorkspaceManager { command: crate::WorkspaceCommand::Switch { id: choice.id.clone() } });
+            item.selected = Some(choice.id == workspace.id);
+            item
+        }).collect();
+        let action = crate::UiAction::Phone { action: PhoneAction::MenuOpen { page: crate::MenuPageId::Workspaces } };
+        let mut options = crate::ContextMenuItem::command(localization.text(crate::MessageId::WORKSPACE_SWITCHER_OPTIONS).to_string(), action.clone());
+        options.icon = Some("layer-more-small-symbolic".into());
+        Some(PhoneMenuSwitcher { label: localization.text(crate::MessageId::WORKSPACE_WORKSPACES).to_string(), action, choices, options })
     }
 }
 
@@ -1040,7 +1071,7 @@ mod menu_tests {
     }
     #[test]
     fn menu_navigation_preserves_ancestors_and_rejects_missing_pages() {
-        let menu = PhoneMenu { strip: Vec::new(), list: menu(), finger: ContextMenu::default() };
+        let menu = PhoneMenu { strip: Vec::new(), list: menu(), finger: ContextMenu::default(), switcher: None };
         let pages = PhoneMenuNavigation::pages(&menu.list);
         assert_eq!(pages.iter().map(|page| page.route.name()).collect::<Vec<_>>(),
             ["main", "application-file", "application-file-0-0", "application-window", "workspaces"]);
@@ -1058,7 +1089,7 @@ mod menu_tests {
     fn workspace_route_keeps_window_as_back_destination_in_each_language() {
         for language in UiLanguage::ALL {
             let localization = Localizer::shared(language);
-            let mut menu = PhoneMenu { strip: Vec::new(), list: menu(), finger: ContextMenu::default() };
+            let mut menu = PhoneMenu { strip: Vec::new(), list: menu(), finger: ContextMenu::default(), switcher: None };
             menu.list.sections[0][1].label = ApplicationMenu::Window.localized_label(&localization).to_string();
             menu.list.sections[0][1].sections[0][0].label = localization.text(crate::MessageId::WORKSPACE_WORKSPACES).to_string();
             let mut navigation = PhoneMenuNavigation::default();
@@ -1074,6 +1105,7 @@ mod menu_tests {
             for swapped in [false, true] {
                 let phone = PhoneLayout::resolve(&layout, viewport, [0.; 4], [0.; 2], [0; 2], swapped, false).unwrap();
                 for row in [28., 32., 44.] {
+                    if viewport == [891., 412.] { assert_eq!(phone.menu_width(200., 240., row), PhoneLayout::MENU_MIN_WIDTH, "landscape keeps a roomy menu"); }
                     let width = phone.menu_width(242., 340., row);
                     let placement = phone.menu(viewport, width, 400., row).unwrap();
                     let geometry = phone.menu_geometry(&placement, row);
@@ -1121,6 +1153,18 @@ mod menu_tests {
                 "can_back":false,"input":{"kind":"release","hit":hit,"inside":true}}).to_string()).unwrap();
             assert_eq!(released["reply"]["accepted"],true);
         }
+    }
+    #[test]
+    fn switcher_hits_read_host_names_and_accept_only_their_own_release() {
+        let route = PhoneMenuRoute::default();
+        let hits: Vec<PhoneMenuHit> = serde_json::from_value(serde_json::json!([
+            {"kind":"switcher"}, {"kind":"switcher_choice","position":1}, {"kind":"switcher_options"}])).unwrap();
+        assert_eq!(hits, [PhoneMenuHit::Switcher, PhoneMenuHit::SwitcherChoice(1), PhoneMenuHit::SwitcherOptions]);
+        let mut contact = PhoneMenuContact::default();
+        contact.press(&route, PhoneMenuHit::SwitcherChoice(1));
+        assert!(!contact.release(&route, &PhoneMenuHit::Switcher, true));
+        contact.press(&route, PhoneMenuHit::SwitcherChoice(1));
+        assert!(contact.release(&route, &PhoneMenuHit::SwitcherChoice(1), true));
     }
     #[test]
     fn root_page_contacts_stay_pending_until_slop_so_a_still_press_activates() {

@@ -11,13 +11,12 @@ behind the transparent bar.
 
 GTK windows with a short side below 480 logical pixels show the phone bars
 instead. The title bar's arrangement returns when the window grows; title bar
-editing is unavailable while the phone bars show. Capy's menu contains the app
-menus, the compact drawing selector and the workspace switcher. Its drawing,
-switcher, Search with its Preferences gear, and switches share one column; the
-app menus use a second beside it when both fit, or below with scrolling
-otherwise. The menu stays inside the Capy bar's span. Its native menu rows keep
-the same padding, indicators and text as Main Menu. Submenus slide within the
-same bounds with a back row; the switcher's ⋮ opens Window → Workspaces there.
+editing is unavailable while the phone bars show. Capy's menu lists the current
+drawing, the workspace switcher and the app menus beside an icon strip; see the
+[phone layout](../development/phone-layout.md#capys-menu-and-the-main-menu). The
+menu stays inside the Capy bar's span. Its native menu rows keep the same
+padding, indicators and text as Main Menu. Submenus slide within the same bounds
+with a back row; the switcher's ⋮ opens Window → Workspaces there.
 Check marks occupy the leading gutter without moving row text. Sections and
 columns use the native separator line and spacing.
 

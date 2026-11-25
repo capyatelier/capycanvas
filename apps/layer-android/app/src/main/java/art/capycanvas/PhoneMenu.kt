@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -29,7 +30,9 @@ import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -73,7 +76,7 @@ internal class PhoneMenuInteraction(val host: CanvasHost, val dock: DockInteract
         return value.getJSONObject("reply")
     }
     fun cancel() { generation++; contact = null; pressed = null; progress = 0f; swiping = false; settling?.cancel(); settling = null }
-    fun hit(point: Offset) = hits.entries.lastOrNull { it.value.bounds.contains(point) }
+    fun hit(point: Offset) = hits.entries.filter { it.value.bounds.contains(point) }.minByOrNull { it.value.bounds.width*it.value.bounds.height }
 }
 
 private fun Modifier.menuHit(input: PhoneMenuInteraction?, hit: JSONObject, enabled: Boolean, submenu: Boolean = false, activate: () -> Unit): Modifier {
@@ -228,7 +231,7 @@ private fun Modifier.menuGestures(input: PhoneMenuInteraction, width: Float, rtl
     DisposableEffect(dock) { onDispose { dock.drawerSources.remove("menu"); input.frame = null; dock.refresh() } }
     SubcomposeLayout(Modifier.fillMaxSize().zIndex(220f)) { constraints ->
         val root = pages.first { it.isNull("parent") }
-        val probe = subcompose("root-measure") { PhoneMenuPage(host, root, view.number("close_width"), null, Modifier.clearAndSetSemantics {}) }.single()
+        val probe = subcompose("root-measure") { PhoneMenuPage(host, root, view.number("close_width"), null, view.objectOrNull("switcher"), Modifier.clearAndSetSemantics {}) }.single()
         val minimum = probe.minIntrinsicWidth(Int.MAX_VALUE)/density
         val natural = probe.maxIntrinsicWidth(Int.MAX_VALUE)/density
         val row = root.array("sections").values().flatMap { (it as org.json.JSONArray).objects() }.first()
@@ -286,12 +289,12 @@ private fun Modifier.menuGestures(input: PhoneMenuInteraction, width: Float, rtl
                 LaunchedEffect(scroll.value) { input.input(obj("kind" to "cancel_press")); input.pressed = null }
                 val list = geometry.getJSONObject("list")
                 Box(Modifier.placedAbsolute(list, density).clipToBounds().testTag("phone-menu-scroll"), contentAlignment = AbsoluteAlignment.TopLeft) {
-                    if (input.swiping && parent != null) PhoneMenuPage(host, parent, model.number("close_width"), null,
+                    if (input.swiping && parent != null) PhoneMenuPage(host, parent, model.number("close_width"), null, model.objectOrNull("switcher"),
                         Modifier.fillMaxWidth().graphicsLayer { clip = true; shape = androidx.compose.foundation.shape.GenericShape { size, _ ->
                             val distance = size.width*input.progress
                             addRect(if (rtl) Rect(size.width-distance,0f,size.width,size.height) else Rect(0f,0f,distance,size.height))
                         } }.clearAndSetSemantics {})
-                    PhoneMenuPage(host, page, model.number("close_width"), input,
+                    PhoneMenuPage(host, page, model.number("close_width"), input, model.objectOrNull("switcher"),
                         Modifier.fillMaxWidth().graphicsLayer { translationX = list.number("width")*density*input.progress*(if (rtl) -1 else 1) }
                             .verticalScroll(scroll))
                 }
@@ -311,7 +314,7 @@ private fun Modifier.menuGestures(input: PhoneMenuInteraction, width: Float, rtl
     }
 }
 
-@Composable private fun PhoneMenuPage(host: CanvasHost, page: JSONObject, closeWidth: Float, input: PhoneMenuInteraction?, modifier: Modifier = Modifier) {
+@Composable private fun PhoneMenuPage(host: CanvasHost, page: JSONObject, closeWidth: Float, input: PhoneMenuInteraction?, switcher: JSONObject?, modifier: Modifier = Modifier) {
     val colors = LocalPalette.current
     val active = rememberMenuActivation(host,page.getJSONObject("id").toString(),input != null)
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
@@ -320,6 +323,10 @@ private fun Modifier.menuGestures(input: PhoneMenuInteraction, width: Float, rtl
         page.array("sections").values().forEachIndexed { section, rows ->
             (rows as org.json.JSONArray).objects().forEachIndexed { index, item ->
                 val position = org.json.JSONArray(listOf(section,index))
+                if (switcher != null && page.isNull("parent") && section == 0 && index == 0) {
+                    switcher.array("choices").objects().indices.forEach { add(obj("kind" to "switcher_choice","position" to it).toString()) }
+                    add(obj("kind" to "switcher_options").toString())
+                }
                 add(obj("kind" to "row","position" to position).toString())
                 if (!item.isNull("close")) add(obj("kind" to "close","position" to position).toString())
             }
@@ -327,16 +334,17 @@ private fun Modifier.menuGestures(input: PhoneMenuInteraction, width: Float, rtl
     }
     SideEffect { if (input != null) input.rows = order }
     val focus = remember(page.getJSONObject("id").toString()) { FocusRequester() }
-    LaunchedEffect(page.getJSONObject("id").toString(), input) { if (input != null) focus.requestFocus() }
+    val keyboard = LocalInputModeManager.current.inputMode == InputMode.Keyboard
+    LaunchedEffect(page.getJSONObject("id").toString(), input, keyboard) { if (input != null && keyboard) focus.requestFocus() }
     Column(modifier.focusProperties { canFocus = input != null }.padding(vertical = 6.dp)) {
         if (!page.isNull("parent")) {
             val hit = obj("kind" to "back")
             val action = { if (active()) host.phone(obj("kind" to "menu_back", "route" to page.getJSONObject("id"))) }
             Row(Modifier.fillMaxWidth().heightIn(min = 36.dp).then(if (input != null) Modifier.testTag("phone-menu-back").focusRequester(focus) else Modifier).menuHit(input, hit, true, activate = action).clickable(onClickLabel = host.bootstrap!!.getJSONObject("common").getString("back"), onClick = action)
                 .padding(horizontal = 16.dp,vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) { SharedIcon("back", null, Modifier.graphicsLayer { scaleX = if (rtl) -1f else 1f }) }
+                SharedIcon("back", null, Modifier.graphicsLayer { scaleX = if (rtl) -1f else 1f })
                 Text(page.getString("title"), Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.width(24.dp))
+                Spacer(Modifier.width(16.dp))
             }
         }
         page.array("sections").values().forEachIndexed { sectionIndex, value ->
@@ -348,6 +356,29 @@ private fun Modifier.menuGestures(input: PhoneMenuInteraction, width: Float, rtl
                         ?: item.objectOrNull("action")?.let(host::dispatch)
                     Unit
                 }
+                if (switcher != null && page.isNull("parent") && sectionIndex == 0 && index == 0) {
+                    val open = { if (active()) switcher.objectOrNull("action")?.let(host::dispatch); Unit }
+                    val choices = switcher.array("choices").objects().mapIndexed { choiceIndex, choice ->
+                        val enabled = input != null && choice.getBoolean("enabled")
+                        val choose = { if (active()) choice.objectOrNull("action")?.let(host::dispatch); Unit }
+                        SwitcherChoice("phone-menu-switch-$choiceIndex", choice.getString("label"), choice.optBoolean("selected"), enabled,
+                            Modifier.menuHit(input, obj("kind" to "switcher_choice", "position" to choiceIndex), enabled, activate = choose), choose)
+                    }
+                    val options = switcher.getJSONObject("options")
+                    val showOptions = { if (active()) options.objectOrNull("action")?.let(host::dispatch); Unit }
+                    Row(Modifier.padding(bottom = 4.dp).fillMaxWidth().height(36.dp).then(if (input != null) Modifier.testTag("phone-menu-switcher-row") else Modifier)
+                        .menuHit(input, obj("kind" to "switcher"), true, submenu = true, activate = open)
+                        .clickable(onClickLabel = switcher.getString("label"), onClick = open).padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Spacer(Modifier.width(28.dp))
+                        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                            SwitcherTrack(choices, options.getString("label"), "phone-menu-switcher", fill = false,
+                                optionsModifier = Modifier.menuHit(input, obj("kind" to "switcher_options"), true, activate = showOptions), options = showOptions)
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        SharedIcon("down", null, Modifier.rotate(-90f))
+                    }
+                }
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     MenuRow(item, Modifier.weight(1f).then(if (input != null && page.isNull("parent") && sectionIndex == 0 && index == 0) Modifier.focusRequester(focus) else Modifier).then(if (input != null) Modifier.testTag(if (item.objectOrNull("target")?.objectOrNull("page")?.optString("kind") == "drawings") "phone-drawing" else "phone-menu-row-$sectionIndex-$index") else Modifier)
                         .menuHit(input, hit, item.getBoolean("enabled") && !item.optBoolean("is_heading"),submenu = item.objectOrNull("target") != null,activate = action), checks = page.getBoolean("checks"),
@@ -358,7 +389,7 @@ private fun Modifier.menuGestures(input: PhoneMenuInteraction, width: Float, rtl
                         val closeHit = obj("kind" to "close", "position" to org.json.JSONArray(listOf(sectionIndex,index)))
                         val closeAction = { if (active()) host.dispatch(close.getJSONObject("action")) }
                         HeaderButton(close.getString("label"), false, item.getBoolean("enabled"), null,
-                            Modifier.width(closeWidth.dp).height(36.dp).then(if (input != null) Modifier.testTag("phone-menu-close-$sectionIndex-$index") else Modifier).menuHit(input, closeHit, item.getBoolean("enabled"), activate = closeAction),
+                            Modifier.padding(end = 7.dp).width(closeWidth.dp).height(36.dp).then(if (input != null) Modifier.testTag("phone-menu-close-$sectionIndex-$index") else Modifier).menuHit(input, closeHit, item.getBoolean("enabled"), activate = closeAction),
                             surface = false, onClick = closeAction) { SharedIcon("close", null, Modifier.size(16.dp)) }
                     }
                 }

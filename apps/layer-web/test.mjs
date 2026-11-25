@@ -449,6 +449,7 @@ try {
     [process.argv.includes("--toolbar-manager"), () => checkToolbarManager({ call, evaluate, settle }), checkErrors],
     [process.argv.includes('--tab-surfaces'), async()=>{for(const deviceScaleFactor of [1,2]){await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor,mobile:false});await checkTabSurfaceCoverage({call,evaluate,settle});await checkTabDragCorner({call,evaluate,settle});}}, checkErrors],
     [process.argv.includes("--tab-styles"), () => checkTabStyles({ call, evaluate, settle }), checkErrors],
+    [process.argv.includes("--phone-switcher"), async () => (await import('./phone-switcher-journey.test.mjs')).checkPhoneSwitcher({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--phone-menus"), async () => (await import('./phone-audit.mjs')).checkPhoneAudit({ call, evaluate, reload, settle, mode:'menus' }), checkErrors],
     [process.argv.includes("--phone-drawers"), async () => (await import('./phone-audit.mjs')).checkPhoneAudit({ call, evaluate, reload, settle, mode:'drawers' }), checkErrors],
     [process.argv.includes("--phone-frame"), async () => (await import('./phone-audit.mjs')).checkPhoneAudit({ call, evaluate, reload, settle, mode:'frame' }), checkErrors],

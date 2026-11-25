@@ -416,6 +416,8 @@ async function auditLayerKind(c,kind){
   else if(kind==='fill'){
     await c.send({type:'effect',action:{op:'insert',effect:'solid_color'}});
   }else if(kind==='mask'){
+    await c.evaluate(`(()=>{const paint=layerApp.state().layers.find(layer=>layer.label==='Current ink'&&!layer.paper);if(!paint)throw Error('Missing owned Current ink paint layer');layerApp.dispatch({type:'select_layer',id:paint.id});})()`);
+    await c.wait('layerApp.state().layer_tools.editing_layer?.label==="Current ink"');
     await c.send({type:'invoke',command:'select_all'});await c.send({type:'invoke',command:'mask_selection'});
   }else if(kind==='selection'){await c.send({type:'invoke',command:'select_all'});await c.send({type:'invoke',command:'save_selection_layer'});}
   else await c.send({type:'invoke',command:'new_vector_layer'});
@@ -1402,6 +1404,15 @@ export async function checkPhoneAudit({call,evaluate,reload,settle,canvasPixels,
           {id:'menu.back',role:'back',selector:'.menu-page:not([hidden]):not([inert]) .submenu-back',optional:true},
           {id:'menu.bridge',role:'bridge',selector:'.drawer-bridge'},
           ...['preferences','search','finger','zen','swap'].map(name=>({id:`menu.tile.${name}`,role:'menu-tile',selector:`#phone-${name}`}))];
+        if(await route()===rootRoute){
+          const switcher=await evaluate(`(()=>{const row=document.querySelector('#phone-menu-switcher-row');return {first:row===row.parentElement.firstElementChild,drawingNext:row.nextElementSibling?.id==='phone-drawing',pills:row.querySelectorAll('.phone-menu-switch').length};})()`);
+          assert.ok(switcher.first&&switcher.drawingNext,'The workspace switcher is first, followed by the drawing row');
+          specs.push({id:'menu.switcher.row',role:'menu-row',selector:'#phone-menu-switcher-row'},
+            {id:'menu.switcher.well',role:'menu-well',selector:'#phone-menu-switcher'},
+            {id:'menu.switcher.options',role:'menu-options',selector:'#phone-menu-switcher-options'},
+            {id:'menu.switcher.arrow',role:'menu-arrow',selector:'#phone-menu-switcher-row > .submenu-arrow'},
+            ...Array.from({length:switcher.pills},(_,i)=>({id:`menu.switcher.pill.${i}`,role:'menu-pill',selector:`#phone-menu-switch-${i}`})));
+        }
         const rows=await evaluate(`(()=>{const rows=[...document.querySelectorAll('.menu-page:not([hidden]):not([inert]) .menu-row')];return rows.map((row,i)=>{row.dataset.auditRow=i;return{index:i,parts:[['label','.menu-label'],['check','.menu-check'],['icon','.menu-icon:not([hidden])'],['arrow','.submenu-arrow,.menu-back-arrow'],['detail','.shortcut-hint:not([hidden])']].filter(([,selector])=>row.querySelector(selector)).map(([part])=>part),close:row.parentElement.classList.contains('menu-drawing-row')};});})()`);
         for(const {index,parts,close} of rows){
           const selector=`.menu-page:not([hidden]):not([inert]) .menu-row[data-audit-row="${index}"]`;
@@ -1416,6 +1427,8 @@ export async function checkPhoneAudit({call,evaluate,reload,settle,canvasPixels,
         const record=await capture(test,name,specs,'typed shared Capy menu through the common drawer owner',null,expectedDocuments,{space:'Srgb',depth:'U8'},expectedExtent);
         assert.deepEqual(record.missing,[]);assert.ok(record.elements.find(e=>e.id==='menu.bridge').visible);
         const row=record.elements.find(e=>e.id==='menu.row.0'),tiles=record.elements.filter(e=>e.role==='menu-tile');
+        const switcherRow=record.elements.find(e=>e.id==='menu.switcher.row');
+        if(switcherRow)assert.ok(Math.abs(switcherRow.bounds[3]-row.bounds[3])<=1,'The switcher and drawing rows have the same height');
         for(const tile of tiles)assert.ok(Math.abs(tile.bounds[2]-row.bounds[3])<=1&&Math.abs(tile.bounds[3]-row.bounds[3])<=1,'The strip tiles match the native menu row height');
         const actual=await bounds();for(const axis of ['x','y','width','height'])assert.ok(Math.abs(actual[axis]-initial[axis])<=1,`${name}: root outer ${axis} remains fixed`);
         return record;
@@ -1594,7 +1607,7 @@ export async function checkPhoneAudit({call,evaluate,reload,settle,canvasPixels,
           const variants=phoneCaptureIDs.states.filter(entry=>entry.inventory?.preset===preset
             &&samePhoneControl(entry.inventory.control,tile.control)).map(entry=>entry.state);
           if(selectedStates&&!variants.some(wanted))continue;
-          const transforming=name==='scale_rotate';
+          const transforming=name==='scale_rotate'||name==='operation';
           if(transforming)await auditOwnedImage(fixture);
           if(preset==='builtin:workspace:painter'&&(tile.control.panel==='layers'||tile.control.kind==='color'))await send({type:'select_brush',id:2});
           const selector=`#phone-tool-${tile.id}`;

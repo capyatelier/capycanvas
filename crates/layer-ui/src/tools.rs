@@ -304,9 +304,9 @@ const PRESETS: &[(DefaultBrushPreset, MessageId, ToolGroup)] = &[
     ),
     (DefaultBrushPreset::LiquifyEdge, MessageId::BRUSH_PRESET_LIQUIFY_EDGE, ToolGroup::Liquify),
     (DefaultBrushPreset::LiquifyReconstruct, MessageId::BRUSH_PRESET_LIQUIFY_RECONSTRUCT, ToolGroup::Liquify),
-    (DefaultBrushPreset::CloneStamp, MessageId::BRUSH_PRESET_CLONE_STAMP, ToolGroup::Retouch),
-    (DefaultBrushPreset::HealingBrush, MessageId::BRUSH_PRESET_HEALING_BRUSH, ToolGroup::Retouch),
     (DefaultBrushPreset::SpotHealingBrush, MessageId::BRUSH_PRESET_SPOT_HEALING_BRUSH, ToolGroup::Retouch),
+    (DefaultBrushPreset::HealingBrush, MessageId::BRUSH_PRESET_HEALING_BRUSH, ToolGroup::Retouch),
+    (DefaultBrushPreset::CloneStamp, MessageId::BRUSH_PRESET_CLONE_STAMP, ToolGroup::Retouch),
 ];
 
 pub(crate) fn control_profile(id: u32) -> Option<&'static crate::tool_settings::profiles::ControlProfile> {

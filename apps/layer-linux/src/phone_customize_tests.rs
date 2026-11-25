@@ -8,12 +8,12 @@ fn history(d: &Driver) -> layer_ui::WorkspaceCapture {
     ui_session_mut(&d.w).capture_workspace().unwrap()
 }
 
-fn popup(d: &Driver) -> Option<gtk::Popover> {
+pub(super) fn popup(d: &Driver) -> Option<gtk::Popover> {
     d.w.popovers.borrow().iter().filter_map(|popup| popup.upgrade())
         .find(|popup| popup.is_mapped() && popup.has_css_class("panel-context-menu"))
 }
 
-fn hold(d: &mut Driver, tile: Option<u32>) {
+pub(super) fn hold(d: &mut Driver, tile: Option<u32>) {
     until(|| {
         let view = presentation(d);
         layout(d).phone.unwrap().iter().enumerate().all(|(index, tile)| {

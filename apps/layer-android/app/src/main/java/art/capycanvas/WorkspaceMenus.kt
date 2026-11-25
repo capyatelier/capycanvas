@@ -250,7 +250,7 @@ internal fun Modifier.opensWindowlessMenu(button: WindowlessMenuButton, label: S
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         if (checks) Box(Modifier.width(16.dp), contentAlignment = Alignment.Center) { if (item.optBoolean("selected")) SharedIcon("check", null, Modifier.size(16.dp)) }
         item.optString("icon").takeIf { it.isNotEmpty() && it != "null" }?.let { SharedIcon(it, null) }
-        Text(item.getString("label"), Modifier.weight(1f), fontWeight = FontWeight.Bold,
+        Text(item.getString("label").let { if (it.startsWith("• ")) "•\u2002" + it.substring(2) else it }, Modifier.weight(1f), fontWeight = FontWeight.Bold,
             maxLines = maxLines, overflow = overflow)
         if (!checks && item.optBoolean("selected")) SharedIcon("check", null)
         if (detail.isNotEmpty()) Text(detail, color = colors.secondary)

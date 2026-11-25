@@ -99,7 +99,8 @@ struct RowView {
     detail: gtk::Label,
     close: Option<gtk::Button>,
 }
-struct Pane { widget: InlineMenu, contents: MenuContents, stack: gtk::Stack, row: gtk::Button, rows: Vec<RowView> }
+struct SwitcherView { row: gtk::Box, well: gtk::Box, choices: gtk::Box, options: gtk::Button, buttons: RefCell<Vec<gtk::ToggleButton>> }
+struct Pane { widget: InlineMenu, contents: MenuContents, stack: gtk::Stack, row: gtk::Button, rows: Vec<RowView>, switcher: Option<SwitcherView> }
 pub(super) struct Menu {
     pub root: drawers::Columns,
     body: gtk::Box,
@@ -110,12 +111,18 @@ pub(super) struct Menu {
     contact: Rc<RefCell<PhoneMenuContact>>,
 }
 fn compatible(a: &PhoneMenuView, b: &PhoneMenuView) -> bool {
-    a.pages.len() == b.pages.len() && a.pages.iter().zip(&b.pages).all(|(a, b)| a.id == b.id && a.parent == b.parent && a.title == b.title
+    a.switcher.is_some() == b.switcher.is_some() && a.pages.len() == b.pages.len() && a.pages.iter().zip(&b.pages).all(|(a, b)| a.id == b.id && a.parent == b.parent && a.title == b.title
         && a.checks == b.checks && a.sections.len() == b.sections.len() && a.sections.iter().zip(&b.sections).all(|(a, b)|
             a.len() == b.len() && a.iter().zip(b).all(|(a, b)| a.is_heading == b.is_heading && a.selected.is_some() == b.selected.is_some() && a.target == b.target && a.close.is_some() == b.close.is_some())))
 }
 fn row_model<'a>(model: &'a PhoneMenuView, page: &PhoneMenuRoute, position: [usize; 2]) -> Option<&'a PhoneMenuRow> {
     model.pages.iter().find(|p| &p.id == page)?.sections.get(position[0])?.get(position[1])
+}
+const SWITCHER_CARET_GAP: i32 = 12;
+fn switch_name(action: Option<&UiAction>) -> String {
+    let Some(UiAction::Phone { action: PhoneAction::MenuActivate { action, .. } }) = action else { return String::new(); };
+    let UiAction::WorkspaceManager { command: WorkspaceCommand::Switch { id } } = &**action else { return String::new(); };
+    format!("phone-menu-switch-{}", id.rsplit(':').next().unwrap_or(id))
 }
 fn route(w: &Workspace) -> PhoneMenuRoute { w.gpu.borrow().as_ref().unwrap().session.state().phone.menu_navigation.current() }
 fn show_page(stack: &gtk::Stack, route: &PhoneMenuRoute) {
@@ -219,6 +226,7 @@ impl Menu {
         if let Some(pane) = self.pane.borrow().as_ref() {
             if pane.stack.visible_child_name().as_deref() != Some(route(w).name().as_str()) { swipe::cancel(&pane.contents, &self.contact); }
             show_page(&pane.stack, &route(w));
+            if let (Some(view), Some(switcher)) = (&pane.switcher, &model.switcher) { self.sync_switcher(w, view, switcher, pane.row.measure(gtk::Orientation::Vertical, -1).1); }
             for row in &pane.rows {
                 let item = row_model(model, &row.page, row.position).unwrap();
                 row.label.set_text(&item.label); row.button.set_sensitive(item.enabled);
@@ -238,6 +246,95 @@ impl Menu {
             }
         }
         w.surface.queue_allocate();
+    }
+    fn build_switcher(&self, w: &Rc<Workspace>) -> SwitcherView {
+        let well = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+        well.set_widget_name("phone-menu-switcher");
+        for class in ["choice-well", "workspace-switcher", "phone-menu-switcher"] { well.add_css_class(class); }
+        well.set_hexpand(true);
+        well.set_halign(gtk::Align::Center);
+        let choices = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+        let scroll = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::External).vscrollbar_policy(gtk::PolicyType::Never).propagate_natural_width(true).child(&choices).build());
+        well.append(&scroll);
+        well.connect_map(glib::clone!(#[weak] scroll, #[weak] choices, move |_| {
+            glib::idle_add_local_once(glib::clone!(#[weak] scroll, #[weak] choices, move || {
+                let mut child = choices.first_child();
+                while let Some(widget) = child {
+                    if widget.downcast_ref::<gtk::ToggleButton>().is_some_and(|button| button.is_active())
+                        && let Some(viewport) = scroll.child().and_downcast::<gtk::Viewport>() {
+                        viewport.scroll_to(&widget, None);
+                        return;
+                    }
+                    child = widget.next_sibling();
+                }
+            }));
+        }));
+        let options = gtk::Button::builder().child(&crate::icons::image("layer-more-small-symbolic")).build();
+        options.set_widget_name("phone-menu-switcher-options");
+        options.add_css_class("workspace-options");
+        let model = self.model.clone();
+        options.connect_clicked(glib::clone!(#[weak] w, #[strong] model, move |_| {
+            let action = model.borrow().as_ref().and_then(|model| model.switcher.as_ref()).and_then(|switcher| switcher.options.action.clone());
+            if let Some(action) = action { w.dispatch(action); }
+        }));
+        well.append(&options);
+        let caret = crate::icons::image("go-next-symbolic");
+        for class in ["menu-arrow", "menu-forward-arrow"] { caret.add_css_class(class); }
+        caret.set_valign(gtk::Align::Center);
+        caret.set_margin_start(SWITCHER_CARET_GAP);
+        let lead = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        lead.set_size_request(SWITCHER_CARET_GAP + caret.pixel_size().max(16), -1);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        row.set_widget_name("phone-menu-switcher-row");
+        row.set_margin_bottom(4);
+        row.append(&lead);
+        row.append(&well);
+        row.append(&caret);
+        let click = gtk::GestureClick::new();
+        let model = self.model.clone();
+        click.connect_released(glib::clone!(#[weak] w, #[weak] well, #[strong] model, move |gesture, presses, x, y| {
+            if presses != 1 { return; }
+            if let Some(row) = gesture.widget()
+                && well.compute_bounds(&row).is_some_and(|bounds| bounds.contains_point(&gtk::graphene::Point::new(x as f32, y as f32))) { return; }
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            let action = model.borrow().as_ref().and_then(|model| model.switcher.as_ref()).map(|switcher| switcher.action.clone());
+            if let Some(action) = action { w.dispatch(action); }
+        }));
+        row.add_controller(click);
+        SwitcherView { row, well, choices, options, buttons: RefCell::default() }
+    }
+    fn sync_switcher(&self, w: &Rc<Workspace>, view: &SwitcherView, model: &PhoneMenuSwitcher, row_height: i32) {
+        view.well.set_size_request(-1, row_height);
+        view.well.update_property(&[gtk::accessible::Property::Label(&model.label)]);
+        let mut buttons = view.buttons.borrow_mut();
+        if buttons.len() != model.choices.len() {
+            while let Some(child) = view.choices.first_child() { view.choices.remove(&child); }
+            buttons.clear();
+            for index in 0..model.choices.len() {
+                let button = gtk::ToggleButton::new();
+                button.set_group(buttons.first());
+                button.set_child(Some(&gtk::Label::new(None)));
+                let shared = self.model.clone();
+                button.connect_clicked(glib::clone!(#[weak] w, #[strong] shared, move |_| {
+                    let action = shared.borrow().as_ref().and_then(|model| model.switcher.as_ref())
+                        .and_then(|switcher| switcher.choices.get(index)).and_then(|choice| choice.action.clone());
+                    if let Some(action) = action { w.dispatch(action); }
+                }));
+                view.choices.append(&button);
+                buttons.push(button);
+            }
+        }
+        for (button, item) in buttons.iter().zip(&model.choices) {
+            button.set_widget_name(&switch_name(item.action.as_ref()));
+            button.child().and_downcast::<gtk::Label>().unwrap().set_text(&item.label);
+            button.set_tooltip_text(Some(&item.label));
+            button.set_sensitive(item.enabled);
+            button.set_active(item.selected == Some(true));
+        }
+        view.options.set_tooltip_text(Some(&model.options.label));
+        view.options.update_property(&[gtk::accessible::Property::Label(&model.options.label)]);
+        view.options.set_sensitive(model.options.enabled);
     }
     fn bind_row(&self, w: &Rc<Workspace>, button: &gtk::Button, page: PhoneMenuRoute, hit: PhoneMenuHit) {
         let contact = self.contact.clone(); let model = self.model.clone();
@@ -261,7 +358,7 @@ impl Menu {
                     row.target.as_ref().map(|route| UiAction::Phone { action: PhoneAction::MenuSelect { route: route.clone() } }).or_else(|| row.action.clone())
                 }),
                 PhoneMenuHit::Close(position) => row_model(model, &page, position.map(|i| i as usize)).and_then(|row| row.close.as_ref().map(|close| close.action.clone())),
-                PhoneMenuHit::Strip(_) => None,
+                PhoneMenuHit::Strip(_) | PhoneMenuHit::Switcher | PhoneMenuHit::SwitcherChoice(_) | PhoneMenuHit::SwitcherOptions => None,
             }
             };
             if let Some(action) = action { w.dispatch(action); }
@@ -273,6 +370,7 @@ impl Menu {
         let stack = gtk::Stack::builder().hhomogeneous(false).vhomogeneous(false).transition_type(gtk::StackTransitionType::SlideLeftRight).build();
         stack.set_widget_name("phone-menu-pages");
         let mut rows = Vec::new(); let mut measure_row = None;
+        let switcher = model.switcher.as_ref().map(|_| self.build_switcher(w));
         for page in &model.pages {
             let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
             body.set_widget_name(&format!("phone-menu-page-{}", page.id.name()));
@@ -306,6 +404,7 @@ impl Menu {
                         if let Some(UiAction::Phone { action: PhoneAction::Drawing { id, .. } }) = item.action { close.set_widget_name(&format!("phone-drawing-close-{id}")); }
                         self.bind_row(w, &close, page.id.clone(), PhoneMenuHit::Close([s as u32, i as u32])); close
                     });
+                    if let Some(view) = switcher.as_ref().filter(|_| page.parent.is_none() && [s, i] == [0, 0]) { body.append(&view.row); }
                     if let Some(close) = &close { let row = gtk::Box::new(gtk::Orientation::Horizontal, 0); row.append(&button); row.append(close); body.append(&row); } else { body.append(&button); }
                     if page.parent.is_none() && measure_row.is_none() && item.target.as_ref().is_none_or(|route| route.page != Some(MenuPageId::Drawings)) { measure_row = Some(button.clone()); }
                     rows.push(RowView { page: page.id.clone(), position: [s, i], button, label, check, icon, detail, close });
@@ -346,6 +445,6 @@ impl Menu {
         let widget: InlineMenu = glib::Object::new(); widget.set_orientation(gtk::Orientation::Vertical);
         widget.add_css_class("menu"); widget.add_css_class("phone-menu-native"); widget.append(&contents); self.body.append(&widget);
         show_page(&stack, &route(w));
-        *self.pane.borrow_mut() = Some(Pane { widget, contents, stack, row: measure_row.unwrap(), rows });
+        *self.pane.borrow_mut() = Some(Pane { widget, contents, stack, row: measure_row.unwrap(), rows, switcher });
     }
 }

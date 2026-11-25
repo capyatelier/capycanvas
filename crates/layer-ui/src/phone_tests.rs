@@ -264,7 +264,7 @@ fn phone_finger_page_lists_one_finger_drag_choices_and_returns_to_the_main_page(
 fn phone_menu_route_stack_is_session_owned_validated_and_cleared() {
     let mut s = phone_session([412, 891]);
     s.configure_workspace_manager(ManagedWorkspace { id: "paint".into(), name: "Paint".into(),
-        baseline: s.state.workspace.layout.clone(), choices: Vec::new() }).unwrap();
+        baseline: s.state.workspace.layout.clone(), switcher: Vec::new(), choices: Vec::new() }).unwrap();
     let route = |page| PhoneMenuRoute { page: Some(page), path: Vec::new() };
     let workspaces = route(MenuPageId::Workspaces);
     s.dispatch(UiAction::Phone { action: PhoneAction::MenuOpen { page: MenuPageId::Workspaces } }).unwrap();
@@ -297,7 +297,7 @@ fn phone_menu_route_stack_is_session_owned_validated_and_cleared() {
 fn phone_menu_projects_typed_pages_and_close_slots_without_reading_titles() {
     let mut s = phone_session([412, 891]);
     s.configure_workspace_manager(ManagedWorkspace {
-        id: "paint".into(), name: "Same".into(), baseline: s.state.workspace.layout.clone(), choices: Vec::new(),
+        id: "paint".into(), name: "Same".into(), baseline: s.state.workspace.layout.clone(), switcher: Vec::new(), choices: Vec::new(),
     }).unwrap();
     let labels = [1, 2].map(|id| DocumentTabLabel { id, title: format!("Study {{雪}} {id}"), location: String::new(), uri: None, export_uri: None, modified: id == 2 });
     let selector = DrawingSelector::new(&labels, 2, &s.command(CommandId::NewDocument), s.localization());
@@ -371,6 +371,7 @@ fn drawer_body_minimums_preserve_scroll_bodies_without_overriding_the_layers_ins
 fn tool_panel_presentation_splits_sets_once_and_keeps_selection_rows_short() {
     for viewport in [[412, 891], [891, 412]] {
         let mut s = phone_session(viewport);
+        s.state.workspace.layout.insert_phone_tools(None, &[ToolbarControl::Command { command: CommandId::DrawingBrush }, ToolbarControl::Command { command: CommandId::Select }]).unwrap();
         invoke(&mut s, CommandId::DrawingBrush);
         let tile = s.state.workspace.layout.phone.as_ref().unwrap().iter()
             .find(|tile| tile.control == (ToolbarControl::Command { command: CommandId::DrawingBrush })).unwrap().id;
@@ -535,7 +536,7 @@ fn phone_menu_command_closure_notifies_layout_and_refusals_keep_it_open() {
     let mut s = phone_session([412, 891]);
     let layout = s.state.workspace.layout.clone();
     s.configure_workspace_manager(ManagedWorkspace {
-        id: "sketch".into(), name: "Sketch".into(), baseline: layout, choices: Vec::new(),
+        id: "sketch".into(), name: "Sketch".into(), baseline: layout, switcher: Vec::new(), choices: Vec::new(),
     }).unwrap();
     for command in [CommandId::ActualPixels, CommandId::ZoomIn] {
         s.dispatch(UiAction::Invoke { command }).unwrap();
@@ -549,9 +550,12 @@ fn phone_menu_command_closure_notifies_layout_and_refusals_keep_it_open() {
     assert!(s.dispatch(UiAction::Invoke { command: CommandId::Undo }).is_err());
     assert!(s.state.phone.menu);
     let change = s.dispatch(UiAction::WorkspaceManager { command: WorkspaceCommand::Switch { id: "sketch".into() } }).unwrap();
+    assert!(s.state.phone.menu);
+    assert_eq!(change.regions, 0);
+    let change = s.dispatch(UiAction::WorkspaceManager { command: WorkspaceCommand::Manage }).unwrap();
     assert!(!s.state.phone.menu);
     assert_eq!(change.regions & (regions::LAYOUT | regions::CUSTOMIZATION), regions::LAYOUT | regions::CUSTOMIZATION);
-    assert_eq!(change.regions & regions::HOST, 0);
+    assert_ne!(change.regions & regions::HOST, 0);
 }
 
 #[test]
@@ -745,7 +749,8 @@ fn phone_color_drawer_budgets_the_whole_wheel_before_scrolling() {
 
 #[test]
 fn phone_brush_sets_and_tools_share_a_row_without_settings() {
-    let s = phone_session([320, 568]);
+    let mut s = phone_session([320, 568]);
+    s.state.workspace.layout.insert_phone_tools(None, &[ToolbarControl::Command { command: CommandId::DrawingBrush }]).unwrap();
     let tile = s.state.workspace.layout.phone.as_ref().unwrap().iter().find(|t| {
         t.control == ToolbarControl::Command { command: CommandId::DrawingBrush }
     }).unwrap().id;
@@ -777,6 +782,8 @@ fn phone_tool_drawers_adapt_sets_and_keep_their_origin_when_a_set_changes() {
             if matches!(control, ToolbarControl::ToolSlot { .. }) {
                 let first = s.state.workspace.layout.phone.as_ref().unwrap()[0].id;
                 s.state.workspace.layout.remove_phone_tool(first).unwrap();
+                s.state.workspace.layout.insert_phone_tools(None, &[control]).unwrap();
+            } else if control == (ToolbarControl::Command { command: CommandId::DrawingBrush }) {
                 s.state.workspace.layout.insert_phone_tools(None, &[control]).unwrap();
             }
             let tile = s.state.workspace.layout.phone.as_ref().unwrap().iter().find(|tile| tile.control == control).unwrap().id;
@@ -829,7 +836,7 @@ fn phone_paint_defaults_offer_sculpt_and_preserve_an_authored_blend_tile() {
     let controls = WorkspacePreset::Illustrator.phone_controls();
     assert!(controls.contains(&sculpt));
     assert!(!controls.contains(&blend));
-    assert!(WorkspacePreset::Photographer.phone_controls().contains(&ToolbarControl::ToolSlot { slot: ToolSlotId::Healing }));
+    assert!(WorkspacePreset::Photographer.phone_controls().contains(&ToolbarControl::ToolSlot { slot: ToolSlotId::PhotoRetouch }));
     assert!(starting.panel(Panel::Toolbar).unwrap().tiles().iter().any(|tile| tile.control == blend));
     let mut saved = starting.clone();
     saved.phone.as_mut().unwrap().iter_mut().find(|tile| tile.control == sculpt).unwrap().control = blend;
@@ -846,7 +853,7 @@ fn phone_choice_only_and_leaf_drawers_publish_choices_as_subtools() {
     for viewport in [[412, 891], [891, 412]] {
         for control in [ToolbarControl::ToolSlot { slot: ToolSlotId::Fill },
             ToolbarControl::ToolSlot { slot: ToolSlotId::Gradient }, ToolbarControl::Command { command: CommandId::Select },
-            ToolbarControl::ToolSlot { slot: ToolSlotId::Healing }] {
+            ToolbarControl::ToolSlot { slot: ToolSlotId::Healing }, ToolbarControl::ToolSlot { slot: ToolSlotId::Bucket }] {
             let mut s = phone_session(viewport);
             s.state.workspace.layout.phone = Some(Vec::new());
             s.state.workspace.layout.insert_phone_tools(None, &[control]).unwrap();
@@ -860,7 +867,7 @@ fn phone_choice_only_and_leaf_drawers_publish_choices_as_subtools() {
             s.dispatch(UiAction::Phone { action: PhoneAction::Tool { tile } }).unwrap();
             let drawer = s.state.customization.drawer.as_ref().unwrap();
             assert_eq!(drawer.anchor, anchor);
-            assert_eq!(drawer.columns, [vec![if matches!(control, ToolbarControl::Command { .. } | ToolbarControl::ToolSlot { slot: ToolSlotId::Fill }) { Panel::Tools } else { Panel::Brushes }]]);
+            assert_eq!(drawer.columns, [vec![if matches!(control, ToolbarControl::Command { .. } | ToolbarControl::ToolSlot { slot: ToolSlotId::Fill | ToolSlotId::Bucket }) { Panel::Tools } else { Panel::Brushes }]]);
             assert!(!drawer.sets_column);
             assert!(serde_json::to_value(drawer).unwrap().get("sets_column").is_none());
             if let ToolbarControl::ToolSlot { slot } = control {
@@ -971,6 +978,7 @@ fn open_phone_layers_follow_edits_and_visible_rows_up_to_the_bar() {
 #[test]
 fn phone_tool_settings_uses_its_fixed_tile_and_releases_multi_column_drawers() {
     let mut s = phone_session([412, 891]);
+    s.state.workspace.layout.insert_phone_tools(None, &[ToolbarControl::Command { command: CommandId::DrawingBrush }, ToolbarControl::Command { command: CommandId::Select }]).unwrap();
     let view = s.state.phone_settings();
     assert_eq!(view.id, None);
     assert_eq!(view.resolved_control, PhoneLayout::SETTINGS);
@@ -1137,7 +1145,7 @@ fn phone_workspace_options_enter_window_workspaces_and_keep_both_back_destinatio
     let mut s = phone_session([412, 891]);
     s.configure_workspace_manager(ManagedWorkspace {
         id: "paint".into(), name: "Paint".into(), baseline: s.state.workspace.layout.clone(),
-        choices: vec![WorkspaceChoice { id: "sketch".into(), name: "Sketch".into() }],
+        switcher: Vec::new(), choices: vec![WorkspaceChoice { id: "sketch".into(), name: "Sketch".into() }],
     }).unwrap();
     s.dispatch(UiAction::Phone { action: PhoneAction::MenuOpen { page: MenuPageId::Workspaces } }).unwrap();
     let route = s.state.phone.menu_navigation.current();
@@ -1154,6 +1162,47 @@ fn phone_workspace_options_enter_window_workspaces_and_keep_both_back_destinatio
     s.dispatch(UiAction::Phone { action: PhoneAction::MenuBack { route } }).unwrap();
     assert!(s.state.phone.menu && s.state.phone.menu_navigation.is_root());
 
+}
+
+#[test]
+fn phone_menu_switcher_and_workspaces_page_switch_without_closing_the_menu() {
+    let mut s = phone_session([412, 891]);
+    let choice = |id: &str, name: &str| WorkspaceChoice { id: id.into(), name: name.into() };
+    s.configure_workspace_manager(ManagedWorkspace {
+        id: "paint".into(), name: "Paint".into(), baseline: s.state.workspace.layout.clone(),
+        switcher: vec![choice("sketch", "Sketch"), choice("paint", "Paint"), choice("photo", "Photo")], choices: vec![choice("sketch", "Sketch")],
+    }).unwrap();
+    let labels = [DocumentTabLabel { id: 1, title: "Study".into(), location: String::new(), uri: None, export_uri: None, modified: false }];
+    let view = |s: &UiSession<Recorder>| {
+        let selector = DrawingSelector::new(&labels, 1, &s.command(CommandId::NewDocument), s.localization());
+        s.phone_menu().unwrap().view(&selector, s.state.platform, s.localization())
+    };
+    let switcher = |s: &UiSession<Recorder>| view(s).switcher.unwrap();
+    let requested = |s: &UiSession<Recorder>, target: &str| s.state.requests.iter().any(|request| matches!(&request.kind,
+        HostRequestKind::Workspace { command: WorkspaceCommand::Switch { id } } if id == target));
+    s.dispatch(UiAction::Phone { action: PhoneAction::Capy }).unwrap();
+    let published = switcher(&s);
+    assert_eq!(published.choices.iter().map(|item| (item.label.as_str(), item.selected, item.enabled)).collect::<Vec<_>>(),
+        [("Sketch", Some(false), true), ("Paint", Some(true), true), ("Photo", Some(false), true)]);
+    assert_eq!(published.options.icon.as_deref(), Some("layer-more-small-symbolic"));
+    s.dispatch(published.choices[2].action.clone().unwrap()).unwrap();
+    assert!(s.state.phone.menu && s.state.phone.menu_navigation.is_root());
+    assert!(requested(&s, "photo"));
+    let reopened = switcher(&s);
+    assert_eq!(reopened.options.action.as_ref(), Some(&reopened.action));
+    s.dispatch(reopened.action).unwrap();
+    assert!(s.state.phone.menu);
+    assert_eq!(s.state.phone.menu_navigation.current().page, Some(MenuPageId::Workspaces));
+    let route = s.state.phone.menu_navigation.current();
+    s.dispatch(published.choices[0].action.clone().unwrap()).unwrap();
+    assert!(!requested(&s, "sketch"), "a switcher choice from the main page is ignored once another page shows");
+    let row = view(&s).pages.into_iter().find(|page| page.id == route).unwrap().sections.into_iter().flatten()
+        .find(|row| matches!(&row.action, Some(UiAction::Phone { action: PhoneAction::MenuActivate { action, .. } })
+            if matches!(&**action, UiAction::WorkspaceManager { command: WorkspaceCommand::Switch { id } } if id == "sketch"))).unwrap();
+    s.dispatch(row.action.unwrap()).unwrap();
+    assert!(requested(&s, "sketch"));
+    assert!(s.state.phone.menu);
+    assert_eq!(s.state.phone.menu_navigation.current(), route);
 }
 
 #[test]

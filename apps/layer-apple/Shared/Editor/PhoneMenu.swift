@@ -100,8 +100,12 @@ import Combine
     static func hit(_ kind: String, _ position: Any? = nil) -> JSON {
         position.map { JSON(["kind": kind, "position": $0]) } ?? JSON(["kind": kind])
     }
+    private var switcher: JSON { page["parent"].isNull ? model["switcher"] : JSON() }
     var order: [String] {
         var values: [JSON] = page["parent"].isNull ? [] : [Self.hit("back")]
+        let choices = switcher["choices"].array
+        values += choices.indices.filter { choices[$0]["enabled"].bool }.map { Self.hit("switcher_choice", $0) }
+        if switcher["options"]["enabled"].bool { values.append(Self.hit("switcher_options")) }
         for (section, rows) in page["sections"].array.enumerated() {
             for (index, row) in rows.array.enumerated() where row["enabled"].bool && !row["is_heading"].bool {
                 values.append(Self.hit("row", [section, index]))
@@ -111,19 +115,20 @@ import Combine
         values += model["strip"].array.indices.filter { model["strip"][$0]["enabled"].bool }.map { Self.hit("strip", $0) }
         return values.map(\.stableKey)
     }
+    private var targets: [String] { switcher.isNull ? order : order + [Self.hit("switcher").stableKey] }
     func allocated(_ hit: JSON, _ bounds: CGRect) { frames[hit.stableKey] = bounds }
     func source(at point: CGPoint) -> ReorderTarget? {
         guard enabled, frame["placement"]["bounds"].rect.contains(point) else { return nil }
         let clip = geometry["list"].rect.offsetBy(dx: target["bounds"]["x"].number, dy: target["bounds"]["y"].number)
         let inList = clip.contains(point)
-        let key = order.last(where: {
+        let key = targets.filter {
             guard let bounds = frames[$0], let hit = try? JSON.decode($0) else { return false }
             return (hit["kind"].string == "strip" ? bounds : bounds.intersection(clip)).contains(point)
-        })
+        }.reversed().min { frames[$0]!.width * frames[$0]!.height < frames[$1]!.width * frames[$1]!.height }
         guard key != nil || inList else { return nil }
         let hit = key.flatMap { try? JSON.decode($0) }
         return ReorderTarget(id: key ?? "phone-menu-list", surface: .row, canDrag: false,
-            valid: { [weak self] _ in self?.enabled == true && (key == nil || self?.order.contains(key!) == true) },
+            valid: { [weak self] _ in self?.enabled == true && (key == nil || self?.targets.contains(key!) == true) },
             press: { [weak self] in
                 guard let self else { return }
                 if let hit { pressed = key; _ = input(["kind": "press", "hit": hit.raw]) }
@@ -165,13 +170,16 @@ import Combine
         }
     }
     func activate(_ hit: JSON, semantic: Bool = false) {
-        guard enabled, order.contains(hit.stableKey) else { return }
+        guard enabled, targets.contains(hit.stableKey) else { return }
         if semantic { _ = input(["kind": "press", "hit": hit.raw]) }
         guard input(["kind": "release", "hit": hit.raw, "inside": true])["accepted"].bool else { return }
         contact.cancel(); pressed = nil
         switch hit["kind"].string {
         case "back": send(JSON(["kind": "menu_back", "route": route.raw]))
         case "strip": store?.dispatch(model["strip"][Int(hit["position"].number)]["action"])
+        case "switcher": store?.dispatch(switcher["action"])
+        case "switcher_choice": store?.dispatch(switcher["choices"][Int(hit["position"].number)]["action"])
+        case "switcher_options": store?.dispatch(switcher["options"]["action"])
         default:
             let row = page["sections"][Int(hit["position"][0].number)][Int(hit["position"][1].number)]
             if hit["kind"].string == "close" { store?.dispatch(row["close"]["action"]) }
@@ -296,14 +304,15 @@ struct PhoneMenu: View {
                 let hit = PhoneMenuPresentation.hit("back")
                 Button { input.activate(hit) } label: {
                     HStack(spacing: 8) {
-                        SharedIcon(name: "back", size: 24).scaleEffect(x: input.rtl ? -1 : 1)
+                        SharedIcon(name: "back").scaleEffect(x: input.rtl ? -1 : 1)
                         Text(page["title"].string).lineLimit(1).frame(maxWidth: .infinity).multilineTextAlignment(.center)
-                        Color.clear.frame(width: 24)
-                    }.padding(.horizontal, 16).frame(minHeight: 36)
+                        Color.clear.frame(width: 16)
+                    }.padding(.horizontal, 10).frame(minHeight: 36)
                 }.buttonStyle(.plain).accessibilityIdentifier("phone-menu-back")
                     .accessibilityAction { input.activate(hit, semantic: true) }
                     .modifier(PhoneMenuHit(input: live ? input : nil, hit: hit))
             }
+            if page["parent"].isNull && !input.model["switcher"].isNull { switcherRow(input.model["switcher"], live: live) }
             ForEach(page["sections"].array.indices, id: \.self) { section in
                 if section > 0 { EditorLine(color: palette.panelBorder).padding(.horizontal, 6).padding(.vertical, 4) }
                 ForEach(page["sections"][section].array.indices, id: \.self) { index in
@@ -312,6 +321,53 @@ struct PhoneMenu: View {
             }
         }.padding(.vertical, 6).allowsHitTesting(live).accessibilityHidden(!live)
     }
+    private func switcherRow(_ switcher: JSON, live: Bool) -> some View {
+        let hit = PhoneMenuPresentation.hit("switcher"), options = PhoneMenuPresentation.hit("switcher_options")
+        let choices = switcher["choices"].array
+        let natural = WorkspaceSwitcher.naturalWidth(choices.map { $0["label"].string }, textSize: 44.0 / 3, pillMaximum: .infinity)
+        let caret = Image(systemName: "chevron.right").font(.caption).allowsHitTesting(false)
+        return HStack(spacing: 12) {
+            caret.hidden()
+            SwitcherTrack(palette: palette, natural: natural, maximum: .infinity, registersGlass: false) {
+                ScrollViewReader { scroll in
+                    SwitcherChoices {
+                        ForEach(choices.indices, id: \.self) { index in switcherChoice(choices[index], index: index, live: live) }
+                    }.onAppear {
+                        if let selected = choices.firstIndex(where: { $0["selected"].bool }) {
+                            scroll.scrollTo(PhoneMenuPresentation.hit("switcher_choice", selected).stableKey)
+                        }
+                    }
+                }
+                SwitcherOptionsButton(label: switcher["options"]["label"].string, palette: palette) { input.activate(options) }
+                    .disabled(!switcher["options"]["enabled"].bool)
+                    .accessibilityIdentifier("phone-menu-switcher-options")
+                    .accessibilityAction { input.activate(options, semantic: true) }
+                    .overlay { if input.focused == options.stableKey { SquircleShape.tile.fill(palette.accent.opacity(0.15)).allowsHitTesting(false) } }
+                    .modifier(PhoneMenuHit(input: live ? input : nil, hit: options))
+            }.contentShape(SquircleShape.tile)
+                .accessibilityElement(children: .contain).accessibilityLabel(switcher["label"].string)
+                .accessibilityIdentifier("phone-menu-switcher")
+                .frame(maxWidth: .infinity)
+            caret
+        }.padding(.horizontal, 10).frame(maxWidth: .infinity, minHeight: max(36, input.rowHeight))
+            .background {
+                Button { input.activate(hit) } label: { Color.clear.contentShape(Rectangle()) }.buttonStyle(.plain)
+                    .accessibilityLabel(switcher["label"].string).accessibilityIdentifier("phone-menu-switcher-row")
+                    .accessibilityAction { input.activate(hit, semantic: true) }
+                    .modifier(PhoneMenuHit(input: live ? input : nil, hit: hit))
+            }.padding(.bottom, 4)
+    }
+    private func switcherChoice(_ choice: JSON, index: Int, live: Bool) -> some View {
+        let hit = PhoneMenuPresentation.hit("switcher_choice", index)
+        return SwitcherPill(title: choice["label"].string, selected: choice["selected"].bool, palette: palette, maximum: .infinity) {
+            input.activate(hit)
+        }.disabled(!choice["enabled"].bool)
+            .accessibilityIdentifier("phone-menu-switch-\(index)")
+            .accessibilityAddTraits(choice["selected"].bool ? .isSelected : [])
+            .accessibilityAction { input.activate(hit, semantic: true) }
+            .overlay { if input.focused == hit.stableKey { SquircleShape.tile.fill(palette.accent.opacity(0.15)).allowsHitTesting(false) } }
+            .modifier(PhoneMenuHit(input: live ? input : nil, hit: hit))
+    }
     @ViewBuilder private func row(_ row: JSON, page: JSON, section: Int, index: Int, live: Bool) -> some View {
         if row["is_heading"].bool {
             Text(row["label"].string).foregroundStyle(.secondary).padding(.horizontal, 10).frame(minHeight: 36)
@@ -319,10 +375,10 @@ struct PhoneMenu: View {
         } else { actionRow(row, page: page, section: section, index: index, live: live) }
     }
     private func actionRow(_ row: JSON, page: JSON, section: Int, index: Int, live: Bool) -> some View {
-        let hit = PhoneMenuPresentation.hit("row", [section, index])
+        let hit = PhoneMenuPresentation.hit("row", [section, index]), label = row["label"].string
         return HStack(spacing: 0) {
             Button { input.activate(hit) } label: {
-                EditorMenuRowLabel(label: row["label"].string, icon: row["icon"].string,
+                EditorMenuRowLabel(label: label, icon: row["icon"].string,
                     selected: row["selected"].isNull ? nil : row["selected"].bool, checks: page["checks"].bool,
                     hint: row["count"].string.isEmpty ? row["hint"].string : row["count"].string,
                     submenu: !row["target"].isNull, singleLine: true, middleEllipsis: row["ellipsis"].string == "middle")
@@ -338,8 +394,9 @@ struct PhoneMenu: View {
                 }
             if !row["close"].isNull {
                 let close = PhoneMenuPresentation.hit("close", [section, index])
-                Button { input.activate(close) } label: { SharedIcon(name: "close", size: 16).frame(maxWidth: .infinity, maxHeight: .infinity) }
-                    .buttonStyle(.plain).frame(width: input.model["close_width"].number, height: input.rowHeight)
+                Button { input.activate(close) } label: {
+                    SharedIcon(name: "close", size: 16).padding(.trailing, 10).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                }.buttonStyle(.plain).frame(width: input.model["close_width"].number, height: input.rowHeight)
                     .disabled(!row["enabled"].bool)
                     .accessibilityLabel(row["close"]["label"].string).accessibilityIdentifier("phone-menu-close-\(section)-\(index)")
                     .accessibilityAction { input.activate(close, semantic: true) }
@@ -355,6 +412,9 @@ private struct PhoneMenuHit: ViewModifier {
     let hit: JSON
     func body(content: Content) -> some View {
         content.id(hit.stableKey)
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("editor-workspace")) } action: { input?.allocated(hit, $0) }
+            .onGeometryChange(for: CGRect.self) { proxy in
+                let frame = proxy.frame(in: .named("editor-workspace"))
+                return proxy.bounds(of: .scrollView(axis: .horizontal)).map { frame.intersection($0.offsetBy(dx: frame.minX, dy: frame.minY)) } ?? frame
+            } action: { input?.allocated(hit, $0) }
     }
 }

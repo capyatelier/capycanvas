@@ -367,7 +367,7 @@ pub struct UiSession<R: CanvasRenderer> {
     workspace_transition: bool,
     workspace_read_only: bool,
     workspace_preview: Option<WorkspaceState>,
-    managed_workspace: Option<ManagedWorkspace>,
+    pub(crate) managed_workspace: Option<ManagedWorkspace>,
     interaction: Interaction,
     cursor: cursor::Cursor,
     next_request: u32,
@@ -3082,7 +3082,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let change = self.dispatch(*action)?;
                 return Ok(merge_change(change, self.dispatch(UiAction::Phone { action: PhoneAction::MenuBack { route } })?));
             }
-            let keep_open = crate::customization::menu_keeps_open(&action);
+            let keep_open = crate::customization::menu_keeps_open(&action)
+                || matches!(*action, UiAction::WorkspaceManager { command: WorkspaceCommand::Switch { .. } });
             let change = self.dispatch(*action)?;
             if keep_open || !self.state.phone.menu { return Ok(change); }
             self.state.phone.menu = false;
@@ -3480,10 +3481,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if self.managed_workspace.is_none() {
                     return Err("Workspace management is not connected".into());
                 }
+                let switch = matches!(command, WorkspaceCommand::Switch { .. });
                 let current = matches!(&command, WorkspaceCommand::Switch { id }
                     if self.managed_workspace.as_ref().is_some_and(|w| &w.id == id));
                 if !current { self.request(HostRequestKind::Workspace { command })?; }
-                let closed = std::mem::take(&mut self.state.phone.menu);
+                let closed = !switch && std::mem::take(&mut self.state.phone.menu);
                 if current && !closed {
                     return Ok(UiChange::default());
                 }
@@ -8318,7 +8320,7 @@ mod tests {
             id: "test".into(),
             name: "Painting".into(),
             baseline: durable_layout(&s.state.workspace.layout),
-            choices: Vec::new(),
+            switcher: Vec::new(), choices: Vec::new(),
         })
         .unwrap();
         let menu = s.workspace_menu();
@@ -10432,8 +10434,8 @@ mod tests {
             assert!(!s.command(CommandId::Sculpt).selected);
             assert!(!s.command(CommandId::DrawingBrush).selected);
             assert_eq!(s.command(CommandId::DrawingBrush).icon, Some("pencil"));
-            assert_eq!(s.command(CommandId::Sculpt).icon, Some("spot-heal"));
-            assert_eq!(s.header_view().items.iter().find(|item| item.id == id).unwrap().icon, "spot-heal");
+            assert_eq!(s.command(CommandId::Sculpt).icon, Some("clone"));
+            assert_eq!(s.header_view().items.iter().find(|item| item.id == id).unwrap().icon, "clone");
             let eraser = s.state.workspace.layout.header.entries().find(|e|
                 e.item == HeaderItem::Tool { control: ToolbarControl::Command { command: CommandId::Eraser } }).unwrap().id;
             s.dispatch(UiAction::MeasureHeader { height: 60., items: vec![HeaderItemBounds {
@@ -10448,7 +10450,7 @@ mod tests {
             restored.restore_editing(serde_json::from_str(&serde_json::to_string(&s.editing_state()).unwrap()).unwrap()).unwrap();
             restored.adopt_workspace(PreparedWorkspace::new(serde_json::from_str(&json).unwrap()).unwrap()).unwrap();
             assert_eq!(restored.command(CommandId::DrawingBrush).icon, Some("pencil"));
-            assert_eq!(restored.command(CommandId::Sculpt).icon, Some("spot-heal"));
+            assert_eq!(restored.command(CommandId::Sculpt).icon, Some("clone"));
             invoke(&mut restored, CommandId::DrawingBrush);
             assert_eq!((restored.state.brush.preset, restored.state.brush.diameter), (drawing, 23.));
             invoke(&mut restored, CommandId::Sculpt);

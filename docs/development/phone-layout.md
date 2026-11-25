@@ -197,14 +197,21 @@ Brush controls.
 
 | Workspace | Phone toolbar |
 | --- | --- |
-| Sketch | Filters (`Panel::Adjustments`), Select, Scale/rotate, Brush, Sculpt, Eraser, Layers, Color: its title bar's tools |
-| Paint | Select, Gradient, Brush, Sculpt, Eraser, Fill, Layers, Color |
-| Photo | Crop, Select, Healing, Brush, Eraser, Filters, Layers, Color |
+| Sketch | Pen, Pencil, Paint, Sculpt, Eraser, Bucket, Layers, Color |
+| Paint | Select, Operation, Brush, Sculpt, Eraser, Bucket, Layers, Color |
+| Photo | Filters (`Panel::Adjustments`), Select, Operation, Brush, Retouch, Eraser, Layers, Color |
 
 Brush, Sculpt and Eraser stay separate tiles: painters switch between them
-mid-drawing, and each remembers its own tool.
+mid-drawing, and each remembers its own tool. Sketch splits Brush: Pen holds the
+pens, Pencil holds Pencil and Pastel, and the Paint slot (`ToolSlotId::Paint`)
+holds Paint, Watercolor, Oil and Airbrush.
 Paint's Sculpt drawer offers Blend, Paint mixing, Effects, Liquify and Retouch.
 An authored Blend tile keeps its Blend, Paint mixing and Effects choices.
+Photo's Retouch slot (`ToolSlotId::PhotoRetouch`) holds Sculpt's sets with
+Retouch first, so it starts on Spot Healing: Retouch, Blend, Paint mixing,
+Effects and Liquify.
+Bucket (`ToolSlotId::Bucket`) starts on Fill and adds the three gradients after
+the fills. Operation starts on Transform.
 
 ## Capy's menu and the Main Menu
 
@@ -221,16 +228,15 @@ tile and icon sizes follow the native text size together.
 ```text
 Portrait                         Landscape
 ┌─────────────────────────┐      ┌───┬──────────────────────┐
-│ • Untitled 2       2   › │      │ ⚙ │ • Untitled 2   2   › │
-│ ─────────────────────── │      │ ⌕ │ ──────────────────── │
-│ File                  › │      │ ☝ │ File               › │
-│ Edit                  › │      │ ◐ │ Edit               › │
-│ …                       │      │ ⇄ │ …                    │
+│ (Sketch Paint Photo⋮) › │      │ ⚙ │(Sketch Paint Photo⋮)›│
+│ • Untitled 2      2   › │      │ ⌕ │ • Untitled 2   2   › │
+│ ─────────────────────── │      │ ☝ │ ──────────────────── │
+│ File                  › │      │ ◐ │ File               › │
+│ Edit                  › │      │ ⇄ │ Edit               › │
+│ …                       │      │   │ …                    │
 │ Window                › │      │   │ Window             › │
-│ ─────────────────────── │      │   │                      │
-│                         │      └───┴──────────────────────┘
+│ ─────────────────────── │      └───┴──────────────────────┘
 │ ⚙ ⌕ ☝ ◐ ⇄               │       ↑ 8 to tiles at the top
-│                         │
 └─────────────────────────┘
   ↑ 8 from Capy's end; 8 above/below the strip tiles
 ```
@@ -241,12 +247,19 @@ One-finger drag shows the current mode's icon and opens its page of four
 choices; choosing one returns to the main page. Preferences and Search open
 their existing page or bar and close the menu. Zen closes it and hides the bars.
 
-The list starts with the current drawing's unsaved dot and name, a dim count
-when several drawings are open, and the submenu caret. It opens **Drawings** in
-place. A separator precedes File through Window. There is no workspace pill;
-Window → Workspaces contains the saved workspace checklist and manager. A panel
-in Window opens that panel as a drawer from Capy, replacing the menu and joined
-to Capy by the bridge.
+The list starts with the workspace switcher row, exactly one menu row tall: the
+title bar's switcher well, sized to its pinned workspaces with ⋮ inside and
+centered in the row, and a submenu caret at the row's end, 12 after the well;
+4 separates it from the drawing row.
+When the pills don't fit, the well takes the row's width and scrolls. Choosing a
+pill, or a workspace in Window → Workspaces, switches and keeps the menu open,
+like Swap Sides; ⋮ or a tap on the row outside the well opens Window → Workspaces
+in place. `PhoneMenuView::switcher` publishes the row. The current drawing's
+unsaved dot and name follow, with a dim count when several drawings are open and
+the submenu caret; it opens **Drawings** in place. A separator precedes File
+through Window. In landscape the list is at least `PhoneLayout::MENU_MIN_WIDTH`
+(320) wide. A panel in Window opens that panel as a drawer from Capy, replacing
+the menu and joined to Capy by the bridge.
 
 Drawings lists documents in tab order, with the current check in the gutter,
 unsaved dots, titles that ellipsize in the middle and a close button for each.

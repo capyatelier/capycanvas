@@ -159,11 +159,11 @@ test('one shared registry names published pages and rejects old visitor aliases'
 
 test('inventory identities use shared base controls and stable commands instead of labels or resolved tools',()=>{
   const preset='builtin:workspace:painter';
-  assert.equal(phoneAuditInventoryID(preset,{command:'scale_rotate',kind:'command'}).state,'inventory-sketch-scalerotate');
-  assert.equal(phoneAuditInventoryID(preset,{kind:'command',command:'drawing_brush'},'bottom').state,'inventory-sketch-drawingbrush-bottom');
-  assert.equal(phoneAuditInventoryID('builtin:workspace:illustrator',{kind:'tool_slot',slot:'gradient'}).state,'inventory-paint-gradient');
+  assert.equal(phoneAuditInventoryID(preset,{command:'pen',kind:'command'}).state,'inventory-sketch-pen');
+  assert.equal(phoneAuditInventoryID(preset,{kind:'tool_slot',slot:'bucket'},'bottom').state,'inventory-sketch-bucket-bottom');
+  assert.equal(phoneAuditInventoryID('builtin:workspace:illustrator',{kind:'tool_slot',slot:'operation'}).state,'inventory-paint-operation');
   assert.equal(phoneAuditInventoryID(null,{kind:'command',command:'drawing_brush'},'settings').state,'inventory-settings-drawing_brush');
-  assert.throws(()=>phoneAuditInventoryID(preset,{kind:'command',command:'pencil'}),/Unknown phone inventory identity/);
+  assert.throws(()=>phoneAuditInventoryID(preset,{kind:'command',command:'drawing_brush'}),/Unknown phone inventory identity/);
 });
 
 test('menu routes and their expected titles come from the shared capture registry',async()=>{
@@ -186,7 +186,7 @@ test('Web index exposes native pairing keys and matching-DPR reference paths',as
   const testCase=selectPhoneAuditCases(auditModes.audit,'402x874-light@3')[0];
   const identity=phoneAuditIdentity('audit',testCase,'rest','builtin:workspace:painter');
   assert.deepEqual(identity,{family:'frame',state:'rest',case:'402x874-light@3',theme:'light',text_size:11,fixture:'builtin:workspace:painter'});
-  assert.equal(phoneAuditIdentity('drawers',testCase,'inventory-sketch-drawingbrush','Sketch').family,'inventory');
+  assert.equal(phoneAuditIdentity('drawers',testCase,'inventory-sketch-pen','Sketch').family,'inventory');
   assert.equal(phoneAuditIdentity('dialogs-phone',testCase,'new-drawing','Sketch').family,'pages');
   assert.equal(phoneAuditIdentity('menus',testCase,'menu-main','Sketch').family,'menu');
   const entry={...identity,...testCase,status:'captured',png:'rest.png'};
@@ -198,7 +198,7 @@ test('Web index exposes native pairing keys and matching-DPR reference paths',as
 
 test('focused drawer capture selects existing state names without changing the full journey',()=>{
   assert.equal(selectPhoneDrawerStates(undefined),null);
-  assert.deepEqual([...selectPhoneDrawerStates(' inventory-sketch-sculpt, inventory-photo-crop,inventory-sketch-sculpt ')],['inventory-sketch-sculpt','inventory-photo-crop']);
+  assert.deepEqual([...selectPhoneDrawerStates(' inventory-sketch-sculpt, inventory-photo-retouch,inventory-sketch-sculpt ')],['inventory-sketch-sculpt','inventory-photo-retouch']);
   assert.throws(()=>selectPhoneDrawerStates(' , '),/at least one state/);
 });
 

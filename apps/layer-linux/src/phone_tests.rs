@@ -1,5 +1,6 @@
 use super::*;
 use super::workspace_header::Driver;
+use crate::workspace::manager::now_ms;
 use layer_render::CanvasRenderer;
 use layer_core::DefaultBrushPreset;
 
@@ -333,7 +334,7 @@ fn native_phone_frame() {
     frame(&d);
     capture(&mut d, "paint-default");
     for (name, control) in [("eraser", ToolbarControl::Command { command: CommandId::Eraser }),
-        ("fill", ToolbarControl::ToolSlot { slot: ToolSlotId::Fill })] {
+        ("fill", ToolbarControl::ToolSlot { slot: ToolSlotId::Bucket })] {
         let tile = tool(&d, control);
         click(&mut d, &tile);
         let view = state(&d.w).phone_tools().into_iter().find(|view| format!("phone-tool-{}",view.id.unwrap()) == tile).unwrap();
@@ -589,13 +590,13 @@ pub(super) fn assert_leaf_tool_rows(body: &gtk::Widget, view: &layer_ui::ToolSet
 fn tool_drawer_sets(d: &mut Driver) {
     use ToolbarControl::{Command as C, ToolSlot as S};
     for (preset, name, control) in [
-        (WorkspacePreset::Painter, "sketch-brush", C { command: CommandId::DrawingBrush }),
+        (WorkspacePreset::Painter, "sketch-pencil", C { command: CommandId::Pencil }),
+        (WorkspacePreset::Painter, "sketch-paint", S { slot: ToolSlotId::Paint }),
         (WorkspacePreset::Painter, "sketch-sculpt", C { command: CommandId::Sculpt }),
         (WorkspacePreset::Illustrator, "paint-brush", C { command: CommandId::DrawingBrush }),
         (WorkspacePreset::Illustrator, "paint-sculpt", C { command: CommandId::Sculpt }),
-        (WorkspacePreset::Illustrator, "paint-fill", S { slot: ToolSlotId::Fill }),
-        (WorkspacePreset::Illustrator, "paint-gradient", S { slot: ToolSlotId::Gradient }),
-        (WorkspacePreset::Photographer, "photo-healing", S { slot: ToolSlotId::Healing }),
+        (WorkspacePreset::Illustrator, "paint-bucket", S { slot: ToolSlotId::Bucket }),
+        (WorkspacePreset::Photographer, "photo-retouch", S { slot: ToolSlotId::PhotoRetouch }),
         (WorkspacePreset::Photographer, "photo-eraser", C { command: CommandId::Eraser }),
     ] {
         inventory_workspace(d,preset);
@@ -607,7 +608,7 @@ fn tool_drawer_sets(d: &mut Driver) {
             click(d, &opener);
         }
         inventory_drawer_ready(d);
-        if name == "sketch-brush" && presentation(d).edge != Edge::Top {
+        if name == "sketch-paint" && presentation(d).edge != Edge::Top {
             let body = d.named("tool-drawer");
             let bounds = body.compute_bounds(&d.w.surface).unwrap();
             assert!(bounds.y() <= 12. && bounds.y()+bounds.height() > 12., "the open drawer overlaps the title band");
@@ -631,7 +632,8 @@ fn tool_drawer_sets(d: &mut Driver) {
             body.remove_controller(&input);
         }
         let drawer = state(&d.w).customization.drawer.unwrap();
-        let adaptive = matches!(control, C { command: CommandId::DrawingBrush | CommandId::Sculpt });
+        let adaptive = matches!(control, C { command: CommandId::DrawingBrush | CommandId::Sculpt }
+            | S { slot: ToolSlotId::Paint | ToolSlotId::PhotoRetouch });
         if adaptive {
             let sets = if control == (C { command: CommandId::Sculpt }) { Panel::SculptSets } else { Panel::BrushSets };
             assert_eq!(drawer.sets_column, presentation(d).edge != Edge::Top, "{name}");
@@ -648,10 +650,10 @@ fn tool_drawer_sets(d: &mut Driver) {
                 assert!(groups > 0 && rows == 0 && descendants::<gtk::Picture>(&body).is_empty(), "{name}: set columns build groups only");
             } else if panel == Panel::Tools && drawer.sets_column {
                 assert!(groups == 0 && rows > 0, "{name}: the Tools column builds its list without chips");
-            } else if matches!(control, S { slot: ToolSlotId::Fill | ToolSlotId::Gradient | ToolSlotId::Healing }) {
+            } else if matches!(control, S { slot: ToolSlotId::Fill | ToolSlotId::Gradient | ToolSlotId::Healing | ToolSlotId::Bucket }) {
                 assert_eq!(groups, 0, "{name}: leaf tools are rows, not sets");
                 assert_leaf_tool_rows(&body, drawer.tool_set.as_ref().unwrap(), name);
-            } else if adaptive {
+            } else if adaptive || control == (C { command: CommandId::Pencil }) {
                 assert!(groups > 0, "{name}: the set choices remain visible");
             }
             for button in descendants::<gtk::Button>(&body).into_iter().filter(|button| button.is_mapped()) {
@@ -712,6 +714,14 @@ fn tool_drawer_sets(d: &mut Driver) {
 #[ignore = "private compositor: --native-test=native_phone_drawers --native-storage; phone viewport and theme supplied externally"]
 fn native_phone_drawers() {
     let mut d = setup("art.capycanvas.PhoneDrawers");
+    let workspace = state(&d.w).workspace;
+    let mut fixture = workspace.clone();
+    let tiles = fixture.layout.phone.as_ref().unwrap();
+    let index = tiles.iter().position(|tile| tile.control == ToolbarControl::ToolSlot { slot: ToolSlotId::Paint }).unwrap();
+    let (paint, before) = (tiles[index].id, tiles.get(index + 1).map(|tile| tile.id));
+    fixture.layout.remove_phone_tool(paint).unwrap();
+    fixture.layout.insert_phone_tools(before, &[ToolbarControl::Command { command: CommandId::DrawingBrush }]).unwrap();
+    d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(fixture) });
     let checkpoint = ui_session(&d.w).engine().checkpoint();
     drawer_selection_colors(&mut d);
     for swapped in [false, true] {
@@ -820,6 +830,7 @@ fn native_phone_drawers() {
             assert_ne!(slider.value(), before, "the real slider changes its brush value");
         }
     }
+    d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
     tool_drawer_sets(&mut d);
     assert_eq!(ui_session(&d.w).engine().checkpoint(), checkpoint, "drawers and sliders do not paint");
     d.finish();
@@ -1509,8 +1520,8 @@ fn native_phone_control_feedback() {
         capture(&mut d, &format!("fixed-settings-{command:?}").to_lowercase());
         close(&mut d);
     }
-    d.w.dispatch(UiAction::Invoke { command: CommandId::DrawingBrush });
-    let brush = tool(&d, ToolbarControl::Command { command: CommandId::DrawingBrush });
+    d.w.dispatch(UiAction::Invoke { command: CommandId::Pencil });
+    let brush = tool(&d, ToolbarControl::Command { command: CommandId::Pencil });
     click(&mut d, &brush);
     until(|| state(&d.w).customization.drawer.is_some(), "Brush opens its list");
     inventory_drawer_ready(&d);
@@ -2092,7 +2103,7 @@ fn inventory_bar_menu(d: &mut Driver, menu: layer_ui::CanvasBarMenu, name: &str)
     }
 }
 
-fn inventory_place_checker(d: &Driver) {
+pub(super) fn inventory_place_checker(d: &Driver) {
     let checker=layer_core::color::source::rgba8_source([64,64],|x,y|if (x/16+y/16)%2==0 {[76,112,144,255]} else {[208,176,128,255]});
     ui_session_mut(&d.w).place_layer_source("Inventory marks.png",std::sync::Arc::unwrap_or_clone(checker),None).unwrap();d.w.wake();new_photo::ready(&d.w);
 }
@@ -2158,15 +2169,282 @@ fn inventory_canvas_bars(d: &mut Driver) {
 }
 
 #[test]
+#[ignore = "private compositor: --native-test=native_phone_toolbar_defaults --native-storage; phone viewport/theme external"]
+fn native_phone_toolbar_defaults() {
+    let mut d = setup("art.capycanvas.PhoneToolbarDefaults");
+    d.w.dispatch(UiAction::SelectBrush { id: DefaultBrushPreset::SpotHealingBrush as u32 });
+    d.w.dispatch(UiAction::SelectBrush { id: DefaultBrushPreset::Pencil as u32 });
+    let checkpoint = ui_session(&d.w).engine().checkpoint();
+    for (preset, tag, holds) in [
+        (WorkspacePreset::Painter, "sketch", &[ToolSlotId::Paint, ToolSlotId::Bucket][..]),
+        (WorkspacePreset::Illustrator, "paint", &[ToolSlotId::Operation][..]),
+        (WorkspacePreset::Photographer, "photo", &[ToolSlotId::PhotoRetouch][..]),
+    ] {
+        inventory_workspace(&d, preset);
+        assert_eq!(state(&d.w).workspace.layout.phone.as_ref().unwrap().iter()
+            .map(|tile| tile.control).collect::<Vec<_>>(), preset.phone_controls());
+        capture(&mut d, &format!("toolbar-default-{tag}"));
+        for &slot in holds {
+            let control = ToolbarControl::ToolSlot { slot };
+            let tile = state(&d.w).workspace.layout.phone.unwrap().into_iter().find(|tile| tile.control == control).unwrap().id;
+            customize::hold(&mut d, Some(tile));
+            let popup = customize::popup(&d).unwrap();
+            assert!(find_menu_item(popup.upcast_ref(), "Remove Tool").is_some());
+            assert!(find_menu_item(popup.upcast_ref(), "Insert Tools…").is_some());
+            inventory_monitor(&mut d, &format!("toolbar-hold-{tag}-{slot:?}").to_lowercase());
+            d.input.key(0xff1b);
+            until(|| customize::popup(&d).is_none(), "the slot hold menu closes");
+        }
+        if preset == WorkspacePreset::Photographer {
+            let opener = tool(&d, ToolbarControl::ToolSlot { slot: ToolSlotId::PhotoRetouch });
+            click(&mut d, &opener);
+            assert!(state(&d.w).customization.drawer.is_none(), "the first Retouch tap selects the tool");
+            assert_eq!(state(&d.w).brush.preset, DefaultBrushPreset::SpotHealingBrush as u32);
+            click(&mut d, &opener);
+            inventory_drawer_ready(&d);
+            capture(&mut d, "toolbar-photo-retouch-drawer");
+            inventory_close(&mut d);
+        }
+    }
+    inventory_workspace(&d, WorkspacePreset::Painter);
+    click(&mut d, "zen-capy");
+    until(|| state(&d.w).phone.menu && d.w.drawer.placement().is_some()
+        && find_named(d.w.window.upcast_ref(), "phone-menu-switcher").is_some_and(|row| row.is_mapped() && row.height() > 0)
+        && !d.w.drawer.animation_active(), "Capy's drawing and workspace switcher rows are allocated");
+    let drawing = d.named("phone-drawing");
+    let switcher = d.named("phone-menu-switcher");
+    let row = d.named("phone-menu-switcher-row").downcast::<gtk::Box>().unwrap();
+    let drawing_surface = drawing.compute_bounds(&d.w.surface).unwrap();
+    let switcher_surface = row.compute_bounds(&d.w.surface).unwrap();
+    let height = [drawing_surface.height(), switcher_surface.height()];
+    let row_gap = drawing_surface.y() - switcher_surface.y() - switcher_surface.height();
+    assert!(row.prev_sibling().is_none(), "the switcher is the first row in Capy's menu");
+    let drawing_label = widgets(&drawing).filter_map(|widget| widget.downcast::<gtk::Label>().ok()).find(|label| label.css_name() == "label").unwrap();
+    let drawing_text_x = drawing_label.compute_bounds(&d.w.surface).unwrap().x() + drawing_label.layout_offsets().0 as f32;
+    let well_x = switcher.compute_bounds(&d.w.surface).unwrap().x();
+    let well = switcher.compute_bounds(&row).unwrap();
+    let row_bounds = row.compute_bounds(&row).unwrap();
+    let gaps = [well.x() - row_bounds.x(), row_bounds.x() + row_bounds.width() - well.x() - well.width()];
+    let caret_widget = row.last_child().unwrap();
+    let caret = caret_widget.compute_bounds(&row).unwrap();
+    let caret_gap = caret.x() - well.x() - well.width();
+    let caret_reserve = caret.width() + caret_widget.margin_start() as f32;
+    let caret_end_gap = row_bounds.x() + row_bounds.width() - caret.x() - caret.width();
+    let lead_width = row.first_child().unwrap().compute_bounds(&row).unwrap().width();
+    let menu_list_width = d.named("phone-menu-scroll").compute_bounds(&d.w.surface).unwrap().width();
+    let placement = d.w.drawer.placement().unwrap().bounds;
+    eprintln!("phone menu row heights drawing={} switcher={}; switcher y={} drawing y={} gap={row_gap}; list width={} drawing text x={} well x={}; well gaps left={} right={}; caret gap={} margin={} end gap={}", height[0], height[1], switcher_surface.y(), drawing_surface.y(), menu_list_width, drawing_text_x, well_x, gaps[0], gaps[1], caret_gap, caret_widget.margin_start(), caret_end_gap);
+    capture(&mut d, "toolbar-sketch-capy-menu");
+    let switched = |d: &Driver, preset: WorkspacePreset, route: PhoneMenuRoute| {
+        wait_workspaces(&d.w);
+        new_photo::ready(&d.w);
+        let id = layer_workspace::DEFAULT_WORKSPACES.iter().find(|(_, value)| *value == preset).unwrap().0;
+        until(|| {
+            let view = state(&d.w);
+            d.w.workspaces.view().id.as_deref() == Some(id) && view.phone.menu
+                && view.phone.menu_navigation.current() == route && !d.w.drawer.animation_active()
+                && view.workspace.layout.phone.as_ref().is_some_and(|tiles| tiles.iter().map(|tile| tile.control).collect::<Vec<_>>() == preset.phone_controls())
+        }, &format!("switching to {} changes the phone toolbar and keeps Capy's menu on its page", preset.name()));
+    };
+    let switch_state = |d: &Driver, preset: WorkspacePreset, name: &str| {
+        switched(&d, preset, PhoneMenuRoute::default());
+        let pill = format!("phone-menu-switch-{name}");
+        until(|| find_named(d.w.window.upcast_ref(), &pill).and_then(|widget| widget.downcast::<gtk::ToggleButton>().ok())
+            .is_some_and(|button| button.is_mapped() && button.is_active()), "the active pill follows the switched workspace");
+        for name in ["painter", "illustrator", "photographer"] {
+            assert!(d.named(&format!("phone-menu-switch-{name}")).is_sensitive(), "the {name} pill stays sensitive");
+        }
+        assert_eq!(d.w.drawer.placement().unwrap().bounds, placement, "switching via a pill keeps the menu shell");
+    };
+    for (name, preset) in [("photographer", WorkspacePreset::Photographer), ("illustrator", WorkspacePreset::Illustrator)] {
+        let point = d.point(&d.named(&format!("phone-menu-switch-{name}")));
+        d.input.perform(serde_json::json!([contact("touch", "down", point), contact("touch", "up", point)]));
+        switch_state(&d, preset, name);
+    }
+    capture(&mut d, "toolbar-double-switch-completed-paint-menu-open");
+    click(&mut d, "phone-menu-switch-painter");
+    switch_state(&d, WorkspacePreset::Painter, "painter");
+    for (name, preset, tag) in [("photographer", WorkspacePreset::Photographer, "photo"),
+        ("illustrator", WorkspacePreset::Illustrator, "paint"), ("painter", WorkspacePreset::Painter, "sketch")] {
+        click(&mut d, &format!("phone-menu-switch-{name}"));
+        switch_state(&d, preset, name);
+        capture(&mut d, &format!("toolbar-switch-to-{tag}-menu-open"));
+    }
+    until(|| find_named(d.w.window.upcast_ref(), "phone-menu-switcher-options").is_some_and(|row| row.is_mapped() && row.height() > 0)
+        && !d.w.drawer.animation_active(), "the options button is allocated");
+    let stack = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
+    for target in ["options", "background", "caret"] {
+        let row = d.named("phone-menu-switcher-row").downcast::<gtk::Box>().unwrap();
+        match target {
+            "options" => click(&mut d, "phone-menu-switcher-options"),
+            "background" => {
+                let well = d.named("phone-menu-switcher").compute_bounds(&row).unwrap();
+                let caret = row.last_child().unwrap().compute_bounds(&row).unwrap();
+                let row_bounds = row.compute_bounds(&row).unwrap();
+                let background = if caret.x() > well.x() + well.width() {
+                    (well.x() + well.width() + caret.x()) * 0.5
+                } else {
+                    assert!(well.x() > row_bounds.x(), "the row has tappable background before its well");
+                    (well.x() + row_bounds.x()) * 0.5
+                };
+                let fraction = (background - row_bounds.x()) / row_bounds.width();
+                d.input.click(screen_point(row.upcast_ref(), &d.w.window, [fraction, 0.5]));
+            }
+            "caret" => d.click(&row.last_child().unwrap()),
+            _ => unreachable!(),
+        }
+        until(|| state(&d.w).phone.menu_navigation.current().page == Some(layer_ui::MenuPageId::Workspaces)
+            && !stack.is_transition_running(), &format!("the {target} opens Workspaces in Capy's menu"));
+        capture(&mut d, &format!("toolbar-workspaces-{target}"));
+        assert_eq!(d.w.drawer.placement().unwrap().bounds, placement, "Workspaces opens in the same menu shell");
+        if target == "options" {
+            let route = state(&d.w).phone.menu_navigation.current();
+            for (preset, tag) in [(WorkspacePreset::Photographer, "photo"), (WorkspacePreset::Painter, "sketch")] {
+                let page = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap().visible_child().unwrap();
+                let row = widgets(&page).find(|widget| widget.is_mapped() && widget.css_name() == "modelbutton"
+                    && menu_text(widget) == preset.name()).unwrap();
+                click_widget(&mut d, &row);
+                switched(&d, preset, route.clone());
+                capture(&mut d, &format!("toolbar-workspaces-switch-to-{tag}-menu-open"));
+                assert_eq!(d.w.drawer.placement().unwrap().bounds, placement, "switching via a Workspaces row keeps the menu shell");
+            }
+        }
+        click(&mut d, "phone-menu-back");
+        until(|| state(&d.w).phone.menu_navigation.current().page == Some(layer_ui::MenuPageId::Application(ApplicationMenu::Window))
+            && !stack.is_transition_running(), "Back returns to the Window submenu");
+        click(&mut d, "phone-menu-back");
+        until(|| state(&d.w).phone.menu_navigation.current() == PhoneMenuRoute::default()
+            && !stack.is_transition_running(), "Back returns to Capy's switcher row");
+    }
+    assert_eq!(height[0], height[1], "drawing and switcher rows must have equal allocated heights");
+    assert!((row_gap - 4.).abs() <= 0.5, "the switcher sits above the drawing row with a 4 px gap: {row_gap}");
+    let left_free = gaps[0] - lead_width;
+    let right_free = gaps[1] - caret_reserve;
+    eprintln!("centered switcher lead={} caret reserve={} free gaps left={} right={}", lead_width, caret_reserve, left_free, right_free);
+    assert!((left_free - right_free).abs() <= 2., "the well is centered with equal space beside its spacer and reserved caret: {left_free}/{right_free}");
+    if d.w.surface.width() > d.w.surface.height() { assert!(menu_list_width >= layer_ui::PhoneLayout::MENU_MIN_WIDTH, "landscape list keeps its minimum width: {menu_list_width}"); }
+    assert_eq!(caret_widget.margin_start(), 12, "the caret reserves 12 px separation from the well");
+    assert!(caret_gap >= 11., "the well keeps at least 12 px separation from the caret: {caret_gap}");
+    assert!((0. ..=13.).contains(&caret_end_gap), "the caret stays at the row's trailing inset: {caret_end_gap}");
+    inventory_close(&mut d);
+    if d.w.surface.width() == 412 {
+        let manager = d.w.workspaces.manager().unwrap();
+        let original = manager.current().unwrap().capture().unwrap();
+        let initial_pins = manager.switcher_ids();
+        let initial_ids = manager.workspace_ids();
+        let entities: Vec<_> = (0..4).map(|index| layer_workspace::Entity::workspace(
+            &format!("Overflow study {index}"), original.history.clone().into_history(),
+            original.working.clone(), original.history.layout().clone(), now_ms())).collect();
+        let ids: Vec<_> = entities.iter().map(|entity| entity.id.clone()).collect();
+        let mutations = entities.into_iter().map(|entity| layer_workspace::Mutation::Create {
+            entity, claim: false, name_policy: layer_workspace::NamePolicy::Exact,
+        }).collect();
+        glib::MainContext::default().block_on(async {
+            manager.store.request(layer_workspace::StoreRequest::Commit {
+                batch: layer_workspace::CommitBatch::prepare(manager.owner.clone(), mutations).unwrap(),
+            }).await.unwrap();
+            manager.refresh().await.unwrap();
+        });
+        for id in &ids {
+            d.w.workspaces.send(&d.w, layer_workspace::WorkspaceInput::EditSwitcher {
+                edit: layer_workspace::SwitcherEdit::Show { id: id.clone(), visible: true },
+            });
+            until(|| !d.w.workspaces.view().switcher_busy && manager.switcher_ids().contains(id), "overflow fixture is pinned");
+        }
+        click(&mut d, "zen-capy");
+        until(|| state(&d.w).phone.menu && !d.w.drawer.animation_active()
+            && find_named(d.w.window.upcast_ref(), "phone-menu-switcher-row").is_some_and(|row| row.is_mapped() && row.height() > 0), "the overflow switcher row is allocated");
+        let row = d.named("phone-menu-switcher-row").downcast::<gtk::Box>().unwrap();
+        let well = d.named("phone-menu-switcher");
+        let scroll = descendant::<gtk::ScrolledWindow>(&well).unwrap();
+        let options = d.named("phone-menu-switcher-options");
+        let caret = row.last_child().unwrap();
+        let well_bounds = well.compute_bounds(&row).unwrap();
+        let caret_bounds = caret.compute_bounds(&row).unwrap();
+        let bounds = row.compute_bounds(&row).unwrap();
+        let gaps = [well_bounds.x() - bounds.x(), bounds.x() + bounds.width() - well_bounds.x() - well_bounds.width()];
+        let caret_gap = caret_bounds.x() - well_bounds.x() - well_bounds.width();
+        let caret_reserve = caret_bounds.width() + caret.margin_start() as f32;
+        let adjustment = scroll.hadjustment();
+        let pills = descendants::<gtk::ToggleButton>(&well).into_iter().filter(|button| button.widget_name().starts_with("phone-menu-switch-")).collect::<Vec<_>>();
+        let labels = pills.iter().map(|button| button.child().unwrap().downcast::<gtk::Label>().unwrap()).collect::<Vec<_>>();
+        let names = labels.iter().map(|label| label.text().to_string()).collect::<Vec<_>>();
+        let labels_full = labels.iter().all(|label| !label.layout().is_ellipsized());
+        let active_visible = |scroll: &gtk::ScrolledWindow, well: &gtk::Widget| {
+            let active = descendants::<gtk::ToggleButton>(well).into_iter().find(|button| button.widget_name().starts_with("phone-menu-switch-") && button.is_active()).unwrap();
+            let rect = active.compute_bounds(scroll).unwrap();
+            (active.widget_name().to_string(), rect.x() >= -1. && rect.x() + rect.width() <= scroll.width() as f32 + 1.)
+        };
+        let initial_active = active_visible(&scroll, &well);
+        eprintln!("overflow switcher row={} well={} gaps left={} right={} caret={} gap={} margin={} scroll upper={} page_size={} names={names:?} full={labels_full} current={initial_active:?}", bounds.width(),well_bounds.width(),gaps[0],gaps[1],caret_bounds.width(),caret_gap,caret.margin_start(),adjustment.upper(),adjustment.page_size());
+        capture(&mut d, "toolbar-switcher-overflow");
+        let before = adjustment.value();
+        let scroller = scroll.upcast_ref::<gtk::Widget>();
+        let from = screen_point(scroller, &d.w.window, [0.8,0.5]);
+        let to = screen_point(scroller, &d.w.window, [0.2,0.5]);
+        let mut events = vec![contact("touch", "down", from)];
+        for t in [0.2, 0.4, 0.6, 0.8, 1.] { events.push(contact("touch", "move", [from[0] + (to[0] - from[0]) * t, from[1]])); }
+        events.push(contact("touch", "up", to));
+        d.input.perform(serde_json::Value::Array(events));
+        until(|| adjustment.value() > before + 0.5, "the overflow pills scroll horizontally through native touch drag");
+        eprintln!("overflow horizontal drag adjustment {} -> {}", before, adjustment.value());
+        assert_eq!(state(&d.w).phone.menu_navigation.current(), PhoneMenuRoute::default(), "dragging overflowing pills keeps Capy's menu on its main page");
+        assert_eq!(d.w.workspaces.view().id.as_deref(), Some("builtin:workspace:painter"), "dragging pills does not switch workspace");
+        capture(&mut d, "toolbar-switcher-overflow-scrolled");
+        for widget in [&options, &caret] {
+            let actual = widget.compute_bounds(&row).unwrap();
+            assert!(widget.is_mapped() && actual.width() > 0. && actual.x() >= bounds.x() - 1.
+                && actual.x() + actual.width() <= bounds.x() + bounds.width() + 1., "fixed overflow control stays fully visible");
+        }
+        let fills_row = gaps[0] <= 12. + caret_reserve + 1. && gaps[1] <= 12. + caret_reserve + 1.
+            && adjustment.upper() > adjustment.page_size() + 0.5;
+        inventory_close(&mut d);
+        d.w.workspaces.send(&d.w, layer_workspace::WorkspaceInput::Switch { id: ids.last().unwrap().clone() });
+        wait_workspaces(&d.w);
+        new_photo::ready(&d.w);
+        assert_eq!(d.w.workspaces.view().id.as_ref(), ids.last());
+        click(&mut d, "zen-capy");
+        until(|| state(&d.w).phone.menu && !d.w.drawer.animation_active()
+            && find_named(d.w.window.upcast_ref(), "phone-menu-switcher").is_some_and(|row| row.is_mapped() && row.height() > 0), "the last workspace switcher row is allocated");
+        let well = d.named("phone-menu-switcher");
+        let scroll = descendant::<gtk::ScrolledWindow>(&well).unwrap();
+        let last_active = active_visible(&scroll, &well);
+        eprintln!("overflow last workspace current={last_active:?} scroll value={} upper={} page_size={}", scroll.hadjustment().value(), scroll.hadjustment().upper(), scroll.hadjustment().page_size());
+        capture(&mut d, "toolbar-switcher-overflow-last-workspace");
+        inventory_close(&mut d);
+        inventory_workspace(&d, WorkspacePreset::Painter);
+        for id in &ids {
+            d.w.workspaces.send(&d.w, layer_workspace::WorkspaceInput::EditSwitcher {
+                edit: layer_workspace::SwitcherEdit::Show { id: id.clone(), visible: false },
+            });
+            until(|| !d.w.workspaces.view().switcher_busy && !manager.switcher_ids().contains(id), "overflow fixture is unpinned");
+            glib::MainContext::default().block_on(manager.delete_item(id, None, now_ms())).unwrap();
+        }
+        d.w.workspaces.send(&d.w, layer_workspace::WorkspaceInput::RefreshSwitcher);
+        until(|| !d.w.workspaces.view().switcher_busy && manager.workspace_ids() == initial_ids, "overflow workspaces are removed");
+        assert_eq!(manager.switcher_ids(), initial_pins, "the private profile's original pins are restored");
+        assert!(fills_row, "the overflowing well fills the row beside the fixed caret");
+        assert!((caret_gap - 12.).abs() <= 1., "the overflowing well and caret stay 12 px apart: {caret_gap}");
+        assert!(labels_full, "workspace pill names must not be ellipsized: {names:?}");
+        assert!(initial_active.1 && last_active.1, "current workspace pills remain visible when opening Capy's menu: {initial_active:?}, {last_active:?}");
+    }
+    assert_eq!(ui_session(&d.w).engine().checkpoint(), checkpoint);
+    d.finish();
+}
+
+#[test]
 #[ignore = "private compositor: --native-test=native_phone_inventory --native-storage; phone viewport/theme external"]
 fn native_phone_inventory() {
     let mut d = setup("art.capycanvas.PhoneInventory");
     if std::env::var("LAYER_PHONE_INVENTORY_CONTEXTS").as_deref() == Ok("transform") {
         inventory_workspace(&d, WorkspacePreset::Painter);
+        let control = ToolbarControl::Command {command:CommandId::ScaleRotate};
+        let mut workspace = state(&d.w).workspace;
+        workspace.layout.insert_phone_tools(None, &[control]).unwrap();
+        d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
         inventory_place_checker(&d);
         d.w.dispatch(UiAction::Invoke {command:CommandId::ApplyTransform});
         new_photo::ready(&d.w);
-        let control = ToolbarControl::Command {command:CommandId::ScaleRotate};
         let tile = state(&d.w).workspace.layout.phone.as_ref().unwrap().iter().find(|tile| tile.control == control).unwrap().id;
         let name = tool(&d, control);
         click(&mut d, &name);
@@ -2246,7 +2524,8 @@ fn native_phone_inventory() {
         }
         let tiles = state(&d.w).workspace.layout.phone.unwrap();
         for tile in tiles.into_iter().filter(|tile| tile.control != ToolbarControl::Divider) {
-            let owns_image=tile.control==(ToolbarControl::Command {command:CommandId::ScaleRotate});
+            let owns_image=matches!(tile.control,ToolbarControl::Command {command:CommandId::ScaleRotate}
+                | ToolbarControl::ToolSlot {slot:ToolSlotId::Operation});
             if owns_image {inventory_place_checker(&d);d.w.dispatch(UiAction::Invoke {command:CommandId::ApplyTransform});new_photo::ready(&d.w);}
             if owns_image {assert!(state(&d.w).layers.iter().any(|row|row.label.starts_with("Inventory marks")),"the ScaleRotate tile has its owned checker layer");}
             if let ToolbarControl::Command {command}=tile.control {
@@ -2383,11 +2662,11 @@ fn native_transform_escape() {
     ui_session_mut(&d.w).import_layer_source("Escape marks", std::sync::Arc::unwrap_or_clone(sample)).unwrap();
     d.w.wake();
     new_photo::ready(&d.w);
-    d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
-        layout: WorkspacePreset::Painter.layout(Platform::Gtk), ..Default::default()
-    }) });
     let control = ToolbarControl::Command { command: CommandId::ScaleRotate };
     let phone = d.w.surface.width().min(d.w.surface.height()) < 480;
+    let mut layout = WorkspacePreset::Painter.layout(Platform::Gtk);
+    if phone { layout.insert_phone_tools(None, &[control]).unwrap(); }
+    d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState { layout, ..Default::default() }) });
     let opener = if phone { tool(&d, control) } else {
         let layout = state(&d.w).workspace.layout;
         layout.header.entries().filter(|entry| entry.item == HeaderItem::Tool { control })

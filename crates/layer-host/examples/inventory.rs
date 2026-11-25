@@ -42,7 +42,7 @@ fn workspace_host(platform: Platform, preset: WorkspacePreset) -> NativeHost {
             id: format!("inventory-{}", preset.name().to_ascii_lowercase()),
             name: preset.name().into(),
             baseline: layout,
-            choices: WorkspacePreset::ALL
+            switcher: Vec::new(), choices: WorkspacePreset::ALL
                 .into_iter()
                 .map(|choice| WorkspaceChoice {
                     id: format!("inventory-{}", choice.name().to_ascii_lowercase()),

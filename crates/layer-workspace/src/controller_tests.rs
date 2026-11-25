@@ -2751,6 +2751,7 @@ fn workspace_projection_uses_one_identity_without_publishing_or_dirtying() {
         let expected = workspace_display_name(&id, &stored.entity.metadata, &localization);
         assert_eq!(manager.active_name().as_deref(), Some(expected.as_str()));
         assert_eq!(manager.binding().unwrap().name, expected);
+        assert!(manager.binding().unwrap().switcher.iter().any(|choice| choice.id == id && choice.name == expected));
         assert_eq!(manager.details(&stored, true, 1000).title, expected);
         let rows = manager.rows(ManagerPage::Workspaces, "Ｐａｉｎｔ", 1000);
         assert_eq!(rows[0].title, expected);

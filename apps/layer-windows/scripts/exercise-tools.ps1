@@ -111,15 +111,32 @@ function Select-Preset([int]$Preset){
     Wait-Canvas {(Model).state.brush.preset -eq $Preset -and (Model).brush_ready} "Preset $Preset did not activate"
 }
 function Select-Tool([string]$Id,[switch]$Cancel){
-    $target=@{id=$null}
+    $target=@{id=$null;choose=$false}
     Wait-Until {
         foreach($panel in (Model).panels){
             $tile=$panel.tiles|Where-Object {$_.control.command -eq $Id -or $_.resolved_control.command -eq $Id}|Select-Object -First 1
             if($tile){$target.id="tile-$($panel.id)-$($tile.id)";return $true}
         }
+        if($Id -in @('move','scale_rotate')){
+            foreach($panel in (Model).panels){
+                $tile=$panel.tiles|Where-Object {$_.control.slot -eq 'operation'}|Select-Object -First 1
+                if($tile){$target.id="tile-$($panel.id)-$($tile.id)";$target.choose=$true;return $true}
+            }
+        }
         $false
     } "Command has no native toolbar tile: $Id"
-    Invoke-Id $target.id
+    if($target.choose){
+        $bounds=(Arranged $target.id ([System.Windows.Automation.ControlType]::Button)).Current.BoundingRectangle
+        $label=((Model).state.commands|Where-Object id -eq $Id).label
+        $ownsInput=![CapyRowPointer]::Initialized
+        try{
+            if($ownsInput){[CapyRowPointer]::Initialize([uint32]$ProcessId)}
+            [void][CapyRowPointer]::SetForegroundWindow($drawingWindow)
+            [CapyRowPointer]::RightClick([int]($bounds.Left+$bounds.Width/2),[int]($bounds.Top+$bounds.Height/2))
+            $choice=Control $label ([System.Windows.Automation.ControlType]::MenuItem)
+            $choice.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+        }finally{if($ownsInput){[CapyRowPointer]::Dispose()}}
+    }else{Invoke-Id $target.id}
     if($Cancel){return}
     Wait-Until {
         if($Id -eq 'scale_rotate'){return (Model).state.layer_tools.tool -eq 'transform'}

@@ -399,7 +399,7 @@ fn catalog_reaches_tool_variants_layer_properties_workspaces_and_paint_slots() {
         id: "w0".into(),
         name: "Workspace 0".into(),
         baseline: durable_layout(&s.state.workspace.layout),
-        choices: (0..8)
+        switcher: Vec::new(), choices: (0..8)
             .map(|i| WorkspaceChoice { id: format!("w{i}"), name: format!("Workspace {i}") })
             .collect(),
     })

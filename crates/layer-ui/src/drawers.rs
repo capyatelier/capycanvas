@@ -487,7 +487,7 @@ impl ResolvedLayout {
 impl ToolbarControl {
     pub(crate) fn drawer_columns(self) -> Option<Vec<Vec<Panel>>> {
         match self {
-            Self::ToolSlot { slot: ToolSlotId::Fill }
+            Self::ToolSlot { slot: ToolSlotId::Fill | ToolSlotId::Bucket }
             | Self::Command { command: CommandId::Fill | CommandId::LassoFill | CommandId::EncloseFill | CommandId::PaintUnfilled } => Some(vec![vec![Panel::Tools], vec![Panel::ToolSettings]]),
             Self::ToolSlot {..} => Some(vec![vec![Panel::Brushes],vec![Panel::ToolSettings]]),
             Self::ColorPicker => Some(vec![vec![Panel::ToolSettings]]),

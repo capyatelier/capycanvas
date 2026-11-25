@@ -30,6 +30,8 @@ pub struct ManagedWorkspace {
     /// Restore target for this host: latest built-in default or saved custom baseline.
     pub baseline: DockLayout,
     pub choices: Vec<WorkspaceChoice>,
+    #[serde(default)]
+    pub switcher: Vec<WorkspaceChoice>,
 }
 impl ManagedWorkspace {
     pub(crate) fn menu(&self, idle: bool, can_reset: bool, localizer: &Localizer) -> ContextMenuItem {
@@ -98,7 +100,7 @@ mod tests {
         let localization = Localizer::shared(UiLanguage::English);
         let workspace = ManagedWorkspace {
             id: "current".into(), name: "Current".into(), baseline: DockLayout::default(),
-            choices: vec![WorkspaceChoice { id: "other".into(), name: "Other".into() }],
+            switcher: Vec::new(), choices: vec![WorkspaceChoice { id: "other".into(), name: "Other".into() }],
         };
         let menu = workspace.menu(true, true, &localization);
         for item in menu.sections.iter().flatten() {
@@ -121,7 +123,7 @@ mod tests {
         let ja = Localizer::shared(UiLanguage::Japanese);
         let workspace = ManagedWorkspace {
             id: "current".into(), name: "Workspaces {$name}".into(), baseline: DockLayout::default(),
-            choices: vec![WorkspaceChoice { id: "other".into(), name: "New Workspace… 日本語".into() }],
+            switcher: Vec::new(), choices: vec![WorkspaceChoice { id: "other".into(), name: "New Workspace… 日本語".into() }],
         };
         let english = workspace.menu(false, true, &en);
         let japanese = workspace.menu(false, true, &ja);

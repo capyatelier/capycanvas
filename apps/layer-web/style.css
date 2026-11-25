@@ -1893,6 +1893,16 @@ body:has(> #workspace > #gpu-notice[data-launch]:not([hidden])) > .document-tran
 .menu-back-arrow { display:flex; align-self:stretch; align-items:center; width:16px; opacity:.3; margin-inline-start:-2px; }
 .menu-page hr { margin:6px 0; height:1px; border:0; flex:none; background:var(--menu-divider); }
 .menu-drawing-row { display:flex; min-width:0; }
+.menu-page .menu-switcher-row { display:flex; align-items:center; flex:none; height:var(--phone-menu-row,32px); margin-bottom:4px; padding:0 12px; box-sizing:border-box; }
+.menu-switcher-lead { flex:none; width:28px; }
+.menu-switcher-row > .submenu-arrow { margin-inline-start:12px; }
+.phone-menu-switcher { flex:0 1 auto; min-width:0; height:100%; margin-inline:auto; display:flex; align-items:center; gap:2px; padding:3px; box-sizing:border-box; border-radius:999px; background:var(--glass-switcher); }
+.phone-menu-switcher-choices { position:relative; flex:1 1 auto; min-width:0; height:100%; display:flex; align-items:stretch; gap:2px; overflow-x:auto; scrollbar-width:none; }
+.menu-page.workspace-menu-items .phone-menu-switcher button { flex:none; min-width:0; min-height:0; height:100%; padding:0 8px; border-radius:999px; white-space:nowrap; font-weight:500; background:transparent; }
+.menu-page.workspace-menu-items .phone-menu-switcher button[aria-pressed="true"] { color:var(--text); background:var(--glass-switcher-selection); }
+:where(:root:not([data-touch])) .menu-page .phone-menu-switcher button:hover:not(:disabled):not([aria-pressed="true"]) { background:color-mix(in srgb,var(--text) 8%,transparent); }
+.menu-page.workspace-menu-items .phone-menu-switcher .phone-menu-switcher-options { width:20px; padding:0; color:color-mix(in srgb,var(--text) 70%,transparent); }
+.phone-menu-switcher-options svg { width:16px; height:16px; }
 .menu-page .menu-drawing-row > .menu-row { flex:1; width:0; }
 .menu-page.workspace-menu-items .menu-close { display:grid; min-width:0; height:auto; flex:none; padding:0; }
 .menu-close svg { width:16px; height:16px; }

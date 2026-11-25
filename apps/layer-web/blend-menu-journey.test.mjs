@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 
-const control='.layer-blend',menu='.panel-context-menu';
-const opened=`!!document.querySelector('${menu}:popover-open')`;
+const control='.layer-blend',menu='.panel-context-menu:popover-open';
+const opened=`!!document.querySelector('${menu}')`;
 const GROUPS=[
   ['Normal'],
   ['Darken','Multiply','Color Burn','Linear Burn'],
@@ -27,7 +27,7 @@ export async function checkBlendMenu({call,evaluate,settle}) {
     :call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons:type==='mouseReleased'?0:1,clickCount:1,pointerType:kind,force:type==='mouseReleased'?0:.6});
   const tap=async(p,kind)=>{touchId++;await pointer('mousePressed',p,kind);await pointer('mouseReleased',p,kind);await settle();await pause(60);};
   const blend=()=>evaluate('layerApp.state().layer_tools.editing_layer.blend_label');
-  const groups=()=>evaluate(`(()=>{const out=[[]];for(const n of document.querySelector('${menu}').children){if(n.tagName==='HR')out.push([]);else out.at(-1).push(n.querySelector('.menu-label')?.textContent);}return out;})()`);
+  const groups=()=>evaluate(`(()=>{const out=[[]];for(const n of document.querySelector('${menu} .context-menu-body').children){if(n.tagName==='HR')out.push([]);else out.at(-1).push(n.querySelector('.menu-label')?.textContent);}return out;})()`);
   const checked=()=>evaluate(`[...document.querySelectorAll('${menu} [aria-checked=true] .menu-label')].map(n=>n.textContent)`);
   const theme=await evaluate('layerApp.state().settings.theme ?? null');
   await wait(`(()=>{[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Keep for Later')?.click();return !document.querySelector('dialog[open]');})()`);

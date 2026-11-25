@@ -123,7 +123,7 @@ mod phone_restore_tests {
         let mut s = phone_session([412, 891]);
         s.state.workspace.layout = current;
         s.configure_workspace_manager(ManagedWorkspace {
-            id: "legacy-sketch".into(), name: "Legacy Sketch".into(), baseline: starting.clone(), choices: Vec::new(),
+            id: "legacy-sketch".into(), name: "Legacy Sketch".into(), baseline: starting.clone(), switcher: Vec::new(), choices: Vec::new(),
         }).unwrap();
         assert!(!s.command(CommandId::ResetLayout).enabled);
         let first = s.state.workspace.layout.phone.as_ref().unwrap()[0].id;

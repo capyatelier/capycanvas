@@ -698,7 +698,7 @@ mod tests {
                 let previous = host.session.state().revision;
                 let change = host.session.configure_workspace_manager(ManagedWorkspace {
                     id: "initial".into(), name: "Initial".into(),
-                    baseline: host.session.state().workspace.layout.clone(), choices: Vec::new(),
+                    baseline: host.session.state().workspace.layout.clone(), switcher: Vec::new(), choices: Vec::new(),
                 }).unwrap();
                 host.apply_change(previous, change);
                 complete(&host, "initial");

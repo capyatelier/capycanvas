@@ -158,11 +158,16 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let baseline = current.starting_layout(self.platform, self.tablet.get()).ok()?;
         let mut items = self.items();
         items.retain(|i| i.metadata.kind == ItemKind::Workspace);
+        let switcher = self.switcher_display_ids().into_iter()
+            .filter_map(|id| items.iter().find(|item| item.id == id))
+            .map(|item| layer_ui::WorkspaceChoice { name: self.summary_display_name(item), id: item.id.clone() })
+            .collect();
         items.sort_by_key(|i| std::cmp::Reverse(i.metadata.last_used_ms));
         Some(layer_ui::ManagedWorkspace {
             id: current.id.clone(),
             name: self.display_name(&current.id, &current.metadata),
             baseline,
+            switcher,
             choices: items
                 .into_iter()
                 .map(|i| layer_ui::WorkspaceChoice {

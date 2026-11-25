@@ -12,13 +12,13 @@ struct WorkspaceSwitcher: View {
     var tile: CGFloat = 36
     private var choices: [JSON] { workspaces.view["switcher_display"].array }
     private var naturalWidth: CGFloat {
-        Self.naturalWidth(choices, textSize: textSize)
+        Self.naturalWidth(choices.map { $0["title"].string }, textSize: textSize)
     }
-    static func naturalWidth(_ choices: [JSON], textSize: Double) -> CGFloat {
-        10 + CGFloat(max(0, choices.count - 1)) * 2 + choices.reduce(0) { width, workspace in
-            width + min(110, EditorTextMetrics.width(workspace["title"].string, size: textSize, weight: .medium))
+    static func naturalWidth(_ titles: [String], textSize: Double, pillMaximum: CGFloat = SwitcherPill.maximumWidth) -> CGFloat {
+        10 + CGFloat(max(0, titles.count - 1)) * 2 + titles.reduce(0) { width, title in
+            width + min(pillMaximum, EditorTextMetrics.width(title, size: textSize, weight: .medium))
                 + 16
-        } + 2 + WorkspaceSwitcherOptions.size.width
+        } + 2 + SwitcherOptionsButton.size.width
     }
     var body: some View {
         Group {
@@ -31,7 +31,7 @@ struct WorkspaceSwitcher: View {
                     .disabled(!workspaces.ready || workspaces.readOnly)
                     .modifier(WorkspaceSwitcherContext(workspaces: workspaces))
             } else {
-                segments.glassSurface(SquircleShape.tile, fill: palette.glassSwitcher)
+                segments
             }
         }
         .accessibilityElement(children: .contain).accessibilityLabel(workspaces.view["switcher_menu"]["title"].string)
@@ -46,34 +46,24 @@ struct WorkspaceSwitcher: View {
     }
     private var choicesEnabled: Bool { workspaces.ready && !workspaces.busy && !workspaces.readOnly && !workspaces.presented }
     private var segments: some View {
-        WorkspaceNameWidth(natural: naturalWidth, maximum: maximumWidth) {
-            HStack(spacing: 2) {
-                ScrollViewReader { scroll in
-                    EditorScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 2) {
-                            ForEach(choices, id: \.switcherID) { workspace in
-                                choice(workspace).id(workspace["id"].string)
-                            }
-                        }.padding([.leading, .vertical], 5)
-                    }.frame(height: 36)
-                        .onChange(of: choices.first?["id"].string) { _, first in
-                            if let first, first == workspaces.view["id"].string { scroll.scrollTo(first, anchor: .leading) }
-                        }
-                }.disabled(!choicesEnabled).modifier(WorkspaceSwitcherContext(workspaces: workspaces))
-                WorkspaceSwitcherOptions(workspaces: workspaces, palette: palette)
-            }.padding(.trailing, 5)
+        SwitcherTrack(palette: palette, natural: naturalWidth, maximum: maximumWidth) {
+            ScrollViewReader { scroll in
+                SwitcherChoices {
+                    ForEach(choices, id: \.switcherID) { workspace in
+                        choice(workspace).id(workspace["id"].string)
+                    }
+                }.onChange(of: choices.first?["id"].string) { _, first in
+                    if let first, first == workspaces.view["id"].string { scroll.scrollTo(first, anchor: .leading) }
+                }
+            }.disabled(!choicesEnabled).modifier(WorkspaceSwitcherContext(workspaces: workspaces))
+            WorkspaceSwitcherOptions(workspaces: workspaces, palette: palette)
         }
     }
     private func choice(_ workspace: JSON) -> some View {
         let selected = workspace["current"].bool
-        return Button { workspaces.switchTo(workspace["id"].string) } label: {
-            WorkspaceNameWidth(natural: EditorTextMetrics.width(workspace["title"].string, size: textSize, weight: .medium),
-                maximum: 110) {
-                Text(workspace["title"].string).font(EditorTextMetrics.font(size: textSize, weight: .medium)).lineLimit(1)
-            }.padding(.horizontal, 8).frame(height: 26)
-                .foregroundStyle(palette["text"])
-        }.buttonStyle(SwitcherChoiceStyle(selected: selected, palette: palette)).fixedSize(horizontal: true, vertical: false)
-            .help("Switch to \(workspace["title"].string) workspace")
+        return SwitcherPill(title: workspace["title"].string, selected: selected, palette: palette, textSize: textSize) {
+            workspaces.switchTo(workspace["id"].string)
+        }.help("Switch to \(workspace["title"].string) workspace")
             .accessibilityIdentifier("workspace-switch-" + workspace["id"].string)
             .accessibilityAddTraits(selected ? .isSelected : [])
             .modifier(HeaderControlMeasurement(id: "workspace-switch-" + workspace["id"].string))
@@ -90,23 +80,72 @@ private struct WorkspaceSwitcherContext: ViewModifier {
 }
 
 struct WorkspaceSwitcherOptions: View {
-    static let size = CGSize(width: 20, height: 26)
     @ObservedObject var workspaces: WorkspaceController
     let palette: EditorPalette
     @State private var open = false
     var body: some View {
-        let label = workspaces.view["switcher_options_label"].string
-        Button { open.toggle() } label: {
-            SharedIcon(name: "more-small", size: 16).foregroundStyle(palette["text"].opacity(0.7))
-                .frame(width: Self.size.width, height: Self.size.height).contentShape(Rectangle())
-        }.buttonStyle(SwitcherChoiceStyle(selected: false, palette: palette))
-            .help(label).accessibilityLabel(label).accessibilityIdentifier("workspace-switcher-options")
+        SwitcherOptionsButton(label: workspaces.view["switcher_options_label"].string, palette: palette) { open.toggle() }
+            .accessibilityIdentifier("workspace-switcher-options")
             .editorPopover(isPresented: $open) {
                 if open {
                     EditorActionMenu(model: WorkspaceSwitcher.options(workspaces), width: 280,
                         identifier: "workspace-switcher-options-menu") { open = false }
                 }
             }
+    }
+}
+
+struct SwitcherTrack<Content: View>: View {
+    let palette: EditorPalette
+    let natural: CGFloat
+    let maximum: CGFloat
+    var registersGlass = true
+    @ViewBuilder var content: () -> Content
+    var body: some View {
+        WorkspaceNameWidth(natural: natural, maximum: maximum) {
+            HStack(spacing: 2) { content() }.padding(.trailing, 5)
+        }.glassSurface(SquircleShape.tile, fill: palette.glassSwitcher, register: registersGlass)
+    }
+}
+
+struct SwitcherChoices<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+    var body: some View {
+        EditorScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 2) { content() }.padding([.leading, .vertical], 5)
+        }.frame(height: 36)
+    }
+}
+
+struct SwitcherPill: View {
+    static let maximumWidth: CGFloat = 110
+    let title: String
+    let selected: Bool
+    let palette: EditorPalette
+    var textSize: Double = 44.0 / 3
+    var maximum: CGFloat = SwitcherPill.maximumWidth
+    let choose: () -> Void
+    var body: some View {
+        Button(action: choose) {
+            WorkspaceNameWidth(natural: EditorTextMetrics.width(title, size: textSize, weight: .medium), maximum: maximum) {
+                Text(title).font(EditorTextMetrics.font(size: textSize, weight: .medium)).lineLimit(1)
+            }.padding(.horizontal, 8).frame(height: 26)
+                .foregroundStyle(palette["text"])
+        }.buttonStyle(SwitcherChoiceStyle(selected: selected, palette: palette)).fixedSize(horizontal: true, vertical: false)
+    }
+}
+
+struct SwitcherOptionsButton: View {
+    static let size = CGSize(width: 20, height: 26)
+    let label: String
+    let palette: EditorPalette
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            SharedIcon(name: "more-small", size: 16).foregroundStyle(palette["text"].opacity(0.7))
+                .frame(width: Self.size.width, height: Self.size.height).contentShape(Rectangle())
+        }.buttonStyle(SwitcherChoiceStyle(selected: false, palette: palette))
+            .help(label).accessibilityLabel(label)
     }
 }
 

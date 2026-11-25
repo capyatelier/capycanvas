@@ -7,6 +7,7 @@ variants! {
     pub enum ToolSlotId {
         Drawing, Marquee, Lasso, AutomaticSelection, ManualSelection, Healing,
         PhotoFill, #[serde(alias = "lasso_fill")] Fill, Blend, Retouch, Operation, Figure, Ruler, Gradient,
+        Paint, PhotoRetouch, Bucket,
     }
 }
 
@@ -171,7 +172,7 @@ impl ToolSlotId {
                 V::BrushPreset { id: DefaultBrushPreset::HealingBrush as u32 },
                 V::BrushPreset { id: DefaultBrushPreset::SpotHealingBrush as u32 },
             ] },
-            Self::Operation => const { &[command(C::Move), command(C::ScaleRotate), command(C::EditPoints), command(C::Crop)] },
+            Self::Operation => const { &[command(C::ScaleRotate), command(C::Move), command(C::EditPoints), command(C::Crop)] },
             Self::Figure => {
                 const {
                     &[
@@ -216,6 +217,28 @@ impl ToolSlotId {
                     ]
                 }
             }
+            Self::Paint => const { &[
+                V::BrushGroup { group: ToolGroup::Paint },
+                V::BrushGroup { group: ToolGroup::Watercolor },
+                V::BrushGroup { group: ToolGroup::Oil },
+                V::BrushGroup { group: ToolGroup::Airbrush },
+            ] },
+            Self::PhotoRetouch => const { &[
+                V::BrushGroup { group: ToolGroup::Retouch },
+                V::BrushGroup { group: ToolGroup::Blend },
+                V::BrushGroup { group: ToolGroup::WetPaint },
+                V::BrushGroup { group: ToolGroup::Effects },
+                V::BrushGroup { group: ToolGroup::Liquify },
+            ] },
+            Self::Bucket => const { &[
+                command(C::Fill),
+                command(C::LassoFill),
+                command(C::EncloseFill),
+                command(C::PaintUnfilled),
+                V::Gradient {shape:layer_core::GradientShape::Linear},
+                V::Gradient {shape:layer_core::GradientShape::Radial},
+                V::Gradient {shape:layer_core::GradientShape::Reflected},
+            ] },
         }
     }
     pub(crate) fn label(self, localization: &Localizer) -> String {
@@ -227,8 +250,9 @@ impl ToolSlotId {
             Self::Figure => CommandId::Figure.localized_label(localization).to_string(),
             Self::Ruler => CommandId::Ruler.localized_label(localization).to_string(),
             Self::Blend => CommandId::Blend.localized_label(localization).to_string(),
-            Self::Retouch => ToolGroup::Retouch.localized_label(localization).to_string(),
-            Self::Fill => localization.text(MessageId::TOOL_FAMILY_FILL).to_string(),
+            Self::Retouch | Self::PhotoRetouch => ToolGroup::Retouch.localized_label(localization).to_string(),
+            Self::Paint => ToolGroup::Paint.localized_label(localization).to_string(),
+            Self::Fill | Self::Bucket => localization.text(MessageId::TOOL_FAMILY_FILL).to_string(),
             Self::Gradient => CommandId::Gradient
                 .localized_label(localization)
                 .to_string(),

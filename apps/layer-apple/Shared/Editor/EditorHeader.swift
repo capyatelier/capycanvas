@@ -53,7 +53,7 @@ import SwiftUI
                 if drawings > 1 { width = max(180, min(600, Double(drawings) * 180)) }
                 else { width = max(tile, ceil(EditorTextMetrics.width(store.drawingTabs.selectedDescription, size: textSize, weight: .semibold) + 16)) }
             case "workspaces":
-                width = max(144, WorkspaceSwitcher.naturalWidth(store.workspaces?.view["switcher_display"].array ?? [], textSize: 44.0 / 3))
+                width = max(144, WorkspaceSwitcher.naturalWidth((store.workspaces?.view["switcher_display"].array ?? []).map { $0["title"].string }, textSize: 44.0 / 3))
             case "menu_labels":
                 width = ceil(ApplicationMenus.naturalWidth(store.snapshot["application_menus"].array, textSize: textSize))
             case "clock":

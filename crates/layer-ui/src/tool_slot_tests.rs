@@ -624,7 +624,7 @@ fn slot_menus_publish_only_member_choices_and_activate_their_leaf_tools() {
     let slots = [ToolSlotId::Drawing, ToolSlotId::Marquee, ToolSlotId::Lasso,
         ToolSlotId::AutomaticSelection, ToolSlotId::ManualSelection, ToolSlotId::Healing,
         ToolSlotId::PhotoFill, ToolSlotId::Fill, ToolSlotId::Blend, ToolSlotId::Retouch, ToolSlotId::Operation,
-        ToolSlotId::Figure, ToolSlotId::Ruler, ToolSlotId::Gradient];
+        ToolSlotId::Figure, ToolSlotId::Ruler, ToolSlotId::Gradient, ToolSlotId::Paint, ToolSlotId::PhotoRetouch, ToolSlotId::Bucket];
     for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows] {
         let (mut s, panel, ids) = slot_fixture(platform, &slots);
         for (slot, tile) in slots.into_iter().zip(ids) {
@@ -663,6 +663,22 @@ fn slot_menus_publish_only_member_choices_and_activate_their_leaf_tools() {
 }
 
 #[test]
+fn phone_tile_groups_start_on_spot_healing_transform_paint_and_fill() {
+    let slots = [ToolSlotId::PhotoRetouch, ToolSlotId::Operation, ToolSlotId::Paint, ToolSlotId::Bucket];
+    let (mut s, panel, ids) = slot_fixture(Platform::Android, &slots);
+    let anchors: Vec<_> = ids.into_iter().map(|tile| DrawerAnchor::Tile { panel, tile }).collect();
+    let command = |command| ToolVariant::Command { command };
+    assert_eq!(anchors.iter().map(|&anchor| selected_slot_variant(&s, anchor)).collect::<Vec<_>>(),
+        [ToolVariant::BrushGroup { group: ToolGroup::Retouch }, command(CommandId::ScaleRotate), ToolVariant::BrushGroup { group: ToolGroup::Paint }, command(CommandId::Fill)]);
+    activate_slot(&mut s, anchors[0]);
+    assert!(s.command(CommandId::SpotHeal).selected);
+    activate_slot(&mut s, anchors[2]);
+    assert_eq!(tools::group(s.state().brush.preset), ToolGroup::Paint);
+    activate_slot(&mut s, anchors[3]);
+    assert!(s.command(CommandId::Fill).selected);
+}
+
+#[test]
 fn choosing_a_variant_selects_once_and_active_slot_clicks_keep_settings_drawers() {
     for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows] {
         let (mut s, panel, ids) = slot_fixture(platform, &[ToolSlotId::Drawing, ToolSlotId::Gradient]);
@@ -694,7 +710,7 @@ fn choosing_a_variant_selects_once_and_active_slot_clicks_keep_settings_drawers(
 #[test]
 fn grouped_slots_publish_the_same_siblings_in_menus_panels_and_drawers() {
     for slot in ToolSlotId::ALL {
-        let sets = matches!(slot, ToolSlotId::Drawing | ToolSlotId::Blend | ToolSlotId::Figure);
+        let sets = matches!(slot, ToolSlotId::Drawing | ToolSlotId::Blend | ToolSlotId::Figure | ToolSlotId::Paint | ToolSlotId::PhotoRetouch);
         let (mut s, panel, ids) = slot_fixture(Platform::Gtk, &[slot]);
         let anchor = DrawerAnchor::Tile { panel, tile: ids[0] };
         if slot == ToolSlotId::Operation {
@@ -716,7 +732,7 @@ fn grouped_slots_publish_the_same_siblings_in_menus_panels_and_drawers() {
                 menu.iter().map(|item| item.enabled).collect::<Vec<_>>(), "{slot:?}");
             activate_slot(&mut s, anchor);
             let drawer = s.state().customization.drawer.as_ref().unwrap();
-            assert_eq!(drawer.columns, [vec![if slot == ToolSlotId::Fill { Panel::Tools } else { Panel::Brushes }], vec![Panel::ToolSettings]]);
+            assert_eq!(drawer.columns, [vec![if matches!(slot, ToolSlotId::Fill | ToolSlotId::Bucket) { Panel::Tools } else { Panel::Brushes }], vec![Panel::ToolSettings]]);
             let choices = drawer.tool_set.as_ref().unwrap();
             assert_eq!(choices.groups.is_empty(), !sets, "{slot:?}/{variant:?}");
             let drawer_siblings: Vec<_> = choices.groups.iter().chain(&choices.subtools)

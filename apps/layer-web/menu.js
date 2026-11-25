@@ -34,6 +34,9 @@ export function createMenu({app,state,element,button,icon,dispatch,customization
     clearPressed();
     if(hit.kind==='back'){send({kind:'menu_back',route:route()});return;}
     if(hit.kind==='strip'){const item=model.strip[hit.position];if(item.enabled&&item.action)dispatch(item.action);return;}
+    if(hit.kind==='switcher'){if(model.switcher)dispatch(model.switcher.action);return;}
+    if(hit.kind==='switcher_options'){if(model.switcher?.options.enabled)dispatch(model.switcher.options.action);return;}
+    if(hit.kind==='switcher_choice'){const choice=model.switcher?.choices[hit.position];if(choice?.enabled&&choice.action)dispatch(choice.action);return;}
     if(!row?.enabled)return;
     if(hit.kind==='close'){if(row.close)dispatch(row.close.action);return;}
     if(row.target)send({kind:'menu_select',route:row.target});
@@ -50,8 +53,42 @@ export function createMenu({app,state,element,button,icon,dispatch,customization
     node.id=`phone-${['preferences','search','finger','zen','swap'][index]}`;
     bind(node,{kind:'strip',position:index});strip.push(node);root.append(node);
   }
+  let switcher,revealPending=true;
+  function switcherRow(page) {
+    const row=element('div','menu-switcher-row'),well=element('div','phone-menu-switcher'),choices=element('div','phone-menu-switcher-choices');
+    const options=button('',()=>{},'phone-menu-switcher-options'),caret=icon('go-next');
+    row.id='phone-menu-switcher-row';well.id='phone-menu-switcher';options.id='phone-menu-switcher-options';
+    options.append(icon('more-small'));caret.classList.add('submenu-arrow');
+    well.append(choices,options);row.append(element('span','menu-switcher-lead'),well,caret);
+    bind(row,{kind:'switcher'},null,page.id);bind(options,{kind:'switcher_options'},null,page.id);
+    const open=row.onclick;row.onclick=event=>{if(event.target.closest('.phone-menu-switcher'))return;open(event);};
+    return {row,choices,options,page:page.id,buttons:[]};
+  }
+  function syncSwitcher(next) {
+    if(!switcher||!next.switcher)return;
+    const {choices,options,buttons}=switcher;
+    if(buttons.length!==next.switcher.choices.length) {
+      buttons.length=0;choices.replaceChildren();
+      for(const index of next.switcher.choices.keys()) {
+        const pill=button('',()=>{},'phone-menu-switch');pill.id=`phone-menu-switch-${index}`;
+        bind(pill,{kind:'switcher_choice',position:index},null,switcher.page);choices.append(pill);buttons.push(pill);
+      }
+    }
+    for(const [index,choice]of next.switcher.choices.entries()) {
+      const pill=buttons[index],selected=String(!!choice.selected);
+      if(selected==='true'&&pill.getAttribute('aria-pressed')!=='true')revealPending=true;
+      pill.textContent=choice.label;pill.title=choice.label;pill.disabled=!choice.enabled;pill.setAttribute('aria-pressed',selected);
+    }
+    options.title=next.switcher.options.label;options.setAttribute('aria-label',next.switcher.options.label);options.disabled=!next.switcher.options.enabled;
+    switcher.row.setAttribute('aria-label',next.switcher.label);
+  }
+  function revealSelectedWorkspace() {
+    const choices=switcher?.choices,selected=choices?.querySelector('[aria-pressed="true"]');if(!selected)return;
+    const start=selected.offsetLeft,end=start+selected.offsetWidth;
+    if(start<choices.scrollLeft)choices.scrollLeft=start;else if(end>choices.scrollLeft+choices.clientWidth)choices.scrollLeft=end-choices.clientWidth;
+  }
   function rebuild(next) {
-    cancelContact();
+    cancelContact();switcher=null;
     for(const page of pages.values())for(const record of page.records)record.row.disposeMenuRow();
     stack.replaceChildren();pages.clear();
     for(const page of next.pages) {
@@ -62,6 +99,7 @@ export function createMenu({app,state,element,button,icon,dispatch,customization
         arrow.append(icon('go-previous'));title.append(element('span','menu-caption',page.title));back.append(arrow,title);back.dataset.back='true';
         bind(back,{kind:'back'},null,page.id);body.append(back);
       }
+      if(!page.parent&&next.switcher){switcher=switcherRow(page);body.append(switcher.row);}
       for(const [s,section]of page.sections.entries()) {
         if(s)body.append(element('hr'));
         for(const [i,item]of section.entries()) {
@@ -78,13 +116,14 @@ export function createMenu({app,state,element,button,icon,dispatch,customization
       stack.append(body);pages.set(key(page.id),{root:body,records,page});
     }
   }
-  const shape=next=>JSON.stringify(next.pages.map(p=>[p.id,p.parent,p.title,p.checks,p.sections.map(s=>s.map(r=>[r.is_heading?r.label:false,r.target,!!r.close]))]));
+  const shape=next=>JSON.stringify([!!next.switcher,next.pages.map(p=>[p.id,p.parent,p.title,p.checks,p.sections.map(s=>s.map(r=>[r.is_heading?r.label:false,r.target,!!r.close]))])]);
   let structure;
   function refresh() {
     const next=app.phone_menu();if(!next)return;
     model=next;root.style.setProperty('--header-tile',`${app.header_view().sizes.find(size=>size.id==='medium').tile}px`);
     const nextStructure=shape(next);
     if(nextStructure!==structure){structure=nextStructure;rebuild(next);}
+    syncSwitcher(next);
     for(const [index,node]of strip.entries()) {
       const item=next.strip[index];node.disabled=!item.enabled;node.title=item.label;node.setAttribute('aria-label',item.label);
       if(item.selected==null)node.removeAttribute('aria-pressed');else node.setAttribute('aria-pressed',item.selected);
@@ -102,6 +141,7 @@ export function createMenu({app,state,element,button,icon,dispatch,customization
     const before=page.style.cssText,hidden=page.hidden;
     page.hidden=false;page.style.cssText=`position:absolute;visibility:${hidden?'hidden':'visible'};width:max-content;inset:auto;`;
     const row=page.querySelector('.menu-row'),rowHeight=row.getBoundingClientRect().height;
+    root.style.setProperty('--phone-menu-row',`${rowHeight}px`);
     const natural=page.getBoundingClientRect().width;
     page.style.width='min-content';const minimum=page.getBoundingClientRect().width;
     const width=app.phone_menu_width(minimum,natural,rowHeight);
@@ -118,6 +158,7 @@ export function createMenu({app,state,element,button,icon,dispatch,customization
     place(root,{x:0,y:0,width:placement.bounds.width,height:placement.bounds.height});place(frame,geometry.list);
     place(scroll,{x:0,y:0,width:geometry.list.width,height:geometry.list.height});place(separator,geometry.separator);
     for(const [index,node]of strip.entries()){place(node,geometry.buttons[index]);node.style.setProperty('--tile-icon-size',`${geometry.icon}px`);}
+    if(revealPending&&switcher){revealPending=false;revealSelectedWorkspace();}
   }
   const rtl=()=>getComputedStyle(root).direction==='rtl';
   function preview(progress) {

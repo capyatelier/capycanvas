@@ -74,6 +74,7 @@ fn escape_cancels_pending_transform_and_retires_its_drawer_together() {
         invoke(&mut s, CommandId::ScaleRotate);
         s.set_transform_control("transform_angle", 0.3).unwrap();
         let anchor = if viewport[0] < 480 {
+            s.state.workspace.layout.insert_phone_tools(None, &[control]).unwrap();
             let tile = s.state.workspace.layout.phone.as_ref().unwrap().iter().find(|tile| tile.control == control).unwrap().id;
             DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Tool(tile) }
         } else {

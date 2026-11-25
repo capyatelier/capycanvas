@@ -16,16 +16,16 @@ impl WorkspacePreset {
         use ToolbarControl::{Color, Command as T, Panel as P, ToolSlot as Slot};
         match self {
             Self::Painter => &[
-                P { panel: Panel::Adjustments }, T { command: C::Select }, T { command: C::ScaleRotate },
-                T { command: C::DrawingBrush }, T { command: C::Sculpt }, T { command: C::Eraser }, P { panel: Panel::Layers }, Color,
+                T { command: C::Pen }, T { command: C::Pencil }, Slot { slot: S::Paint },
+                T { command: C::Sculpt }, T { command: C::Eraser }, Slot { slot: S::Bucket }, P { panel: Panel::Layers }, Color,
             ],
             Self::Illustrator => &[
-                T { command: C::Select }, Slot { slot: S::Gradient },
-                T { command: C::DrawingBrush }, T { command: C::Sculpt }, T { command: C::Eraser }, Slot { slot: S::Fill }, P { panel: Panel::Layers }, Color,
+                T { command: C::Select }, Slot { slot: S::Operation },
+                T { command: C::DrawingBrush }, T { command: C::Sculpt }, T { command: C::Eraser }, Slot { slot: S::Bucket }, P { panel: Panel::Layers }, Color,
             ],
             Self::Photographer => &[
-                T { command: C::Crop }, T { command: C::Select }, Slot { slot: S::Healing },
-                T { command: C::DrawingBrush }, T { command: C::Eraser }, P { panel: Panel::Adjustments }, P { panel: Panel::Layers }, Color,
+                P { panel: Panel::Adjustments }, T { command: C::Select }, Slot { slot: S::Operation },
+                T { command: C::DrawingBrush }, Slot { slot: S::PhotoRetouch }, T { command: C::Eraser }, P { panel: Panel::Layers }, Color,
             ],
         }
     }

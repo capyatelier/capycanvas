@@ -1379,6 +1379,12 @@
 			"path" = "iOS/Tests/PhoneSourceChecks.swift";
 			"sourceTree" = "<group>";
 		};
+		"3FA9D7879FD0CBEE8C2D596D" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "iOS/Tests/PhoneWorkspaceMenuChecks.swift";
+			"sourceTree" = "<group>";
+		};
 		"4AC35E74B9B49A72BF6AB181" = {
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
@@ -2943,6 +2949,10 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "584AA39A467EDCA1BF566885";
 		};
+		"5F238A936FEDD77152299414" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "3FA9D7879FD0CBEE8C2D596D";
+		};
 		"599E04C69B9F05AF9D2425E3" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "4AC35E74B9B49A72BF6AB181";
@@ -3023,6 +3033,7 @@
 				"3E5795DC3F9C2052D046C197",
 				"E96C8046F717725F8836E8A7",
 				"6D3ACA790BE37177ED3271FF",
+				"5F238A936FEDD77152299414",
 				"599E04C69B9F05AF9D2425E3",
 				"E3F46F0FEC67C3D9C998E0C3",
 			);
@@ -4785,6 +4796,7 @@
 				"61BCE7A055C61F6DECD79302",
 				"20500BEBF7E9828F8AC323E7",
 				"584AA39A467EDCA1BF566885",
+				"3FA9D7879FD0CBEE8C2D596D",
 				"4AC35E74B9B49A72BF6AB181",
 				"E3074AFA18004156B1184C29",
 				"38A94B87502172530B078A49",

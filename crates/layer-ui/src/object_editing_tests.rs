@@ -21,6 +21,7 @@ fn image_transform_tools_stay_active_and_toggle_their_drawer() {
             activate(&mut s,layer);
             let mut layout=WorkspacePreset::Painter.layout(platform);
             let (action,anchor)=if viewport[0].min(viewport[1])<480 {
+                layout.insert_phone_tools(None, &[control]).unwrap();
                 let tile=layout.phone.as_ref().unwrap().iter().find(|tile|tile.control==control).unwrap().id;
                 (UiAction::Phone {action:PhoneAction::Tool {tile}},DrawerAnchor::Phone {anchor:PhoneDrawerAnchor::Tool(tile)})
             } else {

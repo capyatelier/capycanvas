@@ -331,12 +331,21 @@ fn paint_slot_variations(d: &mut Driver, theme: Theme) {
             CommandId::EllipseSelect, CommandId::PolygonSelect, CommandId::SelectionBrush]),
         (ToolSlotId::AutomaticSelection, vec![CommandId::AutoSelect, CommandId::ColorSelect, CommandId::TonalSelect]),
         (ToolSlotId::Fill, vec![CommandId::Fill, CommandId::LassoFill, CommandId::EncloseFill, CommandId::PaintUnfilled]),
-        (ToolSlotId::Operation, vec![CommandId::Move, CommandId::ScaleRotate, CommandId::EditPoints, CommandId::Crop]),
+        (ToolSlotId::Operation, vec![CommandId::ScaleRotate, CommandId::Move, CommandId::EditPoints, CommandId::Crop]),
     ] {
+        if slot == ToolSlotId::Operation {
+            super::phone::inventory_place_checker(d);
+            d.w.dispatch(UiAction::Invoke { command: CommandId::ApplyTransform });
+            new_photo::ready(&d.w);
+            assert!(ui_session(&d.w).command(CommandId::ScaleRotate).enabled);
+        }
         let anchor = slot_anchor(d, slot);
         let widget = anchor_widget(d, anchor);
         secondary_group_click(d, &widget);
         choose_variant(d, anchor, 0);
+        if slot == ToolSlotId::Operation {
+            assert!(ui_session(&d.w).command(CommandId::ScaleRotate).selected);
+        }
         let view = state(&d.w).tool_set;
         let actual = view.groups.iter().chain(&view.subtools).filter_map(|item| match item.action {
             UiAction::ChooseToolVariant { variant, anchor: origin } if origin == anchor => Some(variant.command()),
@@ -366,6 +375,14 @@ fn paint_slot_variations(d: &mut Driver, theme: Theme) {
             }
         }
         d.capture_canvas(&format!("paint-selection-{slot:?}-{theme:?}.png"));
+        if slot == ToolSlotId::Operation {
+            if ui_session(&d.w).command(CommandId::CancelTransform).enabled {
+                d.w.dispatch(UiAction::Invoke { command: CommandId::CancelTransform });
+            }
+            d.w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+            new_photo::ready(&d.w);
+            assert!(!state(&d.w).layers.iter().any(|row| row.label.starts_with("Inventory marks")));
+        }
     }
 }
 
