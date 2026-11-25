@@ -180,6 +180,10 @@ fn stroke(packet:FramePacket<'_>)->Option<(layer_core::StrokeId,SourceTarget)> {
     packet.dab_batches.iter().all(|batch|batch.stroke_id==first.stroke_id && batch.target==first.target
         && matches!(batch.kind,DabBatchKind::Preview|DabBatchKind::Persistent)).then_some((first.stroke_id,first.target))
 }
+fn holdable(packet:FramePacket<'_>,stroke:layer_core::StrokeId,target:SourceTarget)->bool {
+    !packet.composite_all && !packet.reset_layers && packet.restore_rasters.is_empty()
+        && packet.dab_batches.iter().all(|batch|batch.stroke_id==stroke && batch.target==target && matches!(batch.kind,DabBatchKind::Preview|DabBatchKind::Persistent))
+}
 
 impl Contact {
     fn phased(&self,tiles:&BTreeSet<[u32;2]>)->impl Iterator<Item=[u32;2]> {tiles.iter().flat_map(|tile|phased_tiles(*tile,self.source.phase))}
@@ -279,14 +283,12 @@ impl Cache {
     }
     pub(crate) fn contact_stamps(&self,packet:FramePacket<'_>)->Option<Arc<PreviewStamps>> {
         let contact=self.gesture.as_ref()?;
-        (!packet.composite_all && !packet.reset_layers && packet.restore_rasters.is_empty() && packet.dab_batches.iter().all(|batch|batch.stroke_id==contact.stroke
-            && batch.target==contact.target && matches!(batch.kind,DabBatchKind::Preview|DabBatchKind::Persistent))).then(||contact.stamps.clone())
+        holdable(packet,contact.stroke,contact.target).then(||contact.stamps.clone())
     }
     pub(in crate::scene) fn contact_holds(&self,r:&WgpuRasterizer,packet:FramePacket<'_>)->bool {
         let Some(contact)=self.gesture.as_ref() else {return false;};
         let tier=self.pages.lock().unwrap().tier();
-        packet.dab_batches.iter().all(|batch|batch.stroke_id==contact.stroke && batch.target==contact.target && matches!(batch.kind,DabBatchKind::Preview|DabBatchKind::Persistent))
-            && !packet.composite_all && !packet.reset_layers && packet.restore_rasters.is_empty() && r.transform_preview.is_none()
+        holdable(packet,contact.stroke,contact.target) && r.transform_preview.is_none()
             && self.plan==contact.plan && self.pixels.root().map(|image|&image.texture)==Some(&contact.window) && tier.used()<=tier.limit()
             && !contact.submissions.iter().any(submission::Submission::discarded)
     }
@@ -328,7 +330,7 @@ impl Cache {
     }
     pub(super) fn begin_contact(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,retained:u64,budget:&mut WorkBudget)
         ->Result<(),GpuRasterError> {
-        let Some((stroke,target))=stroke(packet).filter(|(_,target)|!target.is_coverage() && !packet.dab_batches.iter().any(|batch|batch.stroke_end)) else {return Ok(());};
+        let Some((stroke,target))=stroke(packet).filter(|(stroke,target)|holdable(packet,*stroke,*target) && !target.is_coverage() && !packet.dab_batches.iter().any(|batch|batch.stroke_end)) else {return Ok(());};
         let Some(root)=self.graph.root.clone() else {return Ok(());};
         let tier=self.pages.lock().unwrap().tier();
         let scope=self.stroke_scope(packet,&[],None);
