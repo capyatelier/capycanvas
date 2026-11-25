@@ -148,7 +148,7 @@ impl WgpuRasterizer {
     pub(crate) fn outstanding_terms(&self) -> Vec<(&'static str, Outstanding)> {
         self.outstanding().into_iter().filter_map(|(term, state)| state.map(|state| (term, state))).collect()
     }
-    fn outstanding(&self) -> [(&'static str, Option<Outstanding>); 27] {
+    fn outstanding(&self) -> [(&'static str, Option<Outstanding>); 28] {
         let held = self.held_frame.is_some();
         let restoring = self.restore_preparation().is_some();
         self.terms().map(|(term, state)| (term, state.filter(|state| if held {
@@ -157,7 +157,7 @@ impl WgpuRasterizer {
             !restoring || matches!(term, "restore preparation" | "display selection" | "settling" | "display retention")
         })))
     }
-    fn terms(&self) -> [(&'static str, Option<Outstanding>); 27] {
+    fn terms(&self) -> [(&'static str, Option<Outstanding>); 28] {
         use Outstanding::{Blocked, Runnable};
         let decode = self.image_decode_waiting();
         let gated = |pending: bool| pending.then_some(if decode { Blocked(Input::Decode) } else { Runnable });
@@ -193,6 +193,7 @@ impl WgpuRasterizer {
             ("startup", self.startup_outstanding()),
             ("regions", self.regions_outstanding()),
             ("pen-down tiles", self.pen_down_warm_due().then_some(Runnable)),
+            ("liquify sources", self.liquify_sources_due().then_some(Runnable)),
         ]
     }
     pub(crate) fn moving_images_outstanding(&self) -> Option<Outstanding> {

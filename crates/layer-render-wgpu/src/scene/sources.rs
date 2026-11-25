@@ -442,7 +442,7 @@ impl Inputs {
         let mut held=true;
         for (key,_,pixels,use_) in &self.tiles {
             let Some(pixels)=pixels else {continue;};
-            if r.source_tiles.borrow().prepared_slot(key).is_some() {continue;}
+            if r.source_tiles.borrow().prepared_slot(key).is_some() || liquify_pixels(r,pixels).is_some() {continue;}
             held=false;
             if !(class.required() || r.decode_queue_has_room()) || !pixels.request(r,*use_==SourceUse::Exact,class)? {break;}
         }
@@ -1301,7 +1301,16 @@ impl PendingTile {
     }
     pub fn prepare(&self,r:&mut WgpuRasterizer,class:crate::residency::Class)->Result<(),GpuRasterError> {
         if self.input.is_some() || self.prepared().is_some() {return Ok(());}
+        if let Some(pixels)=liquify_pixels(r,&self.pixels) {*self.receipt.lock().unwrap()=Some(pixels);return Ok(());}
         self.pixels.request(r,self.texture.format()==wgpu::TextureFormat::Rgba32Float,class).map(drop)
+    }
+}
+fn liquify_pixels(r:&WgpuRasterizer,pixels:&Pixels)->Option<PreparedSourcePixels> {
+    let sources=r.liquify_sources.as_ref()?;
+    match pixels {
+        Pixels::Image(source,coordinate)=>sources.image(source,*coordinate,r.source_tiles.borrow().destination),
+        Pixels::Raster(blob,space,destination)=>sources.raster(blob,*space,*destination),
+        Pixels::Resident=>None,
     }
 }
 struct NativeSamples<'a> {

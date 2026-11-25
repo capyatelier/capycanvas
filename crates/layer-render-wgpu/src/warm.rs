@@ -28,6 +28,7 @@ impl WgpuRasterizer {
         let mut cache = self.scale_display.take();
         self.warm = Some(Warm::of(document));
         self.memory.park(true);
+        self.liquify_sources = None;
         self.retire_scratch(scene.as_deref_mut(), cache.as_mut(), &mut encoder);
         if !navigator { self.navigator.release(); }
         let kept = cache.as_mut().map_or(Ok(Vec::new()), |cache| cache.keep_warm(self, &mut encoder, view, cap / 4));

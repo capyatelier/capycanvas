@@ -308,6 +308,48 @@ fn a_liquify_session_holds_only_what_its_contact_reads_and_commits_what_a_roomy_
     assert!(roomy.len() == 5 && pressed == roomy, "contacts that rebuild their originals commit the pixels of contacts that kept them, through Undo and Redo");
 }
 
+#[test]
+fn a_fit_push_on_a_selected_photo_layer_restores_without_waiting_on_a_decode_after_the_decoded_cache_is_evicted() {
+    const STEPS: u64 = 12;
+    let contact = |room: bool| {
+        let mut canvas = Canvas::photo(1024);
+        let pressure = (!room).then(|| {
+            let r = canvas.engine.backend();
+            r.device.source_samples.set_limit(0);r.device.source_samples.trim_unused(usize::MAX);
+            let budget = r.factory.memory_budget().clone();budget.flush_reports();
+            budget.admit_import(budget.import_headroom_bytes().saturating_sub(2 << 20)).expect("the test holds all but 2 MiB of free memory")
+        });
+        canvas.brush(layer_core::DefaultBrushPreset::LiquifyPush, 512.);
+        assert!(canvas.settle(), "the selected Liquify layer settles, not waiting on {:?}", canvas.engine.backend().outstanding_terms());
+        let (view, start, refusals) = (canvas.engine.view(), canvas.clock.max(60_000_000_000), canvas.engine.metrics().stroke_memory_refusals);
+        let before = crate::test_support::PassCounts::snapshot();
+        for step in 0..=STEPS {
+            if step == 0 || step == STEPS / 2 { crate::test_support::evict_sources(canvas.engine.backend_mut()); }
+            let phase = if step == 0 { PenPhase::Down } else if step == STEPS { PenPhase::Up } else { PenPhase::Move };
+            let along = 0.3 + 0.4 * step as f32 / STEPS as f32;
+            canvas.sequence += 1;
+            let timestamp_ns = start + step * 125_000_000;
+            canvas.input.push(PenEvent { timestamp_ns, view_revision: 1, pressure: if phase == PenPhase::Up { 0. } else { 1. },
+                ..crate::test_support::pen(canvas.sequence, phase, [view.width_px as f32 * along, view.height_px as f32 * (0.5 - 0.1 * along)], SampleFlags::PRIMARY) }).unwrap();
+            canvas.frame(timestamp_ns);
+            for _ in 1..SAMPLE_FRAMES {
+                if !canvas.engine.has_pending_input() && !canvas.engine.has_pending_document_edits() { break; }
+                canvas.frame(canvas.clock + FRAME_NS);
+            }
+        }
+        assert!(canvas.settle(), "the contact ends, not waiting on {:?}", canvas.engine.backend().outstanding_terms());
+        let holds = crate::test_support::PassCounts::snapshot().delta(before).restore_decode_holds;
+        assert_eq!(canvas.engine.metrics().stroke_memory_refusals, refusals, "room {room}: the contact is never refused");
+        drop(pressure);
+        (holds, canvas.contents())
+    };
+    let (holds, prepared) = contact(true);
+    assert_eq!(holds, 0, "a contact on the selected layer restores the photo pages it reaches from prepared sources, without a restore waiting on a decode after each eviction");
+    let (waits, today) = contact(false);
+    assert!(waits > 0, "with no room for the prepared sources the restore decodes on demand");
+    assert!(!prepared.is_empty() && today == prepared, "the prepared and on-demand restores commit the same pixels");
+}
+
 fn drag<T>(extent: [u32; 2], scale: f32, start: [f32; 2], mut frame: impl FnMut(&mut WgpuRasterizer, &mut dyn FnMut(&mut WgpuRasterizer)) -> T) -> Vec<T> {
     use crate::layer_tests::{dab, placement, preset_style};
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();

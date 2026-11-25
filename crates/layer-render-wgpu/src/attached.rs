@@ -192,6 +192,9 @@ impl CanvasRenderer for AttachedRenderer {
     fn set_working_layer(&mut self, layer: Option<layer_core::OccurrenceHandle>) {
         if let Some(gpu) = self.0.as_mut() { gpu.set_working_layer(layer); }
     }
+    fn prepare_liquify(&mut self, target: Option<layer_core::SourceTarget>) {
+        if let Some(gpu) = self.0.as_mut() { gpu.prepare_liquify(target); }
+    }
     fn set_vector_motion(&mut self, motion: Option<layer_render::VectorMotion>) {
         if let Some(gpu) = self.0.as_mut() { gpu.set_vector_motion(motion); }
     }

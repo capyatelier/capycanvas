@@ -561,6 +561,7 @@ impl Liquify {
         for stroke in std::mem::take(&mut self.strokes).into_values() { stroke.release(); }
         self.unchanged_previews.clear();
     }
+    pub(crate) fn drawing(&self, target: SourceTarget) -> bool { self.strokes.contains_key(&target) }
 
     pub fn preview_unchanged(&self, target: SourceTarget, coordinate: [u32; 2]) -> bool {
         self.unchanged_previews.contains(&(target, coordinate))

@@ -365,6 +365,7 @@ impl WgpuRasterizer {
         trimmed
     }
     fn hold_lane(&mut self,blocked:crate::residency::Blocked,allowance:crate::frame_demand::Allowance,trimmed:Option<crate::residency::Batch>)->crate::residency::Blocked {
+        if self.memory.unified && let Some(sources)=&mut self.liquify_sources {sources.release();}
         let batch=(allowance==crate::frame_demand::Allowance::Fresh).then(||crate::residency::Batch::joined(blocked.waiting().cloned().into_iter().chain(trimmed).chain(self.raster_backing_landed()).chain(self.device.transient_display.heap().retiring()))).flatten();
         let blocked=blocked.reclaiming(batch);
         let wait=crate::frame_demand::UnitWait::refused(blocked.clone(),allowance);
@@ -577,6 +578,7 @@ impl WgpuRasterizer {
         self.memory.lane.borrow_mut().closing=closing;
         self.frame_room(packet);
         if packet.dabs.is_empty() && packet.dab_batches.is_empty() && self.pen_down_warm_due() {self.warm_pen_down();}
+        self.prepare_liquify_sources(packet);
         self.scene_tiers.display.begin_frame();
     }
     pub(crate) fn frame_room(&mut self, packet: FramePacket<'_>) {

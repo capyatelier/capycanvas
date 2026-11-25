@@ -1066,7 +1066,13 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         brush.validate()?;
         self.settings.brush = brush;
         self.refresh_retouch();
+        self.backend.prepare_liquify(self.liquify_target());
         Ok(())
+    }
+
+    fn liquify_target(&self) -> Option<SourceTarget> {
+        (self.settings.brush.execution == BrushExecution::Liquify && self.settings.retouch.is_none())
+            .then(|| self.document().try_drawing_target().ok()).flatten().filter(|target| matches!(target, SourceTarget::Paint(_)))
     }
 
     pub fn set_tool(&mut self, tool: StrokeTool) {
@@ -1758,6 +1764,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let selection = self.display_selection().map(|s| s.into_owned());
         self.backend.set_vector_selection(self.editor.document().working.vector_items.as_ref());
         self.backend.set_working_layer(self.editor.document().working.occurrence);
+        self.backend.prepare_liquify(self.liquify_target());
         let result = self
             .backend
             .set_selection_outline(selection.as_ref())

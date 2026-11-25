@@ -1048,6 +1048,7 @@ pub trait CanvasRenderer {
     /// A retouching tool's target, source and focus points, or None when no
     /// retouching tool is selected. Never blocks.
     fn prepare_retouch(&mut self, _retouch: Option<&RetouchPreparation>) {}
+    fn prepare_liquify(&mut self, _target: Option<SourceTarget>) {}
     fn prepare_regions(&mut self, _regions: Option<&RegionPreparation>) {}
     fn set_fill_preview(&mut self, _preview: Option<FillPreview>) {}
     fn fill_preview_ready(&self)->Option<(u64,u64)> {None}

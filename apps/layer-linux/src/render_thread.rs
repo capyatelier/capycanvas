@@ -567,6 +567,7 @@ enum Command {
     MovingLayer(Option<OccurrenceHandle>),
     MovingPixels(Option<(SourceTarget, layer_core::Selection)>),
     Retouch(Option<layer_render::RetouchPreparation>),
+    Liquify(Option<SourceTarget>),
     Regions(Option<layer_render::RegionPreparation>),
     RetireStrokeSources,
     Startup(
@@ -757,6 +758,7 @@ pub struct RenderWorker {
     hidden: bool,
     report: Arc<FrameReport>,
     retouch: Option<layer_render::RetouchPreparation>,
+    liquify: Option<SourceTarget>,
     regions:Option<layer_render::RegionPreparation>,
     thread: Option<JoinHandle<()>>,
     color: layer_core::color::DocumentColor,
@@ -1059,6 +1061,7 @@ impl RenderWorker {
             hidden: false,
             report: Arc::default(),
             retouch: None,
+            liquify: None,
             regions:None,
             thread: None,
             color,
@@ -1403,6 +1406,9 @@ impl CanvasRenderer for RenderWorker {
         if self.retouch.as_ref() != retouch && self.send(Command::Retouch(retouch.cloned())).is_ok() {
             self.retouch = retouch.cloned();
         }
+    }
+    fn prepare_liquify(&mut self, target: Option<SourceTarget>) {
+        if self.liquify != target && self.send(Command::Liquify(target)).is_ok() { self.liquify = target; }
     }
     fn prepare_regions(&mut self, regions:Option<&layer_render::RegionPreparation>) {
         if self.regions.as_ref()!=regions && self.send(Command::Regions(regions.cloned())).is_ok() {self.regions=regions.cloned();}
@@ -2248,6 +2254,7 @@ impl Worker {
                 Command::MovingLayer(layer) => self.renderer.prepare_moving_layer(layer),
                 Command::MovingPixels(pixels) => self.renderer.prepare_moving_pixels(pixels),
                 Command::Retouch(retouch) => self.renderer.prepare_retouch(retouch.as_ref()),
+                Command::Liquify(target) => self.renderer.prepare_liquify(target),
                 Command::Regions(regions)=>self.renderer.prepare_regions(regions.as_ref()),
                 Command::RetireStrokeSources => self.renderer.retire_stroke_sources(),
                 Command::Startup(generation, inputs) => {

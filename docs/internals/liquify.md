@@ -600,6 +600,17 @@ its field the same way; accept it rather than restrict these tools.
   its levels, holding no page copy. A frame still reads every original under the
   connected field of its contact. `liquify::memory_tests` checks the release,
   the rebuilt pixels and the pass counts of a stroke that fits.
+- **Prepared sources.** While Liquify is selected, the decode workers prepare
+  the active layer's source pages at prefetch priority: its raster tiles and
+  photo pages, and on a continued field those of $I_0$ too. The renderer keeps
+  them in RAM it admits from free memory and charges once; pages shared with
+  the sample cache stay charged there. Target restores and rebuilt originals
+  take a prepared page instead of waiting on a decode, so a contact whose
+  decoded cache was evicted costs uploads only. A tool or layer change, device
+  loss or a parked tab releases the set, and a new version drops its stale
+  pages. A set that does not fit, or whose lane is refused on unified memory,
+  leaves restores decoding on demand. `liquify::memory_tests` checks a Fit Push
+  across two evictions of the decoded cache.
 - **Peak memory.** Map storage costs 16 bytes per touched pixel, plus unchanged
   tiles shared across versions. An update temporarily owns both old and new
   tiles. Original caches cost 16 bytes per pixel plus one third for mip levels,
@@ -607,9 +618,11 @@ its field the same way; accept it rather than restrict these tools.
   Shared resource IDs deduplicate this ownership in history and open-drawing
   accounting. Measure total residency, pending pixel readbacks and preview
   storage on the reference tablets, including the 6 GB TCL.
-- **Transitions.** Tool switches do no pixel work. Undo selects existing map
-  ownership; there is no map upload or readback. A map evicted by the history
-  budget, a restart or renderer replacement creates a session boundary.
+- **Transitions.** Tool switches do no pixel work on the UI thread; selecting
+  Liquify starts the prepared-source decodes on the workers. Undo selects
+  existing map ownership; there is no map upload or readback. A map evicted by
+  the history budget, a restart or renderer replacement creates a session
+  boundary.
 - **Thread rules.** Never wait for the GPU, copy canvas pixels or block on I/O
   on the UI or input thread. Avoid replaying past dabs per frame and avoid
   full-canvas work for a local stroke. Painting and Smudge keep their own color

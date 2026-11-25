@@ -57,6 +57,7 @@ mod brush_tiles;
 mod dry_material;
 mod destination_material;
 mod liquify;
+mod liquify_sources;
 mod brush_stamp;
 mod changed_cells;
 mod material_tiles;
@@ -1282,6 +1283,7 @@ pub struct WgpuRasterizer {
     material_gather: Option<material_sources::Gather>,
     retouch: Option<Box<retouch_sources::RetouchSources>>,
     liquify: Option<Box<liquify::Liquify>>,
+    liquify_sources: Option<liquify_sources::LiquifySources>,
     edge_layout: wgpu::BindGroupLayout,
     watercolor_layout: wgpu::BindGroupLayout,
     transport_layout: wgpu::BindGroupLayout,
@@ -1727,6 +1729,7 @@ impl WgpuRasterizer {
             material_gather: None,
             retouch: None,
             liquify: None,
+            liquify_sources: None,
             edge_layout,
             watercolor_layout,
             transport_layout,
@@ -3644,6 +3647,11 @@ impl WgpuRasterizer {
             },
             prepared=>prepared,
         };
+        if self.liquify_sources.as_mut().is_some_and(|sources|sources.capture(space,&prepared)) && prepared.class()==residency::Class::Prefetch
+            && !receipt.as_deref().is_some_and(|receipt|Self::receipt_matches(receipt,&prepared))
+            && !matches!(&prepared,object_image_mips::PreparedImageWork::Image(tile) if self.moving_images.wants(&tile.source,tile.coordinate)) {
+            self.decode_consumed();return Ok(None);
+        }
         if !self.decode_result_eligible(receipt.as_deref(),&prepared) {
             self.source_results.push_back((space,prepared,charge));return Ok(None);
         }
@@ -3782,6 +3790,7 @@ impl WgpuRasterizer {
     fn settle_device_loss(&mut self) {
         let Some(loss) = self.device.loss().error().filter(|_| !self.device_lost).cloned() else { return; };
         self.device_lost = true;
+        if let Some(sources) = &mut self.liquify_sources { sources.release(); }
         self.end_lane_with(loss.clone());
         if let Some(regions) = &mut self.regions { regions.end_waiting_with(&loss); }
         if let Some(pending) = self.settling.take() { pending.fail(&loss.to_string()); }
@@ -4204,6 +4213,7 @@ impl CanvasRenderer for WgpuRasterizer {
     fn prepare_retouch(&mut self, retouch: Option<&layer_render::RetouchPreparation>) {
         self.prepare_retouch_sources(retouch);
     }
+    fn prepare_liquify(&mut self, target: Option<SourceTarget>) { self.select_liquify_target(target); }
     fn prepare_regions(&mut self,regions:Option<&layer_render::RegionPreparation>) {self.prepare_region_cache(regions);}
     fn take_retouch_miss(&mut self) -> Option<StrokeId> {
         self.retouch.as_mut()?.take_miss()

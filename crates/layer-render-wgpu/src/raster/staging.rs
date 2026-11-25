@@ -312,7 +312,11 @@ impl TargetRestore {
             if matches!(source,SourcePage::Output(_)) {self.next+=1;continue;}
             if uploads==UPLOADS {break;}
             let Some(inputs)=source.inputs(space)? else {break;};
-            if !self.inputs.contains(&inputs) || !self.inputs.ready_for(&inputs) {break;}
+            if !self.inputs.contains(&inputs) {break;}
+            if !self.inputs.ready_for(&inputs) {
+                #[cfg(test)] crate::test_support::PassCounts {restore_decode_holds:1,..Default::default()}.record();
+                break;
+            }
             uploads+=1;
             if let SourcePage::Base(coordinate,base)=source {
                 let Some(read)=scene::sources::accepted_base(&self.inputs,base,*coordinate)? else {self.next+=1;continue;};
