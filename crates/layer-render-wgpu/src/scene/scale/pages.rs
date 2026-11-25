@@ -3653,6 +3653,45 @@ pub(super) mod query_tests {
     }
 
     #[test]
+    fn a_replaced_window_with_holes_stays_presented_until_the_new_window_commits() {
+        use crate::submission::ColorPass;
+        let extent=[4096,2048];
+        let document=layer_core::Document::new(layer_core::PortableId::random(),extent[0],extent[1],
+            layer_core::DocumentNames {paint:"Pixels".into(),paper:"Paper".into()});
+        let mut renderer=crate::memory::memory_tests::legacy_scene_renderer(document.composition().color);
+        let mut scene=Scene::new(&renderer).unwrap();
+        let frame=display_frame(&document,0);
+        scene.scale_sources.prepare(&renderer,frame,&[]);
+        let mut commands=RegionRecords::new(&renderer);
+        let mut encoder=submission::CommandEncoder::new(&renderer.device,&Default::default());
+        let write_first_cell=|cache:&mut Cache,renderer:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,commands:&mut RegionRecords| {
+            crate::scene::scale::tests::prepare_fixture_frame(renderer,frame,&scene);
+            cache.prepare_graph(renderer,frame,&scene).unwrap();
+            let region=bounds([cache.plan.bounds.min_x()/PAGE_SIZE,cache.plan.bounds.min_y()/PAGE_SIZE],0,extent);
+            let key=cache.page_key(cache.graph.root.clone().unwrap(),region);
+            let image=cache.pages.lock().unwrap().claim(renderer,key.clone(),u64::MAX,WindowId::default(),crate::residency::Class::Visible).unwrap();
+            let write=cache.pages.lock().unwrap().prepare_write(key,image.plan.bounds,Accuracy::Display,0).unwrap();
+            drop(encoder.color_pass("one written cell",&image.view,wgpu::LoadOp::Clear(wgpu::Color::WHITE)));
+            cache.pages.lock().unwrap().commit(write,0,encoder);
+            cache.copy_level(&scene,renderer,encoder,commands).unwrap();
+        };
+        let shown=PixelRect::new(0,0,512,256);
+        let mut cache=Cache::new(&renderer,Request {plan:display_mips::Plan::window(extent,0,shown),evaluation:Evaluation::Display},document.scene().order().len());
+        pollster::block_on(renderer.compilation.prepare_all([&renderer.scene_pipelines.scale.output(cache.precision.format()).reduce_pair])).unwrap();
+        write_first_cell(&mut cache,&mut renderer,&mut encoder,&mut commands);
+        assert!(cache.picture().is_none() && cache.pixels.committed_root().is_some_and(|root|!root.complete()),"the shown window has one written cell and a hole");
+        let plan=display_mips::Plan::window(extent,0,PixelRect::new(1024,512,1536,768));
+        let (mut next,replaced)=Cache::select(Some(cache),&renderer,frame,Request {plan,evaluation:Evaluation::Display});
+        assert!(replaced && next.pixels.committed_root().is_none(),"the new window has committed nothing");
+        assert_eq!(next.presentable().map(|cache|cache.plan.bounds),Some(shown),"the replaced window stays presented until the new window commits");
+        write_first_cell(&mut next,&mut renderer,&mut encoder,&mut commands);
+        next.release_previous(&renderer);
+        assert!(next.previous.is_none(),"a replaced window with holes is released once the new window commits");
+        assert_eq!(next.presentable().map(|cache|cache.plan.bounds),Some(plan.bounds),"the new window presents once it commits");
+        renderer.uploads.finish(&encoder);encoder.submit(&renderer.queue);crate::test_support::complete(&renderer);
+    }
+
+    #[test]
     fn exact_children_rebuild_an_evicted_parent_without_source_work() {
         let extent=[4096,512];
         let mut document=layer_core::Document::new(layer_core::PortableId::random(),extent[0],extent[1],

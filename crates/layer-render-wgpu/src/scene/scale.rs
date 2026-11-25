@@ -670,7 +670,7 @@ impl Cache {
             let (mut next,replaced)=Self::select(old.overview.take().map(|overview|*overview),r,packet,request);
             old.exit_contact();
             let owed=next.owes_absorption();
-            next.retired=Some(Box::new(old)).filter(|old|owed || old.has_direct_cells());
+            next.retired=next.keep_shown(r,Box::new(old),owed).filter(|old|owed || old.has_direct_cells());
             return (next,replaced);
         }
         if old.plan.extent==plan.extent && old.plan.level==plan.level && old.plan.bounds.intersect(required)==required
@@ -694,21 +694,33 @@ impl Cache {
         if let Some(old)=&old {old.exit_contact();}
         let view=old.as_ref().is_some_and(|old|old.plan.extent==plan.extent && old.layer_count==next.layer_count);
         match old {
-            Some(mut old) if view && old.picture().is_some()=>{
-                let lease=r.scene_tiers.display.heap().lease(&Arc::default());lease.offer(old.window_bytes(),0);
-                old.previous=None;old.standing=Some(lease);next.previous=Some(old);
-            },
+            Some(old) if view && old.picture().is_some()=>next.stand_in_for(r,old),
             Some(mut old)=>{
                 next.previous=old.previous.take().filter(|_|view);
-                match next.overview.as_deref_mut().filter(|overview|overview.owes_absorption()) {
-                    Some(overview)=>overview.retired=Some(old),
-                    None=>next.retired=Some(old).filter(|old|old.has_direct_cells()),
+                let owed=next.overview.as_deref().is_some_and(Cache::owes_absorption);
+                if let Some(old)=next.keep_shown(r,old,owed) {
+                    match next.overview.as_deref_mut().filter(|_|owed) {
+                        Some(overview)=>overview.retired=Some(old),
+                        None=>next.retired=Some(old).filter(|old|old.has_direct_cells()),
+                    }
                 }
             },
             None=>{},
         }
         next.release_previous(r);
         (next,true)
+    }
+
+    fn stand_in_for(&mut self,r:&WgpuRasterizer,mut old:Box<Self>) {
+        let lease=r.scene_tiers.display.heap().lease(&Arc::default());lease.offer(old.window_bytes(),0);
+        old.previous=None;old.standing=Some(lease);self.previous=Some(old);
+    }
+
+    fn keep_shown(&mut self,r:&WgpuRasterizer,old:Box<Self>,owed:bool)->Option<Box<Self>> {
+        if owed || self.pixels.committed_root().is_some() || self.previous.as_deref().is_some_and(|previous|previous.picture().is_some())
+            || old.pixels.committed_root().is_none() || old.plan.extent!=self.plan.extent || old.layer_count!=self.layer_count {return Some(old);}
+        self.stand_in_for(r,old);
+        None
     }
 
     pub fn new(r: &WgpuRasterizer, request: Request, layers: usize) -> Self {
@@ -881,6 +893,7 @@ impl Cache {
     fn release_previous(&mut self,r:&WgpuRasterizer) {
         let Some((previous,lease))=self.previous.as_ref().and_then(|previous|Some((previous,previous.standing.as_ref()?))) else {self.previous=None;return;};
         if self.complete || self.overview.as_deref().is_some_and(|overview|overview.picture().is_some()) || self.refused_bytes()>0 || lease.evicted()
+            || previous.picture().is_none() && self.pixels.committed_root().is_some()
             || r.memory.retention_grant()<r.scene_tiers.display.floor().saturating_add(previous.window_bytes()) {self.previous=None;}
         else {lease.stamp(Class::Fallback);}
     }
