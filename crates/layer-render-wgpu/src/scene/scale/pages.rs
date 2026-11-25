@@ -296,7 +296,7 @@ impl Cache {
             cell.current && cell.written() && cell.shown.as_ref().is_some_and(|shown| {
                 !shown.submission.discarded() && match &shown.recorded {
                     Some(recorded)=>recorded.key.level==level && recorded.matches(frame,self.required_input_level())!=Some(false),
-                    None=>self.gesture.is_some() && !shown.exact,
+                    None=>self.gesture.is_some() && (!shown.exact || self.contact_proves(shown.witness.as_ref())),
                 }
             })
         })
@@ -2205,6 +2205,7 @@ impl Cache {
     pub(super) fn waiting_cells(&self,r:&WgpuRasterizer)->bool {
         self.cells().is_some_and(|(_,cells,_)|cells.cells.iter().any(|cell|cell.naming(r)))
     }
+    #[cfg(test)]
     pub(super) fn keyless(&self,region:PixelRect)->bool {self.keyless_where(region,|_|true)}
     pub(super) fn keyless_unrefused(&self,region:PixelRect)->bool {self.keyless_where(region,|shown|!shown.refused)}
     fn keyless_where(&self,region:PixelRect,accept:impl Fn(&Shown)->bool)->bool {
@@ -2223,10 +2224,10 @@ impl Cache {
         cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level)).filter(|(cell,_)|cell.queued && !cell.derived)
             .map(|(_,coordinate)|bounds(coordinate,self.plan.level,self.plan.extent)).collect()
     }
-    pub(super) fn contact_ready(&self,scope:&[PixelRect])->bool {
-        self.cells().is_some_and(|(_,cells,_)|cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level))
-            .filter(|(_,coordinate)|scope.contains(&bounds(*coordinate,self.plan.level,self.plan.extent)))
-            .all(|(cell,_)|cell.written()))
+    pub(super) fn stale_cells(&self)->Vec<PixelRect> {
+        let Some((_store,cells,_))=self.cells() else {return Vec::new();};
+        cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level)).filter(|(cell,_)|cell.queued && !cell.derived && (!cell.current || cell.shown.as_ref().is_none_or(|shown|shown.recorded.is_none())))
+            .map(|(_,coordinate)|bounds(coordinate,self.plan.level,self.plan.extent)).collect()
     }
     pub(super) fn cell_reads(&self,target:SourceTarget,regions:&[PixelRect])->crate::IdMap<[u32;2],Arc<[PixelRect]>> {
         let Some((store,_cells,template))=self.cells() else {return Default::default();};

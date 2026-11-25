@@ -1367,6 +1367,89 @@ fn a_stroke_crossing_into_a_cell_without_its_halves_keeps_every_dab_and_shows_th
 }
 
 #[test]
+fn a_stroke_over_a_cold_fit_view_keeps_one_contact_from_pen_down_while_its_holes_fill() {
+    let extent=[4096,2048];
+    let mut doc=Document::new(PortableId::random(),extent[0],extent[1],layer_core::DocumentNames {paint:"Current ink".into(),paper:"Paper".into()});
+    let below=paint_occurrence(&mut doc,"Below",Some(rgba8_source(extent,|x,y|[(x/17) as u8,(y/9) as u8,140,255])));
+    let working=doc.scene().position(doc.working.occurrence.unwrap()).unwrap();
+    insert_occurrence(&mut doc,below,working+1);
+    let above=paint_occurrence(&mut doc,"Above",Some(rgba8_source(extent,|x,y|[90,(x/13) as u8,(y/7) as u8,128])));
+    coverage_mask(&mut doc,above,[0,0],Some(layer_core::Selection::polygon(vec![
+        layer_core::Point {x:1800.,y:300.},layer_core::Point {x:2600.,y:300.},layer_core::Point {x:2600.,y:700.},layer_core::Point {x:1800.,y:700.},
+    ]).unwrap()));
+    insert_occurrence(&mut doc,above,0);
+    let (ink,lower)=(doc.active_target().unwrap(),doc.scene().source_target(below).unwrap());
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,4);
+    let xs=[1500.,1600.,1700.,1800.,1900.,2100.,2200.,2300.,2310.];
+    let draw=|r:&mut WgpuRasterizer,step:usize,all:bool| {
+        let dab=stroke_dab(xs[step],500.);let batch=stroke_batch(ink,&dab,step==0,step+1==xs.len());
+        crate::test_support::submit_ready(r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),time_seconds:0.01*(step+1) as f32,composite_all:all,..frame}).unwrap();
+        crate::test_support::complete(r);
+    };
+    let mut twin=renderer(&doc);
+    crate::test_support::submit_settled(&mut twin,frame);
+    for step in 0..xs.len() {draw(&mut twin,step,true);}
+    crate::test_support::submit_settled(&mut twin,frame);
+    let expected=display_pixels(&twin);
+    let mut r=renderer(&doc);
+    crate::test_support::submit_settled(&mut r,frame);
+    let plan=r.scale_display.as_ref().unwrap().plan;
+    assert!(plan.level==2 && r.scale_display.as_ref().unwrap().overview.is_none(),"the fit view is one level-2 window without an overview");
+    let kept=[[0,0],[1,0],[0,1]];
+    let holes=pages::coordinates(plan.bounds,plan.level).filter(|coordinate|!kept.contains(coordinate)).map(|coordinate|pages::bounds(coordinate,plan.level,plan.extent)).collect::<Vec<_>>();
+    {
+        let cache=r.scale_display.as_ref().unwrap();
+        evict_composite_pages(cache,&holes);
+        for hole in &holes {
+            cache.evict_window(*hole);
+            for level in 0..=plan.level {cache.pages.lock().unwrap().discard_source_chunks(lower,level,*hole);}
+        }
+    }
+    let photo=doc.scene().paint_base(lower).unwrap().image.storage().clone();
+    let stored=SourceImage {tiles:photo.tiles.iter().filter(|(tile,_)|holes.iter().any(|hole|!page_rect(**tile).intersect(*hole).is_empty())).map(|(tile,blob)|(*tile,blob.clone())).collect(),..(*photo).clone()};
+    let store=crate::test_support::GatedStore::new(&layer_core::raster_storage::RetainedTiles::from_sources([&stored]),false);
+    {
+        let samples=r.device.source_samples.clone();let limit=samples.stats().limit_bytes;
+        samples.set_limit(0);samples.trim_unused(usize::MAX);samples.set_limit(limit);
+        r.source_tiles.borrow().release_ready();r.source_tiles.borrow_mut().retire_evicted();
+    }
+    let written=|r:&WgpuRasterizer,coordinate:[u32;2]| {
+        let cache=r.scale_display.as_ref().unwrap();
+        let index=pages::coordinates(cache.plan.bounds,cache.plan.level).position(|cell|cell==coordinate).unwrap();
+        crate::test_support::published_coverage(crate::test_support::coverage_hash(&cache.geometry)).is_some_and(|coverage|coverage.written[index/32]>>(index%32)&1==1)
+    };
+    let complete=|r:&WgpuRasterizer|pages::coordinates(plan.bounds,plan.level).all(|coordinate|written(r,coordinate));
+    let original=display_pixels(&r);
+    let texel=|x:f32|(500/4*(extent[0]/4)+x as u32/4) as usize;
+    let (signal,woken)=std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move||{let _=signal.send(());}));
+    let (mut contact,mut gated)=(None,0);
+    for step in 0..xs.len()-1 {
+        draw(&mut r,step,false);
+        let id=r.scale_display.as_ref().unwrap().contact_id();
+        if step==0 {assert!(id.is_some(),"the stroke over a cold fit view begins its contact at pen down");contact=id;}
+        assert_eq!(id,contact,"frame {step} keeps the contact begun at pen down");
+        if step<5 {assert!(max_error(&display_pixels(&r)[texel(xs[step])..=texel(xs[step])],&original[texel(xs[step])..=texel(xs[step])])>0.1,"frame {step} shows its dab in the written cell");continue;}
+        gated+=usize::from(store.gate.reads.load(std::sync::atomic::Ordering::Acquire)>0);
+        assert!(!written(&r,[2,0]),"the masked hole the stroke reaches keeps its coverage while its decode is held at frame {step}");
+    }
+    assert!(gated>0,"the hole's decode is held while the stroke reaches it");
+    store.gate.release();
+    let (idle,deadline)=(FramePacket {dabs:&[],dab_batches:&[],..frame},std::time::Instant::now()+crate::test_support::WAIT_BOUND);
+    while !complete(&r) {
+        assert!(std::time::Instant::now()<deadline,"the contact fills every hole while the pen rests before pen up: {:?}",
+            pages::coordinates(plan.bounds,plan.level).filter(|coordinate|!written(&r,*coordinate)).collect::<Vec<_>>());
+        let _=woken.recv_timeout(std::time::Duration::from_millis(5));
+        crate::test_support::submit_ready(&mut r,idle).unwrap();crate::test_support::complete(&r);
+        assert_eq!(r.scale_display.as_ref().unwrap().contact_id(),contact,"the resting pen keeps its contact while the holes fill");
+    }
+    draw(&mut r,xs.len()-1,false);
+    crate::test_support::submit_settled(&mut r,frame);
+    let error=max_error(&display_pixels(&r),&expected);
+    assert!(error<1e-4,"after pen up the cold view matches a twin that composed every frame: {error}");
+}
+
+#[test]
 fn a_memory_trim_during_a_stroke_ends_the_contact_for_cells_it_did_not_declare_instead_of_stopping_the_canvas() {
     let extent=[2048,1024];
     let mut doc=Document::new(PortableId::random(),extent[0],extent[1],layer_core::DocumentNames {paint:"Current ink".into(),paper:"Paper".into()});
@@ -1729,14 +1812,16 @@ impl<'a> Stroked<'a> {
         (r,frame,target)
     }
     fn dabs(&self,(ink,tip):(f32,f32))->[layer_render::Dab;3] {[ink,tip,tip+9.].map(|x|sized_dab([x+self.shift[0],300.+self.shift[1]],self.radius,&self.style))}
-    fn patched_and_whole_texels(&self,mut before:impl FnMut(usize,&mut WgpuRasterizer))->Vec<[u64;2]> {
+    fn patched_and_whole_texels(&self,mut before:impl FnMut(usize,&mut WgpuRasterizer))->Vec<[u64;3]> {
         let Self {label,style,tips,frames,..}=self;
         let (mut r,frame,target)=self.started();
         let mut sequence=None;
         let texels=STROKE.into_iter().take(*frames).enumerate().map(|(step,at)| {
             before(step,&mut r);
             let dabs=self.dabs(at);
-            let patched=stroke_frame(&mut r,frame,target,style,&dabs[..=*tips],true,step).composed_texels;
+            let (counts,written)=crate::test_support::compositions(||stroke_frame(&mut r,frame,target,style,&dabs[..=*tips],true,step));
+            let window=r.scale_display.as_ref().unwrap().pixels.root().unwrap().texture.clone();
+            let (patched,outside)=(counts.composed_texels,written.iter().filter(|(texture,_)|*texture!=window).map(|(_,[_,_,width,height])|u64::from(*width)*u64::from(*height)).sum());
             let shown=bits(&r);
             let plan=r.scale_display.as_ref().unwrap().plan;
             let cells=r.metrics.frame_composited_pages.iter().map(|(_,coordinate)|pages::bounds(*coordinate,plan.level,plan.extent)).collect::<Vec<_>>();
@@ -1745,7 +1830,7 @@ impl<'a> Stroked<'a> {
             assert!(held.is_some() && (step==0 || held==sequence),"{label} frame {step}: the renderer keeps its stroke sequence");
             sequence=held;
             assert!(step==0 || bits(&r)==shown,"{label} frame {step}: a patched frame differs from a whole redraw of the same cells");
-            [patched,whole]
+            [patched,whole,outside]
         }).skip(1).collect();
         let last=self.dabs(STROKE[frames-1])[0];
         let lift=layer_render::DabBatch {stroke_id:layer_core::StrokeId(1),stroke_start:false,stroke_end:true,..crate::test_support::dab_batch(target,style.clone(),last.bounds())};
@@ -1757,7 +1842,7 @@ impl<'a> Stroked<'a> {
         texels
     }
 }
-fn sums(texels:&[[u64;2]])->[u64;2] {[0,1].map(|renderer|texels.iter().map(|frame|frame[renderer]).sum())}
+fn sums(texels:&[[u64;3]])->[u64;2] {[0,1].map(|renderer|texels.iter().map(|frame|frame[renderer]).sum())}
 
 type PageReads=BTreeMap<[u32;2],(crate::resident::Input,Vec<[u32;4]>)>;
 fn page_reads(r:&WgpuRasterizer,target:SourceTarget,preview:bool)->PageReads {
@@ -1899,7 +1984,7 @@ fn patches_bit_for_bit<'a>(strokes:impl IntoIterator<Item=Stroked<'a>>) {
 fn stays_whole<'a>(strokes:impl IntoIterator<Item=Stroked<'a>>) {
     for stroked in strokes {
         let texels=stroked.patched_and_whole_texels(|_,_|{});
-        assert!(texels.iter().all(|[patched,whole]|patched==whole),"{}: every cell is composed whole: {texels:?}",stroked.label);
+        assert!(texels.iter().all(|[patched,whole,_]|patched==whole),"{}: every cell is composed whole: {texels:?}",stroked.label);
     }
 }
 
@@ -2007,11 +2092,12 @@ fn a_cell_whose_cached_inputs_were_rebuilt_or_whose_record_was_dropped_is_compos
     let stroked=Stroked::new("a Pencil",&doc,DefaultBrushPreset::Pencil,1);
     let plain=stroked.patched_and_whole_texels(|_,_|{});
     assert!(plain[1][0]<plain[1][1],"the third frame patches when nothing is lost: {plain:?}");
+    let composed_whole_once=|[patched,whole,outside]:[u64;3]|patched==whole+outside && outside<=cell.area();
     let rebuilt=stroked.patched_and_whole_texels(|step,r|if step==2 {evict_composite_pages(r.scale_display.as_ref().unwrap(),&[cell]);});
-    assert_eq!(rebuilt[1][0],rebuilt[1][1],"a cell whose cached inputs were rebuilt composes whole: {rebuilt:?}");
+    assert!(composed_whole_once(rebuilt[1]),"a cell whose cached inputs were rebuilt composes the window whole once and rebuilds no more than that cell outside it: {rebuilt:?}");
     assert!(rebuilt[2][0]<rebuilt[2][1],"the cell patches again from its new baseline: {rebuilt:?}");
     let dropped=stroked.patched_and_whole_texels(|step,r|if step==2 {r.scale_display.as_ref().unwrap().evict_window(cell);});
-    assert_eq!(dropped[1][0],dropped[1][1],"a cell without its record composes whole: {dropped:?}");
+    assert!(composed_whole_once(dropped[1]),"a cell without its record composes the window whole once and rebuilds no more than that cell outside it: {dropped:?}");
     assert!(dropped[2][0]<dropped[2][1],"the cell patches again from its new baseline: {dropped:?}");
 }
 
@@ -2053,7 +2139,7 @@ fn a_stroke_that_starts_and_ends_in_one_frame_forms_no_sequence_and_settles() {
 }
 
 #[test]
-fn a_stroke_inside_one_cell_composes_whole_cells_twice_and_then_only_its_patch() {
+fn a_stroke_inside_one_cell_composes_whole_cells_once_and_then_only_its_patch() {
     let extent=[768,512];let doc=stroked_over_a_layer(extent,true);let target=doc.active_target().unwrap();
     let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
     let cell=u64::from(PAGE_SIZE).pow(2);
@@ -2065,8 +2151,11 @@ fn a_stroke_inside_one_cell_composes_whole_cells_twice_and_then_only_its_patch()
         for step in 0..8 {
             let x=300.+3.*step as f32;let dabs=[pen_dab(x,&style),pen_dab(x+3.,&style)];
             let texels=stroke_frame(&mut r,frame,target,&style,&dabs[..=tips],true,step).composed_texels;
-            if step==0 {whole=texels;assert!(whole>=cell && whole%cell==0,"{preset:?} with {tips} tips: the first frame composes whole cells: {texels}");continue;}
-            if step==1 {assert_eq!(texels,whole,"{preset:?} with {tips} tips: the second frame composes whole cells");continue;}
+            if step==0 {
+                whole=texels;
+                assert!(r.scale_display.as_ref().unwrap().contact_id().is_some() && whole>=cell && whole%cell==0,"{preset:?} with {tips} tips: the first frame begins a contact and composes whole cells: {texels}");
+                continue;
+            }
             let reach=[pen_dab(x-3.,&style),dabs[0],dabs[1]].iter().map(|dab|crate::pixel_rect::pixel_rect(dab.bounds(),extent)).reduce(PixelRect::union).unwrap();
             assert!(texels<=whole/cell*reach.area(),"{preset:?} with {tips} tips, frame {step}: {texels} texels composed for a {reach:?} patch");
         }
@@ -2121,7 +2210,7 @@ fn same_texel(shown:&[f32;4],other:&[f32;4],float:bool)->bool {
     shown.iter().zip(other).all(|(a,b)|if float {a.to_bits()==b.to_bits()}else {(step(*a)-step(*b)).abs()<=1})
 }
 fn differing(shown:&[[f32;4]],other:&[[f32;4]],float:bool)->usize {shown.iter().zip(other).filter(|(a,b)|!same_texel(a,b,float)).count()}
-struct Zoomed<'a> {scene:&'a str,brush:String,style:layer_render::DabStyle,zoom:f32,diameter:f32,shift:[f32;2],tips:usize,frames:usize,redraws:bool}
+struct Zoomed<'a> {scene:&'a str,brush:String,style:layer_render::DabStyle,zoom:f32,diameter:f32,shift:[f32;2],tips:usize,frames:usize,redraws:bool,rounding:f32}
 struct Redrawn {case:String,level:u32,float:bool,restarts:usize,texels:Vec<[u64;2]>}
 impl Redrawn {
     fn patched(&self)->usize {self.texels[2..].iter().filter(|[patched,whole]|patched<whole).count()}
@@ -2132,7 +2221,7 @@ impl Redrawn {
     }
 }
 impl<'a> Zoomed<'a> {
-    fn new(scene:&'a str,brush:&str,style:layer_render::DabStyle,tips:usize,zoom:f32)->Self {Self {scene,brush:brush.into(),style,zoom,diameter:9.,shift:[0.;2],tips,frames:STROKE.len(),redraws:true}}
+    fn new(scene:&'a str,brush:&str,style:layer_render::DabStyle,tips:usize,zoom:f32)->Self {Self {scene,brush:brush.into(),style,zoom,diameter:9.,shift:[0.;2],tips,frames:STROKE.len(),redraws:true,rounding:0.}}
     fn level(&self)->u32 {(1./self.zoom).log2().floor() as u32}
     fn at(&self,x:f32)->layer_render::Dab {
         let [left,top]=scene_offset(self.scene).map(|side|side as f32);
@@ -2252,7 +2341,7 @@ impl<'a> Zoomed<'a> {
         println!("| {case}, reversing | 18 live frames equal | pen up shows {} texels of the frame before |",differing(&shown,&now,float));
     }
     fn redrawn(&self)->Redrawn {
-        let Self {style,tips,frames,redraws,..}=self;
+        let Self {style,tips,frames,redraws,rounding,..}=self;
         let (case,level,doc)=(self.case(),self.level(),self.document());let (frame,target)=(self.frame(&doc),doc.active_target().unwrap());
         let mut r=self.settled(&doc,frame);
         let cache=r.scale_display.as_ref().unwrap();
@@ -2287,10 +2376,12 @@ impl<'a> Zoomed<'a> {
             ..crate::test_support::dab_batch(target,style.clone(),last.bounds())};
         crate::test_support::submit_settled(&mut r,FramePacket {dabs:std::slice::from_ref(&last),dab_batches:std::slice::from_ref(&lift),time_seconds:2.,..frame});
         crate::test_support::submit_settled(&mut r,frame);
-        let shown=bits(&r);
+        let (shown,settled)=(bits(&r),display_pixels(&r));
         r.scale_display.as_ref().unwrap().evict_window(plan.bounds);
         crate::test_support::submit_settled(&mut r,frame);
-        assert!(bits(&r)==shown,"{case}: after pen up the display differs from a whole redraw of every cell");
+        let error=max_error(&display_pixels(&r),&settled);
+        assert!(bits(&r)==shown || *rounding>0. && error<=*rounding,
+            "{case}: after pen up the display differs from a whole redraw of every cell by {error}; exact routes for one key agree within float rounding of {rounding}");
         let redrawn=Redrawn {case,level,float,restarts,texels};
         println!("{}",redrawn.row());
         redrawn
@@ -2377,10 +2468,10 @@ fn pencil_and_smudge(scene:&str,zoom:f32)->[Zoomed<'_>;2] {
 #[test]
 fn below_full_size_every_patched_frame_equals_whole_cells_for_each_layer_setup() {
     for zoom in ZOOMS {
-        Zoomed::new("a blank layer","a Pencil",crate::layer_tests::preset_style(DefaultBrushPreset::Pencil),1,zoom).patches();
-        for scene in ["the middle layer of five","a layer in a group","a drawing without Paper","a masked layer"] {for stroke in pencil_and_smudge(scene,zoom) {stroke.patches();}}
+        Zoomed {rounding:1e-6,..Zoomed::new("a blank layer","a Pencil",crate::layer_tests::preset_style(DefaultBrushPreset::Pencil),1,zoom)}.patches();
+        for scene in ["the middle layer of five","a layer in a group","a drawing without Paper","a masked layer"] {for stroke in pencil_and_smudge(scene,zoom) {Zoomed {rounding:1e-6,..stroke}.patches();}}
     }
-    for zoom in [0.37,0.14] {for stroke in pencil_and_smudge("a photo layer",zoom) {stroke.patches();}}
+    for zoom in [0.37,0.14] {for stroke in pencil_and_smudge("a photo layer",zoom) {Zoomed {rounding:1e-6,..stroke}.patches();}}
 }
 
 #[test]

@@ -263,7 +263,9 @@ fn the_first_preview_frame_shows_its_ink_and_commits_like_a_fresh_renderer(conta
             let cache=r.scale_display.as_ref().unwrap();
             let damage=pixel_rect(dab.bounds(),doc.composition().size);
             let reached=cache.wanted_cells(damage,preview.view);
-            assert!(!reached.is_empty() && cache.half_cells(damage)==reached,"{format:?} {contact:?}: the reached cells have valid backdrop halves");
+            let (declared,owed)=cache.contact_declared_and_owed().unwrap_or_default();
+            assert!(!reached.is_empty() && reached.iter().all(|cell|declared.contains(cell) && !owed.contains(cell)),
+                "{format:?} {contact:?}: the contact begun by the first preview frame declares every reached cell and owes none: {reached:?} in {declared:?}, owed {owed:?}");
             let built:Vec<_>=cache.half_pages().into_iter().filter(|page|!before_halves.contains(page)).collect();
             assert!(built.iter().all(|(level,region)|*level==cache.plan.level && reached.contains(region))
                 && built.len()<=cache.pivot_halves().len()*reached.len(),"{format:?} {contact:?}: the first preview only builds missing reached-cell halves: {built:?}");

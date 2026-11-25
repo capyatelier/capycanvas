@@ -1115,16 +1115,17 @@ impl Cache {
         if self.pixels.root().is_some_and(|image|image.texture.format()!=self.precision.format()) {self.end_held_frame(r,packet)?;}
         if !self.ensure_window(r,scene,encoder) {self.previous=None;return Err(GpuRasterError::NotReady);}
         let live=self.gesture.is_some();
-        let lane=if view && stroking {self.lane_cells(packet)}else {Vec::new()};
+        if let Some(reached)=reached.filter(|_|live) && !self.grow_contact(scene,r,packet,encoder,*retained,budget,&reached,from)? {
+            self.end_held_frame(r,packet)?;self.end_contact(encoder);self.commit_window(r,encoder)?;
+        }
+        if view && self.gesture.is_none() && stroking {self.begin_contact(scene,r,packet,encoder,*retained,budget)?;}
+        let live=self.gesture.is_some();
+        let lane=if view && stroking && !live {self.lane_cells(packet)}else {Vec::new()};
         if !lane.is_empty() {
             let exact=self.build_halves(scene,r,packet,encoder,budget,*retained,lane,Class::Authored,true,Some(crate::frame_demand::Allowance::Fresh))?;
             for (key,wait) in exact.blocks {self.block(key.plan().bounds,wait);}
             for (region,refusal,allowance) in exact.refusals {self.refuse(region,&refusal,allowance);}
         }
-        if let Some(reached)=reached.filter(|_|live) && !self.grow_contact(scene,r,packet,encoder,*retained,budget,&reached,from)? {
-            self.end_held_frame(r,packet)?;self.end_contact(encoder);self.commit_window(r,encoder)?;
-        }
-        let live=self.gesture.is_some();
         let visible=if matches!(destination,Destination::View) {display_mips::view_bounds(packet.view,self.plan.extent,0).unwrap_or(PixelRect::EMPTY)}else {PixelRect::EMPTY};
         let deferred=match destination {Destination::View=>Class::Prefetch,Destination::Navigator=>Class::Navigator,Destination::Overview(..)|Destination::Preview=>Class::Fallback};
         let served=if matches!(destination,Destination::View) {visible}else {self.plan.bounds};
@@ -1336,7 +1337,6 @@ impl Cache {
         if !self.cohort.is_empty() && self.coverage_complete() {self.cohort=Default::default();}
         if view && !live && !stroking {self.pivot_pending=self.pivot_inputs_pending(scene,r,packet);}
         if view && live && self.ends_contact(packet) {self.end_contact(encoder);}
-        else if view && !live && stroking {self.begin_contact(scene,r,packet,encoder,*retained,budget,&composed)?;}
         self.project_above(scene,r,packet,encoder,commands)?;
         for region in &composed {
             let [_, _, width, height] = paint_transform::texel_rect(region.window_local(output_bounds), side);
