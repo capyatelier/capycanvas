@@ -1,22 +1,16 @@
 use super::*;
 use crate::frame_demand::Allowance;
 
-pub(super) fn exact_at_view_level(scene: SceneView<'_>) -> bool {
+pub(super) fn objects_or_vectors(scene: SceneView<'_>) -> bool {
     scene.order().iter().any(|&owner| scene.object_layer(owner).is_some() || scene.vector_layer(owner).is_some())
 }
 
-pub(super) fn exact_input_level(scene: SceneView<'_>, required_input_level: u32) -> u32 {
-    if exact_at_view_level(scene) {required_input_level} else {0}
+pub(super) fn exact_at_view_level(scene: SceneView<'_>, level: u32) -> bool {
+    level > 0 || objects_or_vectors(scene)
 }
 
-pub(super) fn presented_accuracy(r: &WgpuRasterizer, scene: SceneView<'_>, preview: bool) -> pages::Accuracy {
-    if !preview && r.moving_layer.is_none() && exact_at_view_level(scene) {pages::Accuracy::Exact} else {pages::Accuracy::Display}
-}
-
-pub(super) fn streams_exact(cache: &Cache, r: &WgpuRasterizer, packet: FramePacket<'_>, presented: pages::Accuracy) -> bool {
-    presented == pages::Accuracy::Display && cache.plan.level > 0 && refining(r) && !exact_at_view_level(packet.scene)
-        && packet.dab_batches.is_empty() && cache.graph.motion.is_none() && cache.graph.prepared.is_none()
-        && !packet.scene.order().iter().any(|&handle| packet.scene.visible(handle) && packet.scene.effect(handle).is_some_and(|effect| effect.animated()))
+pub(super) fn presented_accuracy(r: &WgpuRasterizer, scene: SceneView<'_>, level: u32, preview: bool, approximate: bool) -> pages::Accuracy {
+    if !preview && r.moving_layer.is_none() && exact_at_view_level(scene, level) && !approximate {pages::Accuracy::Exact} else {pages::Accuracy::Display}
 }
 
 pub(super) fn refining(r: &WgpuRasterizer) -> bool {
@@ -28,7 +22,7 @@ enum Outcome {Committed,Waiting(crate::frame_demand::UnitWait),Refused(PixelRect
 struct Admitted {interest:pages::Interest,view:layer_render::ViewState,work:u64,waiting:Option<crate::frame_demand::UnitWait>}
 
 #[derive(Default)]
-pub(super) struct Streaming {cells:Vec<(pages::Key,Vec<pages::Held>)>,units:Vec<Admitted>,turned:u64}
+pub(super) struct Streaming {units:Vec<Admitted>,turned:u64}
 impl Streaming {
     fn work(&self)->u64 {self.units.iter().map(|unit|unit.work).sum()}
 }
@@ -50,14 +44,14 @@ fn asleep(wait:Option<&crate::frame_demand::UnitWait>,r:&WgpuRasterizer)->crate:
 pub(super) struct Exact {pub(super) committed:bool,pub(super) blocks:Vec<(pages::Key,Option<crate::frame_demand::UnitWait>)>,pub(super) refusals:Vec<(PixelRect,crate::residency::Blocked,Allowance)>,
     pub(super) pivot_refusal:Option<crate::residency::Blocked>}
 impl Exact {
-    fn refuse(&mut self,region:PixelRect,refusal:crate::residency::Blocked,pivot:bool,allowance:Allowance) {
+    fn refuse(&mut self,region:PixelRect,refusal:crate::residency::Blocked,allowance:Allowance,pivot:bool) {
         if pivot {self.pivot_refusal.get_or_insert_with(||refusal.clone());}
         self.refusals.push((region,refusal,allowance));
     }
 }
 
 impl Cache {
-    pub fn approximating(&self) -> bool { !self.output_complete() || self.preparing || self.overview.as_ref().is_some_and(|overview| overview.approximating()) }
+    pub fn approximating(&self) -> bool { !self.output_complete() || !self.preparing.is_empty() || self.overview.as_ref().is_some_and(|overview| overview.approximating()) }
 
 
     pub fn has_pending_work(&self, r: &WgpuRasterizer) -> bool {
@@ -71,18 +65,27 @@ impl Cache {
         if own==Some(Runnable) || overview==Some(Runnable) {Some(Runnable)}else {own.or(overview)}
     }
     fn display_demand(&self, r: &WgpuRasterizer) -> Option<crate::frame_demand::Outstanding> {
-        use crate::frame_demand::Outstanding::Runnable;
-        if self.contact || self.preparing || self.retired.is_some() {return Some(Runnable);}
-        self.cells_demand(r,refining(r)).or_else(||self.pixels.committed_root().is_none().then(||self.residual_demand(r)).flatten())
-            .or_else(||self.reduction_demand(r))
+        use crate::frame_demand::Outstanding::{self,Runnable};
+        if self.contact || self.retired.is_some() {return Some(Runnable);}
+        let prepared=self.preparing.iter().map(|wait|wait.demand(r)).fold(None,Outstanding::either);
+        Outstanding::either(self.cells_demand(r,refining(r)).or_else(||self.pixels.committed_root().is_none().then(||self.residual_demand(r)).flatten())
+            .or_else(||self.reduction_demand(r)),prepared)
     }
     fn reduction_demand(&self,r:&WgpuRasterizer)->Option<crate::frame_demand::Outstanding> {
         (!self.pixels.unreduced().is_empty() && self.pixels.committed_root().is_some() && self.coverage_complete())
             .then(||asleep(self.reduction_wait.as_ref(),r))
     }
 
-    pub(super) fn release_streaming(&mut self,encoder:&crate::submission::CommandEncoder) {
-        for page in std::mem::take(&mut self.streaming).cells.into_iter().flat_map(|(_,pins)|pins) {page.track(encoder);}
+    pub(super) fn at_rest(&self,r:&WgpuRasterizer,packet:FramePacket<'_>)->bool {self.gesture.is_none() && packet.dab_batches.is_empty() && refining(r)}
+    pub(super) fn approximates(&self,r:&WgpuRasterizer,packet:FramePacket<'_>)->bool {
+        self.graph.root.as_ref().is_some_and(|root|super::cell_plan::Footprint::approximate(root,packet.scene,self.plan.level,self.at_rest(r,packet)))
+    }
+    pub(super) fn domains(&self,packet:FramePacket<'_>,at_rest:bool)->[BTreeSet<SourceTarget>;2] {
+        self.graph.root.as_ref().map(|root|super::cell_plan::Footprint::of(root,packet.scene,self.plan.bounds,self.plan.extent,self.plan.level,at_rest).domains()).unwrap_or_default()
+    }
+    pub(super) fn release_streaming(&mut self) {self.streaming=Streaming::default();}
+    fn settles_at_view(&self)->bool {
+        self.pages.lock().unwrap().expected().is_some_and(|frame|exact_at_view_level(frame.scene(),self.plan.level))
     }
     pub(super) fn shows(&self,expression:&graph::Node)->bool {self.graph.content.as_ref()==Some(expression) || self.pivot_halves().contains(expression)}
     fn current(&self,cell:&pages::Key)->bool {self.shows(&cell.expression) || self.overview.as_ref().is_some_and(|overview|overview.graph.content.as_ref()==Some(&cell.expression))}
@@ -119,12 +122,39 @@ impl Cache {
         !halves.is_empty() && (self.pivot_edited() && class==Class::Refinement || halves.into_iter().all(|half|
             self.pages.lock().unwrap().get(&pages::Key {expression:half,..key.clone()},region,pages::Accuracy::Exact,0,class).is_some()))
     }
-    pub(super) fn wanted_halves(&self,region:PixelRect,view:layer_render::ViewState)->Vec<pages::Key> {
-        let halves=self.pivot_halves();
+    pub(super) fn wanted_cells(&self,region:PixelRect,view:layer_render::ViewState)->Vec<PixelRect> {
         let mut cells=pages::coordinates(region.intersect(self.plan.bounds),self.plan.level).map(|coordinate|pages::bounds(coordinate,self.plan.level,self.plan.extent)).collect::<Vec<_>>();
         let near=self.pointer.map_or(view,|point|centred(view,point));
         cells.sort_by_key(|cell|centre_distance(near,*cell));
-        cells.into_iter().flat_map(|cell|{let cell=self.refinement_interest(self.plan.level,cell).key;halves.iter().map(move|half|pages::Key {expression:half.clone(),..cell.clone()})}).collect()
+        cells
+    }
+    pub(super) fn half_keys(&self,cells:&[PixelRect])->Vec<pages::Key> {
+        let halves=self.pivot_halves();
+        let settles=self.settles_at_view();
+        cells.iter().flat_map(|cell|{let cell=if settles {self.page_key(self.graph.root.clone().unwrap(),*cell)}else {self.refinement_interest(self.plan.level,*cell).key};
+            halves.iter().map(move|half|pages::Key {expression:half.clone(),..cell.clone()})}).collect()
+    }
+    #[expect(clippy::too_many_arguments, reason = "Halves share the frame's scene, encoding and budget with the pass that wants them")]
+    pub(super) fn build_halves(
+        &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
+        encoder: &mut crate::submission::CommandEncoder, budget: &mut WorkBudget, retained: u64,
+        cells: Vec<PixelRect>, class: Class, owed: bool,
+    ) -> Result<Exact, GpuRasterError> {
+        if cells.is_empty() {return Ok(Exact::default());}
+        if !exact_at_view_level(packet.scene,self.plan.level) {
+            let keys=self.half_keys(&cells);
+            return self.exact_units(scene,r,packet,encoder,budget,keys,&|_|class,owed);
+        }
+        let halves=self.pivot_halves();
+        let cells=cells.into_iter().filter(|cell|self.pivot_missing(*cell)).collect::<Vec<_>>();
+        let mut completed=Vec::new();
+        let built=self.half_units(scene,r,packet,encoder,retained,budget,cells,&halves,class,&mut completed)?;
+        self.encode_units(scene,r,encoder,completed.iter_mut().map(|ready|std::mem::take(&mut ready.unit)))?;
+        for ready in completed {self.pages.lock().unwrap().finish_inputs(&ready.handle);}
+        let mut exact=Exact::default();
+        for (region,wait) in built.blocks {exact.blocks.extend(halves.first().map(|half|(self.page_key(half.clone(),region),wait)));}
+        for (region,refusal,allowance) in built.refusals {exact.refuse(region,refusal,allowance,true);}
+        Ok(exact)
     }
     pub(super) fn pivot_halves(&self)->Vec<graph::Node> {
         self.graph.parts.iter().flat_map(|parts|[&parts.nodes[0],&parts.nodes[2]]).filter(|node|!graph::Expression::is_clear(node) && self.graph.caches(node)).cloned().collect()
@@ -139,14 +169,16 @@ impl Cache {
         let halves=if self.pivot_edited() {self.pivot_halves()}else {Vec::new()};
         if halves.is_empty() {return self.pivot_input(r);}
         let held=self.half_cells(self.plan.bounds);
+        let settles=self.settles_at_view();
         let mut naming=false;
         for coordinate in pages::coordinates(self.plan.bounds,self.plan.level) {
             let region=pages::bounds(coordinate,self.plan.level,self.plan.extent).intersect(self.plan.bounds);
             if held.contains(&region) || self.refusals_hold(r) && self.refused(r,region) {continue;}
+            if settles {return waiting();}
             let cell=self.refinement_interest(self.plan.level,region).key;
             for half in &halves {
                 let mut frontier=Vec::new();
-                self.pages.lock().unwrap().refinement_frontier(&pages::Key {expression:half.clone(),..cell.clone()},usize::MAX,&mut frontier,0);
+                self.pages.lock().unwrap().refinement_frontier(&pages::Key {expression:half.clone(),..cell.clone()},&mut frontier);
                 if !frontier.is_empty() {return waiting();}
             }
             naming=true;
@@ -169,22 +201,23 @@ impl Cache {
         &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
         encoder: &mut crate::submission::CommandEncoder, commands: &mut RegionRecords, budget: &mut WorkBudget,
     ) -> Result<PixelRect, GpuRasterError> {
-        if exact_at_view_level(packet.scene) || self.gesture.is_some() || !refining(r) {return Ok(PixelRect::EMPTY);}
-        let mut keys=Vec::new();
-        for cache in std::iter::once(&*self).chain(self.overview.as_deref()).filter(|cache|cache.graph.root.is_some()) {
-            let mut coordinates=pages::coordinates(cache.plan.bounds,cache.plan.level)
-                .filter(|coordinate|!cache.awaits_compose(pages::bounds(*coordinate,cache.plan.level,cache.plan.extent))).collect::<Vec<_>>();
-            coordinates.sort_by_key(|coordinate|centre_distance(packet.view,pages::bounds(*coordinate,cache.plan.level,cache.plan.extent)));
-            keys.extend(coordinates.into_iter().map(|coordinate|cache.refinement_interest(cache.plan.level,pages::bounds(coordinate,cache.plan.level,cache.plan.extent)).key));
-        }
+        if self.gesture.is_some() || !refining(r) || self.graph.root.is_none() {return Ok(PixelRect::EMPTY);}
+        self.pairing=self.overview.as_deref().filter(|_|self.plan.level==0).map_or_else(Default::default,Cache::pairing);
         let halves=if self.pivot_edited() {self.pivot_halves()}else {Vec::new()};
-        if !halves.is_empty() {keys.extend(self.wanted_halves(self.plan.bounds,packet.view));}
-        let mut exact=self.exact_units(scene,r,packet,encoder,commands,budget,keys,&|_|Class::Refinement,false)?;
+        let wanted=if halves.is_empty() {Vec::new()}else {self.wanted_cells(self.plan.bounds,packet.view)};
+        let mut exact=if exact_at_view_level(packet.scene,self.plan.level) {
+            self.build_halves(scene,r,packet,encoder,budget,0,wanted,Class::Refinement,false)?
+        } else {
+            let mut coordinates=pages::coordinates(self.plan.bounds,self.plan.level)
+                .filter(|coordinate|!self.awaits_compose(pages::bounds(*coordinate,self.plan.level,self.plan.extent))).collect::<Vec<_>>();
+            coordinates.sort_by_key(|coordinate|centre_distance(packet.view,pages::bounds(*coordinate,self.plan.level,self.plan.extent)));
+            let mut keys=coordinates.into_iter().map(|coordinate|self.refinement_interest(self.plan.level,pages::bounds(coordinate,self.plan.level,self.plan.extent)).key).collect::<Vec<_>>();
+            keys.extend(self.half_keys(&wanted));
+            self.exact_units(scene,r,packet,encoder,budget,keys,&|_|Class::Refinement,false)?
+        };
         self.pivot_refusal=exact.pivot_refusal.take().map(|refusal|crate::frame_demand::UnitWait::parked(refusal,crate::frame_demand::Allowance::Fresh));
         self.pivot_waiting=exact.blocks.iter().find(|(key,_)|halves.contains(&key.expression)).and_then(|(_,wait)|wait.clone());
-        for cache in std::iter::once(&*self).chain(self.overview.as_deref()) {
-            for (key,wait) in exact.blocks.iter().filter(|(key,_)|key.level==cache.plan.level) {cache.block(key.plan().bounds,wait.clone());}
-        }
+        for (key,wait) in &exact.blocks {self.block(key.plan().bounds,wait.clone());}
         for (region,refusal,allowance) in &exact.refusals {self.refuse(*region,refusal,*allowance);}
         self.pivot_pending=self.pivot_inputs_pending(scene,r,packet);
         if self.pivot_pending {
@@ -198,7 +231,7 @@ impl Cache {
     #[expect(clippy::too_many_arguments, reason = "Exact units share the frame's scene, encoding and budget with the pass that selected their cells")]
     pub(super) fn exact_units(
         &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
-        encoder: &mut crate::submission::CommandEncoder, commands: &mut RegionRecords, budget: &mut WorkBudget,
+        encoder: &mut crate::submission::CommandEncoder, budget: &mut WorkBudget,
         cells: Vec<pages::Key>, class: &dyn Fn(PixelRect)->Class, owed: bool,
     ) -> Result<Exact, GpuRasterError> {
         let mut exact=Exact::default();
@@ -206,61 +239,45 @@ impl Cache {
         let mut outcomes=std::collections::HashMap::<pages::Key,(bool,Option<crate::frame_demand::UnitWait>)>::new();
         {let units=std::mem::take(&mut self.streaming.units);let pages=self.pages.lock().unwrap();
             self.streaming.units=units.into_iter().filter(|unit|self.current(&unit.interest.key) && pages.accepted(&unit.interest.key,unit.interest.key.plan().bounds,0)).collect();}
-        let mut previous=std::mem::take(&mut self.streaming.cells);
         let admitted=self.streaming.units.iter().map(|unit|unit.interest.key.clone()).filter(|unit|cells.iter().any(|cell|cell.expression==unit.expression)).collect::<Vec<_>>();
         let mut pass=Pass {started:false,owed,closed:None};
         let flying=admitted.len();
         for (index,cell) in admitted.into_iter().chain(cells).enumerate() {
-            let owners=||std::iter::once(&*self).chain(self.overview.as_deref()).filter(|cache|cache.plan.level==cell.level);
-            if index>=flying && owners().any(|cache|cache.refused(r,cell.plan().bounds)) {continue;}
-            let allowance=if !owed && owners().any(|cache|cache.cell_allowance(r,cell.plan().bounds)==Allowance::Spent) {Allowance::Spent}else {Allowance::Fresh};
-            let carried=previous.iter().position(|(key,_)|*key==cell).map(|index|previous.swap_remove(index).1).unwrap_or_default();
+            if index>=flying && self.refused(r,cell.plan().bounds) {continue;}
+            if index>=flying && !halves.contains(&cell.expression) && let Some(wait)=self.pairing.awaits(cell.plan().bounds) {exact.blocks.push((cell,wait));continue;}
+            let allowance=if !owed && self.cell_allowance(r,cell.plan().bounds)==Allowance::Spent {Allowance::Spent}else {Allowance::Fresh};
             if index>=flying && let Some(closed)=pass.closed.as_ref().filter(|closed|closed.applies(class(cell.plan().bounds),allowance)) {
                 match self.flight(cell.plan().bounds,closed) {
                     Outcome::Waiting(input)=>exact.blocks.push((cell.clone(),Some(input))),
-                    Outcome::Refused(region,refusal)=>exact.refuse(region,refusal,halves.contains(&cell.expression),allowance),
+                    Outcome::Refused(region,refusal)=>exact.refuse(region,refusal,allowance,halves.contains(&cell.expression)),
                     _=>{},
                 }
-                if self.has_admitted_unit(&cell) {self.streaming.cells.push((cell,carried));}else {for page in carried {page.track(encoder);}}
                 continue;
             }
-            for page in carried {page.track(encoder);}
             let mut frontier=Vec::new();
-            self.pages.lock().unwrap().refinement_frontier(&cell,usize::MAX,&mut frontier,0);
+            self.pages.lock().unwrap().refinement_frontier(&cell,&mut frontier);
             if frontier.is_empty() {continue;}
             let (mut pending,mut waiting)=(false,None);
-            let mut pinned=self.exact_children(&cell,class);
+            let mut pinned=Vec::new();
             for key in frontier {
                 if let Some((held,outcome))=outcomes.get(&key) {pending|=*held;waiting=waiting.or_else(||outcome.clone());continue;}
-                let outcome=if key.level>0 {
-                    #[cfg(test)] crate::test_support::PassCounts {destination_units:1,..Default::default()}.record();
-                    self.reduce_exact(scene,r,encoder,commands,key.clone(),class)?
-                } else {
-                    self.exact_unit(scene,r,packet,encoder,commands,budget,&mut pass,&mut pinned,&key,class,allowance)?
-                };
+                let outcome=self.exact_unit(scene,r,packet,encoder,budget,&mut pass,&mut pinned,&key,class,allowance)?;
                 let held=!matches!(outcome,Outcome::Committed);
                 let input=match outcome {
                     Outcome::Committed=>{exact.committed=true;None},
                     Outcome::Waiting(input)=>Some(input),
                     Outcome::Deferred=>None,
-                    Outcome::Refused(region,refusal)=>{exact.refuse(region,refusal,halves.contains(&cell.expression),allowance);if allowance==Allowance::Spent {break;}continue;},
+                    Outcome::Refused(region,refusal)=>{exact.refuse(region,refusal,allowance,halves.contains(&cell.expression));if allowance==Allowance::Spent {break;}continue;},
                     Outcome::Skipped=>continue,
                 };
                 pending|=held;waiting=waiting.or_else(||input.clone());
                 outcomes.insert(key,(held,input));
             }
-            if self.has_admitted_unit(&cell) {
-                let pins=self.exact_children(&cell,class);
-                if !pins.is_empty() {self.streaming.cells.push((cell.clone(),pins));}
-            }
             for page in pinned {page.track(encoder);}
             if waiting.is_some() {exact.blocks.push((cell,waiting));}
-            else if !pending && cell.level==self.plan.level && let Some(refusal)=self.prepare_pivot(scene,r,packet,encoder,budget,cell.plan().bounds,class)? {
+            else if !pending && let Some(refusal)=self.prepare_pivot(scene,r,packet,encoder,budget,cell.plan().bounds,class)? {
                 exact.pivot_refusal.get_or_insert(refusal);
             }
-        }
-        for (cell,pins) in previous {
-            if self.current(&cell) && self.has_admitted_unit(&cell) {self.streaming.cells.push((cell,pins));}else {for page in pins {page.track(encoder);}}
         }
         Ok(exact)
     }
@@ -270,30 +287,12 @@ impl Cache {
             .map(|parts|[parts.nodes[0].clone(),parts.nodes[2].clone()]).into_iter().flatten().filter(|node|!graph::Expression::is_clear(node)))
             .map(|expression|pages::Key {expression,..cell.clone()}).collect()
     }
-    fn has_admitted_unit(&self,cell:&pages::Key)->bool {
-        let parts=self.cell_parts(cell);
-        self.streaming.units.iter().map(|unit|&unit.interest.key).any(|unit|unit.level<=cell.level
-            && unit.coordinate.map(|value|value>>(cell.level-unit.level))==cell.coordinate && parts.iter().any(|part|part.expression==unit.expression))
-    }
     fn continues_admitted(&self,key:&pages::Key)->bool {self.streaming.units.iter().any(|unit|self.cell_parts(&unit.interest.key).contains(key))}
     fn keep_committed_halves(&self,key:&pages::Key) {
         let Some(unit)=self.streaming.units.iter().find(|unit|unit.interest.key==*key) else {return;};
         let mut store=self.pages.lock().unwrap();
         let committed=self.cell_parts(key).into_iter().skip(1).filter(|half|store.has(half,half.plan().bounds,pages::Accuracy::Exact,0)).collect::<Vec<_>>();
         store.keep_outputs(&unit.interest,&committed);
-    }
-    fn exact_level(&self)->u32 {self.plan.level.max(self.overview.as_ref().map_or(0,|cache|cache.plan.level))}
-    fn ancestors(&self,key:&pages::Key)->Vec<pages::Key> {
-        let level=self.exact_level();
-        self.cell_parts(key).into_iter().flat_map(|part|(part.level+1..=level)
-            .map(move|level|pages::Key {level,coordinate:part.coordinate.map(|value|value>>(level-part.level)),..part.clone()})).collect()
-    }
-    fn exact_children(&self,cell:&pages::Key,class:&dyn Fn(PixelRect)->Class)->Vec<pages::Held> {
-        let parts=self.cell_parts(cell);
-        let mut store=self.pages.lock().unwrap();
-        let mut held=Vec::new();
-        for part in parts {store.exact_inputs(&part,class(cell.plan().bounds),&mut held);}
-        held
     }
     pub(super) fn streamed_interests(&self,view:layer_render::ViewState)->impl Iterator<Item=pages::Interest>+'_ {
         let visible=display_mips::view_bounds(view,self.plan.extent,0).unwrap_or(PixelRect::EMPTY);
@@ -318,21 +317,21 @@ impl Cache {
     #[expect(clippy::too_many_arguments, reason = "An exact unit shares the frame's scene, encoding and budget with its cell")]
     fn exact_unit(
         &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
-        encoder: &mut crate::submission::CommandEncoder, commands: &mut RegionRecords, budget: &mut WorkBudget, pass: &mut Pass, pinned: &mut Vec<pages::Held>,
+        encoder: &mut crate::submission::CommandEncoder, budget: &mut WorkBudget, pass: &mut Pass, pinned: &mut Vec<pages::Held>,
         key: &pages::Key, class: &dyn Fn(PixelRect)->Class, allowance: Allowance,
     ) -> Result<Outcome, GpuRasterError> {
         let region=key.plan().bounds;
         let Some(graph::Parts {nodes,scopes})=self.graph.parts.as_ref().filter(|_|self.graph.content.as_ref()==Some(&key.expression) && self.folds_halves(key,class(region)))
             .map(|parts|graph::Parts {nodes:parts.nodes.clone(),scopes:parts.scopes.clone()}) else {
             let scope=self.graph.parts.as_ref().and_then(|parts|parts.nodes.iter().position(|node|*node==key.expression).map(|index|parts.scopes[index].clone()));
-            return self.exact_capture(scene,r,packet,encoder,commands,budget,pass,pinned,key,scope.as_ref(),None,class,allowance);
+            return self.exact_capture(scene,r,packet,encoder,budget,pass,pinned,key,scope.as_ref(),None,class,allowance);
         };
         let mut halves=[None,None];
         for (half,index) in [(0,0),(1,2)] {
             if graph::Expression::is_clear(&nodes[index]) {continue;}
             let part=pages::Key {expression:nodes[index].clone(),..key.clone()};
             if self.pages.lock().unwrap().get(&part,region,pages::Accuracy::Exact,0,class(region)).is_none() {
-                match self.exact_capture(scene,r,packet,encoder,commands,budget,pass,pinned,&part,Some(&scopes[index]),None,class,allowance)? {
+                match self.exact_capture(scene,r,packet,encoder,budget,pass,pinned,&part,Some(&scopes[index]),None,class,allowance)? {
                     Outcome::Committed=>{},
                     outcome=>{if matches!(outcome,Outcome::Refused(..)) {self.keep_committed_halves(key);}return Ok(outcome);},
                 }
@@ -340,13 +339,13 @@ impl Cache {
             halves[half]=Some(self.pages.lock().unwrap().get(&part,region,pages::Accuracy::Exact,0,class(region))
                 .ok_or(GpuRasterError::Invariant("a committed exact part is missing"))?);
         }
-        self.exact_capture(scene,r,packet,encoder,commands,budget,pass,pinned,key,Some(&scopes[1]),Some(halves),class,allowance)
+        self.exact_capture(scene,r,packet,encoder,budget,pass,pinned,key,Some(&scopes[1]),Some(halves),class,allowance)
     }
 
     #[expect(clippy::too_many_arguments, reason = "An exact capture shares the frame's scene, encoding and budget with its cell")]
     fn exact_capture(
         &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
-        encoder: &mut crate::submission::CommandEncoder, commands: &mut RegionRecords, budget: &mut WorkBudget, pass: &mut Pass, pinned: &mut Vec<pages::Held>,
+        encoder: &mut crate::submission::CommandEncoder, budget: &mut WorkBudget, pass: &mut Pass, pinned: &mut Vec<pages::Held>,
         key: &pages::Key, scope: Option<&layer_core::authored::SceneScope>, halves: Option<[Option<pages::Held>;2]>, class: &dyn Fn(PixelRect)->Class, allowance: Allowance,
     ) -> Result<Outcome, GpuRasterError> {
         let admitted=self.streaming.units.iter().position(|unit|unit.interest.key==*key);
@@ -370,7 +369,6 @@ impl Cache {
             Err(error)=>return Err(error),
         };
         let folds=halves.as_ref().map_or(0,|halves|halves.iter().flatten().count() as u64+1);
-        let identity=folds==0 && inputs.reads()<=1 && !packet.scene.order().iter().any(|handle|packet.scene.visible(*handle) && packet.scene.effect(*handle).is_some());
         let work=region.area().saturating_mul((inputs.reads()+folds).max(1)).saturating_add(window.area().saturating_mul(passes));
         let scratch=self.graph.root.as_ref().unwrap().cost().1 as usize+1;
         let interest=Self::exact_interest(key.clone(),region);
@@ -378,11 +376,10 @@ impl Cache {
             self.streaming.turned=work;pass.closed=Some(Closed::Full);
             return Ok(self.flight(region,&Closed::Full));
         }
-        let ancestors=self.ancestors(key);
         let parts=if halves.is_some() {self.cell_parts(key)}else {vec![key.clone()]};
-        let outputs=parts.into_iter().map(|part|(part,region)).chain(ancestors.iter().map(|ancestor|(ancestor.clone(),ancestor.plan().bounds))).collect();
+        let outputs=parts.into_iter().map(|part|(part,region)).collect();
         #[cfg(test)] crate::test_support::PassCounts {destination_admissions:1,..Default::default()}.record();
-        let handle=match self.accept_working(scene,r,interest.clone(),outputs,inputs,[scratch,0],plan,true,class(region),class(region),allowance,encoder)? {
+        let handle=match self.accept_working(scene,r,interest.clone(),outputs,inputs,[scratch,0],plan,true,class(region),class(region),allowance,None,Default::default(),encoder)? {
             Ok(handle)=>handle,
             Err(None)=>return Ok(waiting_on(scene,r,self.declarations(),&GpuRasterError::NotReady).map_or(Outcome::Deferred,Outcome::Waiting)),
             Err(Some(refusal))=>{let refusal=refusal.alone();if allowance==Allowance::Fresh {pass.closed=Some(Closed::Refused(refusal.clone()));}return Ok(Outcome::Refused(region,refusal));},
@@ -406,21 +403,13 @@ impl Cache {
             Ok(())=>{
                 budget.spend(work.max(object_cache::PASS_TAPS));pass.started=true;
                 self.streaming.units.remove(unit);
-                let intermediate=key.level<self.plan.level && self.graph.content.as_ref()==Some(&key.expression);
-                self.pages.lock().unwrap().commit(write,if intermediate {0}else {work},encoder);
+                self.pages.lock().unwrap().commit(write,work,encoder);
                 self.retain_exact(key);
-                if intermediate && identity {self.pages.lock().unwrap().set_transient(key);}
                 pinned.extend(halves.into_iter().flatten().flatten());
                 r.metrics.composited_pixels+=region.area();r.metrics.frame_composited_pages.push((0,key.coordinate));
                 pinned.push(image);
-                let reduced=ancestors.iter().filter(|parent|parent.level==key.level+1).try_for_each(|parent|
-                    match self.reduce_exact(scene,r,encoder,commands,parent.clone(),class)? {
-                        Outcome::Refused(..)=>Err(GpuRasterError::Invariant("an admitted exact unit's reserved ancestor was refused")),
-                        _=>Ok(()),
-                    });
-                let mut store=self.pages.lock().unwrap();
-                store.finish_inputs(&handle);store.release_unwanted(&ancestors);
-                reduced.map(|()|Outcome::Committed)
+                self.pages.lock().unwrap().finish_inputs(&handle);
+                Ok(Outcome::Committed)
             },
             Err(error@(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished))=>{
                 self.pages.lock().unwrap().hold_inputs(&handle,held)?;
@@ -432,49 +421,10 @@ impl Cache {
         }
     }
 
-    fn reduce_exact(&mut self,scene:&Scene,r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder,commands:&mut RegionRecords,
-        mut key:pages::Key,class:&dyn Fn(PixelRect)->Class,
-    )->Result<Outcome,GpuRasterError> {
-        let level=self.exact_level();
-        loop {
-            let region=key.plan().bounds;
-            if self.pages.lock().unwrap().get(&key,region,pages::Accuracy::Exact,0,class(region)).is_none() {
-                let inputs=self.pages.lock().unwrap().reduction(&key,0,class(region));
-                let Some((inputs,pages::Accuracy::Exact))=inputs else {break;};
-                let image=match self.claim_page(scene,r,key.clone(),class(region))? {Ok(image)=>image,Err(blocked)=>return Ok(Outcome::Refused(region,blocked.alone()))};
-                let write=self.pages.lock().unwrap().prepare_write(key.clone(),image.plan.bounds,pages::Accuracy::Exact,0)?;
-                let work=inputs.len() as u64*object_cache::PASS_TAPS;
-                let children=inputs.iter().map(|(child,_)|child.clone()).collect::<Vec<_>>();
-                for (_,input) in inputs {
-                    let covered=input.plan.bounds.intersect(image.plan.bounds);
-                    let [x,y,width,height]=paint_transform::texel_rect(covered.window_local(image.plan.bounds),1<<image.plan.level);
-                    let mut values=[0;20];
-                    values[..8].copy_from_slice(&[x,y,width,height,input.plan.bounds.width(),input.plan.bounds.height(),2,(input.plan.level<<8)|8]);
-                    values[14]=((x*2) as f32).to_bits();values[15]=((y*2) as f32).to_bits();
-                    let binding=RegionRecords::binding(r,&input.view,&r.empty_view,&image.view);
-                    match commands.reduce(r,encoder,values,&binding,"reduce exact composite page",image.texture.format()) {
-                        Err(error@(GpuRasterError::NotReady|GpuRasterError::Waiting(_)))=>return Ok(Outcome::Waiting(waiting_on(scene,r,self.declarations(),&error)
-                            .unwrap_or_else(||crate::frame_demand::UnitWait::input(crate::frame_demand::Producer::Class(crate::frame_demand::Input::Compile))))),
-                        result=>result?,
-                    }
-                    input.track(encoder);
-                }
-                self.pages.lock().unwrap().commit(write,work,encoder);
-                self.retain_exact(&key);
-                let mut store=self.pages.lock().unwrap();
-                for child in &children {store.release_transient(child,encoder);}
-            }
-            if key.level>=level {break;}
-            key=pages::Key {level:key.level+1,coordinate:key.coordinate.map(|value|value/2),..key};
-        }
-        Ok(Outcome::Committed)
-    }
-
     fn project_exact(&mut self,scene:&Scene,r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder,commands:&mut RegionRecords)->Result<PixelRect,GpuRasterError> {
         let view=self.copy_level(scene,r,encoder,commands)?;
         self.underived.add(view);
-        let stand_in=match &mut self.overview {Some(cache)=>cache.copy_level(scene,r,encoder,commands)?,None=>PixelRect::EMPTY};
-        Ok(self.presented(view,stand_in))
+        Ok(self.presented(view,PixelRect::EMPTY))
     }
 }
 
@@ -538,7 +488,7 @@ mod tests {
         pages::evict_composite_pages_where(&cache, &[region], |page| page.level == 0);
         let tier = cache.pages.lock().unwrap().tier();
         let mut frontier = Vec::new();
-        cache.pages.lock().unwrap().refinement_frontier(&key, usize::MAX, &mut frontier, 0);
+        cache.pages.lock().unwrap().refinement_frontier(&key, &mut frontier);
         assert!(frontier == vec![key.clone()], "the exact leaf still needs capture");
         tier.update_limit(0);
 
@@ -561,13 +511,12 @@ mod tests {
                 closed: closed.then(|| Closed::Refused(sibling.clone())),
             };
             assert_eq!(pass.closed.as_ref().is_some_and(|closed| closed.applies(Class::Refinement, Allowance::Fresh)), closed);
-            let mut commands = RegionRecords::new(&r);
             let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
             let before = PassCounts::snapshot();
             let mut pinned = Vec::new();
             let outcome = {
                 let mut budget = work(false);
-                cache.exact_capture(&mut scene, &mut r, frame, &mut encoder, &mut commands, &mut budget, &mut pass,
+                cache.exact_capture(&mut scene, &mut r, frame, &mut encoder, &mut budget, &mut pass,
                     &mut pinned, &key, None, None, &|_|Class::Refinement, allowance).unwrap()
             };
             let counts = PassCounts::snapshot().delta(before);

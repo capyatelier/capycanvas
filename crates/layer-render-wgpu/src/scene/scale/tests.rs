@@ -331,9 +331,21 @@ fn assert_settled(mut r: &mut WgpuRasterizer, frame: FramePacket<'_>, reference:
     assert!(r.settled() && !publication_pending(r), "refinement and its Navigator refresh must settle: {:?}",r.outstanding_terms());
     match installed {Some(wake)=>r.set_preparation_wake(wake),None=>r.preparation_wake=None}
     let cache = r.scale_display.as_ref().unwrap();
-    assert_reduction(&display_pixels(r), reference, cache.plan, cache.texture().format(), 2e-5, format_args!("settled display"));
-    if let Some(overview) = &cache.overview {
-        assert_reduction(&window_pixels(r, overview.pixels.root().unwrap(), overview.plan), reference, overview.plan, overview.pixels.root().unwrap().texture.format(), 2e-5, format_args!("settled overview"));
+    if cache.plan.level == 0 {
+        assert_reduction(&display_pixels(r), reference, cache.plan, cache.texture().format(), 2e-5, format_args!("settled display"));
+        if let Some(overview) = &cache.overview {
+            assert_reduction(&window_pixels(r, overview.pixels.root().unwrap(), overview.plan), reference, overview.plan, overview.pixels.root().unwrap().texture.format(), 2e-5, format_args!("settled overview"));
+        }
+    } else {
+        let mut fresh = WgpuRasterizer::new_native_headless(r.document_color()).unwrap();
+        crate::test_support::submit_settled(&mut fresh, frame);
+        assert_eq!(fresh.scale_display.as_ref().unwrap().plan, cache.plan, "a fresh renderer settles the same view");
+        let format = cache.texture().format();
+        let ordinal = |value: f32| i32::from(layer_core::color::f16::from_f32(value).to_bits() as i16);
+        for (index, (settled, fresh)) in display_pixels(r).iter().zip(display_pixels(&fresh)).enumerate() {
+            let close = settled.iter().zip(fresh).all(|(a, b)| if format == wgpu::TextureFormat::Rgba16Float {(ordinal(*a) - ordinal(b)).abs() <= 1} else {(a - b).abs() <= 2e-5});
+            assert!(close, "a settled display below 100% equals a fresh renderer's: texel {index}, {settled:?} against {fresh:?}");
+        }
     }
     assert_presentation_mip(r);
 
@@ -2189,7 +2201,7 @@ fn display_and_native_evaluation_share_the_display_cache() {
         submit_published(&mut exact, p);
         assert!(r.scale_display.is_some());
 
-        assert_eq!(r.scale_display.as_ref().unwrap().evaluation == Evaluation::Native, filtered);
+        assert!(r.scale_display.as_ref().unwrap().evaluation == Evaluation::Display, "a reduced view captures a native effect at its own node, not the whole view natively");
         assert_settled(&mut r, p, &pixels(&exact, crate::test_support::document_texture(&exact)));
         if !filtered {
             assert_eq!(r.scene.as_ref().unwrap().image_cache_bytes(), 0);
@@ -2635,7 +2647,7 @@ fn fitted_projective_preview_reuses_coarse_pixels_and_bounds_fine_source_ownersh
 #[test]
 fn fine_memory_admission_cannot_override_a_visible_native_effect() {
     let mut doc=Document::new(PortableId::random(),6000,4000,layer_core::DocumentNames {paint:"paint".into(),paper:"Paper".into()});
-    assert!(!requires_native_effects(doc.scene(),1),"ordinary Paper does not require native filter evaluation");
+    assert!(!requires_native_effects(doc.scene(),0),"ordinary Paper does not require native filter evaluation");
     let target=crate::layer_tests::placement::target(&doc);
     let preview=layer_render::TransformPreview {transaction:1,moving:true,target,selection:None,transform:Default::default()};
     assert!(fine_source(Evaluation::Tiled(48),Some(&preview),target));
@@ -2647,9 +2659,10 @@ fn fine_memory_admission_cannot_override_a_visible_native_effect() {
     Arc::make_mut(&mut draft.program).resolution=layer_core::EffectResolution::Native;
     let effect=effect_occurrence(&mut doc,draft,"native image windows");
     insert_occurrence(&mut doc,effect,0);
-    assert!(requires_native_effects(doc.scene(),1));
+    assert!(requires_native_effects(doc.scene(),0));
+    assert!(!requires_native_effects(doc.scene(),1),"a reduced view captures a native effect at its own node, not the whole view natively");
     remove_occurrence(&mut doc,effect);
-    assert!(!requires_native_effects(doc.scene(),1));
+    assert!(!requires_native_effects(doc.scene(),0));
 }
 
 #[path = "batch_failure_tests.rs"]
@@ -3039,6 +3052,54 @@ fn a_transition_held_for_an_unpublished_page_waits_for_it_instead_of_spinning() 
     assert!(r.outstanding_terms().contains(&("display",Outstanding::Blocked(Input::Name))),"{:?}",r.outstanding_terms());
     publish_clear(&r,&changed,&tile);
     assert!(r.next_frame()==layer_render::FrameDemand::Work,"the page's publication resumes the transition");
+    submit_published(&mut r,FramePacket {composite_all:false,..frame});
+}
+
+#[test]
+fn a_transition_shows_no_cell_of_the_new_revision_while_another_cell_waits() {
+    use crate::frame_demand::Outstanding;
+    let extent=[1024,512];
+    let doc=document_at(extent);
+    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    r.set_preparation_wake(Arc::new(||{}));
+    let view=[0.5,0.,0.,0.5,0.,0.];
+    let mut frame=packet(doc.scene(),extent);frame.view.document_to_surface=view;
+    submit_published(&mut r,frame);
+    let before=display_pixels(&r);
+    let mut changed=doc.clone();
+    occurrence_mut(&mut changed,0).opacity=0.5;
+    let mut frame=packet(changed.scene(),extent);frame.view.document_to_surface=view;
+    let cache=r.scale_display.as_ref().unwrap();
+    let waiting=pages::bounds([1,0],cache.plan.level,extent);
+    cache.invalidate_cells(cache.reached_cells(waiting.into()),None);
+    cache.refuse(waiting,&r.scene_tiers.display.wanting(crate::residency::Class::Visible,u64::MAX>>2),crate::frame_demand::Allowance::Spent);
+    crate::test_support::submit_ready(&mut r,FramePacket {composite_all:false,..frame}).unwrap();
+    r.wait_idle().unwrap();
+    let ready=|pixels:&[[f32;4]]|pixels.chunks(512).flat_map(|row|row[..256].to_vec()).collect::<Vec<_>>();
+    assert!(ready(&display_pixels(&r))==ready(&before),"the cell of the new revision that is ready stays old while its sibling waits");
+    assert!(r.outstanding_terms().iter().any(|(term,state)|*term=="display" && *state==Outstanding::Blocked(crate::frame_demand::Input::Residency)),
+        "the held transition sleeps on its sibling's wait: {:?}",r.outstanding_terms());
+    r.scale_display.as_ref().unwrap().release(waiting);
+    submit_published(&mut r,FramePacket {composite_all:false,..frame});
+    let mut fresh=WgpuRasterizer::new_native_headless(changed.composition().color).unwrap();
+    submit_published(&mut fresh,frame);
+    assert!(crate::test_support::max_error(&display_pixels(&r),&display_pixels(&fresh))<1e-5,"the whole new revision is shown once its last cell is ready");
+}
+
+#[test]
+fn a_refused_display_window_sleeps_until_its_room_returns_instead_of_spinning() {
+    use crate::frame_demand::Outstanding;
+    let extent=[1024,512];
+    let doc=document_at(extent);
+    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    r.set_preparation_wake(Arc::new(||{}));
+    let mut frame=packet(doc.scene(),extent);frame.view.document_to_surface=[0.5,0.,0.,0.5,0.,0.];
+    r.scene_tiers.windows.update_limit(0);
+    assert!(settle_to_wait(&mut r,frame)>0);
+    assert!(r.scale_display.as_ref().is_some_and(|cache|cache.pixels.root().is_none()),"the composition window does not fit");
+    assert!(!r.outstanding_terms().contains(&("display",Outstanding::Runnable)),"a refused window sleeps on its room: {:?}",r.outstanding_terms());
+    r.scene_tiers.windows.update_limit(u64::MAX);
+    assert!(r.next_frame()==layer_render::FrameDemand::Work,"returned room resumes the refused window");
     submit_published(&mut r,FramePacket {composite_all:false,..frame});
 }
 

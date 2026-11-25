@@ -2270,6 +2270,119 @@ fn demand_the_first_decode_above_more_recent_lower_class_ones(r: &mut WgpuRaster
 }
 
 #[test]
+fn a_streamed_lookahead_decode_queues_behind_a_contact_decode_requested_after_it() {
+    use crate::residency::Class;
+    let source = decoded_source(2);
+    let mut r = decoded_renderer(&source);
+    let declared = |r: &WgpuRasterizer, x: u32| {let mut inputs = scene::sources::Inputs::default();inputs.image(&source, tile(x), r.document_color().space);inputs};
+    let lookahead = declared(&r, 0).acquire_in(&r, Class::Fallback, &Default::default()).unwrap();
+    assert!(!lookahead.prepare(&mut r).unwrap(), "the lookahead step's decode is still outstanding");
+    let contact = declared(&r, 1).acquire(&r, Class::Authored).unwrap();
+    assert!(!contact.prepare(&mut r).unwrap(), "the contact's decode is still outstanding");
+    let queue = r.image_decode_queue(r.document_color().space).unwrap();
+    let classes = [0, 1].map(|x| queue.awaits_image(&source, tile(x)));
+    assert_eq!(classes, [Some(Class::Fallback), Some(Class::Authored)], "a stream's lookahead decode is requested at the stream's class, below the contact's");
+}
+
+#[test]
+fn a_step_that_reads_its_cohort_slot_is_not_promised_that_slot_for_its_missing_tile() {
+    use crate::residency::Class;
+    let layers = 16;
+    let source = decoded_source(layers + 1);
+    let mut r = decoded_renderer(&source);
+    for x in 0..layers { decode_at(&mut r, &source, x, Class::Visible); }
+    assert_eq!(r.source_tiles.borrow().live_arrays(), 1, "the fixture fills one source array");
+    let declared = |r: &WgpuRasterizer, tiles: &[u32]| {let mut inputs = scene::sources::Inputs::default();for x in tiles {inputs.image(&source, tile(*x), r.document_color().space);}inputs};
+    let mut cohort = scene::sources::Cohort::default();
+    let held = declared(&r, &[0]).acquire_in(&r, Class::Visible, &cohort).unwrap();
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    cohort.read(&held, &encoder.submission());
+    drop(held);encoder.submit(&r.queue);complete(&r);
+    let step = declared(&r, &[0, layers]);
+    let promised = {let cache = r.source_tiles.borrow();step.uncovered_bytes(&cache, &mut cohort.spare_credit(&cache, [&step].into_iter()))};
+    let acquired = step.acquire_in(&r, Class::Visible, &cohort).unwrap();
+    let created = r.source_tiles.borrow().live_arrays() - 1;
+    assert!(created * scene::sources::ARRAY_BYTES <= promised,
+        "the step's own read pins the cohort slot, so its missing tile's {created} new array(s) must be promised, not {promised} bytes");
+    drop(acquired);
+}
+
+#[test]
+fn a_refused_stream_leaves_no_pin_on_the_slots_it_prepared_but_never_read() {
+    use crate::residency::Class;
+    let source = decoded_source(2);
+    let r = decoded_renderer(&source);
+    let cohort = scene::sources::Cohort::default();
+    let before = r.source_tiles.borrow().pinned_bytes();
+    let mut inputs = scene::sources::Inputs::default();
+    inputs.image(&source, tile(0), r.document_color().space);
+    let prepared = inputs.acquire_in(&r, Class::Visible, &cohort).unwrap();
+    assert!(r.source_tiles.borrow().pinned_bytes() > before, "the stream pins the slot it prepared");
+    drop(prepared);
+    assert_eq!(r.source_tiles.borrow().pinned_bytes(), before, "the view keeps no pin on a slot its refused stream never read");
+}
+
+fn photo_document(source: &Arc<layer_core::color::source::SourceImage>) -> (layer_core::Document, layer_core::PaintBase) {
+    let mut doc = layer_core::Document::new(layer_core::PortableId::random(), source.extent[0], source.extent[1], layer_core::DocumentNames { paint: "Photo".into(), paper: "Paper".into() });
+    let target = doc.artwork.paint.iter().next().unwrap().0;
+    let base = layer_core::PaintBase::new(source.clone().into());
+    doc.artwork.paint.get_mut(target).unwrap().base = Some(base.clone());
+    (layer_core::Document::from_artwork(doc.artwork).unwrap(), base)
+}
+
+fn queued_decodes(r: &mut WgpuRasterizer, base: &layer_core::PaintBase) -> Vec<crate::residency::Class> {
+    let queue = r.image_decode_queue(r.document_color().space).unwrap();
+    (0..16).filter_map(|x| queue.awaits_image(base.image.storage(), [x, 0])).collect()
+}
+
+#[test]
+fn a_fit_cell_the_preview_admits_streams_its_decodes_at_the_view_class_once_the_view_joins() {
+    use crate::residency::Class;
+    let source = decoded_source(16);
+    let (doc, base) = photo_document(&source);
+    let mut r = decoded_renderer(&source);
+    let queued = (0..120).find_map(|_| {
+        crate::test_support::submit_ready(&mut r, fit_view(&doc, 1024)).unwrap();
+        let queued = queued_decodes(&mut r, &base);
+        (!queued.is_empty()).then_some(queued)
+    }).unwrap_or_default();
+    assert!(queued.iter().any(|class| *class <= Class::Visible) && !queued.iter().any(|class| matches!(class, Class::Fallback | Class::Navigator)),
+        "the Preview admits a Fit cell at Fallback and the View joins it, so the cell's owed decodes run at Visible: {queued:?}");
+}
+
+#[test]
+fn a_view_cell_decodes_ahead_at_prefetch_only_while_no_stroke_decode_waits() {
+    use crate::residency::Class;
+    let source = decoded_source(16);
+    let (doc, base) = photo_document(&source);
+    let mut r = decoded_renderer(&source);
+    let held = layer_core::color::source::rgba8_source([PAGE_SIZE; 2], |_, _| [255, 128, 0, 255]);
+    let mut artwork = layer_core::authored::Artwork::new([PAGE_SIZE; 2]).unwrap();
+    let (_, layer_core::authored::SourceTarget::Paint(owner)) = crate::test_support::add_paint(&mut artwork, "Stroke source", [PAGE_SIZE; 2]) else { unreachable!() };
+    artwork.paint.get_mut(owner).unwrap().base = Some(layer_core::PaintBase::new(held.clone().into()));
+    let store = crate::test_support::GatedStore::new(&layer_core::Editor::new(layer_core::Document::from_artwork(artwork).unwrap()).retained_tiles(), false);
+    let mut stroke = scene::sources::Inputs::default();
+    stroke.image(&held, [0, 0], r.document_color().space);
+    let stroke = stroke.acquire(&r, Class::Authored).unwrap();
+    assert!(!stroke.prepare(&mut r).unwrap(), "the stroke's decode waits on its gated read");
+    store.gate.entered();
+    let owed = (0..120).find_map(|_| {
+        crate::test_support::submit_ready(&mut r, fit_view(&doc, 1024)).unwrap();
+        let queued = queued_decodes(&mut r, &base);
+        (!queued.is_empty()).then_some(queued)
+    }).unwrap_or_default();
+    assert!(!owed.is_empty() && !owed.contains(&Class::Prefetch), "while the stroke's decode waits the view requests only its owed steps: {owed:?}");
+    store.gate.release();
+    let ahead = (0..120).find_map(|_| {
+        crate::test_support::submit_ready(&mut r, fit_view(&doc, 1024)).unwrap();
+        let queued = queued_decodes(&mut r, &base);
+        queued.contains(&Class::Prefetch).then_some(queued)
+    });
+    assert!(ahead.is_some(), "once the stroke's decode is delivered the view decodes its next steps ahead at Prefetch, below every owed decode");
+    drop(stroke);
+}
+
+#[test]
 fn a_demanded_decoded_slot_survives_a_grant_shrink_while_undemanded_ones_go_first() {
     let doc = document();
     let source = decoded_source(24);
@@ -2713,23 +2826,46 @@ fn tablet_renderer(color:layer_core::color::DocumentColor)->WgpuRasterizer {
         MemoryBudget::with_facts(MemoryFacts {host_default_bytes:Some(1<<30),override_bytes:Some(1<<30),..Default::default()})).unwrap()
 }
 
-fn tablet_open(doc:&layer_core::Document,size:[u32;2],scale:f32)->(WgpuRasterizer,u64) {
+#[test]
+fn a_gigapixel_fit_on_a_tablet_budget_selects_the_finest_level_whose_window_fits() {
+    let side=131_072u32;
+    let mut doc=layer_core::Document::new(layer_core::PortableId::random(),side,side,layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+    let root=doc.artwork.root;
+    doc.artwork.compositions.get_mut(root).unwrap().color.depth=layer_core::color::SampleDepth::F32;
+    let r=tablet_renderer(doc.composition().color);
+    assert!(r.device.limits().max_texture_dimension_2d>=8192,"the level-4 root passes the dimension check");
+    let mut frame=packet(doc.scene(),[side;2]);
+    frame.view.width_px=1024;frame.view.height_px=1024;frame.view.document_to_surface=[1./128.,0.,0.,1./128.,0.,0.];
+    let request=crate::scene::scale::request(&r,frame).unwrap();
+    let bytes=|level:u32|[level,level+1].map(|level|u64::from(side>>level).pow(2)*16).into_iter().sum::<u64>();
+    let limit=r.memory.display_limit();
+    assert!(bytes(4)>limit,"the level-4 root and next exceed the tablet's display room of {limit} bytes");
+    assert!(request.plan.level>4 && request.plan.level<=7 && bytes(request.plan.level)<=limit && bytes(request.plan.level-1)>limit,
+        "Fit selects the finest legal level whose root and next fit: level {} on {limit} bytes",request.plan.level);
+}
+
+fn tablet_open(doc:&layer_core::Document,size:[u32;2],scale:f32,mut observe:impl FnMut(&WgpuRasterizer))->(WgpuRasterizer,crate::test_support::PassCounts,u64) {
     let extent=doc.composition().size;
     let mut r=tablet_renderer(doc.composition().color);
     let mut frame=packet(doc.scene(),extent);frame.view.width_px=size[0];frame.view.height_px=size[1];
     frame.view.document_to_surface=[scale,0.,0.,scale,size[0] as f32/2.-scale*extent[0] as f32/2.,size[1] as f32/2.-scale*extent[1] as f32/2.];
+    crate::test_support::count_source_preparations();
     let counts=crate::test_support::PassCounts::snapshot();
-    settle_observing(&mut r,frame,|_|{});
-    let attempts=crate::test_support::PassCounts::snapshot().delta(counts).unit_acceptances;
-    (r,attempts)
+    let mut frames=0;
+    settle_observing(&mut r,frame,|r|{frames+=1;observe(r);});
+    (r,crate::test_support::PassCounts::snapshot().delta(counts),frames)
 }
 
 #[test]
-fn a_tablet_budget_cold_open_admits_each_exact_unit_once_and_decodes_each_present_tile_once() {
+fn a_tablet_budget_cold_open_at_fit_grants_each_cell_once_and_writes_each_present_tile_once() {
     let doc=layered_raster_document(28,16);
-    let (r,attempts)=tablet_open(&doc,[1366;2],1./3.);
-    let (units,present)=(16*16,28*16*16);
-    assert!(attempts<=units+8,"{attempts} acceptance attempts for {units} exact units; an admitted unit keeps its inputs and a refused one waits for room");
+    let (r,counts,frames)=tablet_open(&doc,[1366;2],1./3.,|_|{});
+    assert_eq!(r.scale_display.as_ref().unwrap().plan.level,1,"a third of the 4096 x 4096 drawing opens on level 1");
+    let (cells,present)=(8*8,28*16*16);
+    let [written,distinct]=crate::test_support::source_preparations();
+    assert_eq!([counts.unit_admissions,written,distinct],[cells,present,present],
+        "each of the {cells} level-1 cells is granted once and writes each of its 112 layer tiles once, in {frames} frames: {counts:?}");
+    assert!(counts.unit_acceptances<=cells+8,"{} parent attempts for {cells} grants in {frames} frames; each cell reuses the decoded slots and layer pages of the cells before it instead of asking for fresh room: {counts:?}",counts.unit_acceptances);
     let decodes=r.source_tiles.borrow().misses;
     assert!(decodes<=present+present/50,"{decodes} decodes of {present} present tiles");
 }
@@ -2737,11 +2873,106 @@ fn a_tablet_budget_cold_open_admits_each_exact_unit_once_and_decodes_each_presen
 #[test]
 fn a_tablet_budget_zoomed_cold_open_decodes_a_tile_at_most_once_for_the_overview_and_once_for_the_view() {
     let doc=layered_raster_document(28,12);
-    let (r,_)=tablet_open(&doc,[1920,1200],1.);
+    let (r,..)=tablet_open(&doc,[1920,1200],1.,|r| {r.source_tiles.borrow().release_ready();r.source_tiles.borrow_mut().retire_evicted();});
     let view=PixelRect::new(1536-960,1536-600,1536+960,1536+600);
     let visible=28*page_coordinates(view).count() as u64;
     let decodes=r.source_tiles.borrow().misses;
     assert!(decodes<=28*12*12+visible,"{decodes} decodes: the overview reads each of {} present tiles and the view its {visible} visible tiles at most once more",28*12*12);
+}
+
+#[test]
+fn a_far_edge_panorama_stroke_keeps_its_source_arrays_and_settles_within_870_ticks_after_pen_up() {
+    use layer_core::color::{SampleDepth,source::{SourceChannels,SourceImage,SourceInterpretation}};
+    use layer_core::raster::{TILE_SIZE,TileBlob};
+    use layer_engine::{CanvasEngine,PenEvent,PenPhase,SampleFlags,ToolKind,ViewTransform,input_queue};
+    const VIEW:[u32;2]=[2880,1800];
+    const SIZE:[u32;2]=[65536,16384];
+    const EDGE:[f32;2]=[0.985,0.5];
+    const FRAME_NS:u64=8_333_333;
+    const PEN_NS:u64=5_000_000;
+    const SETTLE:u64=870;
+    let budget=MemoryBudget::with_facts(MemoryFacts {host_default_bytes:Some(1<<30),override_bytes:Some(1<<30),tablet:true,..Default::default()});
+    let interpretation=SourceInterpretation {channels:SourceChannels::Rgb,depth:SampleDepth::U8,profile:Default::default(),profile_assumed:false};
+    let descriptor=interpretation.descriptor();
+    let coordinates=(0..SIZE[1]/TILE_SIZE).flat_map(|y|(0..SIZE[0]/TILE_SIZE).map(move|x|[x,y])).collect::<Vec<_>>();
+    let workers=std::thread::available_parallelism().map_or(4,usize::from);
+    let tiles=std::thread::scope(|scope| coordinates.chunks(coordinates.len().div_ceil(workers)).map(|chunk|scope.spawn(move|| {
+        let mut tile:Vec<u8>=(0..TILE_SIZE).flat_map(|y|(0..TILE_SIZE).flat_map(move|x|[64+(x/8) as u8,144-(y/8) as u8,106+((x+y)/16) as u8])).collect();
+        chunk.iter().map(|&[x,y]| {tile[..3].copy_from_slice(&[x as u8,y as u8,128]);([x,y],Arc::new(TileBlob::encode(descriptor,&tile).unwrap()))}).collect::<Vec<_>>()
+    })).collect::<Vec<_>>().into_iter().flat_map(|worker|worker.join().unwrap()).collect());
+    let image=Arc::new(SourceImage {extent:SIZE,resolution:None,interpretation,tiles});
+    image.validate().unwrap();
+    let mut doc=layer_core::Document::new(layer_core::PortableId::random(),SIZE[0],SIZE[1],layer_core::DocumentNames {paint:"Panorama".into(),paper:"Paper".into()});
+    let target=doc.artwork.paint.iter().next().unwrap().0;
+    doc.artwork.paint.get_mut(target).unwrap().base=Some(layer_core::PaintBase::new(image.into()));
+    let working=doc.working.clone();
+    let mut doc=layer_core::Document::from_artwork(doc.artwork).unwrap().with_memory(layer_core::DocumentMemory::new(budget.clone(),None));
+    doc.working=working;doc.initialize_memory();budget.flush_reports();
+    let mut brush=layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);brush.diameter=100.;
+    let mut gpu=renderer_in_budget(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(1<<30),unified:true,..Default::default()},budget).unwrap();
+    gpu.prepare_startup(&doc,&brush,false).unwrap();gpu.finish_startup_catalog();
+    crate::test_support::wait_startup(&mut gpu,std::time::Instant::now()+std::time::Duration::from_secs(60),|progress|progress.complete,format_args!("startup"));
+    let camera=|scale:f32,anchor:[f32;2],pan:[f32;2],revision:u64| {
+        let position=[0,1].map(|axis|VIEW[axis] as f32/2.-anchor[axis]*SIZE[axis] as f32*scale+pan[axis]);
+        (layer_render::ViewState {width_px:VIEW[0],height_px:VIEW[1],document_to_surface:[scale,0.,0.,scale,position[0],position[1]]},
+            ViewTransform {revision,surface_to_document:[1./scale,0.,0.,1./scale,-position[0]/scale,-position[1]/scale]})
+    };
+    let fit=VIEW[0] as f32/SIZE[0] as f32;
+    let (view,transform)=camera(fit,[0.5;2],[0.;2],0);
+    let (mut input,consumer)=input_queue(1024);
+    let mut engine=CanvasEngine::new(gpu,doc,consumer,view,transform).unwrap();
+    engine.set_brush(brush).unwrap();
+    let tick=|engine:&mut CanvasEngine<WgpuRasterizer>,clock:&mut u64| {
+        *clock+=FRAME_NS;
+        crate::test_support::pace(engine.backend_mut());
+        engine.backend_mut().poll_startup().unwrap();
+        engine.render_frame_for(*clock,*clock+FRAME_NS).unwrap();
+        crate::test_support::wait_until("the journey's pipelines compile",||match engine.backend().compilation.pending() {0=>Ok(()),pending=>Err(pending)});
+        engine.backend_mut().wait_idle().unwrap();
+        crate::test_support::settle_decodes(engine.backend_mut());
+    };
+    let settled=|engine:&CanvasEngine<WgpuRasterizer>|engine.backend().has_presentable_frame() && engine.backend().settled()
+        && matches!(engine.frame_demand(),layer_render::FrameDemand::Wait) && !engine.has_pending_document_edits() && !engine.has_pending_input() && !engine.has_active_stroke();
+    let drive=|engine:&mut CanvasEngine<WgpuRasterizer>,clock:&mut u64,ticks:u64|(1..=ticks).find(|_|{tick(engine,clock);settled(engine)});
+    let mut clock=0;
+    drive(&mut engine,&mut clock,1440);
+    let mut revision=0;
+    for (scale,anchor,pan,ticks) in [(fit,[0.5;2],[-106.,100.],360),(0.4,EDGE,[0.;2],600),(1.,EDGE,[0.;2],1200)] {
+        revision+=1;let (view,transform)=camera(scale,anchor,pan,revision);engine.set_view(view,transform);
+        drive(&mut engine,&mut clock,ticks);
+    }
+    let mut sequence=0;
+    let mut contact=|engine:&mut CanvasEngine<WgpuRasterizer>,clock:&mut u64,events:u64,stationary:bool| {
+        let (start,mut sent)=(*clock,0);
+        while sent<events {
+            while sent<((*clock-start)/PEN_NS+1).min(events) {
+                let angle=std::f32::consts::TAU*(sent*PEN_NS) as f32/1e9;
+                let phase=if sent==0 {PenPhase::Down}else if sent==events-1 {PenPhase::Up}else {PenPhase::Move};
+                let offset=if stationary {[0.;2]}else {[VIEW[0] as f32*0.3*angle.cos(),VIEW[1] as f32*0.2*angle.sin()]};
+                let pressure=if sent==events-1 {0.}else if stationary {1.}else {0.625-0.375*angle.cos()};
+                sequence+=1;
+                input.push(PenEvent {device_id:1,sequence,timestamp_ns:start+sent*PEN_NS,view_revision:revision,
+                    surface_position:layer_core::Point {x:VIEW[0] as f32/2.+offset[0],y:VIEW[1] as f32/2.+offset[1]},pressure,
+                    tilt_radians:[0.;2],twist_radians:0.,distance:0.,phase,tool:ToolKind::Pen,flags:SampleFlags::PRIMARY}).unwrap();
+                sent+=1;
+            }
+            tick(engine,clock);
+        }
+    };
+    let blank=engine.document().revision;
+    contact(&mut engine,&mut clock,21,true);
+    for _ in 0..960 {if engine.document().revision>blank {break;}tick(&mut engine,&mut clock);}
+    let primed=engine.document().revision;
+    assert!(primed>blank,"the priming dab commits");
+    contact(&mut engine,&mut clock,251,false);
+    let (created,live)=(crate::test_support::source_arrays(),engine.backend().source_tiles.borrow().live_arrays());
+    let ticks=drive(&mut engine,&mut clock,SETTLE);
+    let creates=crate::test_support::source_arrays()-created;
+    let frees=live+creates-engine.backend().source_tiles.borrow().live_arrays();
+    assert!(engine.document().revision>primed,"the stroke commits");
+    let arrays=(2*crate::scene::sources::ARRAY_BYTES+2*40*crate::scene::sources::NORMALIZED_PAGE_BYTES).div_ceil(crate::scene::sources::ARRAY_BYTES)+1;
+    assert!(ticks.is_some() && creates<=arrays,"after pen-up the panorama settled at tick {ticks:?} of {SETTLE} and created {creates} and freed {frees} 16 MiB source arrays from {live} live; \
+        its producers hold a working set of at most {arrays} arrays instead of freeing and recreating them per region");
 }
 
 fn single_layer_document(tiles:u32)->layer_core::Document {

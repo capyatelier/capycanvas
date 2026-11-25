@@ -18,6 +18,7 @@ pub(crate) struct PassCounts {
     pub display_walks:u64,
     pub preview_revision_replays:u64,
     pub unit_acceptances:u64,
+    pub unit_admissions:u64,
     pub projected_cells:u64,
     pub projected_copies:u64,
     pub composite_commits:u64,
@@ -53,7 +54,6 @@ pub(crate) struct PassCounts {
     pub written_back:u64,
     pub window_reduced_texels:u64,
     pub liquify_dispatches:u64,
-    pub source_admissions:u64,
     pub display_gathers:u64,
     pub binding_visits:u64,
     pub gather_invocations:u64,
@@ -61,7 +61,7 @@ pub(crate) struct PassCounts {
     pub absorbed_texels:u64,
 }
 std::thread_local! {
-    static PASS_COUNTS:std::cell::Cell<PassCounts>=const {std::cell::Cell::new(PassCounts {material_encode_accepts:0,material_neighborhoods:0,material_bind_groups:0,transport_bind_groups:0,total:0,normalizations:0,material_batches:0,source_input_misses:0,raster_output_misses:0,raster_write_defers:0,store_page_visits:0,paint_page_visits:0,display_walks:0,preview_revision_replays:0,unit_acceptances:0,projected_cells:0,projected_copies:0,composite_commits:0,declarations:0,store_gets:0,expected_keys:0,brush_acceptances:0,preview_computations:0,completion_callbacks:0,submissions:0,preview_definitions:0,warm_restore_extra_tiles:0,navigator_checks:0,graph_prepares:0,signature_reads:0,contact_declarations:0,destination_units:0,destination_admissions:0,destination_wait_transitions:0,raster_admissions:0,vector_names:0,grant_encoders:0,report_syncs:0,command_encoders:0,scene_dispatches:0,fold_inputs:0,display_rooms:0,memory_updates:0,object_lookups:0,object_lookup_visits:0,room_scans:0,composed_texels:0,written_back:0,window_reduced_texels:0,liquify_dispatches:0,source_admissions:0,display_gathers:0,binding_visits:0,gather_invocations:0,pinned_walks:0,absorbed_texels:0})};
+    static PASS_COUNTS:std::cell::Cell<PassCounts>=const {std::cell::Cell::new(PassCounts {material_encode_accepts:0,material_neighborhoods:0,material_bind_groups:0,transport_bind_groups:0,total:0,normalizations:0,material_batches:0,source_input_misses:0,raster_output_misses:0,raster_write_defers:0,store_page_visits:0,paint_page_visits:0,display_walks:0,preview_revision_replays:0,unit_acceptances:0,unit_admissions:0,projected_cells:0,projected_copies:0,composite_commits:0,declarations:0,store_gets:0,expected_keys:0,brush_acceptances:0,preview_computations:0,completion_callbacks:0,submissions:0,preview_definitions:0,warm_restore_extra_tiles:0,navigator_checks:0,graph_prepares:0,signature_reads:0,contact_declarations:0,destination_units:0,destination_admissions:0,destination_wait_transitions:0,raster_admissions:0,vector_names:0,grant_encoders:0,report_syncs:0,command_encoders:0,scene_dispatches:0,fold_inputs:0,display_rooms:0,memory_updates:0,object_lookups:0,object_lookup_visits:0,room_scans:0,composed_texels:0,written_back:0,window_reduced_texels:0,liquify_dispatches:0,display_gathers:0,binding_visits:0,gather_invocations:0,pinned_walks:0,absorbed_texels:0})};
 }
 pub(crate) fn destination_wait_changed(previous:Option<&crate::frame_demand::UnitWait>, next:Option<&crate::frame_demand::UnitWait>)->bool {
     use crate::frame_demand::UnitWait;
@@ -123,6 +123,20 @@ pub(crate) fn liquify_writes<T>(run:impl FnOnce()->T)->(T,Vec<LiquifyWrite>) {
     let value=run();
     (value,LIQUIFY_WRITES.with(|writes|writes.borrow_mut().take().map(|(_,writes)|writes).unwrap_or_default()))
 }
+pub(crate) type Composed=(wgpu::Texture,[u32;4]);
+std::thread_local! {static COMPOSITIONS:std::cell::RefCell<Option<Vec<Composed>>>=const {std::cell::RefCell::new(None)};}
+pub(crate) fn record_composition(output:&wgpu::TextureView,values:&[u32;20]) {
+    PassCounts {composed_texels:u64::from(values[2])*u64::from(values[3]),..Default::default()}.record();
+    COMPOSITIONS.with(|written|if let Some(written)=written.borrow_mut().as_mut() {written.push((output.texture().clone(),[values[0],values[1],values[2],values[3]]));});
+}
+pub(crate) fn compositions<T>(run:impl FnOnce()->T)->(T,Vec<Composed>) {
+    COMPOSITIONS.with(|written|*written.borrow_mut()=Some(Vec::new()));
+    let value=run();
+    (value,COMPOSITIONS.with(|written|written.borrow_mut().take().unwrap_or_default()))
+}
+std::thread_local! {static SOURCE_ARRAYS:std::cell::Cell<u64>=const {std::cell::Cell::new(0)};}
+pub(crate) fn record_source_array() {SOURCE_ARRAYS.with(|created|created.set(created.get()+1));}
+pub(crate) fn source_arrays()->u64 {SOURCE_ARRAYS.with(std::cell::Cell::get)}
 type SourcePreparation=(layer_core::SourceTarget,u32,[u32;2]);
 std::thread_local! {static SOURCE_PREPARATIONS:std::cell::RefCell<Option<crate::IdMap<SourcePreparation,u32>>>=const {std::cell::RefCell::new(None)};}
 pub(crate) fn record_source_preparation(page:SourcePreparation) {SOURCE_PREPARATIONS.with(|pages|if let Some(pages)=pages.borrow_mut().as_mut() {*pages.entry(page).or_default()+=1;});}
@@ -142,10 +156,10 @@ impl PassCounts {
             material_batches:self.material_batches-before.material_batches,source_input_misses:self.source_input_misses-before.source_input_misses,
             raster_output_misses:self.raster_output_misses-before.raster_output_misses,raster_write_defers:self.raster_write_defers-before.raster_write_defers,
             store_page_visits:self.store_page_visits-before.store_page_visits,paint_page_visits:self.paint_page_visits-before.paint_page_visits,display_walks:self.display_walks-before.display_walks,
-            preview_revision_replays:self.preview_revision_replays-before.preview_revision_replays,unit_acceptances:self.unit_acceptances-before.unit_acceptances,
+            preview_revision_replays:self.preview_revision_replays-before.preview_revision_replays,unit_acceptances:self.unit_acceptances-before.unit_acceptances,unit_admissions:self.unit_admissions-before.unit_admissions,
             projected_cells:self.projected_cells-before.projected_cells,projected_copies:self.projected_copies-before.projected_copies,composite_commits:self.composite_commits-before.composite_commits,
             declarations:self.declarations-before.declarations,store_gets:self.store_gets-before.store_gets,expected_keys:self.expected_keys-before.expected_keys,
-            brush_acceptances:self.brush_acceptances-before.brush_acceptances,preview_computations:self.preview_computations-before.preview_computations,completion_callbacks:self.completion_callbacks-before.completion_callbacks,submissions:self.submissions-before.submissions,preview_definitions:self.preview_definitions-before.preview_definitions,warm_restore_extra_tiles:self.warm_restore_extra_tiles-before.warm_restore_extra_tiles,navigator_checks:self.navigator_checks-before.navigator_checks,graph_prepares:self.graph_prepares-before.graph_prepares,signature_reads:self.signature_reads-before.signature_reads,contact_declarations:self.contact_declarations-before.contact_declarations,destination_units:self.destination_units-before.destination_units,destination_admissions:self.destination_admissions-before.destination_admissions,destination_wait_transitions:self.destination_wait_transitions-before.destination_wait_transitions,raster_admissions:self.raster_admissions-before.raster_admissions,vector_names:self.vector_names-before.vector_names,grant_encoders:self.grant_encoders-before.grant_encoders,report_syncs:self.report_syncs-before.report_syncs,command_encoders:self.command_encoders-before.command_encoders,scene_dispatches:self.scene_dispatches-before.scene_dispatches,fold_inputs:self.fold_inputs-before.fold_inputs,display_rooms:self.display_rooms-before.display_rooms,memory_updates:self.memory_updates-before.memory_updates,object_lookups:self.object_lookups-before.object_lookups,object_lookup_visits:self.object_lookup_visits-before.object_lookup_visits,room_scans:self.room_scans-before.room_scans,composed_texels:self.composed_texels-before.composed_texels,written_back:self.written_back-before.written_back,window_reduced_texels:self.window_reduced_texels-before.window_reduced_texels,liquify_dispatches:self.liquify_dispatches-before.liquify_dispatches,source_admissions:self.source_admissions-before.source_admissions,display_gathers:self.display_gathers-before.display_gathers,binding_visits:self.binding_visits-before.binding_visits,gather_invocations:self.gather_invocations-before.gather_invocations,pinned_walks:self.pinned_walks-before.pinned_walks,absorbed_texels:self.absorbed_texels-before.absorbed_texels}
+            brush_acceptances:self.brush_acceptances-before.brush_acceptances,preview_computations:self.preview_computations-before.preview_computations,completion_callbacks:self.completion_callbacks-before.completion_callbacks,submissions:self.submissions-before.submissions,preview_definitions:self.preview_definitions-before.preview_definitions,warm_restore_extra_tiles:self.warm_restore_extra_tiles-before.warm_restore_extra_tiles,navigator_checks:self.navigator_checks-before.navigator_checks,graph_prepares:self.graph_prepares-before.graph_prepares,signature_reads:self.signature_reads-before.signature_reads,contact_declarations:self.contact_declarations-before.contact_declarations,destination_units:self.destination_units-before.destination_units,destination_admissions:self.destination_admissions-before.destination_admissions,destination_wait_transitions:self.destination_wait_transitions-before.destination_wait_transitions,raster_admissions:self.raster_admissions-before.raster_admissions,vector_names:self.vector_names-before.vector_names,grant_encoders:self.grant_encoders-before.grant_encoders,report_syncs:self.report_syncs-before.report_syncs,command_encoders:self.command_encoders-before.command_encoders,scene_dispatches:self.scene_dispatches-before.scene_dispatches,fold_inputs:self.fold_inputs-before.fold_inputs,display_rooms:self.display_rooms-before.display_rooms,memory_updates:self.memory_updates-before.memory_updates,object_lookups:self.object_lookups-before.object_lookups,object_lookup_visits:self.object_lookup_visits-before.object_lookup_visits,room_scans:self.room_scans-before.room_scans,composed_texels:self.composed_texels-before.composed_texels,written_back:self.written_back-before.written_back,window_reduced_texels:self.window_reduced_texels-before.window_reduced_texels,liquify_dispatches:self.liquify_dispatches-before.liquify_dispatches,display_gathers:self.display_gathers-before.display_gathers,binding_visits:self.binding_visits-before.binding_visits,gather_invocations:self.gather_invocations-before.gather_invocations,pinned_walks:self.pinned_walks-before.pinned_walks,absorbed_texels:self.absorbed_texels-before.absorbed_texels}
     }
     pub fn record(self) {
         PASS_COUNTS.with(|counts| {
@@ -154,10 +168,10 @@ impl PassCounts {
                 material_batches:before.material_batches+self.material_batches,source_input_misses:before.source_input_misses+self.source_input_misses,
                 raster_output_misses:before.raster_output_misses+self.raster_output_misses,raster_write_defers:before.raster_write_defers+self.raster_write_defers,
                 store_page_visits:before.store_page_visits+self.store_page_visits,paint_page_visits:before.paint_page_visits+self.paint_page_visits,display_walks:before.display_walks+self.display_walks,
-                preview_revision_replays:before.preview_revision_replays+self.preview_revision_replays,unit_acceptances:before.unit_acceptances+self.unit_acceptances,
+                preview_revision_replays:before.preview_revision_replays+self.preview_revision_replays,unit_acceptances:before.unit_acceptances+self.unit_acceptances,unit_admissions:before.unit_admissions+self.unit_admissions,
                 projected_cells:before.projected_cells+self.projected_cells,projected_copies:before.projected_copies+self.projected_copies,composite_commits:before.composite_commits+self.composite_commits,
                 declarations:before.declarations+self.declarations,store_gets:before.store_gets+self.store_gets,expected_keys:before.expected_keys+self.expected_keys,
-                brush_acceptances:before.brush_acceptances+self.brush_acceptances,preview_computations:before.preview_computations+self.preview_computations,completion_callbacks:before.completion_callbacks+self.completion_callbacks,submissions:before.submissions+self.submissions,preview_definitions:before.preview_definitions+self.preview_definitions,warm_restore_extra_tiles:before.warm_restore_extra_tiles+self.warm_restore_extra_tiles,navigator_checks:before.navigator_checks+self.navigator_checks,graph_prepares:before.graph_prepares+self.graph_prepares,signature_reads:before.signature_reads+self.signature_reads,contact_declarations:before.contact_declarations+self.contact_declarations,destination_units:before.destination_units+self.destination_units,destination_admissions:before.destination_admissions+self.destination_admissions,destination_wait_transitions:before.destination_wait_transitions+self.destination_wait_transitions,raster_admissions:before.raster_admissions+self.raster_admissions,vector_names:before.vector_names+self.vector_names,grant_encoders:before.grant_encoders+self.grant_encoders,report_syncs:before.report_syncs+self.report_syncs,command_encoders:before.command_encoders+self.command_encoders,scene_dispatches:before.scene_dispatches+self.scene_dispatches,fold_inputs:before.fold_inputs+self.fold_inputs,display_rooms:before.display_rooms+self.display_rooms,memory_updates:before.memory_updates+self.memory_updates,object_lookups:before.object_lookups+self.object_lookups,object_lookup_visits:before.object_lookup_visits+self.object_lookup_visits,room_scans:before.room_scans+self.room_scans,composed_texels:before.composed_texels+self.composed_texels,written_back:before.written_back+self.written_back,window_reduced_texels:before.window_reduced_texels+self.window_reduced_texels,liquify_dispatches:before.liquify_dispatches+self.liquify_dispatches,source_admissions:before.source_admissions+self.source_admissions,display_gathers:before.display_gathers+self.display_gathers,binding_visits:before.binding_visits+self.binding_visits,gather_invocations:before.gather_invocations+self.gather_invocations,pinned_walks:before.pinned_walks+self.pinned_walks,absorbed_texels:before.absorbed_texels+self.absorbed_texels});
+                brush_acceptances:before.brush_acceptances+self.brush_acceptances,preview_computations:before.preview_computations+self.preview_computations,completion_callbacks:before.completion_callbacks+self.completion_callbacks,submissions:before.submissions+self.submissions,preview_definitions:before.preview_definitions+self.preview_definitions,warm_restore_extra_tiles:before.warm_restore_extra_tiles+self.warm_restore_extra_tiles,navigator_checks:before.navigator_checks+self.navigator_checks,graph_prepares:before.graph_prepares+self.graph_prepares,signature_reads:before.signature_reads+self.signature_reads,contact_declarations:before.contact_declarations+self.contact_declarations,destination_units:before.destination_units+self.destination_units,destination_admissions:before.destination_admissions+self.destination_admissions,destination_wait_transitions:before.destination_wait_transitions+self.destination_wait_transitions,raster_admissions:before.raster_admissions+self.raster_admissions,vector_names:before.vector_names+self.vector_names,grant_encoders:before.grant_encoders+self.grant_encoders,report_syncs:before.report_syncs+self.report_syncs,command_encoders:before.command_encoders+self.command_encoders,scene_dispatches:before.scene_dispatches+self.scene_dispatches,fold_inputs:before.fold_inputs+self.fold_inputs,display_rooms:before.display_rooms+self.display_rooms,memory_updates:before.memory_updates+self.memory_updates,object_lookups:before.object_lookups+self.object_lookups,object_lookup_visits:before.object_lookup_visits+self.object_lookup_visits,room_scans:before.room_scans+self.room_scans,composed_texels:before.composed_texels+self.composed_texels,written_back:before.written_back+self.written_back,window_reduced_texels:before.window_reduced_texels+self.window_reduced_texels,liquify_dispatches:before.liquify_dispatches+self.liquify_dispatches,display_gathers:before.display_gathers+self.display_gathers,binding_visits:before.binding_visits+self.binding_visits,gather_invocations:before.gather_invocations+self.gather_invocations,pinned_walks:before.pinned_walks+self.pinned_walks,absorbed_texels:before.absorbed_texels+self.absorbed_texels});
         });
     }
 }
@@ -993,6 +1007,113 @@ pub(crate) fn float_pixels(r: &WgpuRasterizer, texture: impl Into<crate::source_
         bytes.as_chunks::<8>().0.iter().map(|pixel|std::array::from_fn(|channel|
             layer_core::color::f16::from_bits(u16::from_le_bytes(pixel[channel*2..channel*2+2].try_into().unwrap())).to_f32())).collect()
     } else {floats(&bytes)}
+}
+
+pub(crate) fn reduced(pixels:&[[f64;4]],extent:[u32;2],level:u32)->Vec<[f64;4]> {
+    let side=1u32<<level;let size=extent.map(|n|n.div_ceil(side));
+    (0..size[1]).flat_map(|y|(0..size[0]).map(move |x|[x,y])).map(|[x,y]| {
+        let (columns,rows)=(x*side..((x+1)*side).min(extent[0]),y*side..((y+1)*side).min(extent[1]));
+        let count=(columns.len()*rows.len()) as f64;
+        let mut sum=[0.;4];
+        for row in rows {for column in columns.clone() {let pixel=pixels[(row*extent[0]+column) as usize];for c in 0..4 {sum[c]+=pixel[c]/count;}}}
+        sum
+    }).collect()
+}
+
+pub(crate) fn settled_pixels(r:&mut WgpuRasterizer,document:&layer_core::Document)->Vec<[f64;4]> {
+    submit_settled(r,FramePacket {reset_layers:true,blend_space:document.composition().blend,..packet(document.scene(),document.composition().size)});
+    float_pixels(r,document_texture(r)).into_iter().map(|pixel|pixel.map(f64::from)).collect()
+}
+
+pub(crate) fn isolated(r:&mut WgpuRasterizer,document:&layer_core::Document,owner:OccurrenceHandle)->Vec<[f64;4]> {
+    let scene=document.scene();
+    let lineage:Vec<_>=std::iter::successors(Some(owner),|handle|scene.parent(*handle)).collect();
+    let mut artwork=document.artwork.clone();
+    for handle in scene.order() {
+        let occurrence=artwork.occurrences.get_mut(*handle).unwrap();
+        occurrence.visible=lineage.contains(handle);
+        if occurrence.visible {
+            occurrence.opacity=1.;occurrence.blend=layer_core::LayerBlend::Normal;occurrence.attachment=layer_core::Attachment::None;
+            if let Some(mask)=&mut occurrence.mask {mask.enabled=false;}
+        }
+    }
+    settled_pixels(r,&layer_core::Document::from_artwork(artwork).unwrap())
+}
+
+fn mask_coverage(r:&mut WgpuRasterizer,document:&layer_core::Document,owner:OccurrenceHandle)->Vec<[f64;4]> {
+    use layer_core::authored::*;
+    let (scene,composition)=(document.scene(),document.composition());
+    let mask=scene.occurrence(owner).and_then(|occurrence|occurrence.mask.as_ref()).unwrap();
+    let mut artwork=document.artwork.clone();
+    for handle in scene.children(None) {artwork.occurrences.get_mut(*handle).unwrap().visible=false;}
+    let white=depth_source(composition.size,layer_core::color::SampleDepth::U8,composition.color.space,usize::MAX,|_,_|[1.;4]);
+    let paint=artwork.paint.insert(PortableId::random(),PaintSource {color_mode:Default::default(),domain:composition.size,raster:Default::default(),
+        base:Some(PaintBase::new(white.into())),operations:Arc::default()}).unwrap();
+    let source=artwork.coverage.insert(PortableId::random(),scene.coverage(mask.source).unwrap().clone()).unwrap();
+    let mut opaque=Occurrence::new(OccurrenceContent::Paint(paint),"Coverage");
+    opaque.mask=Some(MaskUse {source,enabled:true,linked:false,inverted:mask.inverted,offset:scene.mask_origin(owner).unwrap()});
+    let opaque=artwork.occurrences.insert(PortableId::random(),opaque).unwrap();
+    artwork.stacks.get_mut(composition.result).unwrap().entries.insert(0,opaque);
+    settled_pixels(r,&layer_core::Document::from_artwork(artwork).unwrap())
+}
+
+fn straight_linear(premultiplied:[f64;4],space:layer_core::BlendSpace,rgb:layer_core::color::RgbSpace)->[f32;4] {
+    let alpha=premultiplied[3];
+    if alpha<=0. {return [0.;4];}
+    let held=[0,1,2].map(|c|premultiplied[c]/alpha);
+    let linear=if space==layer_core::BlendSpace::Perceptual {held.map(|value|rgb.decode(value))}else {held};
+    [linear[0] as f32,linear[1] as f32,linear[2] as f32,alpha as f32]
+}
+
+fn coverage_raster(color:layer_core::color::DocumentColor,extent:[u32;2],coverage:&[[f64;4]])->layer_core::raster::RasterRevision {
+    use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey,TILE_SIZE};
+    let descriptor=color.coverage_descriptor();
+    assert_eq!(descriptor.bits_per_channel,16);
+    RasterRevision::backed(RasterData {tiles:page_coordinates(PixelRect::full(extent)).map(|coordinate| {
+        let bytes:Vec<u8>=(0..TILE_SIZE*TILE_SIZE).flat_map(|i| {
+            let [x,y]=[coordinate[0]*TILE_SIZE+i%TILE_SIZE,coordinate[1]*TILE_SIZE+i/TILE_SIZE];
+            let value=if x<extent[0] && y<extent[1] {coverage[(y*extent[0]+x) as usize][3]}else {0.};
+            ((value.clamp(0.,1.)*65535.).round() as u16).to_le_bytes()
+        }).collect();
+        (TileKey {plane:RasterPlane::Mask,coordinate},RasterTile::backed(TileBlob::encode(descriptor,&bytes).unwrap()))
+    }).collect(),watercolor:None})
+}
+
+pub(crate) fn reduced_twin(document:&layer_core::Document,level:u32)->Vec<[f64;4]> {
+    use layer_core::authored::*;use layer_core::color::{DocumentColor,SampleDepth};
+    let (scene,composition)=(document.scene(),document.composition());
+    let (extent,color,space)=(composition.size,composition.color,composition.blend);
+    let size=extent.map(|side|side.div_ceil(1<<level));
+    let twin=DocumentColor {depth:if color.depth==SampleDepth::U8 {SampleDepth::U16}else {color.depth},..color};
+    let mut exact=WgpuRasterizer::new_native_headless(color).unwrap();exact.test.reference=true;
+    let mut artwork=document.artwork.clone();
+    *artwork.compositions.get_mut(artwork.root).unwrap()=Composition {size,color:twin,..composition.clone()};
+    for &handle in scene.order().iter().filter(|handle|scene.visible(**handle)) {
+        match scene.occurrence(handle).unwrap().content {
+            OccurrenceContent::Paint(paint)=>{
+                let pixels=reduced(&isolated(&mut exact,document,handle),extent,level);
+                let image=depth_source(size,SampleDepth::F32,color.space,usize::MAX,|x,y|straight_linear(pixels[(y*size[0]+x) as usize],space,color.space));
+                *artwork.paint.get_mut(paint).unwrap()=PaintSource {color_mode:Default::default(),domain:size,raster:Default::default(),
+                    base:Some(PaintBase::new(image.into())),operations:Arc::default()};
+            }
+            OccurrenceContent::Stack(_)=>{}
+            OccurrenceContent::Effect(_)=>{
+                let program=scene.effect(handle).unwrap().program;
+                assert!(program.resolution!=layer_core::EffectResolution::Native && !program.uses_spatial_reference() && program.analysis().is_none(),
+                    "the reduced twin evaluates pointwise display-resolution effects, not {}",program.id);
+            }
+            _=>panic!("the reduced twin composes paint, groups and effects"),
+        }
+        let occurrence=artwork.occurrences.get_mut(handle).unwrap();
+        occurrence.offset=[0;2];
+        if let Some(mask)=occurrence.mask.as_mut().filter(|mask|mask.enabled) {
+            let coverage=reduced(&mask_coverage(&mut exact,document,handle),extent,level);
+            *artwork.coverage.get_mut(mask.source).unwrap()=CoverageSource {domain:size,raster:coverage_raster(twin,size,&coverage),default_coverage:0.,operations:Arc::default()};
+            mask.inverted=false;mask.offset=[0;2];
+        }
+    }
+    let mut r=WgpuRasterizer::new_native_headless(twin).unwrap();r.test.reference=true;
+    settled_pixels(&mut r,&layer_core::Document::from_artwork(artwork).unwrap())
 }
 
 pub(crate) fn blend_space_pixels(r:&mut WgpuRasterizer)->Vec<[f32;4]> {

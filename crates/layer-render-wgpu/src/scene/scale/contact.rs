@@ -292,8 +292,8 @@ impl Cache {
         let previous=std::mem::replace(&mut self.stroked,frame.clone());
         self.gesture.is_some() || stroke(packet).zip(previous.zip(frame)).is_some_and(|((_,target),(previous,frame))|frame.contact_continues(&previous,target).is_some())
     }
-    pub(super) fn edit_halves(&self,packet:FramePacket<'_>,budget:&WorkBudget)->Vec<pages::Key> {
-        if !packet.dab_batches.is_empty() || budget.motion || !self.pivot_edited() {Vec::new()}else {self.wanted_halves(self.plan.bounds,packet.view)}
+    pub(super) fn edit_cells(&self,packet:FramePacket<'_>,budget:&WorkBudget)->Vec<PixelRect> {
+        if !packet.dab_batches.is_empty() || budget.motion || !self.pivot_edited() {Vec::new()}else {self.wanted_cells(self.plan.bounds,packet.view)}
     }
     pub(super) fn prepare_edit_sources(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,budget:&mut WorkBudget)
         ->Result<(),GpuRasterError> {
@@ -321,8 +321,8 @@ impl Cache {
         let Some(root)=self.graph.root.clone() else {return Ok(());};
         let tier=self.pages.lock().unwrap().tier();
         let scope=self.stroke_scope(packet,touched,None);
-        if scope.is_empty() || tier.used()>tier.limit() || r.transform_preview.is_some() || r.moving_layer.is_some() || refinement::exact_at_view_level(packet.scene)
-            || root.native_capture(packet.scene,self.plan.level) || !self.contact_ready(&scope)
+        if scope.is_empty() || tier.used()>tier.limit() || r.transform_preview.is_some() || r.moving_layer.is_some() || refinement::objects_or_vectors(packet.scene)
+            || super::cell_plan::Footprint::captures(&root,packet.scene,self.plan.level,false) || !self.contact_ready(&scope)
             || packet.scene.order().iter().any(|handle|packet.scene.effect(*handle).is_some_and(|effect|effect.animated())) {return Ok(());}
         let (Some(window),Some(frame))=(self.pixels.root().map(|image|image.texture.clone()),self.pages.lock().unwrap().expected().cloned()) else {return Ok(());};
         let preview_level=std::sync::OnceLock::new();
@@ -392,8 +392,8 @@ impl Cache {
         for (key,page) in held {contact.pages.entry(key).or_insert(page);}
         Ok(reached.iter().all(|cell|contact.cells.iter().any(|(declared,_)|declared==cell)))
     }
-    pub(super) fn lane_halves(&self,packet:FramePacket<'_>)->Vec<pages::Key> {
-        self.dab_cells(packet).into_iter().filter(|cell|self.pivot_missing(*cell)).flat_map(|cell|self.wanted_halves(cell,packet.view)).collect()
+    pub(super) fn lane_cells(&self,packet:FramePacket<'_>)->Vec<PixelRect> {
+        self.dab_cells(packet).into_iter().filter(|cell|self.pivot_missing(*cell)).collect()
     }
     #[expect(clippy::too_many_arguments,reason="A contact declares its cells with the frame's scene, encoding and budget, around the pages it already holds")]
     fn declare_contact(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,retained:u64,budget:&mut WorkBudget,

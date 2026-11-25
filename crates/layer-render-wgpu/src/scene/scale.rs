@@ -14,6 +14,7 @@ mod graph;
 mod signatures;
 pub(crate) use signatures::{Capture,Declared,Donor,Input,Prepared as SignatureFrame,PreviewDeclaration,PreviewVersion,PreviewStage,PreviewPass,PreviewQuality,PreviewSeed,PreviewStamps};
 mod effects;
+mod cell_plan;
 mod refinement;
 mod pages;
 mod contact;
@@ -72,11 +73,6 @@ impl Damage {
     pub fn expand(&self, radius: u32, extent: [u32; 2]) -> Self { self.map(|r| r.expand(radius, extent)) }
     pub fn map(&self, f: impl FnMut(PixelRect) -> PixelRect) -> Self { Self::from_regions(self.regions.iter().copied().map(f)) }
     pub fn pages(&self) -> BTreeSet<[u32; 2]> { self.regions.iter().flat_map(|r| page_coordinates(*r)).collect() }
-    fn dependency(&self, radius: Option<u32>, plan: display_mips::Plan) -> Self {
-        if self.is_empty() { Self::EMPTY }
-        else if let Some(radius) = radius { self.expand(radius, plan.extent).intersect(plan.bounds) }
-        else { plan.bounds.into() }
-    }
 }
 
 /// Device recipes survive level changes; display cache retirement drops pixels only.
@@ -300,7 +296,7 @@ pub(crate) struct Cache {
     _geometry_charge: crate::residency::Charge,
     layer_count: usize,
     overview: Option<Box<Cache>>,
-    preparing: bool,
+    preparing: Vec<crate::frame_demand::UnitWait>,
     declaring: bool,
     exact_tile: Option<Image>,
     graph: graph::Graph,
@@ -323,13 +319,16 @@ pub(crate) struct Cache {
     pointer: Option<[f32;2]>,
     underived: pages::Backlog,
     unabsorbed: pages::Backlog,
+    cohort: crate::scene::sources::Cohort,
+    paired: Vec<(PixelRect,Vec<crate::scene::sources::Lease>,u64)>,
+    pairing: pages::Pairing,
+    staged: Vec<pages::Held>,
 }
 
 fn requires_native_effects(scene:SceneView<'_>,level:u32)->bool {
-    scene.order().iter().any(|handle|scene.visible(*handle)
+    level==0 && scene.order().iter().any(|handle|scene.visible(*handle)
         && scene.effect(*handle).is_some_and(|effect|
-            (effect.program.resolution==layer_core::EffectResolution::Native && !native_pointwise_alpha(effect.program))
-                || (effect.program.image_boundary() && level==0)))
+            (effect.program.resolution==layer_core::EffectResolution::Native && !native_pointwise_alpha(effect.program)) || effect.program.image_boundary()))
 }
 
 fn fine_request_capacity(r:&WgpuRasterizer,packet:FramePacket<'_>,plan:display_mips::Plan)->Option<usize> {
@@ -368,7 +367,17 @@ pub(crate) fn request(r: &WgpuRasterizer, packet: FramePacket<'_>) -> Result<Req
         if !matches!(result, Err(GpuRasterError::ExtentUnsupported)) { break; }
         result = request_at(r, packet, coarser);
     }
-    result
+    let fits = |request: &Request| window_bytes(r, packet, request.plan) <= r.memory.display_limit();
+    let Ok(selected) = result.as_ref().map(|request| request.plan.level) else { return result; };
+    if result.as_ref().is_ok_and(fits) { return result; }
+    cell_plan::view_grid(packet.view.document_to_surface, |level| level > selected && request_at(r, packet, level).is_ok_and(|request| fits(&request)))
+        .map_or(result, |level| request_at(r, packet, level))
+}
+
+fn window_bytes(r: &WgpuRasterizer, packet: FramePacket<'_>, plan: display_mips::Plan) -> u64 {
+    let next = display_mips::Plan::window(plan.extent, plan.level + 1, plan.bounds);
+    let texel = u64::from(r.display_precision(packet.scene).format().block_copy_size(None).unwrap());
+    [plan.size, next.size].into_iter().map(|size| size.map(u64::from).into_iter().product::<u64>() * texel).sum()
 }
 
 /// The display request at `level`, or ExtentUnsupported when its native
@@ -493,6 +502,8 @@ pub(super) fn waiting_on(scene: &Scene, r: &WgpuRasterizer, declarations: u64, e
         _ => r.image_decode_waiting().then(|| UnitWait::input(Producer::Class(Input::Decode))),
     }
 }
+
+fn outgrown(r: &WgpuRasterizer, class: Class) -> crate::residency::Blocked { r.scene_tiers.display.wanting(class, 0) }
 
 pub(super) fn bounded(scene: SceneView<'_>) -> bool {
     !scene.order().iter().any(|handle| scene.visible(*handle) && scene.effect(*handle).is_some_and(|effect| effect.program.image_boundary()))
@@ -719,9 +730,10 @@ impl Cache {
             _geometry_charge:r.scene_tiers.windows.charge(geometry.size()),
             geometry,
             layer_count: layers,
-            overview, preparing: false, declaring: false, exact_tile: None,
+            overview, preparing: Vec::new(), declaring: false, exact_tile: None,
             graph: Default::default(), transform: r.transform_preview.clone(), retired: None, previous: None, standing: None, complete: false, contact: false, gesture: None, stroked: None, presented: pages::Accuracy::Display, asked: None,
-            streaming: Default::default(), pivot_waiting: None, pivot_refusal: None, reduction_wait: None, pivot_pending: false, pivot_edit: None, pointer: None, underived: Default::default(), unabsorbed: Default::default(),
+            streaming: Default::default(), pivot_waiting: None, pivot_refusal: None, reduction_wait: None, pivot_pending: false, pivot_edit: None, pointer: None, underived: Default::default(), unabsorbed: Default::default(), cohort: Default::default(),
+            paired: Vec::new(), pairing: Default::default(), staged: Vec::new(),
         }
     }
     fn geometry(r: &WgpuRasterizer, plan: display_mips::Plan) -> wgpu::Buffer {
@@ -746,7 +758,7 @@ impl Cache {
             })
     }
     pub fn native_preview_input(&self,packet:FramePacket<'_>,id:SourceTarget)->bool {
-        self.graph.root.as_ref().is_some_and(|root|root.source_domains(packet.scene)[1].contains(&id))
+        self.domains(packet,false)[1].contains(&id)
     }
     pub fn preview_level(&self, r: &WgpuRasterizer, packet: FramePacket<'_>, id: SourceTarget, contribution:bool) -> u32 {
         if self.evaluation == Evaluation::Native || self.plan.level == 0 { return 0; }
@@ -797,7 +809,7 @@ impl Cache {
             .map(|cache|cache.parent_interest(cache.plan.bounds)));
         windows.extend(self.streamed_interests(packet.view));
         for cache in std::iter::once(self).chain(self.overview.as_deref()) {
-            let reduced=cache.graph.root.as_ref().unwrap().source_domains(packet.scene)[0].clone();
+            let [reduced,_]=cache.domains(packet,cache.at_rest(r,packet));
             let input=input_plan(cache.plan,packet.scene,Some(cache.graph.objects()));
             for (_,id) in targets(r,packet).filter(|(_,id)|reduced.contains(id) && sources.entries.contains_key(id)
                 && !fine_source(cache.evaluation,r.transform_preview.as_ref(),*id) && !r.transforms.as_ref().is_some_and(|t|t.display_source(*id))) {
@@ -884,7 +896,7 @@ impl Cache {
         self.streaming=Default::default();
         if self.complete {self.overview=None;self.previous=None;}
         if !(self.complete && samples_next(view,self.plan.level)) && self.pixels.release_next() {self.write_projection_scales(r,encoder)?;}
-        let halves=if self.graph.root.is_some() {self.wanted_halves(self.plan.bounds,view)} else {Vec::new()};
+        let halves=if self.graph.root.is_some() {self.half_keys(&self.wanted_cells(self.plan.bounds,view))} else {Vec::new()};
         let halves=halves.into_iter().take_while(|key|{let fits=key.bytes()<=room;room=room.saturating_sub(key.bytes());fits}).collect::<Vec<_>>();
         let mut cells=halves.iter().map(|key|key.coordinate).collect::<Vec<_>>();
         cells.dedup();
@@ -939,9 +951,9 @@ impl Cache {
             store.get(&key,area,pages::Accuracy::Display,required_input_level,class).or_else(||store.get(&key,area,pages::Accuracy::Exact,0,class)).is_some()
         })
     }
-    fn prepared_regions(&mut self, scene: &Scene, packet: FramePacket<'_>, destination: &Destination<'_>, budget: &WorkBudget) -> Vec<PixelRect> {
-        if matches!(destination, Destination::View|Destination::Overview(..)) { self.preparing = false; }
-        let (Destination::View|Destination::Overview(..), Some(halves), Some((_, _, bounds))) = (destination, &self.graph.prepared, &scene.scale_sources.prepared) else { return Vec::new() };
+    fn prepared_regions(&mut self, scene: &Scene, packet: FramePacket<'_>, destination: &Destination<'_>, budget: &WorkBudget) -> (Vec<PixelRect>, bool) {
+        if matches!(destination, Destination::View|Destination::Overview(..)) { self.preparing.clear(); }
+        let (Destination::View|Destination::Overview(..), Some(halves), Some((_, _, bounds))) = (destination, &self.graph.prepared, &scene.scale_sources.prepared) else { return (Vec::new(), false) };
         let region = bounds.turning_reach().expand(2).in_frame(packet.document_extent).intersect(self.plan.bounds);
         let side=1<<self.plan.level;
         let bounds=PixelRect::new(region.min_x()/side,region.min_y()/side,region.max_x().div_ceil(side),region.max_y().div_ceil(side));
@@ -950,8 +962,8 @@ impl Cache {
             && !self.branch_ready(half,pages::bounds(*coordinate,self.plan.level,self.plan.extent),Class::Prefetch));
         let limit=((budget.remaining()/object_cache::PASS_TAPS).max(1) as usize).min(APPROXIMATE_PAGES);
         let pages=nearest_pages(bounds,view,limit+1,std::iter::empty(),missing);
-        self.preparing=pages.len()>limit;
-        pages.into_iter().take(limit).map(|coordinate|pages::bounds(coordinate,self.plan.level,self.plan.extent)).collect()
+        let more=pages.len()>limit;
+        (pages.into_iter().take(limit).map(|coordinate|pages::bounds(coordinate,self.plan.level,self.plan.extent)).collect(),more)
     }
 
     pub fn storage_bytes(&self) -> u64 { self.window_bytes()+self.pages.lock().unwrap().bytes() }
@@ -1014,7 +1026,7 @@ impl Cache {
         self.render_coarse_preview(scene,r,packet,encoding)
     }
     fn render_coarse_preview(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>, encoding: &mut Encoding<'_>) -> Result<bool, GpuRasterError> {
-        if self.coverage_complete() || refinement::streams_exact(self,r,packet,refinement::presented_accuracy(r,packet.scene,false)) { return Ok(false); }
+        if self.coverage_complete() { return Ok(false); }
         let result = self.render_graph(scene, r, packet, encoding, Destination::Preview);
         self.release_previous(r);
         match result {
@@ -1050,6 +1062,7 @@ impl Cache {
             stand_in=rendered(scene,result)?;
         }
         encoding.retained=with(overview.as_deref().map_or(0,Cache::window_memory));
+        self.pairing=overview.as_deref().filter(|_|self.plan.level==0).map_or_else(Default::default,Cache::pairing);
         let result=self.render_graph(scene,r,packet,encoding,Destination::View);
         let view=rendered(scene,result)?;
         self.underived.add(view);
@@ -1070,6 +1083,7 @@ impl Cache {
         let Encoding { encoder, commands, retained, budget } = encoding;
         scene.placement_display=true;
         let finer=match destination {Destination::Overview(finer,changed)=>Some((finer,changed)),_=>None};
+        self.paired.retain(|(region,..)|finer.is_some_and(|(finer,_)|finer.owes_native(r,*region)));
         let view=matches!(destination,Destination::View);
         self.ask(pages::Asked {view:packet.view,moving:view && budget.motion});
         let absorbed=match self.retired.take() {
@@ -1089,9 +1103,9 @@ impl Cache {
         if self.pixels.root().is_some_and(|image|image.texture.format()!=self.precision.format()) {self.end_held_frame(r,packet)?;}
         if !self.ensure_window(r,scene,encoder) {self.previous=None;return Err(GpuRasterError::NotReady);}
         let live=self.gesture.is_some();
-        let lane=if view && stroking {self.lane_halves(packet)}else {Vec::new()};
+        let lane=if view && stroking {self.lane_cells(packet)}else {Vec::new()};
         if !lane.is_empty() {
-            let exact=self.exact_units(scene,r,packet,encoder,commands,budget,lane,&|_|Class::Authored,true)?;
+            let exact=self.build_halves(scene,r,packet,encoder,budget,*retained,lane,Class::Authored,true)?;
             for (key,wait) in exact.blocks {self.block(key.plan().bounds,wait);}
             for (region,refusal,allowance) in exact.refusals {self.refuse(region,&refusal,allowance);}
         }
@@ -1102,19 +1116,18 @@ impl Cache {
         let visible=if matches!(destination,Destination::View) {display_mips::view_bounds(packet.view,self.plan.extent,0).unwrap_or(PixelRect::EMPTY)}else {PixelRect::EMPTY};
         let deferred=match destination {Destination::View=>Class::Prefetch,Destination::Navigator=>Class::Navigator,Destination::Overview(..)|Destination::Preview=>Class::Fallback};
         let served=if matches!(destination,Destination::View) {visible}else {self.plan.bounds};
-        let presented=refinement::presented_accuracy(r,packet.scene,matches!(destination,Destination::Preview));
+        let presented=refinement::presented_accuracy(r,packet.scene,self.plan.level,matches!(destination,Destination::Preview),self.approximates(r,packet));
         if std::mem::replace(&mut self.presented,presented)==pages::Accuracy::Display && presented==pages::Accuracy::Exact {self.owe_exact();}
         let selected=|region:PixelRect|if region.intersect(visible).is_empty() {deferred}else {Class::Visible};
-        let selection=if live {pages::Selection {copies:Vec::new(),composes:self.contact_composes(),transition:false,waiting:false}}
+        let selection=if live {pages::Selection {copies:Vec::new(),composes:self.contact_composes(),transition:false,held:None}}
             else {self.select_cells(r,served,presented,&selected)?};
         let transition=selection.transition;
+        if !transition {self.staged.clear();}
         let direct=if view {self.stroke_only(packet)}else {stroking};
         let pages::Selection {mut copies,mut composes,..}=selection;
-        let halves=if view && !live {self.edit_halves(packet,budget)}else {Vec::new()};
+        let halves=if view && !live {self.edit_cells(packet,budget)}else {Vec::new()};
         let own=if view && stroking && !packet.dab_batches.iter().any(|batch|batch.target.is_coverage()) {self.dab_cells(packet)}else {Vec::new()};
-        let mut streamed=if !live && !direct && matches!(destination,Destination::View|Destination::Navigator) && refinement::streams_exact(self,r,packet,presented)
-            {std::mem::take(&mut composes)}else {Vec::new()};
-        let target=if transition && !direct || !streamed.is_empty() {Root::Store}else {Root::Window};
+        let target=if transition && !direct {Root::Store}else {Root::Window};
         let mut blocks=Vec::new();let mut refusals=Vec::new();
         let class=|region:PixelRect|if region.intersect(visible).is_empty() {deferred}else if transition || own.contains(&region) {Class::Authored}else {Class::Visible};
         let side=1<<self.plan.level;
@@ -1134,49 +1147,61 @@ impl Cache {
             if !written.is_empty() || self.pixels.committed_root().is_none() {self.commit_window(r,encoder)?;}
             for region in blocked {self.block(region,waiting_on(scene,r,declarations,&GpuRasterError::NotReady));}
             composed=done.into_iter().map(|(region,_)|region).collect();
-        } else if !composes.is_empty() || !copies.is_empty() || !streamed.is_empty() || !halves.is_empty() || self.graph.prepared.is_some() || transition {
+        } else if !composes.is_empty() || !copies.is_empty() || !halves.is_empty() || self.graph.prepared.is_some() || transition {
             let root = self.graph.root.clone().expect("prepared composition graph");
             let input = input_plan(self.plan, packet.scene,Some(self.graph.objects()));
             let tiled = use_tiles(r, self.plan, packet, Some(scene)) && !(self.plan.level > 0 && root.fused_transform(r));
             let view=work_view(packet,0);
-            composes.sort_by_cached_key(|region|(!budget.required(class(*region)),centre_distance(view,*region)));
-            streamed.sort_by_key(|region|centre_distance(view,*region));
-            let cells=streamed.iter().map(|region|self.refinement_interest(self.plan.level,*region).key).collect::<Vec<_>>();
+            composes.sort_by_cached_key(|region|(!budget.required(class(*region)),!self.streaming(*region).is_ok_and(|streaming|streaming),centre_distance(view,*region)));
             if !stroking && !halves.is_empty() {self.prepare_edit_sources(scene,r,packet,encoder,budget)?;}
-            for (cells,class) in [(halves,&(|_|Class::Refinement) as &dyn Fn(PixelRect)->Class),(cells,&class)].into_iter().filter(|(cells,_)|!cells.is_empty()) {
-                let exact=self.exact_units(scene,r,packet,encoder,commands,budget,cells,class,false)?;
-                blocks.extend(exact.blocks.into_iter().map(|(key,input)|(key.plan().bounds,input)));
-                refusals.extend(exact.refusals);
-            }
-            let prepared = self.prepared_regions(scene, packet, &destination, budget);
+            let exact=self.build_halves(scene,r,packet,encoder,budget,*retained,halves,Class::Refinement,false)?;
+            blocks.extend(exact.blocks.into_iter().map(|(key,input)|(key.plan().bounds,input)));
+            refusals.extend(exact.refusals);
+            let (prepared,more) = self.prepared_regions(scene, packet, &destination, budget);
             let halves:Vec<_>=self.graph.prepared.clone().into_iter().flatten().filter(|half|self.graph.caches(half)).collect();
             let preview=matches!(destination,Destination::Preview);
+            let settles=refinement::exact_at_view_level(packet.scene,self.plan.level);
+            let content=self.graph.content.clone().unwrap_or_else(||root.clone());
+            let at_rest=self.at_rest(r,packet);
+            let mut staged=None;
             let mut accepted=Vec::new();
+            let (mut producing,mut closed)=(None,None::<crate::residency::Blocked>);
             for region in composes {
                 if !own.is_empty() && if own.contains(&region) {self.pivot_missing(region)}else {self.keyless_unrefused(region)} {continue;}
+                if let Some(wait)=self.pairing.awaits(region).filter(|_|region.intersect(visible).is_empty() && !own.contains(&region)) {blocks.push((region,wait));continue;}
                 if !budget.fits(class(region),!accepted.is_empty(),object_cache::PASS_TAPS) {break;}
                 let requests=self.region_sources(scene,r,packet,region,tiled);
-                let allowance=self.cell_allowance(r,region);
-                let (mut unpublished,mut refused)=(false,None);
-                for (id,request) in requests.iter().cloned() {
-                    let prepared=self.prepare_source(scene,r,packet,encoder,id,request,class(region),allowance,budget)?;
-                    unpublished|=prepared.unpublished;refused=refused.or(prepared.refusal);
+                let streaming=self.streaming(region)?;
+                if !streaming && !requests.iter().all(|(id,request)|self.source_ready(scene,r,*id,request)) {
+                    if let Some(wait)=&producing {blocks.push((region,Option::clone(wait)));continue;}
+                    if budget.source_pages(class(region))==0 {blocks.push((region,None));continue;}
                 }
-                if !requests.iter().all(|(id,request)|self.source_ready(scene,r,*id,request)) {
-                    #[cfg(test)] crate::test_support::PassCounts {destination_units:1,..Default::default()}.record();
-                    match refused {
-                        Some(refusal)=>refusals.push((region,refusal,allowance)),
-                        None=>blocks.push((region,waiting_on(scene,r,declarations,if unpublished {&GpuRasterError::NotPublished}else {&GpuRasterError::NotReady}))),
+                let node=if settles && self.pivot_missing(region) {content.clone()}else {root.clone()};
+                if !streaming && cell_plan::Footprint::captures(&node,packet.scene,self.plan.level,at_rest) {
+                    staged=Some(region);
+                    match self.prepare_native(scene,r,packet,encoder,region,input) {
+                        Err(error@(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished))=>{blocks.push((region,waiting_on(scene,r,declarations,&error)));continue;},
+                        Err(GpuRasterError::SourceWorkingSetExceeded)=>{refusals.push((region,outgrown(r,class(region)),self.cell_allowance(r,region)));continue;},
+                        result=>result?,
                     }
-                    continue;
                 }
-                let handle=match self.accept_parent(scene,r,packet,region,&requests,*retained,tiled,std::slice::from_ref(&root),target,preview,class(region),if budget.required(class(region)) {class(region)} else {Class::Prefetch},allowance,encoder) {
+                let allowance=self.cell_allowance(r,region);
+                let handle=match self.accept_parent(scene,r,packet,region,&requests,*retained,tiled,std::slice::from_ref(&node),target,preview,class(region),if budget.required(class(region)) {class(region)} else {Class::Prefetch},allowance,closed.as_ref(),encoder) {
                     Ok(Ok(handle))=>handle,
-                    Ok(Err(Some(refusal)))=>{refusals.push((region,refusal,allowance));continue;},
+                    Ok(Err(Some(refusal)))=>{closed=Some(refusal.clone());refusals.push((region,refusal,allowance));continue;},
                     Ok(Err(None))=>{blocks.push((region,waiting_on(scene,r,declarations,&GpuRasterError::NotReady)));continue;},
                     Err(error@GpuRasterError::NotPublished)=>{blocks.push((region,waiting_on(scene,r,declarations,&error)));continue;},
                     Err(error)=>return Err(error),
                 };
+                match self.stream_sources(scene,r,packet,encoder,&handle,&requests,class(region),budget,finer.map(|(finer,_)|finer))? {
+                    sources::Streamed::Complete=>{},
+                    sources::Streamed::Waiting(wait)=>{
+                        #[cfg(test)] crate::test_support::PassCounts {destination_units:1,..Default::default()}.record();
+                        if class(region).demanded() {producing=Some(wait.clone());}else {self.pages.lock().unwrap().finish_inputs(&handle);}
+                        blocks.push((region,wait));continue;
+                    },
+                    sources::Streamed::Refused(refusal)=>{closed=Some(refusal.clone());refusals.push((region,refusal,allowance));continue;},
+                }
                 r.image_decode_queue(r.device.working_space())?.prioritize(packet.view,region);
                 budget.spend(object_cache::PASS_TAPS);
                 let sources=self.pages.lock().unwrap().take_inputs(&handle)?;
@@ -1189,29 +1214,23 @@ impl Cache {
                 }
                 let evaluated=if sources.objects_fall_back() {Class::Fallback}else {class(region)};
                 #[cfg(test)] crate::test_support::PassCounts {destination_units:1,..Default::default()}.record();
-                accepted.push((region,handle,sources,evaluated));
+                accepted.push((region,handle,sources,evaluated,node));
             }
             let mut completed = Vec::<ReadyUnit>::new();
             let mut sleeping=Vec::new();
-            let native = root.native_capture(packet.scene, self.plan.level);
             let mut accepted=accepted.into_iter();
-            for (region,handle,mut sources,evaluated) in accepted.by_ref() {
-                if native {
-                    let jobs = std::mem::take(&mut scene.jobs);
-                    let source_jobs = std::mem::take(&mut scene.source_jobs);
-                    let output = DocRect::from(region).aligned(PAGE_SIZE.max(side)).intersect(input.doc_bounds).in_frame(packet.document_extent);
-                    let window = scene.cached_capture_window(packet.scene, output);
-                    let result=scene.prepare_region_in_frame(r,packet,(output,window),PixelRect::EMPTY,false,encoder);
-                    scene.discard_unencoded_jobs();
-                    scene.jobs = jobs;scene.source_jobs = source_jobs;
-                    scene.placement_display = true;
-                    if let Err(error) = result {
+            for (region,handle,mut sources,evaluated,node) in accepted.by_ref() {
+                if cell_plan::Footprint::captures(&node,packet.scene,self.plan.level,at_rest) && staged.replace(region)!=Some(region) {
+                    if let Err(error) = self.prepare_native(scene,r,packet,encoder,region,input) {
                         if matches!(error,GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished) {
                             blocks.push((region,waiting_on(scene,r,declarations,&error)));
                             if class(region).demanded() {self.pages.lock().unwrap().hold_inputs(&handle,sources)?;}else {self.pages.lock().unwrap().finish_inputs(&handle);}
                             continue;
                         }
-                        if matches!(error,GpuRasterError::SourceWorkingSetExceeded) {self.pages.lock().unwrap().finish_inputs(&handle);continue;}
+                        if matches!(error,GpuRasterError::SourceWorkingSetExceeded) {
+                            self.pages.lock().unwrap().finish_inputs(&handle);
+                            refusals.push((region,outgrown(r,class(region)),self.cell_allowance(r,region)));continue;
+                        }
                         scene.discard_unencoded_jobs();return Err(error);
                     }
                 }
@@ -1225,7 +1244,7 @@ impl Cache {
                         region: region.into(), input, tiled, unit: &mut unit, accepted:&mut sources,
                         previous_motion: completed.iter().rev().find_map(|ready| ready.unit.motion.as_ref()),retained:*retained,
                         approximate: false, preview, class: evaluated };
-                    compositor.evaluate_root(&root, target)?;
+                    compositor.evaluate_root(&node, target)?;
                     if !compositor.unit.ready(compositor.scene, compositor.r, compositor.encoder, start, class(region))? {
                         return Err(GpuRasterError::NotReady);
                     }
@@ -1251,69 +1270,37 @@ impl Cache {
                     }
                     Err(GpuRasterError::SourceWorkingSetExceeded) => {
                         self.pages.lock().unwrap().finish_inputs(&handle);scene.discard_jobs_from(start);
+                        refusals.push((region,outgrown(r,class(region)),self.cell_allowance(r,region)));
                     }
                     Err(error) => {scene.discard_unencoded_jobs();return Err(error);}
                 }
             }
-            for (region,handle,sources,_) in accepted {
+            for (region,handle,sources,_,_) in accepted {
                 if class(region).demanded() {self.pages.lock().unwrap().hold_inputs(&handle,sources)?;}else {self.pages.lock().unwrap().finish_inputs(&handle);}
             }
-            if self.graph.prepared.is_some() {
-                for region in prepared {
-                    if !budget.fits(Class::Prefetch,!completed.is_empty(),object_cache::PASS_TAPS) {self.preparing=true;break;}
-                    let requests=self.region_sources(scene,r,packet,region,tiled);
-                    for (id,request) in requests.iter().cloned() {self.prepare_source(scene,r,packet,encoder,id,request,Class::Prefetch,crate::frame_demand::Allowance::Fresh,budget)?;}
-                    if !requests.iter().all(|(id,request)|self.source_ready(scene,r,*id,request)) {self.preparing=true;continue;}
-                    let handle=match self.accept_parent(scene,r,packet,region,&requests,*retained,tiled,&halves,Root::Store,preview,Class::Prefetch,Class::Prefetch,crate::frame_demand::Allowance::Fresh,encoder) {
-                        Ok(Ok(handle))=>handle,
-                        Ok(Err(_))|Err(GpuRasterError::NotPublished)=>{self.preparing=true;continue;},
-                        Err(error)=>return Err(error),
-                    };
-                    #[cfg(test)] crate::test_support::PassCounts {destination_units:1,..Default::default()}.record();
-                    budget.spend(object_cache::PASS_TAPS);
-                    let start = scene.jobs.len();
-                    let mut unit = Unit::default();
-                    let mut sources=self.pages.lock().unwrap().take_inputs(&handle)?;
-                    let input = unit_plan(input, packet.scene, region, tiled, Some(self.graph.objects()));
-                    let result = (|| {
-                        #[cfg(test)]
-                        let _record=crate::scene::sources::record_reads(&sources);
-                        let mut compositor = Evaluator { cache: self, scene, packet, r, encoder, region: region.into(), input, tiled,
-                            unit: &mut unit, accepted:&mut sources,
-                            previous_motion: completed.iter().rev().find_map(|ready| ready.unit.motion.as_ref()),retained:*retained,
-                            approximate: false, preview, class: Class::Prefetch };
-                        for half in &halves { compositor.evaluate_root(half,Root::Store)?; }
-                        compositor.unit.ready(compositor.scene, compositor.r, compositor.encoder, start, Class::Prefetch)
-                    })();
-                    unit.sources.extend(sources)?;unit.sources.check_unit(handle.input_unit())?;
-                    match result {
-                        Ok(true) => {
-                            let work=scene.planned_work(start);
-                            if !budget.fits(Class::Prefetch,!completed.is_empty(),work) {scene.discard_jobs_from(start);self.preparing=true;break;}
-                            budget.spend(work);unit.work=work;
-                            completed.push(ReadyUnit {unit,handle,publish:false});
-                        },
-                        Ok(false)|Err(GpuRasterError::SourceWorkingSetExceeded) => {self.pages.lock().unwrap().finish_inputs(&handle);scene.discard_jobs_from(start);self.preparing=true;},
-                        Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished) if !completed.is_empty() => {
-                            self.pages.lock().unwrap().finish_inputs(&handle);scene.discard_jobs_from(start);self.preparing=true;
-                        }
-                        Err(error) => {scene.discard_unencoded_jobs();return Err(error);}
-                    }
-                }
-            }
+            let before=completed.len();
+            let built=self.half_units(scene,r,packet,encoder,*retained,budget,prepared,&halves,Class::Prefetch,&mut completed)?;
+            self.preparing.extend((built.deferred || more && completed.len()>before).then(crate::frame_demand::UnitWait::default));
+            self.preparing.extend(built.blocks.into_iter().map(|(_,wait)|wait.unwrap_or_default()));
+            self.preparing.extend(built.refusals.into_iter().map(|(_,refusal,allowance)|crate::frame_demand::UnitWait::parked(refusal,allowance)));
             sleeping.extend(completed.iter_mut().filter(|ready|ready.publish).map(|ready|(ready.handle.region(),std::mem::take(&mut ready.unit.waits))));
             let lags=self.shown_writes(&completed.iter().filter(|ready|ready.publish).map(|ready|ready.handle.region()).collect::<Vec<_>>());
             self.encode_units(scene, r, encoder, completed.iter_mut().map(|ready| std::mem::take(&mut ready.unit)))?;
             for ReadyUnit {handle,publish,..} in completed {
-                self.pages.lock().unwrap().finish_inputs(&handle);
+                self.pages.lock().unwrap().publish_inputs(&handle);
                 if publish {composed.push(handle.region());}
             }
             if target==Root::Window {shown=composed.iter().zip(lags).fold(shown,|shown,(region,(_,lag))|shown.union(texels(lag.map_or(*region,|lag|region.intersect(lag)))));}
+            let mut followed=None;
             let held=target==Root::Store && {
                 let selection=self.select_cells(r,served,presented,&selected)?;
                 let complete=!transition || selection.complete(served);
-                let wait=blocks.iter().find_map(|(_,wait)|wait.clone());
-                if !complete {blocks.extend(selection.copies.iter().map(|(_,copy,_)|(copy.region,wait.clone())));}
+                let regions=selection.copies.iter().map(|(_,copy,_)|copy.region).collect::<Vec<_>>();
+                if !complete {match selection.held {
+                    Some(held)=>followed=Some((held,regions)),
+                    None=>{let wait=blocks.iter().find_map(|(_,wait)|wait.clone());blocks.extend(regions.into_iter().map(|region|(region,wait.clone())));},
+                }}
+                self.staged=if complete {Vec::new()}else {selection.pins()};
                 copies=if complete {selection.copies}else {Vec::new()};
                 !complete
             };
@@ -1328,8 +1315,11 @@ impl Cache {
             if presented==pages::Accuracy::Exact {blocks.extend(composed.iter().map(|region|(*region,waiting_on(scene,r,declarations,&GpuRasterError::NotReady))));}
             for (region,wait) in blocks {self.block(region,wait);}
             if !matches!(destination,Destination::Navigator) {for (region,waits) in sleeping {self.sleep(region,waits);}}
+            if !refusals.is_empty() {self.cohort=Default::default();}
             for (region,refusal,allowance) in refusals {self.refuse(region,&refusal,allowance);}
+            if let Some((held,regions))=followed {self.follow(held,&regions);}
         }
+        if !self.cohort.is_empty() && self.coverage_complete() {self.cohort=Default::default();}
         if view && !live && !stroking {self.pivot_pending=self.pivot_inputs_pending(scene,r,packet);}
         if view && live && self.ends_contact(packet) {self.end_contact(encoder);}
         else if view && !live && stroking {self.begin_contact(scene,r,packet,encoder,*retained,budget,&composed)?;}
@@ -1360,6 +1350,105 @@ impl Cache {
             r.telemetry.phase_end(11, encoder);
         }
         Ok(document(shown.union(texels(absorbed))))
+    }
+    fn prepare_native(&self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>, encoder: &mut submission::CommandEncoder, region: PixelRect, input: display_mips::Plan)
+        -> Result<(), GpuRasterError> {
+        let jobs = std::mem::take(&mut scene.jobs);
+        let source_jobs = std::mem::take(&mut scene.source_jobs);
+        let output = DocRect::from(region).aligned(PAGE_SIZE.max(1 << self.plan.level)).intersect(input.doc_bounds).in_frame(packet.document_extent);
+        let window = scene.cached_capture_window(packet.scene, output);
+        let result = scene.prepare_region_in_frame(r, packet, (output, window), PixelRect::EMPTY, false, encoder);
+        scene.discard_unencoded_jobs();
+        scene.jobs = jobs; scene.source_jobs = source_jobs;
+        scene.placement_display = true;
+        result
+    }
+    #[expect(clippy::too_many_arguments, reason = "Half units share the frame's scene, encoding and budget with the pass that wants them")]
+    fn half_units(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>, encoder: &mut submission::CommandEncoder, retained: u64,
+        budget: &mut WorkBudget, regions: Vec<PixelRect>, halves: &[graph::Node], class: Class, completed: &mut Vec<ReadyUnit>,
+    ) -> Result<HalfUnits, GpuRasterError> {
+        let mut built=HalfUnits::default();
+        let Some(root)=self.graph.root.clone() else {return Ok(built);};
+        let declarations=self.declarations();
+        let input=input_plan(self.plan,packet.scene,Some(self.graph.objects()));
+        let tiled=use_tiles(r,self.plan,packet,Some(scene)) && !(self.plan.level>0 && root.fused_transform(r));
+        let at_rest=self.at_rest(r,packet);
+        let mut regions=regions;
+        regions.sort_by_cached_key(|region|!self.streaming(*region).is_ok_and(|streaming|streaming));
+        let (mut producing,mut closed)=(None,None::<crate::residency::Blocked>);
+        for region in regions {
+            if !budget.fits(class,!completed.is_empty(),object_cache::PASS_TAPS) {built.deferred=true;break;}
+            let missing=halves.iter().filter(|half|!self.branch_ready(half,region,class)).cloned().collect::<Vec<_>>();
+            if missing.is_empty() {continue;}
+            let requests=self.region_sources(scene,r,packet,region,tiled);
+            let streaming=self.streaming(region)?;
+            if !streaming && !requests.iter().all(|(id,request)|self.source_ready(scene,r,*id,request)) {
+                if let Some(wait)=&producing {built.blocks.push((region,Option::clone(wait)));continue;}
+                if budget.source_pages(class)==0 {built.deferred=true;break;}
+            }
+            if !streaming && missing.iter().any(|half|cell_plan::Footprint::captures(half,packet.scene,self.plan.level,at_rest)) {
+                match self.prepare_native(scene,r,packet,encoder,region,input) {
+                    Err(error@(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished))=>{built.blocks.push((region,waiting_on(scene,r,declarations,&error)));continue;},
+                    Err(GpuRasterError::SourceWorkingSetExceeded)=>{built.refusals.push((region,outgrown(r,class),self.cell_allowance(r,region)));continue;},
+                    result=>result?,
+                }
+            }
+            let allowance=self.cell_allowance(r,region);
+            let handle=match self.accept_parent(scene,r,packet,region,&requests,retained,tiled,&missing,Root::Store,false,class,if budget.required(class) {class} else {Class::Prefetch},allowance,closed.as_ref(),encoder) {
+                Ok(Ok(handle))=>handle,
+                Ok(Err(Some(refusal)))=>{closed=Some(refusal.clone());built.refusals.push((region,refusal,allowance));continue;},
+                Ok(Err(None))=>{built.blocks.push((region,waiting_on(scene,r,declarations,&GpuRasterError::NotReady)));continue;},
+                Err(error@GpuRasterError::NotPublished)=>{built.blocks.push((region,waiting_on(scene,r,declarations,&error)));continue;},
+                Err(error)=>return Err(error),
+            };
+            match self.stream_sources(scene,r,packet,encoder,&handle,&requests,class,budget,None)? {
+                sources::Streamed::Complete=>{},
+                sources::Streamed::Waiting(wait)=>{
+                    if class.demanded() {producing=Some(wait.clone());}else {self.pages.lock().unwrap().finish_inputs(&handle);}
+                    built.blocks.push((region,wait));continue;
+                },
+                sources::Streamed::Refused(refusal)=>{closed=Some(refusal.clone());built.refusals.push((region,refusal,allowance));continue;},
+            }
+            #[cfg(test)] crate::test_support::PassCounts {destination_units:1,..Default::default()}.record();
+            budget.spend(object_cache::PASS_TAPS);
+            let start = scene.jobs.len();
+            let mut unit = Unit::default();
+            let mut sources=self.pages.lock().unwrap().take_inputs(&handle)?;
+            let input = unit_plan(input, packet.scene, region, tiled, Some(self.graph.objects()));
+            let result = (|| {
+                #[cfg(test)]
+                let _record=crate::scene::sources::record_reads(&sources);
+                let mut compositor = Evaluator { cache: self, scene, packet, r, encoder, region: region.into(), input, tiled,
+                    unit: &mut unit, accepted:&mut sources,
+                    previous_motion: completed.iter().rev().find_map(|ready| ready.unit.motion.as_ref()),retained,
+                    approximate: false, preview: false, class };
+                for half in &missing { compositor.evaluate_root(half,Root::Store)?; }
+                compositor.unit.ready(compositor.scene, compositor.r, compositor.encoder, start, class)
+            })();
+            unit.sources.extend(sources)?;unit.sources.check_unit(handle.input_unit())?;
+            match result {
+                Ok(true) => {
+                    let work=scene.planned_work(start);
+                    if !budget.fits(class,!completed.is_empty(),work) {self.pages.lock().unwrap().finish_inputs(&handle);scene.discard_jobs_from(start);built.deferred=true;break;}
+                    budget.spend(work);unit.work=work;
+                    completed.push(ReadyUnit {unit,handle,publish:false});
+                },
+                Err(GpuRasterError::SourceWorkingSetExceeded) => {
+                    self.pages.lock().unwrap().finish_inputs(&handle);scene.discard_jobs_from(start);
+                    built.refusals.push((region,outgrown(r,class),self.cell_allowance(r,region)));
+                },
+                Ok(false) => {
+                    self.pages.lock().unwrap().finish_inputs(&handle);scene.discard_jobs_from(start);
+                    built.blocks.push((region,waiting_on(scene,r,declarations,&GpuRasterError::NotReady)));
+                },
+                Err(error@(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished)) => {
+                    self.pages.lock().unwrap().finish_inputs(&handle);scene.discard_jobs_from(start);
+                    built.blocks.push((region,waiting_on(scene,r,declarations,&error)));
+                },
+                Err(error) => {scene.discard_unencoded_jobs();return Err(error);}
+            }
+        }
+        Ok(built)
     }
     fn encode_units(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, encoder: &mut submission::CommandEncoder,
         units: impl IntoIterator<Item = Unit>,
@@ -1569,6 +1658,8 @@ impl Value {
         self
     }
 }
+#[derive(Default)]
+pub(super) struct HalfUnits {pub(super) blocks:Vec<(PixelRect,Option<crate::frame_demand::UnitWait>)>,pub(super) refusals:Vec<(PixelRect,crate::residency::Blocked,crate::frame_demand::Allowance)>,pub(super) deferred:bool}
 struct ReadyUnit {
     unit: Unit,
     handle: pages::Accepted,
@@ -1883,17 +1974,17 @@ impl Evaluator<'_> {
         let source=&self.scene.scale_sources.entries[&id];
         let needed=needed.intersect(PixelRect::full(source.valid_extent(plan.level)));
         if needed.is_empty() {return Ok(Value::Color([outside;4]));}
-        let mut inputs=Vec::new();
+        let (mut inputs,mut unwritten)=(Vec::new(),false);
         for coordinate in pages::coordinates(needed,plan.level) {
             let key=source.key(self.r,id,plan.level,coordinate);
             let region=key.plan().bounds.intersect(needed);
             let image=match &self.cache.gesture {
                 Some(contact)=>contact.pages.get(&key).map(|held|self.cache.pages.lock().unwrap().restamped(&key,held)),
                 None=>self.cache.pages.lock().unwrap().get(&key,region,pages::Accuracy::Display,plan.level,self.class),
-            }.ok_or(GpuRasterError::NotReady)?;
-            inputs.push((key,image,region));
+            };
+            match image {Some(image)=>inputs.push((key,image,region)),None if self.accepted.declaring()=>unwritten=true,None=>return Err(GpuRasterError::NotReady)}
         }
-        let (view,plan,slot)=if inputs.len()==1 {
+        let (view,plan,slot)=if inputs.len()==1 && !unwritten {
             let (_,image,_)=inputs.pop().unwrap();
             self.unit.reads.push(image.clone());
             (image.view.clone(),image.plan,Some(Slot::Root))

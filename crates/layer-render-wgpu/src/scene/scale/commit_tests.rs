@@ -131,7 +131,7 @@ fn a_ready_display_page_commits_during_continuous_input_without_an_idle_frame() 
             let previous=pages::bounds([x,0],0,extent);
             let requests=attempt.cache.region_sources(&attempt.scene,&attempt.r,initial,previous,false);
             let root=attempt.cache.graph.root.clone().unwrap();
-            assert!(attempt.cache.accept_parent(&mut attempt.scene,&mut attempt.r,initial,previous,&requests,0,false,std::slice::from_ref(&root),Root::Store,false,crate::residency::Class::Visible,crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh,&mut encoder).unwrap().is_ok());
+            assert!(attempt.cache.accept_parent(&mut attempt.scene,&mut attempt.r,initial,previous,&requests,0,false,std::slice::from_ref(&root),Root::Store,false,crate::residency::Class::Visible,crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh,None,&mut encoder).unwrap().is_ok());
         }
         let root=attempt.cache.graph.root.clone().unwrap();let key=attempt.cache.page_key(root,PixelRect::full(extent));
         let accepted=attempt.cache.pages.lock().unwrap().accepted_coordinates(&key,0).collect::<std::collections::HashSet<_>>();
@@ -170,6 +170,96 @@ fn a_ready_display_page_commits_during_continuous_input_without_an_idle_frame() 
     }
 }
 
+#[test]
+fn a_discarded_native_write_into_a_reduced_source_page_is_owed_again_whichever_sibling_submits() {
+    let extent=[2*PAGE_SIZE,PAGE_SIZE];
+    let mut attempt=Attempt::inputs(0,1,extent,1,false,false,None);
+    let frame=frame(&attempt.doc,1);
+    attempt.scene.scale_sources.prepare(&attempt.r,frame,&[]);
+    let id=attempt.doc.scene().source_target(attempt.doc.scene().order()[0]).unwrap();
+    let key=attempt.scene.scale_sources.entries[&id].key(&attempt.r,id,1,[0,0]);
+    let [a,b]=[page_rect([0,0]),page_rect([1,0])];
+    let mut store=attempt.scene.scale_pages.lock().unwrap();
+    drop(store.claim(&attempt.r,key.clone(),u64::MAX,pages::WindowId::default(),Class::Visible).unwrap());
+    for discard_first in [true,false] {
+        let [first,second]=[a,b].map(|area| {
+            let mut encoder=submission::CommandEncoder::new(&attempt.r.device,&Default::default());
+            let write=store.prepare_write(key.clone(),area,pages::Accuracy::Display,1).unwrap();
+            store.commit(write,0,&mut encoder);encoder
+        });
+        let (lost,kept)=if discard_first {drop(first);second.submit(&attempt.r.queue);(a,b)}else {first.submit(&attempt.r.queue);drop(second);(b,a)};
+        assert!(!store.has(&key,lost,pages::Accuracy::Display,1),"a native write whose encoder was discarded is owed again (discard_first={discard_first})");
+        assert!(store.has(&key,kept,pages::Accuracy::Display,1),"a submitted sibling write survives its neighbour's discard (discard_first={discard_first})");
+    }
+    drop(store);crate::test_support::complete(&attempt.r);
+}
+
+fn waiting_parent(attempt:&mut Attempt)->(PixelRect,Vec<(SourceTarget,SourceRequest)>,pages::Accepted) {
+    let frame=frame(&attempt.doc,1);
+    let Attempt {r,scene,cache,..}=attempt;
+    scene.begin_frame();scene.scale_sources.prepare(r,frame,&[]);
+    prepare_fixture_frame(r,frame,scene);cache.prepare_graph(r,frame,scene).unwrap();
+    let region=cache.plan.bounds;
+    let requests=cache.region_sources(scene,r,frame,region,true);
+    let root=cache.graph.root.clone().unwrap();
+    let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+    let handle=match cache.accept_parent(scene,r,frame,region,&requests,0,true,std::slice::from_ref(&root),Root::Store,false,Class::Visible,Class::Visible,crate::frame_demand::Allowance::Fresh,None,&mut encoder).unwrap() {
+        Ok(handle)=>handle,Err(refusal)=>panic!("the producer is admitted: {refusal:?}"),
+    };
+    let streamed={let mut work=crate::test_support::work(false);cache.stream_sources(scene,r,frame,&mut encoder,&handle,&requests,Class::Visible,&mut work,None).unwrap()};
+    assert!(matches!(streamed,sources::Streamed::Waiting(_)),"gated decodes keep the producer's stream waiting");
+    assert!(cache.streaming(region).unwrap());
+    scene.discard_unencoded_jobs();r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(r);
+    (region,requests,handle)
+}
+
+#[test]
+fn a_parent_stream_serves_only_the_selection_it_was_declared_for() {
+    let mut attempt=Attempt::inputs(0,1,[2*PAGE_SIZE;2],1,false,false,None);
+    let (region,requests,_)=waiting_parent(&mut attempt);
+    let Attempt {r,scene,cache,doc,..}=&mut attempt;
+    let frame=frame(doc,1);
+    let root=cache.graph.root.clone().unwrap();
+    let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+    let joined=cache.accept_parent(scene,r,frame,region,&requests,0,true,std::slice::from_ref(&root),Root::Store,true,Class::Prefetch,Class::Prefetch,crate::frame_demand::Allowance::Fresh,None,&mut encoder).unwrap();
+    assert!(joined.is_err(),"a reader with another selection joins the producer instead of taking its live stream");
+    assert!(cache.streaming(region).unwrap(),"the producer keeps its stream and cursor");
+    scene.discard_unencoded_jobs();r.uploads.finish(&encoder);drop(encoder);
+    attempt.finish();
+}
+
+#[test]
+fn a_waiting_parent_does_not_write_a_reduced_source_page_another_path_has_written() {
+    let mut attempt=Attempt::inputs(0,1,[2*PAGE_SIZE;2],1,false,false,None);
+    let (region,requests,handle)=waiting_parent(&mut attempt);
+    crate::test_support::count_source_preparations();
+    attempt.store.gate.release();
+    crate::test_support::settle_decodes(&mut attempt.r);
+    let Attempt {r,scene,cache,doc,..}=&mut attempt;
+    let frame=frame(doc,1);
+    let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+    scene.begin_frame();
+    for (id,request) in requests.clone() {
+        let mut work=crate::test_support::work(false);
+        cache.prepare_source(scene,r,frame,&mut encoder,id,request,Class::Authored,crate::frame_demand::Allowance::Fresh,&mut work).unwrap();
+    }
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(r);
+    let [written,distinct]=crate::test_support::source_preparations();
+    assert!(written>0 && written==distinct,"the per-source path writes each reduced source page once: {written} of {distinct}");
+    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(30);
+    loop {
+        let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+        scene.begin_frame();
+        let streamed={let mut work=crate::test_support::work(false);cache.stream_sources(scene,r,frame,&mut encoder,&handle,&requests,Class::Visible,&mut work,None).unwrap()};
+        scene.encode_jobs(r,&mut encoder).unwrap();r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(r);
+        if matches!(streamed,sources::Streamed::Complete) {break;}
+        assert!(std::time::Instant::now()<deadline,"the producer completes once its inputs are written");
+        crate::test_support::settle_decodes(r);
+    }
+    let [after,pages]=crate::test_support::source_preparations();
+    assert_eq!((after,pages),(written,distinct),"the waiting producer joins the pages another path wrote instead of writing them again");
+    assert!(cache.streaming(region).is_ok_and(|streaming|!streaming));
+}
 
 struct Attempt {
     store:GatedStore,
@@ -286,6 +376,7 @@ impl Attempt {
         }
         (result,counts)
     }
+    fn refused_needs(&self,cells:[PixelRect;2])->[Option<u64>;2] {cells.map(|cell|self.cache.refused_need(cell))}
     fn assert_uncommitted(&self) {
         let coverage=self.cache.coverage_snapshot();
         assert!(coverage.written.is_empty() && coverage.matching.is_empty() && coverage.exact.is_empty());
@@ -660,12 +751,12 @@ fn accepted_native_inputs_reuse_their_existing_normalization_workspace() {
     let mut cache=Cache::new(&r,Request {plan:display_mips::Plan::at(extent,0),evaluation:Evaluation::Native},doc.scene().order().len());
     crate::scene::scale::tests::prepare_fixture_frame(&r,frame(&doc,0),&scene);
     let mut commands=RegionRecords::new(&r);commands.begin();cache.prepare_graph(&r,frame(&doc,0),&scene).unwrap();
-    let root=cache.graph.root.as_ref().unwrap().clone();assert!(root.native_capture(doc.scene(),0));
+    let root=cache.graph.root.as_ref().unwrap().clone();assert!(super::cell_plan::Footprint::captures(&root,doc.scene(),0,true));
     let region=PixelRect::full(extent);let key=cache.page_key(root,region);
     let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
     let requests=cache.region_sources(&scene,&r,frame(&doc,0),region,true);
     let roots=[cache.graph.root.clone().unwrap()];
-    assert!(cache.accept_parent(&mut scene,&mut r,frame(&doc,0),region,&requests,0,true,&roots,Root::Store,false,crate::residency::Class::Visible,crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh,&mut encoder).unwrap().is_ok(),"ample Core working capacity must admit the whole native unit");
+    assert!(cache.accept_parent(&mut scene,&mut r,frame(&doc,0),region,&requests,0,true,&roots,Root::Store,false,crate::residency::Class::Visible,crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh,None,&mut encoder).unwrap().is_ok(),"ample Core working capacity must admit the whole native unit");
     let inputs=cache.pages.lock().unwrap().take_fixture_inputs(&key,region,0);
     for &owner in doc.scene().order().iter().filter(|owner|doc.scene().paint_source(**owner).is_some()) {
         let base=doc.scene().paint_source(owner).unwrap().base.as_ref().unwrap();
@@ -717,4 +808,24 @@ fn navigator_keeps_all_refused_units_pending_without_a_false_publication() {
     r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
     assert_eq!(navigator.revision,1);assert!(navigator.view().is_some());
     assert!(pollster::block_on(validation.pop()).is_none());
+}
+
+#[test]
+fn a_two_page_cell_streams_beside_a_four_page_cell_refused_a_need_it_does_not_share() {
+    let extent=[3*PAGE_SIZE,2*PAGE_SIZE];
+    let cells=[pages::bounds([0,0],1,extent),pages::bounds([1,0],1,extent)];
+    let limited=|room:u64| {
+        let mut attempt=Attempt::inputs(0,1,extent,1,false,false,None);
+        let display=attempt.r.scene_tiers.display.clone();
+        let used=display.used();
+        display.update_limit(used+room);
+        let _=attempt.attempt();
+        (display.used()-used,attempt)
+    };
+    let (window,attempt)=limited(8<<20);
+    let [Some(large),Some(small)]=attempt.refused_needs(cells) else {panic!("both cells are refused while the display has room for only its window: {:?}",attempt.refused_needs(cells));};
+    assert!(small<large,"the two-page cell is refused with its own need, not its four-page sibling's: {small} against {large}");
+    let (_,attempt)=limited(window+small+(large-small)/2);
+    assert!(attempt.cache.streaming(cells[1]).unwrap() && !attempt.cache.streaming(cells[0]).unwrap(),
+        "with room between their needs the two-page cell streams and the four-page cell stays refused: {:?}",attempt.refused_needs(cells));
 }

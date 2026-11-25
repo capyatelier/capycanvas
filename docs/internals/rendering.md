@@ -286,6 +286,36 @@ When a view's level would need a native window larger than its Scene grant
 or a texture, for example a large photo with a blur at about half zoom
 on a 4K screen, the display presents the next coarser level that fits.
 
+Below 100% the settled display reduces each layer to the view's level and
+composes there, and the working layer's below and above halves are composed the
+same way, so Undo, Fit and strokes do no full-resolution composition. Exact
+composition at full resolution is for views at 100% and above and for exact
+queries: export, colour samples, filters, retouch references, fills and
+thumbnails (`an_undo_at_fit_composes_no_level_zero_cell_and_shows_its_whole_picture_once`).
+
+A reduced cell is admitted once, before its first layer write. The grant holds
+the cell's output, every layer page it reads, its scratch and the decoded tiles
+of the native coordinates it holds at once that the view's earlier cells cannot
+lend; the cell then writes its layer pages one native coordinate at a time,
+every layer at that coordinate together, holds the following coordinates'
+decodes in flight up to one source array ahead, and keeps its place across
+frames while it waits for them. The grant pins the decoded tiles the cell will
+read, never lends one of them to the cell's own missing tiles and counts a new
+source array whole; once it is spent, the next coordinate waits for the
+submission whose read frees a slot instead of asking for more room
+(`a_step_that_reads_its_cohort_slot_is_not_promised_that_slot_for_its_missing_tile`). A cell holds the decoded slots it prepares until it
+records their read; a slot whose read has completed serves the cell's next
+coordinate and passes to the view's next admitted cell. A refused, cancelled or
+replaced cell drops its slots with it, and a refusal in the view or a written
+window releases the slots a finished cell left
+(`a_refused_stream_leaves_no_pin_on_the_slots_it_prepared_but_never_read`). Cells that still need layer writes
+wait for the cell streaming ahead of them, a published cell's layer pages stay
+only as optional retention, a cell that lacks room takes those pages over
+instead of asking for fresh room, and the Navigator inherits a full-document view
+that is still producing instead of reading the layers again
+(`a_tablet_budget_cold_open_at_fit_grants_each_cell_once_and_writes_each_present_tile_once`,
+`a_far_edge_panorama_stroke_keeps_its_source_arrays_and_settles_within_870_ticks_after_pen_up`).
+
 When the view is reduced, each screen pixel spans one to two texels of the
 display level and reads only that level, bilinearly. A bilinear sample of the
 finer level stays closer to the pixel's area average than a blend with the

@@ -326,22 +326,23 @@ fn layered_photo(extent: [u32; 2], layers: u32) -> Document {
 }
 
 #[test]
-fn a_many_layer_open_admits_no_more_source_pages_in_a_frame_than_its_budget() {
+fn a_many_layer_open_writes_no_more_source_pages_in_a_frame_than_its_budget_and_one_native_step() {
     let extent = [1024, 768];
     let doc = layered_photo(extent, 32);
     let view = ViewState { width_px: 512, height_px: 384, document_to_surface: [0.5, 0., 0., 0.5, 0., 0.] };
     let frame = FramePacket { view, ..packet(doc.scene(), extent) };
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    let mut counts = crate::test_support::PassCounts::snapshot();
-    let mut admitted = Vec::new();
+    crate::test_support::count_source_preparations();
+    let (mut before, mut written) = (0, Vec::new());
     crate::test_support::submit_settled_observing(&mut r, frame, |_| {
-        let now = crate::test_support::PassCounts::snapshot();
-        admitted.push(now.delta(counts).source_admissions);
-        counts = now;
+        let [now, _] = crate::test_support::source_preparations();
+        written.push(now - before);
+        before = now;
     });
     let budget = crate::frame_pace::IDLE_TAPS / crate::scene::PASS_TAPS + 1;
-    assert!(admitted.iter().sum::<u64>() > budget, "the drawing needs more source pages than one frame admits: {admitted:?}");
-    assert!(admitted.iter().all(|pages| *pages <= budget), "a frame admitted more source pages than its budget and one unit of visible progress: {admitted:?}");
+    let step = doc.scene().targets().count() as u64;
+    assert!(written.iter().sum::<u64>() > budget, "the drawing needs more source pages than one frame writes: {written:?}");
+    assert!(written.iter().all(|pages| *pages <= budget + step), "a frame wrote more source pages than its budget and the native step it began: {written:?}");
     assert!(r.next_frame() != layer_render::FrameDemand::Work, "the open reaches Wait");
     let mut reference = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     crate::test_support::with_pace([1 << 30; 2], || crate::test_support::submit_settled(&mut reference, frame));

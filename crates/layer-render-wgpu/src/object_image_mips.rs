@@ -1013,6 +1013,7 @@ impl MipDecodeQueue {
         !self.outstanding.is_empty()
     }
     pub(crate) fn ready(&self)->bool {self.ready.load(Ordering::Acquire)>0}
+    pub(crate) fn awaits(&self,class:Class)->bool {self.outstanding.iter().any(|stored|stored.class==class)}
     #[cfg(target_arch="wasm32")]
     pub(crate) fn take_external(&mut self)->Option<(u64,MipDecodeRequest)> {self.external.take()}
     #[cfg(target_arch="wasm32")]

@@ -451,15 +451,20 @@ impl Accepted {
 struct WrittenCoverage {
     written:PageSet,
     exact:PageSet,
+    submissions:std::collections::HashMap<[u32;2],submission::Submission>,
 }
 impl WrittenCoverage {
-    fn new(level:u32)->Self {Self {written:PageSet::new(level),exact:PageSet::new(level)}}
-    fn commit(&mut self,area:PixelRect,accuracy:Accuracy) {
+    fn new(level:u32)->Self {Self {written:PageSet::new(level),exact:PageSet::new(level),submissions:Default::default()}}
+    fn commit(&mut self,area:PixelRect,accuracy:Accuracy,submission:&submission::Submission) {
         for coordinate in coordinates(area,self.written.level) {
             self.written.entries.insert(coordinate);self.exact.entries.remove(&coordinate);
             if accuracy==Accuracy::Exact {self.exact.entries.insert(coordinate);}
+            self.submissions.insert(coordinate,submission.clone());
         }
     }
+    fn valid(&self,coordinate:&[u32;2])->bool {self.written.contains(coordinate) && self.submissions.get(coordinate).is_none_or(|submission|!submission.discarded())}
+    fn valid_written(&self)->impl Iterator<Item=&[u32;2]> {self.written.iter().filter(|coordinate|self.valid(coordinate))}
+    fn covers(&self,area:PixelRect)->bool {coordinates(area,self.written.level).all(|coordinate|self.valid(&coordinate))}
 }
 #[derive(Clone)]
 pub(super) struct Held {image:Arc<Image>,pin:Arc<crate::residency::RetentionPin>,written_at:u64}
@@ -474,7 +479,6 @@ struct Page {
     image: Arc<Image>,
     pin: std::sync::Weak<crate::residency::RetentionPin>,
     optional: bool,
-    transient: bool,
     coverage: WrittenCoverage,
     versions:std::collections::HashMap<[u32;2],Recorded>,
     used: u64,
@@ -486,7 +490,6 @@ struct Page {
     demand: crate::residency::Demand,
     id: u64,
     written_at: u64,
-    submission: Option<submission::Submission>,
 }
 impl Page {
     fn pin(&mut self,tier:&Arc<crate::residency::Tier>)->Arc<crate::residency::RetentionPin> {
@@ -497,8 +500,7 @@ impl Page {
     fn pinned(&self)->bool {self.pin.strong_count()!=0}
     fn unwanted(&self)->bool {self.coverage.written.is_empty() && !self.pinned()}
     fn matches(&self,frame:Option<&SignatureFrame>,area:PixelRect,required_input_level:u32)->Option<bool> {
-        if self.submission.as_ref().is_some_and(submission::Submission::discarded)
-            || area.intersect(self.image.plan.bounds)!=area || !Coverage::covers(&self.coverage.written,area) {return Some(false);}
+        if area.intersect(self.image.plan.bounds)!=area || !self.coverage.covers(area) {return Some(false);}
         let Some(frame)=frame else {return Some(false);};let mut pending=false;
         for coordinate in coordinates(area,self.coverage.written.level) {
             let cell=bounds(coordinate,self.coverage.written.level,self.image.plan.extent).intersect(area);
@@ -515,6 +517,7 @@ struct Inputs {
     pages:Vec<(Key,PixelRect,Held)>,
     accepted:Accepted,
     pin:Option<Arc<crate::residency::RetentionPin>>,
+    stream:super::sources::Stream,
 }
 
 impl Inputs {
@@ -667,6 +670,7 @@ pub(in crate::scene) struct Store {
     clock: u64,
     total: Arc<crate::residency::Tier>,
     version_slots: u64,
+    submission_slots: u64,
     pinned: Arc<crate::residency::Tier>,
     expected:Option<Arc<SignatureFrame>>,
     previous:Option<Arc<SignatureFrame>>,
@@ -805,7 +809,7 @@ impl Store {
     }
     fn present<'a>(&'a self,key:&'a Key,area:PixelRect,levels:std::ops::RangeInclusive<u32>)->impl Iterator<Item=(&'a Key,&'a Page)>+'a {
         self.index.overlapping(key,area,levels).map(|candidate|(candidate,&self.pages[candidate])).filter(move|(candidate,page)|candidate.source==key.source && candidate.extent==key.extent
-            && page.submission.as_ref().is_none_or(|submission|!submission.discarded()) && !candidate.plan().bounds.intersect(area).is_empty()
+            && !candidate.plan().bounds.intersect(area).is_empty()
             && (!page.optional || candidate.expression==key.expression))
     }
     fn include_matching(&self,key:&Key,area:PixelRect,required_input_level:u32,coverage:&mut Coverage) {
@@ -822,7 +826,7 @@ impl Store {
     pub(super) fn written(&self,key:&Key,area:PixelRect)->PageSet {
         let mut written:Vec<_>=(0..=display_mips::MAX_LEVEL).map(PageSet::new).collect();
         for (candidate,page) in self.present(key,area,0..=display_mips::MAX_LEVEL) {
-            written[candidate.level as usize].entries.extend(page.coverage.written.iter().copied());
+            written[candidate.level as usize].entries.extend(page.coverage.valid_written().copied());
         }
         for level in 1..=key.level {
             let parents=written[level as usize-1].iter().map(|coordinate|coordinate.map(|value|value/2)).collect::<std::collections::HashSet<_>>();
@@ -847,10 +851,6 @@ impl Store {
         let keys=self.pages.iter().filter(|(key,page)|key.source.is_none() && key.expression==*expression && !page.optional).map(|(key,_)|key.clone()).collect::<Vec<_>>();
         for key in keys {self.set_optional(&key);}
     }
-    pub(super) fn set_transient(&mut self,key:&Key) {self.pages.get_mut(key).unwrap().transient=true;self.set_optional(key);}
-    pub(super) fn release_transient(&mut self,key:&Key,encoder:&submission::CommandEncoder) {
-        if self.pages.get(key).is_some_and(|page|page.transient) {encoder.hold(self.remove(key)._charge);}
-    }
     pub(super) fn set_visible(&mut self,key:&Key) {if let Some(page)=self.pages.get_mut(key) && page.optional {page.set_optional(false);self.victims.touch(page);self.victims.compact(&self.pages);self.touch(key);}}
     pub fn bytes(&self) -> u64 { self.total.used() }
     pub(in crate::scene) fn metadata_bytes(&self)->u64 {
@@ -858,6 +858,7 @@ impl Store {
             +self.ids.capacity() as u64*(std::mem::size_of::<(u64,Key)>()+1) as u64+self.victims.bytes()
             +self.pages.len() as u64*(std::mem::size_of::<Image>()+2*std::mem::size_of::<usize>()) as u64
             +self.version_slots*(std::mem::size_of::<([u32;2],Recorded)>()+1) as u64
+            +self.submission_slots*(std::mem::size_of::<([u32;2],submission::Submission)>()+1) as u64
             +self.changes.log.capacity() as u64*std::mem::size_of::<Change>() as u64
             +self.unconfirmed.capacity() as u64*std::mem::size_of::<(submission::Submission,Key)>() as u64
     }
@@ -882,17 +883,36 @@ impl Store {
         Ok(self.insert(r,key,window,charge))
     }
     fn insert(&mut self,r:&WgpuRasterizer,key:Key,window:WindowId,charge:crate::residency::Charge)->Held {
-        self.clock+=1;
-        let bytes=charge.bytes();
         #[cfg(not(target_arch="wasm32"))]
         self.retirement.get_or_insert_with(||Retirement {sender:r.device.retirement_handle(),
             total:r.device.transient_display.clone(),memory:r.device.transient_memory.clone(),retiring:r.scene_tiers.retiring.clone()});
-        let image=Arc::new(Image::with_format(r,key.plan(),key.format));
+        let image=Image::with_format(r,key.plan(),key.format);
+        self.place(key,window,charge,image)
+    }
+    pub(super) fn recycle(&mut self,missing:&mut Vec<Key>,wanted:u64,window:WindowId)->Vec<(Key,Held)> {
+        let mut spare=self.pages.iter().filter(|(_,page)|page.optional && !page.pinned()).map(|(key,page)|(rank(page),key.clone())).collect::<Vec<_>>();
+        spare.sort_by(|a,b|a.0.cmp(&b.0));
+        let (mut recycled,mut covered)=(Vec::new(),0);
+        missing.retain(|key| {
+            let size=key.plan().size;
+            let Some(index)=spare.iter().position(|(_,old)|self.pages[old].image.plan.size==size && self.pages[old].image.texture.format()==key.format).filter(|_|covered<wanted) else {return true;};
+            let Page {image,_charge:charge,..}=self.remove(&spare.remove(index).1);
+            covered+=charge.bytes();
+            let image=Image {plan:key.plan(),..Image::clone(&image)};
+            recycled.push((key.clone(),self.place(key.clone(),window,charge,image)));
+            false
+        });
+        recycled
+    }
+    fn place(&mut self,key:Key,window:WindowId,charge:crate::residency::Charge,image:Image)->Held {
+        self.clock+=1;
+        let bytes=charge.bytes();
+        let image=Arc::new(image);
         self.victims.charge(window,bytes);
         let coverage=WrittenCoverage::new(if key.source.is_some() {0}else {key.level});
         self.index.insert(&key);self.touch(&key);self.ids.insert(self.clock,key.clone());
         let value=rebuild_value(estimated_work(&key),bytes);
-        let mut page=Page {image,pin:Default::default(),optional:false,transient:false,coverage,versions:Default::default(),used:self.clock,value,priority:self.victims.inflation.saturating_add(value),retention:crate::residency::Retained::new(&self.total,bytes),_charge:charge,window,demand:Default::default(),id:self.clock,written_at:0,submission:None};
+        let mut page=Page {image,pin:Default::default(),optional:false,coverage,versions:Default::default(),used:self.clock,value,priority:self.victims.inflation.saturating_add(value),retention:crate::residency::Retained::new(&self.total,bytes),_charge:charge,window,demand:Default::default(),id:self.clock,written_at:0};
         let held=page.hold(&self.pinned);self.victims.touch(&page);self.pages.insert(key,page);self.victims.compact(&self.pages);
         held
     }
@@ -914,7 +934,7 @@ impl Store {
     }
     fn presented(&mut self,key:&Key,area:PixelRect,class:Class)->Option<Held> {
         let page=self.pages.get_mut(key)?;
-        if page.submission.as_ref().is_some_and(|submission|submission.discarded()) || !Coverage::covers(&page.coverage.written,area) {return None;}
+        if !page.coverage.covers(area) {return None;}
         self.victims.used(&mut self.clock,page,class);let held=page.hold(&self.pinned);self.victims.compact(&self.pages);Some(held)
     }
     fn selected(&self,key:&Key,region:PixelRect,image:Held)->Projection {
@@ -924,14 +944,29 @@ impl Store {
     fn recorded(&self,key:&Key,region:PixelRect)->Option<Recorded> {
         self.pages.get(key)?.versions.get(&key.coordinate).and_then(|recorded|recorded.clipped(region))
     }
+    fn held_mut(&mut self,accepted:&Accepted)->Result<&mut Inputs,GpuRasterError> {
+        let (key,region,input_level)=(accepted.key(),accepted.region(),accepted.input_level());
+        self.inputs.get_mut(key).and_then(|inputs|inputs.iter_mut().find(|input|input.at(region,input_level)
+            && input.accepted.recorded.version.identity()==accepted.recorded.version.identity()))
+            .ok_or(GpuRasterError::Invariant("accepted source hold is missing"))
+    }
     pub(super) fn hold_inputs(&mut self,accepted:&Accepted,sources:crate::scene::sources::AcceptedInputs)->Result<(),GpuRasterError> {
         sources.check_unit(accepted.input_unit())?;
-        let (key,region,input_level)=(accepted.key(),accepted.region(),accepted.input_level());
-        let inputs=self.inputs.get_mut(key).ok_or(GpuRasterError::Invariant("prepared hold inputs state is inconsistent"))?;
-        let held=inputs.iter_mut().find(|held|held.at(region,input_level)
-            && held.accepted.recorded.version.identity()==accepted.recorded.version.identity()).ok_or(GpuRasterError::Invariant("accepted unit inputs are missing"))?;
-        held.sources=sources;Ok(())
+        self.held_mut(accepted)?.sources=sources;Ok(())
     }
+    pub(super) fn streaming(&mut self,interest:&Interest)->Result<Option<Accepted>,GpuRasterError> {
+        if !self.accepted(&interest.key,interest.region,interest.input_level) {return Ok(None);}
+        let Some(held)=self.accept_version(interest)? else {return Ok(None);};
+        Ok(self.held_mut(&held).ok().filter(|input|input.stream.pending()).map(|_|held))
+    }
+    pub(super) fn selects(&mut self,accepted:&Accepted,selection:&super::sources::Selection)->bool {self.held_mut(accepted).is_ok_and(|held|held.stream.selects(selection))}
+    pub(super) fn restamp_inputs(&mut self,accepted:&Accepted,class:Class)->Result<(),GpuRasterError> {
+        let keys=self.held_mut(accepted)?.pages.iter().map(|(key,..)|key.clone()).collect::<Vec<_>>();
+        for key in keys {if let Some(page)=self.pages.get_mut(&key) {self.victims.used(&mut self.clock,page,class);}}
+        self.victims.compact(&self.pages);Ok(())
+    }
+    pub(super) fn take_stream(&mut self,accepted:&Accepted)->Result<super::sources::Stream,GpuRasterError> {Ok(std::mem::take(&mut self.held_mut(accepted)?.stream))}
+    pub(super) fn hold_stream(&mut self,accepted:&Accepted,stream:super::sources::Stream)->Result<(),GpuRasterError> {self.held_mut(accepted)?.stream=stream;Ok(())}
     pub(super) fn holds(&self,accepted:&Accepted,native:&crate::scene::sources::Inputs,areas:&[(Key,PixelRect)])->bool {
         self.expected.as_ref().is_some_and(|frame|accepted.recorded.matches(frame,accepted.input_level())==Some(true)) && self.inputs.get(accepted.key()).is_some_and(|inputs|inputs.iter().any(|held|
             held.at(accepted.region(),accepted.input_level()) && held.accepted.recorded.version.identity()==accepted.recorded.version.identity()
@@ -943,10 +978,7 @@ impl Store {
             && input.accepted.recorded.version.identity()==accepted.recorded.version.identity())?.sources.objects_refusal()
     }
     pub(super) fn take_inputs(&mut self,accepted:&Accepted)->Result<crate::scene::sources::AcceptedInputs,GpuRasterError> {
-        let (key,region,input_level)=(accepted.key(),accepted.region(),accepted.input_level());
-        let held=self.inputs.get_mut(key).and_then(|inputs|inputs.iter_mut().find(|input|input.at(region,input_level)
-            && input.accepted.recorded.version.identity()==accepted.recorded.version.identity()))
-            .ok_or(GpuRasterError::Invariant("accepted source hold is missing"))?;
+        let held=self.held_mut(accepted)?;
         held.sources.check_unit(accepted.input_unit())?;
         Ok(std::mem::take(&mut held.sources))
     }
@@ -972,8 +1004,13 @@ impl Store {
         if self.expected.as_ref().is_none_or(|frame|accepted.recorded.matches(frame,accepted.recorded.input_level)==Some(false)) {return Err(GpuRasterError::Invariant("signature frame is missing or inconsistent"));}
         let inputs=self.inputs.entry(key.clone()).or_default();
         if let Some(held)=inputs.iter_mut().find(|held|held.at(region,*input_level)) {held.pages=images;debug_assert_eq!(held.accepted.recorded.version.identity(),accepted.recorded.version.identity());}
-        else {let pin=self.pages.get_mut(key).map(|page|page.pin(&self.pinned));inputs.push(Inputs {region,evaluation,pages:images,sources:Default::default(),accepted,pin});}
+        else {let pin=self.pages.get_mut(key).map(|page|page.pin(&self.pinned));inputs.push(Inputs {region,evaluation,pages:images,sources:Default::default(),accepted,pin,stream:Default::default()});}
         Ok(())
+    }
+    pub(super) fn publish_inputs(&mut self,accepted:&Accepted) {
+        let published=self.held_mut(accepted).map(|held|held.pages.iter().filter(|(key,..)|key.source.is_some()).map(|(key,..)|key.clone()).collect::<Vec<_>>()).unwrap_or_default();
+        self.finish_inputs(accepted);
+        for key in published {if self.pages.contains_key(&key) {self.set_optional(&key);}}
     }
     pub(super) fn finish_inputs(&mut self,accepted:&Accepted) {
         if let Some(inputs)=self.inputs.get_mut(accepted.key()) {
@@ -983,7 +1020,7 @@ impl Store {
     }
     pub(super) fn keep_outputs(&mut self,interest:&Interest,kept:&[Key]) {
         let Some(input)=self.inputs.get_mut(&interest.key).and_then(|inputs|inputs.iter_mut().find(|input|input.at(interest.region,interest.input_level))) else {return;};
-        input.sources=Default::default();input.pin=None;
+        input.sources=Default::default();input.pin=None;input.stream=Default::default();
         let released=input.pages.extract_if(..,|(key,_,_)|!kept.contains(key)).map(|(key,_,_)|key).collect::<Vec<_>>();
         self.release_unwanted(&released);
     }
@@ -1059,7 +1096,9 @@ impl Store {
             else {area==key.plan().bounds},"a committed unit must be completely written");
         let page=self.pages.get_mut(&key).unwrap();
         self.clock+=1;page.written_at=self.clock;
-        page.coverage.commit(area,accuracy);page.submission=Some(encoder.submission());
+        let submissions=page.coverage.submissions.capacity();
+        page.coverage.commit(area,accuracy,&encoder.submission());
+        self.submission_slots+=(page.coverage.submissions.capacity()-submissions) as u64;
         page.value=rebuild_value(work,page.image.bytes());page.priority=self.victims.inflation.saturating_add(page.value);self.victims.touch(page);
         let pin=page.pin(&self.pinned);encoder.hold(pin);
         let coordinate=coordinates(area,page.coverage.written.level).next().expect("nonempty committed unit");
@@ -1098,7 +1137,7 @@ impl Store {
             if inputs.is_empty() {self.inputs.remove(key);}
         }
         self.index.remove(key);self.touch(key);self.ids.remove(&page.id);self.victims.release(page.window,page.image.bytes());
-        self.version_slots-=page.versions.capacity() as u64;page
+        self.version_slots-=page.versions.capacity() as u64;self.submission_slots-=page.coverage.submissions.capacity() as u64;page
     }
     pub(super) fn trim(&mut self,limit:u64,class:Class) {
         let epoch=self.victims.epoch;
@@ -1121,22 +1160,10 @@ impl Store {
         }
         for (window,victim) in pinned {self.victims.windows.entry(window).or_default().heap.push(victim);}
     }
-    pub(super) fn refinement_frontier(&mut self,key:&Key,limit:usize,pages:&mut Vec<Key>,required_input_level:u32) {
-        if pages.len()>=limit || self.get(key,key.plan().bounds,Accuracy::Exact,0,Class::Refinement).is_some()
-            || self.pages.get(key).is_some_and(|page|page.matches(self.expected.as_deref(),key.plan().bounds,required_input_level).is_none()) {return;}
-        if key.level==0 || matches!(self.reduction(key,required_input_level,Class::Refinement),Some((_,Accuracy::Exact))) {
-            if !pages.contains(key) {pages.push(key.clone());}return;
-        }
-        for child in key.finer() {self.refinement_frontier(&child,limit,pages,required_input_level);if pages.len()>=limit {break;}}
-    }
-    pub(super) fn exact_inputs(&mut self,key:&Key,class:Class,held:&mut Vec<Held>) {
-        if key.level==0 {return;}
-        for child in key.finer() {
-            match self.get(&child,child.plan().bounds,Accuracy::Exact,0,class) {
-                Some(page)=>held.push(page),
-                None=>self.exact_inputs(&child,class,held),
-            }
-        }
+    pub(super) fn refinement_frontier(&mut self,key:&Key,pages:&mut Vec<Key>) {
+        if self.get(key,key.plan().bounds,Accuracy::Exact,0,Class::Refinement).is_some()
+            || self.pages.get(key).is_some_and(|page|page.matches(self.expected.as_deref(),key.plan().bounds,0).is_none()) {return;}
+        if !pages.contains(key) {pages.push(key.clone());}
     }
     pub(super) fn reduction(&mut self,key:&Key,required_input_level:u32,class:Class)->Option<(Vec<(Key,Held)>,Accuracy)> {
         if key.level==0 {return None;}
@@ -1460,20 +1487,6 @@ mod tests {
         assert_eq!(store.bytes(),2*bytes);assert_eq!(needed.plan,root.plan());
     }
     #[test]
-    fn a_native_frontier_fits_one_exact_working_window() {
-        let extent=[9504,6336];
-        let key=Key {source:None,expression:Arc::new(graph::Expression::Color([0;4])),extent,color:Default::default(),
-            blend_space:layer_core::BlendSpace::Linear,level:2,coordinate:[0;2],format:wgpu::TextureFormat::Rgba32Float};
-        let mut missing=Vec::new();
-        Store::default().refinement_frontier(&key,SOURCE_SLOTS,&mut missing,0);
-        assert_eq!(missing.len(),SOURCE_SLOTS);
-        let area=missing.into_iter().map(|key|page_rect(key.coordinate)).fold(PixelRect::EMPTY,PixelRect::union);
-        let strip=exact_strip(extent);
-        assert!(area.width()<=strip[0] && area.height()<=strip[1],"the admitted frontier {area:?} must fit its {strip:?} working window");
-        assert!(u64::from(strip[0])*u64::from(strip[1])<=SOURCE_SLOTS as u64*u64::from(PAGE_SIZE).pow(2));
-    }
-
-    #[test]
     fn display_pages_and_their_reductions_require_exact_replacement() {
         let bounds=PixelRect::full([2*PAGE_SIZE,PAGE_SIZE]);
         fn written(coverage:&mut Coverage,area:PixelRect,accuracy:Accuracy) {
@@ -1515,11 +1528,12 @@ impl Shown {
             && recorded.key.color==template.color && recorded.key.blend_space==template.blend_space))
     }
 }
-pub(super) struct Selection {pub(super) copies:Vec<(usize,Projection,bool)>,pub(super) composes:Vec<PixelRect>,pub(super) transition:bool,pub(super) waiting:bool}
+pub(super) struct Selection {pub(super) copies:Vec<(usize,Projection,bool)>,pub(super) composes:Vec<PixelRect>,pub(super) transition:bool,pub(super) held:Option<usize>}
 impl Selection {
     pub(super) fn complete(&self,served:PixelRect)->bool {
-        !self.waiting && self.composes.iter().all(|region|region.intersect(served).is_empty())
+        self.held.is_none() && self.composes.iter().all(|region|region.intersect(served).is_empty())
     }
+    pub(super) fn pins(&self)->Vec<Held> {self.copies.iter().map(|(_,copy,_)|copy.image.clone()).collect()}
 }
 #[derive(Clone,Copy)]
 pub(super) struct Asked {pub(super) view:layer_render::ViewState,pub(super) moving:bool}
@@ -1539,6 +1553,9 @@ impl Cell {
     }
     fn sleeping(&self)->bool {self.waits.iter().any(|(_,waiter)|waiter.as_ref().is_some_and(|waiter|!waiter.settled()))}
     fn written(&self)->bool {self.derived && self.reduced || self.shown.is_some()}
+    fn live(&self)->bool {!self.written() && self.unsettled()}
+    fn unsettled(&self)->bool {!matches!(self.wait,Some(crate::frame_demand::UnitWait::Parked(..)|crate::frame_demand::UnitWait::End(_)))}
+    fn awaits_native(&self,refining:bool)->bool {self.live() || refining && !self.derived && self.unsettled() && self.shown.as_ref().is_some_and(|shown|!shown.exact)}
     fn owed(&self,area:PixelRect,changed:PixelRect)->PixelRect {if !self.derived {PixelRect::EMPTY}else if self.reduced {area.intersect(changed)}else {area}}
     fn keyed(&self,area:PixelRect)->Option<&Recorded> {self.shown.as_ref()?.recorded.as_ref().filter(|recorded|recorded.written.intersect(area)==area)}
     fn pending(&self)->bool {!self.derived && (self.queued || self.shown.as_ref().is_none_or(|shown|!shown.exact))}
@@ -1565,6 +1582,14 @@ impl Cell {
     fn derive(&mut self,derived:bool) {
         if derived==self.derived {return;}
         *self=if derived {Self {current:true,derived:true,..Self::default()}}else {Self {queued:true,..Self::default()}};
+    }
+}
+#[derive(Default)]
+pub(super) struct Pairing {held:Vec<PixelRect>,live:Vec<(PixelRect,Option<crate::frame_demand::UnitWait>)>}
+impl Pairing {
+    pub(super) fn awaits(&self,region:PixelRect)->Option<Option<crate::frame_demand::UnitWait>> {
+        if self.held.contains(&region) {return None;}
+        self.live.iter().find(|(cell,_)|cell.intersect(region)==region).map(|(_,wait)|wait.clone())
     }
 }
 #[derive(Default)]
@@ -1776,24 +1801,26 @@ impl Cache {
         Ok(())
     }
     pub(super) fn select_cells(&self,r:&WgpuRasterizer,visible:PixelRect,presented:Accuracy,class:&dyn Fn(PixelRect)->Class)->Result<Selection,GpuRasterError> {
-        let mut selection=Selection {copies:Vec::new(),composes:Vec::new(),transition:false,waiting:false};
+        let mut selection=Selection {copies:Vec::new(),composes:Vec::new(),transition:false,held:None};
         let Some((mut store,mut cells,template))=self.cells() else {return Ok(selection);};
         let frame=store.expected().cloned().ok_or(GpuRasterError::Invariant("signature frame is missing or inconsistent"))?;
         selection.transition=self.pixels.committed_root().is_some_and(|root|root.authored()!=frame.authored_revision(&template.expression).ok());
         let (plan,input_level)=(self.plan,self.required_input_level());
-        let exact_input_level=super::refinement::exact_input_level(frame.scene(),input_level);
         for (index,coordinate) in coordinates(plan.bounds,plan.level).enumerate() {
-            if !cells.cells[index].queued || cells.cells[index].refused(r) {continue;}
+            let owed=presented==Accuracy::Exact && !cells.cells[index].derived && cells.cells[index].shown.as_ref().is_some_and(|shown|!shown.exact);
+            if !(cells.cells[index].queued || owed) {continue;}
             let region=bounds(coordinate,plan.level,plan.extent);
-            if cells.cells[index].sleeping() {for (lease,_) in &cells.cells[index].waits {lease.stamp(class(region));}continue;}
+            let hold=(!region.intersect(visible).is_empty()).then_some(index);
+            if cells.cells[index].refused(r) {selection.held=selection.held.or(hold);continue;}
+            if cells.cells[index].sleeping() {for (lease,_) in &cells.cells[index].waits {lease.stamp(class(region));}selection.held=selection.held.or(hold);continue;}
             let key=Key {coordinate,..template.clone()};
             let cell=&mut cells.cells[index];
             match frame.expected_key(&key,region,input_level) {
                 Ok(expected) if expected.version().resolved().is_some()=>if cell.wait.as_ref().is_some_and(|wait|!wait.refusing()) {cell.wait=None;},
-                Ok(expected)=>{cell.wait=Some(crate::frame_demand::UnitWait::input(crate::frame_demand::Producer::Name(expected.into_version())));selection.waiting|=!region.intersect(visible).is_empty();continue;},
+                Ok(expected)=>{cell.wait=Some(crate::frame_demand::UnitWait::input(crate::frame_demand::Producer::Name(expected.into_version())));selection.held=selection.held.or(hold);continue;},
                 Err(error@(GpuRasterError::NotReady|GpuRasterError::Waiting(_)))=>{
                     cell.wait=Some(crate::frame_demand::UnitWait::pending(&error,crate::frame_demand::Producer::Declaration(frame.declarations())));
-                    selection.waiting|=!region.intersect(visible).is_empty();continue;
+                    selection.held=selection.held.or(hold);continue;
                 },
                 Err(error)=>return Err(error),
             }
@@ -1801,7 +1828,7 @@ impl Cache {
                 && recorded.matches_as(&frame,&key.expression,input_level)==Some(true))).map(|shown|shown.exact);
             let exact_key=if store.pages.get(&key).is_some_and(|page|Coverage::covers(&page.coverage.exact,region)) {key.clone()}
                 else {Key {format:wgpu::TextureFormat::Rgba32Float,..key.clone()}};
-            let exact=(current!=Some(true)).then(||store.get(&exact_key,region,Accuracy::Exact,exact_input_level,class(region)).map(|image|(exact_key.clone(),image,true))).flatten();
+            let exact=(current!=Some(true)).then(||store.get(&exact_key,region,Accuracy::Exact,input_level,class(region)).map(|image|(exact_key.clone(),image,true))).flatten();
             let page=exact.or_else(||(current.is_none() && presented==Accuracy::Display).then(||store.get(&key,region,Accuracy::Display,input_level,class(region))
                 .map(|image|(key.clone(),image,false))).flatten());
             match page.and_then(|(key,image,exact)|store.recorded(&key,region).map(|recorded|(key,image,exact,recorded))) {
@@ -1816,7 +1843,8 @@ impl Cache {
         let format=self.precision.format();
         if self.pixels.root().is_some_and(|image|image.texture.format()==format) {return true;}
         let bytes=self.plan.size.map(u64::from).into_iter().product::<u64>()*u64::from(format.block_copy_size(None).unwrap());
-        let Ok(reservation)=self.reserve_window(r,scene,bytes,crate::frame_demand::Allowance::Fresh) else {return false;};
+        let allowance=self.cell_allowance(r,self.plan.bounds);
+        let reservation=match self.reserve_window(r,scene,bytes,allowance) {Ok(reservation)=>reservation,Err(refusal)=>{self.refuse(self.plan.bounds,&refusal,allowance);return false;}};
         let charge=reservation.charge();
         self.end_contact(encoder);
         let retired=self.pixels.take();
@@ -1998,6 +2026,15 @@ impl Cache {
         let cells=self.cells.lock().unwrap();
         Cells::reached(self.plan,region).into_iter().filter_map(|index|cells.cells.get(index)).any(|cell|cell.pending() && !cell.parked_by(Class::Refinement))
     }
+    pub(super) fn follow(&self,held:usize,regions:&[PixelRect]) {
+        let Some((_store,mut cells,_))=self.cells() else {return;};
+        let Some(cell)=cells.cells.get(held) else {return;};
+        let (wait,waits)=(cell.wait.clone(),cell.waits.clone());
+        for index in regions.iter().flat_map(|region|Cells::reached(self.plan,*region)).filter(|index|*index!=held) {
+            let cell=&mut cells.cells[index];
+            if cell.pending() {cell.wait.clone_from(&wait);cell.waits.clone_from(&waits);cell.queued=true;}
+        }
+    }
     pub(super) fn cell_allowance(&self,r:&WgpuRasterizer,region:PixelRect)->crate::frame_demand::Allowance {
         let cells=self.cells.lock().unwrap();
         let spent=Cells::reached(self.plan,region).into_iter().filter_map(|index|cells.cells.get(index)).any(|cell|cell.allowance(r)==crate::frame_demand::Allowance::Spent);
@@ -2041,6 +2078,11 @@ impl Cache {
             Cells::reached(self.plan,page).into_iter().all(|index|cells.cells[index].keyed(page)
                 .is_some_and(|recorded|recorded.matches_as(frame,&template.expression,input_level)==Some(true)))
         }).collect()
+    }
+    #[cfg(test)]
+    pub(super) fn refused_need(&self,region:PixelRect)->Option<u64> {
+        let cells=self.cells.lock().unwrap();
+        Cells::reached(self.plan,region).into_iter().find_map(|index|cells.cells.get(index)?.refusal.clone().map(|refusal|refusal.alone().need()))
     }
     #[cfg(test)]
     pub(super) fn evict_window(&self,area:PixelRect) {
@@ -2195,6 +2237,21 @@ impl Cache {
             parts.extend(found);
         }
         parts
+    }
+    pub(super) fn produces_for(&self,reader:&Cache)->bool {
+        self.transform.is_none() && self.plan.bounds==PixelRect::full(self.plan.extent) && reader.plan.bounds==self.plan.bounds && self.plan.level<=reader.plan.level
+            && self.cells().is_some_and(|(_,cells,_)|cells.cells.iter().any(Cell::live))
+    }
+    pub(super) fn owes_native(&self,r:&WgpuRasterizer,region:PixelRect)->bool {
+        let refining=super::refinement::refining(r);
+        self.plan.level==0 && self.plan.bounds.intersect(region)==region
+            && self.cells().is_some_and(|(_,cells,_)|Cells::reached(self.plan,region).into_iter().all(|index|cells.cells[index].awaits_native(refining)))
+    }
+    pub(super) fn pairing(&self)->Pairing {
+        let held=self.paired.iter().map(|(region,..)|*region).collect();
+        let live=self.cells().map_or_else(Vec::new,|(_,cells,_)|cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level)).filter(|(cell,_)|cell.live())
+            .map(|(cell,coordinate)|(bounds(coordinate,self.plan.level,self.plan.extent),cell.wait.clone())).collect());
+        Pairing {held,live}
     }
     pub(super) fn current_window(&self,reader:&Cache)->Option<WindowSource> {
         #[cfg(test)] crate::test_support::PassCounts {navigator_checks:1,..Default::default()}.record();
@@ -2708,7 +2765,7 @@ pub(super) mod query_tests {
     }
 
     #[test]
-    fn a_frame_holds_no_parent_unit_whose_sources_are_not_ready() {
+    fn a_frame_streams_one_parent_while_its_sources_wait_and_publishes_once_they_arrive() {
         use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey};
         let extent=[2048,1024];
         let mut document=layer_core::Document::new(layer_core::PortableId::random(),extent[0],extent[1],
@@ -2721,15 +2778,11 @@ pub(super) mod query_tests {
         let mut r=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
         let frame=display_frame(&document,2);
         let check=|r:&WgpuRasterizer,attempt:usize| {
-            let scene=r.scene.as_ref().unwrap();let cache=r.scale_display.as_ref().unwrap();
-            let tiled=super::super::use_tiles(r,cache.plan,frame,Some(scene));
+            let cache=r.scale_display.as_ref().unwrap();
             let parent=cache.page_key(cache.graph.root.clone().unwrap(),cache.plan.bounds);
-            let held=cache.pages.lock().unwrap().inputs.iter().filter(|(key,_)|**key==Key {coordinate:key.coordinate,..parent.clone()})
-                .flat_map(|(_,inputs)|inputs.iter().filter(|input|!input.pages.is_empty()).map(|input|input.region)).collect::<Vec<_>>();
-            for region in held {
-                let requests=cache.region_sources(scene,r,frame,region,tiled);
-                assert!(requests.iter().all(|(id,request)|cache.source_ready(scene,r,*id,request)),"attempt {attempt} holds a parent unit over {region:?} while its sources are not ready");
-            }
+            let streaming=cache.pages.lock().unwrap().inputs.iter().filter(|(key,_)|**key==Key {coordinate:key.coordinate,..parent.clone()})
+                .flat_map(|(_,inputs)|inputs.iter().filter(|input|input.stream.pending()).map(|input|input.region)).collect::<Vec<_>>();
+            assert!(streaming.len()<=1,"attempt {attempt} streams the sources of {streaming:?}; a cell waits for the parent ahead of it");
         };
         for attempt in 0..4 {crate::test_support::submit_ready(&mut r,frame).unwrap();check(&r,attempt);r.wait_idle().unwrap();}
         store.gate.release();
@@ -2740,6 +2793,63 @@ pub(super) mod query_tests {
             assert!(std::time::Instant::now()<deadline,"deferred composition must publish");
             r.wait_idle().unwrap();
         }
+    }
+
+    #[test]
+    fn a_navigator_refreshes_on_its_own_once_every_cell_of_the_full_view_it_waits_for_is_parked() {
+        use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey};
+        let extent=[2048,1024];
+        let mut document=layer_core::Document::new(layer_core::PortableId::random(),extent[0],extent[1],
+            layer_core::DocumentNames {paint:"Pixels".into(),paper:"Paper".into()});
+        let descriptor=document.composition().color.paint_descriptor();
+        let tiles=(0..extent[0]/PAGE_SIZE).flat_map(|x|(0..extent[1]/PAGE_SIZE).map(move|y|[x,y])).map(|coordinate|(TileKey {plane:RasterPlane::Color,coordinate},
+            RasterTile::backed(TileBlob::encode(descriptor,&[16,48,90,255].repeat((PAGE_SIZE*PAGE_SIZE) as usize)).unwrap()))).collect();
+        paint_mut(&mut document,0).raster=RasterRevision::backed(RasterData {tiles,..Default::default()});
+        let store=crate::test_support::GatedStore::new(&layer_core::Editor::new(document.clone()).retained_tiles(),false);
+        let mut r=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        crate::test_support::submit_ready(&mut r,display_frame(&document,2)).unwrap();
+        assert!(r.navigator.outstanding(&r).is_none(),"the Navigator waits for the view producing the whole drawing");
+        let cache=r.scale_display.as_ref().unwrap();
+        cache.refuse(cache.plan.bounds,&r.scene_tiers.display.wanting(Class::Visible,1<<20),crate::frame_demand::Allowance::Spent);
+        assert!(r.navigator.outstanding(&r).is_some(),"with every cell of that view parked no donor will come, so the Navigator asks to refresh on its own");
+        drop(store);
+    }
+
+    #[test]
+    fn a_stroke_across_two_cells_streams_the_halves_of_one_while_its_sources_wait() {
+        use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey};
+        let extent=[2048,1024];
+        let mut artwork=layer_core::Document::new(layer_core::PortableId::random(),extent[0],extent[1],
+            layer_core::DocumentNames {paint:"Base".into(),paper:"Paper".into()}).artwork;
+        let descriptor=layer_core::color::DocumentColor::default().paint_descriptor();
+        let layers=(0..3u8).map(|layer| {
+            let (occurrence,target)=crate::test_support::add_paint(&mut artwork,format!("Layer {layer}"),extent);
+            let SourceTarget::Paint(paint)=target else {unreachable!()};
+            let tiles=(0..extent[0]/PAGE_SIZE).flat_map(|x|(0..extent[1]/PAGE_SIZE).map(move|y|[x,y])).filter(|_|layer!=1).map(|coordinate|(TileKey {plane:RasterPlane::Color,coordinate},
+                RasterTile::backed(TileBlob::encode(descriptor,&[40*layer,90,160,200].repeat((PAGE_SIZE*PAGE_SIZE) as usize)).unwrap()))).collect();
+            artwork.paint.get_mut(paint).unwrap().raster=RasterRevision::backed(RasterData {tiles,..Default::default()});
+            (occurrence,target)
+        }).collect::<Vec<_>>();
+        let mut document=layer_core::Document::from_artwork(artwork).unwrap();
+        let (working,target)=layers[1];
+        document.working.occurrence=Some(working);document.working.target=Some(target);
+        let store=crate::test_support::GatedStore::new(&layer_core::Editor::new(document.clone()).retained_tiles(),false);
+        let mut r=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        layer_render::CanvasRenderer::set_working_layer(&mut r,Some(working));
+        let frame=display_frame(&document,2);
+        crate::test_support::submit_ready(&mut r,frame).unwrap();r.wait_idle().unwrap();
+        let style=crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::GPen);
+        let dabs=[[300.,300.],[1500.,700.]].map(|centre|crate::tests::test_dab(centre,[0.9,0.1,0.3,1.],0.8));
+        let batch=|index:usize,kind|layer_render::DabBatch {kind,first_dab:index as u32,stroke_start:index==0,stroke_end:false,
+            ..crate::test_support::dab_batch(target,style.clone(),dabs[index].bounds())};
+        let batches=[batch(0,layer_render::DabBatchKind::Persistent),batch(1,layer_render::DabBatchKind::Preview)];
+        crate::test_support::submit_ready(&mut r,FramePacket {dabs:&dabs,dab_batches:&batches,..frame}).unwrap();
+        let cache=r.scale_display.as_ref().unwrap();
+        let parent=cache.page_key(cache.graph.root.clone().unwrap(),cache.plan.bounds);
+        let streaming=cache.pages.lock().unwrap().inputs.iter().filter(|(key,_)|**key==Key {coordinate:key.coordinate,..parent.clone()})
+            .flat_map(|(_,inputs)|inputs.iter().filter(|input|input.stream.pending()).map(|input|input.region)).collect::<Vec<_>>();
+        assert!(cache.pivot_halves().len()==2 && streaming.len()==1,"the stroke's two cells stream {streaming:?}; the second cell's halves wait for the cell streaming ahead of it");
+        drop(store);
     }
 
     #[test]
@@ -3852,7 +3962,7 @@ pub(super) mod query_tests {
         let key=|coordinate:[u32;2]|Key {source:None,expression:Arc::new(graph::Expression::Color([0;4])),extent,color:r.document_color(),
             blend_space:layer_core::BlendSpace::Linear,level:0,coordinate,format:wgpu::TextureFormat::Rgba32Float};
         let pinned=|store:&Store,reading:&[Key]|store.pages.iter().filter(|(key,page)|Arc::strong_count(&page.image)>1 || store.inputs.contains_key(*key)
-            || page.submission.as_ref().is_some_and(submission::Submission::pending) || reading.contains(key)).map(|(_,page)|page.image.bytes()).sum::<u64>();
+            || page.coverage.submissions.values().any(submission::Submission::pending) || reading.contains(key)).map(|(_,page)|page.image.bytes()).sum::<u64>();
         let bytes=store.claim(&r,key([0;2]),u64::MAX,WindowId::default(),crate::residency::Class::Visible).unwrap().bytes();
         let mut seed=0x9e37_79b9_7f4a_7c15u64;let mut counts=[0;8];
         let mut held=Vec::<Held>::new();let mut pending=Vec::<submission::CommandEncoder>::new();let mut reading=Vec::<Key>::new();
@@ -4203,7 +4313,7 @@ impl Store {
         for (key,page) in &mut self.pages {
             if key.source!=Some(id) || key.level!=level {continue;}
             for coordinate in coordinates(area.intersect(key.plan().bounds),page.coverage.written.level) {
-                page.versions.remove(&coordinate);page.coverage.written.entries.remove(&coordinate);page.coverage.exact.entries.remove(&coordinate);
+                page.versions.remove(&coordinate);page.coverage.written.entries.remove(&coordinate);page.coverage.exact.entries.remove(&coordinate);page.coverage.submissions.remove(&coordinate);
             }
         }
         for (key,inputs) in &mut self.inputs {
@@ -4211,9 +4321,9 @@ impl Store {
         }
     }
     pub(super) fn retained_pages(&self) -> Vec<RetainedPage> {
-        self.pages.iter().filter(|(_,page)|page.submission.as_ref().is_none_or(|submission|!submission.discarded()))
+        self.pages.iter().filter(|(_,page)|page.coverage.written.is_empty() || page.coverage.valid_written().next().is_some())
             .map(|(key,page)|RetainedPage {key:key.clone(),texture:page.image.texture.clone(),
-                written:page.coverage.written.clone(),current:PageSet {level:page.coverage.written.level,entries:page.coverage.written.iter().copied().filter(|coordinate|
+                written:PageSet {level:page.coverage.written.level,entries:page.coverage.valid_written().copied().collect()},current:PageSet {level:page.coverage.written.level,entries:page.coverage.valid_written().copied().filter(|coordinate|
                     page.matches(self.expected.as_deref(),bounds(*coordinate,page.coverage.written.level,key.extent),key.level)==Some(true)).collect()},exact:page.coverage.exact.clone()}).collect()
     }
 }

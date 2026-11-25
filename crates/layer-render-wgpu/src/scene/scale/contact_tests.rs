@@ -1148,30 +1148,78 @@ fn wet_and_watercolor_presets_hold_their_contact_frame_until_pen_up() {presets_h
 #[test]
 fn liquify_presets_hold_their_contact_frame_until_pen_up() {presets_hold_their_contact_frame_until_pen_up(BrushFamily::Liquify);}
 
-#[test]
-fn a_fit_liquify_drag_composes_only_near_its_brush_and_matches_a_twin_that_composes_every_frame() {
+fn fit_liquify_drag(mut observe:impl FnMut(&WgpuRasterizer,usize,&[layer_render::Dab;2],&crate::test_support::PassCounts,&[crate::test_support::Composed])) {
     let extent=[8192,1024];let doc=document_at(extent);let target=primary_target(&doc);
     let mut style=crate::layer_tests::preset_style(DefaultBrushPreset::LiquifyPush);
     style.liquify=Some(Arc::new(layer_core::liquify::Context::for_source(doc.artwork.paint.get(primary_paint(&doc)).unwrap(),false)));
     let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,4);
     let [mut r,mut twin]=[renderer(&doc),renderer(&doc)];
     crate::test_support::submit_settled(&mut r,frame);crate::test_support::submit_settled(&mut twin,frame);
-    let texels=u64::from(PAGE_SIZE>>r.scale_display.as_ref().unwrap().plan.level).pow(2);
     let push=|x:f32| {let mut dab=stroke_dab(x,512.);dab.radii=[140.;2];dab.motion=[40.,0.];dab.material[3]=1.;dab};
     let mut contact=0;
     for step in 0..18usize {
         let x=300.+300.*step as f32;let time=0.01*(step+1) as f32;
         let dabs=[push(x),push(x+45.)];
-        let counts=predicted_frame(&mut r,frame,target,&style,1,&dabs,step==0,time);
+        let (counts,written)=crate::test_support::compositions(||predicted_frame(&mut r,frame,target,&style,1,&dabs,step==0,time));
         predicted_frame(&mut twin,FramePacket {composite_all:true,..frame},target,&style,1,&dabs,step==0,time);
         if in_contact(&counts) {contact+=1;}
         let error=max_error(&display_pixels(&r),&display_pixels(&twin));
         assert!(error<1e-4,"Liquify contact frame {step} differs from a twin that composes every frame by {error}");
-        let near=page_coordinates(PixelRect::new((x as u32).saturating_sub(512),0,x as u32+557,extent[1])).count() as u64*texels+u64::from(PAGE_SIZE).pow(2);
-        assert!(step<4 || counts.composed_texels<=near,
-            "Liquify contact frame {step} composes {} texels, more than the {near} of the pages within two pages of its brush and one cell it enters",counts.composed_texels);
+        observe(&r,step,&dabs,&counts,&written);
     }
     assert!(contact>=16,"the drag stays in contact: {contact} frames");
+}
+
+fn window_cells(r:&WgpuRasterizer,written:&[crate::test_support::Composed])->BTreeMap<[u32;2],Vec<u64>> {
+    let window=r.scale_display.as_ref().unwrap().pixels.root().unwrap();
+    let (side,span)=(1<<window.plan.level,PAGE_SIZE<<window.plan.level);
+    let mut cells=BTreeMap::<[u32;2],Vec<u64>>::new();
+    for (_,[x,y,width,height]) in written.iter().filter(|(texture,_)|*texture==window.texture) {
+        let origin=[window.plan.bounds.min_x()+x*side,window.plan.bounds.min_y()+y*side];
+        cells.entry(origin.map(|value|value/span)).or_default().push(u64::from(*width)*u64::from(*height));
+    }
+    cells
+}
+
+#[test]
+fn a_fit_liquify_drag_composes_only_near_its_brush_and_matches_a_twin_that_composes_every_frame() {
+    fit_liquify_drag(|r,step,dabs,counts,_| {
+        let (x,height)=(dabs[0].center.x as u32,r.document_extent[1]);
+        let texels=u64::from(PAGE_SIZE>>r.scale_display.as_ref().unwrap().plan.level).pow(2);
+        let near=page_coordinates(PixelRect::new(x.saturating_sub(512),0,x+557,height)).count() as u64*texels+u64::from(PAGE_SIZE).pow(2);
+        assert!(step<4 || counts.composed_texels<=near,
+            "Liquify contact frame {step} composes {} texels, more than the {near} of the pages within two pages of its brush and one cell it enters",counts.composed_texels);
+    });
+}
+
+#[test]
+fn a_carried_liquify_cell_beside_its_moving_tip_composes_no_texels_while_the_tip_cell_composes_once() {
+    let mut previous:Vec<layer_render::Dab>=Vec::new();
+    let mut carrying=0;
+    fit_liquify_drag(|r,step,dabs,counts,written| {
+        let span=PAGE_SIZE<<r.scale_display.as_ref().unwrap().plan.level;
+        let cells=window_cells(r,written);
+        let near=|cell:[u32;2]|dabs.iter().chain(&previous).any(|dab| {
+            let (bounds,reach)=(dab.bounds(),PAGE_SIZE as f32);
+            [(cell[0],bounds.min.x,bounds.max.x),(cell[1],bounds.min.y,bounds.max.y)].into_iter()
+                .all(|(at,low,high)|((at*span) as f32)<high+reach && (((at+1)*span) as f32)>low-reach)
+        });
+        let predicted:BTreeSet<[u32;2]>=r.preview_declaration.as_ref().and_then(|preview|preview.contact_outputs())
+            .into_iter().flatten().map(|tile|tile.map(|value|value*PAGE_SIZE/span)).collect();
+        let carried:Vec<_>=predicted.iter().copied().filter(|cell|!near(*cell)).collect();
+        let tip=[dabs[0].center.x as u32/span,dabs[0].center.y as u32/span];
+        let context=format!("frame {step}: composed texels by cell {cells:?}, carried cells {carried:?}, tip {tip:?}");
+        previous=dabs.to_vec();
+        if !in_contact(counts) {return;}
+        carrying+=usize::from(!carried.is_empty());
+        assert!(cells.values().all(|texels|texels.len()==1),"each composed cell has one composition in {context}");
+        for cell in carried {
+            assert_eq!(cells.get(&cell).map_or(0,|texels|texels.iter().sum()),0,"the carried cell {cell:?} composes no texels in {context}");
+        }
+        let tip_texels=cells.get(&tip).map_or(0,|texels|texels.iter().sum::<u64>());
+        assert!((1..=u64::from(PAGE_SIZE).pow(2)).contains(&tip_texels),"the tip cell composes its change, at most one cell, in {context}");
+    });
+    assert!(carrying>=10,"the drag carries unresolved cells behind its tip in {carrying} contact frames");
 }
 
 #[test]

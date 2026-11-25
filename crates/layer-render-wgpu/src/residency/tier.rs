@@ -149,11 +149,12 @@ impl Tier {
     pub(crate) fn wanting(self: &Arc<Self>, class: Class, bytes: u64) -> Blocked {
         Blocked { tier: self.clone(), class, bytes, ahead: Default::default(), ledger: None, with: None, batch: None, external: false, seen: self.stamp(None) }
     }
-    fn reserve_admission(self: &Arc<Self>, class: Class, bytes: u64) -> Result<(), Blocked> {
+    fn reserve_admission(self: &Arc<Self>, within: Option<&Self>, class: Class, bytes: u64) -> Result<(), Blocked> {
+        if within.is_some_and(|within| std::ptr::eq(&**self, within)) { return Ok(()); }
         let seen = self.stamp(None);
         self.used.try_update(SeqCst, SeqCst, |used|self.fits_after(used,class,bytes).then(||used+bytes))
             .map_err(|_|self.refusal(class,bytes,None,seen))?;
-        if let Some(parent)=&self.parent && let Err(blocked)=parent.reserve_admission(class,bytes) {
+        if let Some(parent)=&self.parent && let Err(blocked)=parent.reserve_admission(within,class,bytes) {
             self.used.fetch_sub(bytes,SeqCst);self.release_edge();return Err(blocked);
         }
         Ok(())
@@ -166,7 +167,7 @@ impl Tier {
         self.admit_unevicted(class,bytes).map_err(|blocked| { blocked.tier.heap.evict(blocked.deficit(), class); let batch = blocked.tier.heap.retiring(); blocked.reclaiming(batch) })
     }
     pub(crate) fn admit_unevicted(self: &Arc<Self>, class: Class, bytes: u64) -> Result<Reservation, Blocked> {
-        self.reserve_admission(class,bytes)?;
+        self.reserve_admission(None,class,bytes)?;
         Ok(Reservation(Charge {tier:self.clone(),bytes},class))
     }
     fn notify(&self, ledger: layer_core::MemoryRoom) {
@@ -213,6 +214,13 @@ impl Reservation {
     pub(crate) fn class(&self)->Class {self.1}
     pub(crate) fn split(&mut self, bytes:u64)->Option<Self> {self.0.split(bytes).map(|charge|Self(charge,self.1))}
     pub(crate) fn merge(&mut self, other:Self) {self.0.merge(other.0);}
+    pub(crate) fn admit_within(&mut self, tier:&Arc<Tier>, bytes:u64) -> Result<Self, Blocked> {
+        assert!(tier.lineage().any(|own|std::ptr::eq(own,&*self.0.tier)), "a reservation funds only tiers within its own");
+        let remaining=self.0.bytes.checked_sub(bytes).ok_or_else(||self.0.tier.wanting(self.1,bytes))?;
+        tier.reserve_admission(Some(&self.0.tier),self.1,bytes)?;
+        self.0.bytes=remaining;
+        Ok(Self(Charge {tier:tier.clone(),bytes},self.1))
+    }
     pub(crate) fn absorb(&mut self, mut charge:Charge) {
         let (tier,bytes)=(&self.0.tier,std::mem::take(&mut charge.bytes));
         let shared=tier.lineage().find(|ancestor|charge.tier.lineage().any(|own|std::ptr::eq(own,*ancestor))).expect("a reservation absorbs only storage under its own root");
@@ -261,7 +269,6 @@ impl Blocked {
 }
 impl Blocked {
     pub(crate) fn class(&self)->Class {self.class}
-    pub(crate) fn covering(self, bytes: u64) -> Self { Self { bytes: self.bytes.max(bytes), ..self } }
     pub(crate) fn alone(self) -> Self { Self { ahead: Default::default(), ..self } }
     pub(crate) fn with(self, other: Blocked) -> Self { let batch = super::Batch::joined(self.batch.clone().into_iter().chain(other.batch.clone())); Self { with: Some(Box::new(other)), batch, ..self } }
     pub(crate) fn reclaiming(self, batch: Option<super::Batch>) -> Self { Self { batch, ..self } }
@@ -276,6 +283,7 @@ impl Blocked {
             && self.with.as_ref().is_none_or(|with| with.fits())
     }
     pub(crate) fn need(&self) -> u64 { self.bytes.saturating_add(self.ahead.load(SeqCst)) }
+    pub(crate) fn refuses(&self, tier: &Arc<Tier>, bytes: u64) -> bool { Arc::ptr_eq(&self.tier, tier) && bytes >= self.need() }
     pub(crate) fn same(&self, other: &Self) -> bool { Arc::ptr_eq(&self.ahead, &other.ahead) }
     pub(crate) fn gained(&self) -> bool { self.tier.stamp(self.ledger.as_ref()) != self.seen || self.with.as_ref().is_some_and(|with| with.gained()) }
     pub(crate) fn deficit(&self) -> u64 { self.tier.used().saturating_add(self.bytes).saturating_sub(self.tier.available(self.class)) }

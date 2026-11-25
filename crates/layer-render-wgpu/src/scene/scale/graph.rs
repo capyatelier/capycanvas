@@ -98,35 +98,6 @@ impl Expression {
             }
         }
     }
-    pub(super) fn required(&self, region: Damage, plan: display_mips::Plan) -> Damage {
-        match self {
-            Self::Color(_) => Damage::EMPTY,
-            Self::Objects {..} | Self::Vector { .. } | Self::VectorPreview { .. } | Self::VectorMotion { .. } => region,
-            Self::Source { .. } => region,
-            Self::Opacity { input, .. } => input.required(region, plan),
-            Self::Combine { front, back, .. } => front.required(region.clone(), plan).union(back.required(region, plan)),
-            Self::Effect { input, masks, radius, .. } => masks.iter().flatten().fold(
-                input.required(region.dependency(*radius, plan), plan), |r, n| r.union(n.required(region.clone(), plan))),
-        }
-    }
-    pub(super) fn source_domains(&self, scene: SceneView<'_>) -> [BTreeSet<SourceTarget>; 2] {
-        fn visit(node: &Expression, scene: SceneView<'_>, native: bool, domains: &mut [BTreeSet<SourceTarget>; 2]) {
-            match node {
-                Expression::Source { id, .. } => { domains[usize::from(native)].insert(*id); }
-                Expression::Opacity { input, .. } => visit(input, scene, native, domains),
-                Expression::Combine { front, back, .. } => { visit(front, scene, native, domains); visit(back, scene, native, domains); }
-                Expression::Effect { input, chain, masks, .. } => {
-                    let native = native || chain.iter().any(|(h, ..)| native_pointwise_alpha(scene.effect(*h).unwrap().program));
-                    visit(input, scene, native, domains);
-                    for mask in masks.iter().flatten() { visit(mask, scene, native, domains); }
-                }
-                Expression::Color(_) | Expression::Objects {..} | Expression::Vector { .. } | Expression::VectorPreview { .. } | Expression::VectorMotion { .. } => {}
-            }
-        }
-        let mut domains = Default::default();
-        visit(self, scene, false, &mut domains);
-        domains
-    }
     pub(super) fn reads(&self) -> (BTreeSet<SourceTarget>, BTreeSet<OccurrenceHandle>) {
         fn visit(node: &Expression, reads: &mut (BTreeSet<SourceTarget>, BTreeSet<OccurrenceHandle>)) {
             match node {
@@ -144,15 +115,6 @@ impl Expression {
         let mut reads = Default::default();
         visit(self, &mut reads);
         reads
-    }
-    pub(super) fn native_capture(&self, scene: SceneView<'_>, level: u32) -> bool {
-        match self {
-            Self::Opacity { input, .. } => input.native_capture(scene, level),
-            Self::Combine { front, back, .. } => front.native_capture(scene, level) || back.native_capture(scene, level),
-            Self::Effect { input, chain, masks, .. } => super::effects::native_alpha_capture(scene, &chain.iter().map(|(handle, ..)| *handle).collect::<Vec<_>>(), level)
-                || input.native_capture(scene, level) || masks.iter().flatten().any(|mask| mask.native_capture(scene, level)),
-            _ => false,
-        }
     }
     pub(super) fn moves_other_than(node: &Node, live: &[Moving]) -> bool {
         match node.as_ref() {
@@ -329,7 +291,7 @@ impl Graph {
             && !matches!(n.as_ref(), Expression::Combine { front, .. } if matches!(front.as_ref(), Expression::VectorPreview { .. } | Expression::VectorMotion { .. }))).collect();
         self.content = content;
         self.root = Some(root);
-        self.parts = parts.filter(|_| !super::refinement::exact_at_view_level(packet.scene));
+        self.parts = parts.filter(|_| !super::refinement::objects_or_vectors(packet.scene));
         self.inputs = Some(inputs);
         Ok(())
     }
@@ -480,7 +442,7 @@ impl Evaluator<'_> {
         let fused=(window.texture.format()==wgpu::TextureFormat::Rgba32Float || matches!(node.as_ref(),Expression::Combine {..})).then(||output.clone());
         let outer=std::mem::replace(&mut self.approximate,false);
         let value=self.evaluate_uncached(node,fused)?;
-        if super::refinement::exact_at_view_level(self.packet.scene) && !self.approximate {write.accuracy=pages::Accuracy::Exact;}
+        if super::refinement::exact_at_view_level(self.packet.scene,self.cache.plan.level) && !self.approximate && !self.approximates(node) {write.accuracy=pages::Accuracy::Exact;}
         self.approximate|=outer;
         let value=self.materialize(value,Some(output))?;
         self.unit.window.push(write);
@@ -491,13 +453,12 @@ impl Evaluator<'_> {
         let region=self.region.in_frame(self.cache.plan.extent);
         let required_input_level=self.cache.required_input_level();
         let mut key=self.cache.page_key(node.clone(),region);
-        let exact_at_view=super::refinement::exact_at_view_level(self.packet.scene);
-        let presented=super::refinement::presented_accuracy(self.r,self.packet.scene,self.preview);
-        let exact_input_level=super::refinement::exact_input_level(self.packet.scene,required_input_level);
+        let exact_at_view=super::refinement::exact_at_view_level(self.packet.scene,self.cache.plan.level);
+        let presented=super::refinement::presented_accuracy(self.r,self.packet.scene,self.cache.plan.level,self.preview,self.cache.approximates(self.r,self.packet));
         let cached={
             let mut store=self.cache.pages.lock().unwrap();
             store.get(&key,region,pages::Accuracy::Display,required_input_level,self.class).or_else(||store.get(&key,region,pages::Accuracy::Exact,0,self.class)).map(|image| {
-                let exact=store.get(&key,region,pages::Accuracy::Exact,exact_input_level,self.class).is_some();(image,exact)
+                let exact=store.get(&key,region,pages::Accuracy::Exact,required_input_level,self.class).is_some();(image,exact)
             })
         };
         if let Some((image,exact))=cached.filter(|(_,exact)|*exact || presented==pages::Accuracy::Display) {
@@ -537,13 +498,14 @@ impl Evaluator<'_> {
         let direct=(image.texture.format()==wgpu::TextureFormat::Rgba32Float || matches!(node.as_ref(),Expression::Vector {..} | Expression::Combine {..})).then(||output.clone());
         let outer=std::mem::replace(&mut self.approximate,false);
         let value=self.evaluate_uncached(node,direct)?;
-        if exact_at_view && !self.approximate {write.accuracy=pages::Accuracy::Exact;}
+        if exact_at_view && !self.approximate && !self.approximates(node) {write.accuracy=pages::Accuracy::Exact;}
         self.approximate|=outer;
         let value=self.materialize(value,Some(output))?;
         self.unit.pages.push(write);
         Ok(Some(value))
     }
 
+    fn approximates(&self,node:&Node)->bool {super::cell_plan::Footprint::approximate(node,self.packet.scene,self.cache.plan.level,self.cache.at_rest(self.r,self.packet))}
     fn combine(&mut self, front: &Node, back: &Node, blend: u32, flags: u32, output: Option<Target>) -> Result<Value, GpuRasterError> {
         let (front, back) = if front.cost().1 >= back.cost().1 {
             let front = self.evaluate(front)?;

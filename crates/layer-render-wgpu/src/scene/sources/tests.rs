@@ -43,11 +43,11 @@ impl DecodedTiles {
         source: &Arc<SourceImage>,
         coordinate: [u32; 2],
     ) -> Result<(RawTile, Option<Arc<PendingTile>>), GpuRasterError> {
-        self.plan_image(r,source,coordinate,SourceUse::Native)
+        self.plan_image(r,source,coordinate,SourceUse::Native,None)
     }
     pub(crate) fn fixture_image_plan(&mut self,r:&WgpuRasterizer,source:&Arc<SourceImage>,coordinate:[u32;2],use_:SourceUse)
         ->Result<(RawTile,Option<Arc<PendingTile>>),GpuRasterError> {
-        self.plan_image(r,source,coordinate,use_)
+        self.plan_image(r,source,coordinate,use_,None)
     }
     pub(crate) fn leases_image(&self,source:&Arc<SourceImage>,coordinate:[u32;2])->Option<bool> {
         self.keyed(&Key::Image(Arc::downgrade(source),coordinate)).map(Slot::leased)

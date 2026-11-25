@@ -19,7 +19,7 @@ use std::{
 #[derive(Clone,Copy,PartialEq,Eq)]
 pub(crate) enum SourceUse { Native, Exact }
 pub(crate) const NORMALIZED_PAGE_BYTES: u64 = PAGE_SIZE as u64 * PAGE_SIZE as u64 * 16;
-const ARRAY_BYTES: u64 = 16 << 20;
+pub(crate) const ARRAY_BYTES: u64 = 16 << 20;
 const DECODERS: usize = 4;
 use crate::native_tiles::transfer;
 
@@ -449,12 +449,24 @@ impl Inputs {
         Ok(held)
     }
     pub(crate) fn additional_bytes(&self,cache:&DecodedTiles)->u64 {
-        let mut bytes=self.tiles.iter().map(|(key,color,_,use_)| {
+        let (bytes,slots)=self.needs(cache);
+        bytes+slots.into_iter().map(page_bytes).sum::<u64>()
+    }
+    pub(crate) fn uncovered_bytes(&self,cache:&DecodedTiles,credit:&mut Credit)->u64 {
+        let (bytes,slots)=self.needs(cache);
+        bytes+cache.slot_bytes(Cohort::uncovered(slots.iter(),credit))
+    }
+    fn hits<'a>(&'a self,cache:&'a DecodedTiles)->impl Iterator<Item=usize>+'a {
+        self.tiles.iter().filter_map(|(key,..)|cache.keys.get(key).copied().filter(|index|cache.slots[*index].valid.load(Ordering::Acquire)))
+    }
+    pub(crate) fn hit_leases(&self,cache:&DecodedTiles)->Vec<Lease> {self.hits(cache).map(|index|cache.slot_lease(&cache.slots[index])).collect()}
+    fn needs(&self,cache:&DecodedTiles)->(u64,Vec<wgpu::TextureFormat>) {
+        let slots=self.tiles.iter().filter_map(|(key,color,_,use_)| {
             if cache.keyed(key).is_some_and(|slot|slot.valid.load(Ordering::Acquire)
-                && (*use_==SourceUse::Native || slot.layer.format()==wgpu::TextureFormat::Rgba32Float)) {return 0;}
-            let format=if *use_==SourceUse::Native {color.map_or(wgpu::TextureFormat::Rgba32Float,SourceColor::input_format)}else {wgpu::TextureFormat::Rgba32Float};
-            u64::from(PAGE_SIZE).pow(2)*u64::from(format.block_copy_size(None).unwrap())
-        }).sum::<u64>();
+                && (*use_==SourceUse::Native || slot.layer.format()==wgpu::TextureFormat::Rgba32Float)) {return None;}
+            Some(if *use_==SourceUse::Native {color.map_or(wgpu::TextureFormat::Rgba32Float,SourceColor::input_format)}else {wgpu::TextureFormat::Rgba32Float})
+        }).collect();
+        let mut bytes=0;
         let mut formats=std::collections::HashSet::new();let mut tables=std::collections::BTreeSet::new();
         for (key,color,_,use_) in &self.tiles {
             if cache.keyed(key).is_some_and(|slot|slot.layer.format()==wgpu::TextureFormat::Rgba32Float && slot.ready()) {continue;}
@@ -464,17 +476,21 @@ impl Inputs {
             let space=color.space();
             if !cache.transfer.contains(space) && tables.insert(transfer::Tables::index(space)) {bytes+=transfer::TABLE_BYTES;}
         }
-        bytes
+        (bytes,slots)
     }
-    pub(crate) fn acquire(&self,r:&WgpuRasterizer,class:crate::residency::Class)->Result<AcceptedInputs,GpuRasterError> {
+    pub(crate) fn acquire(&self,r:&WgpuRasterizer,class:crate::residency::Class)->Result<AcceptedInputs,GpuRasterError> {self.acquire_from(r,class,None)}
+    pub(crate) fn acquire_in(&self,r:&WgpuRasterizer,class:crate::residency::Class,cohort:&Cohort)->Result<AcceptedInputs,GpuRasterError> {self.acquire_from(r,class,Some(cohort))}
+    fn acquire_from(&self,r:&WgpuRasterizer,class:crate::residency::Class,cohort:Option<&Cohort>)->Result<AcceptedInputs,GpuRasterError> {
         let mut accepted=Vec::new();
-        for (key,color,pixels,use_) in &self.tiles {
+        let mut tiles=self.tiles.iter().collect::<Vec<_>>();
+        if cohort.is_some() {tiles.sort_by_key(|(key,..)|!r.source_tiles.borrow().keyed(key).is_some_and(|slot|slot.valid.load(Ordering::Acquire)));}
+        for (key,color,pixels,use_) in tiles {
             let mut cache=r.source_tiles.borrow_mut();
             if *use_==SourceUse::Exact && let Some(color)=color && !cache.keyed(key).is_some_and(|slot|slot.layer.format()==wgpu::TextureFormat::Rgba32Float
                 && slot.ready()) {cache.prepare_color(&r.device,*color)?;}
             let (tile,pending)=match pixels {
-                Some(Pixels::Image(source,coordinate))=>cache.plan_image(r,source,*coordinate,*use_)?,
-                Some(Pixels::Raster(blob,space,destination))=>cache.plan_raster(r,blob,*space,*destination,*use_)?,
+                Some(Pixels::Image(source,coordinate))=>cache.plan_image(r,source,*coordinate,*use_,cohort)?,
+                Some(Pixels::Raster(blob,space,destination))=>cache.plan_raster(r,blob,*space,*destination,*use_,cohort)?,
                 _=>continue,
             };
             let (tile,promotion)=if *use_==SourceUse::Exact {cache.promote(r,tile)?}else {(tile,None)};
@@ -922,11 +938,20 @@ impl AcceptedInputs {
         for read in self.iter().filter_map(|lease|lease.read.as_ref()) {if !read.source().encode(r,encoder,class)? {return Ok(false);}}
         Ok(true)
     }
-    pub(crate) fn prepare(&self,r:&mut WgpuRasterizer)->Result<bool,GpuRasterError> {
+    pub(crate) fn raise(&mut self,r:&WgpuRasterizer,class:crate::residency::Class) {
+        if self.class.is_some_and(|held|held<=class) {return;}
+        self.class=Some(class);
+        let cache=r.source_tiles.borrow();
+        for read in self.leases.iter().filter_map(|lease|lease.read.as_ref()) {
+            read.assembly.iter().flat_map(|assembly|assembly.sources()).chain([&read.tile.view]).for_each(|view|cache.stamp(view,class));
+        }
+    }
+    pub(crate) fn prepare(&self,r:&mut WgpuRasterizer)->Result<bool,GpuRasterError> {self.prepare_at(r,Some(self.class.unwrap_or(crate::residency::Class::Visible)))}
+    pub(crate) fn prepare_at(&self,r:&mut WgpuRasterizer,class:Option<crate::residency::Class>)->Result<bool,GpuRasterError> {
         if r.snapshot_worker && cfg!(not(target_arch="wasm32")) {return Ok(true);}
         let mut ready=true;
         for read in self.iter().filter_map(|input|input.read.as_ref()) {
-            for pending in &read.pending {match pending.prepare(r,crate::residency::Class::Visible) {
+            for pending in read.pending.iter().filter(|_|class.is_some()) {match pending.prepare(r,class.unwrap()) {
                 Ok(())=>{},Err(error) if error.is_preparation_pending()=>ready=false,Err(error)=>return Err(error),
             }}
         }
@@ -1090,6 +1115,46 @@ impl Lease {
     pub(crate) fn track(leases:Vec<Self>,encoder:&mut crate::submission::CommandEncoder) {
         let pins=leases.into_iter().map(|lease|(lease.owner,lease._encoded)).collect::<Vec<_>>();
         encoder.hold(pins);
+    }
+    fn id(&self)->usize {Arc::as_ptr(&self.owner) as *const () as usize}
+}
+pub(crate) type Credit=std::collections::HashMap<wgpu::TextureFormat,u64>;
+#[derive(Default)]
+pub(crate) struct Cohort(std::collections::HashMap<usize,(Arc<dyn Send+Sync>,crate::submission::Submission)>);
+impl Cohort {
+    fn entry(&self,slot:&Slot)->Option<&(Arc<dyn Send+Sync>,crate::submission::Submission)> {
+        let pin=slot.pin.lock().unwrap();
+        if pin.strong_count()==0 {return None;}
+        self.0.get(&(pin.as_ptr() as *const () as usize))
+    }
+    fn spare(&self,slot:&Slot)->bool {
+        self.entry(slot).is_some_and(|(pin,_)|Arc::strong_count(pin)==1 && slot.encoded.as_ref().is_none_or(|encoded|encoded.lock().unwrap().strong_count()==0)
+            && (!slot.valid.load(Ordering::Acquire) || slot.ready()))
+    }
+    pub(crate) fn spare_credit<'a>(&self,cache:&DecodedTiles,steps:impl Iterator<Item=&'a Inputs>)->Credit {self.credit(cache,true,&steps.flat_map(|inputs|inputs.hits(cache)).collect())}
+    fn credit(&self,cache:&DecodedTiles,spare:bool,hits:&std::collections::HashSet<usize>)->Credit {
+        let mut credit=std::collections::HashMap::new();
+        for (_,slot) in cache.slots.iter().enumerate().filter(|(index,slot)|!hits.contains(index) && (self.spare(slot) || !spare && self.entry(slot).is_some())) {
+            *credit.entry(slot.layer.format()).or_default()+=1;
+        }
+        credit
+    }
+    fn uncovered<'a>(slots:impl Iterator<Item=&'a wgpu::TextureFormat>,credit:&mut Credit)->Vec<wgpu::TextureFormat> {
+        slots.filter(|format|credit.get_mut(*format).filter(|count|**count!=0).map(|count|*count-=1).is_none()).copied().collect()
+    }
+    pub(crate) fn is_empty(&self)->bool {self.0.is_empty()}
+    pub(crate) fn merge(&mut self,other:Self) {self.0.extend(other.0);}
+    pub(crate) fn workspace<'a>(&self,cache:&DecodedTiles,steps:impl Iterator<Item=&'a Inputs>+Clone)->u64 {
+        let hits=steps.clone().flat_map(|inputs|inputs.hits(cache)).collect();
+        let needs=steps.map(|inputs|inputs.needs(cache)).collect::<Vec<_>>();
+        let step=needs.iter().map(|(_,slots)|slots.iter().copied().map(page_bytes).sum::<u64>()).max().unwrap_or(0);
+        let (window,mut taken)=(2*step.max(ARRAY_BYTES),0);
+        let slots=needs.iter().flat_map(|(_,slots)|slots).take_while(|format| {let within=taken<window;taken+=page_bytes(**format);within});
+        needs.iter().map(|(bytes,_)|*bytes).max().unwrap_or(0)+cache.slot_bytes(Self::uncovered(slots,&mut self.credit(cache,false,&hits)))
+    }
+    pub(crate) fn in_flight(&self)->Option<crate::submission::Submission> {self.0.values().map(|(_,read)|read).find(|read|read.pending()).cloned()}
+    pub(crate) fn read(&mut self,inputs:&AcceptedInputs,submission:&crate::submission::Submission) {
+        for lease in inputs.leases.iter().filter(|lease|lease.read.is_some()) {self.0.insert(lease.id(),(lease.owner.clone(),submission.clone()));}
     }
 }
 struct Slot {
@@ -1356,6 +1421,15 @@ impl DecodedTiles {
         if let Some(pin)=slot.pin.lock().unwrap().upgrade() {pin.0.lock().unwrap().resize(slot.bytes());}
     }
     fn keyed(&self,key:&Key)->Option<&Slot> {self.keys.get(key).map(|index|&self.slots[*index])}
+    fn slot_bytes(&self,formats:Vec<wgpu::TextureFormat>)->u64 {
+        let mut counts=std::collections::HashMap::<wgpu::TextureFormat,u64>::new();
+        for format in formats {*counts.entry(format).or_default()+=1;}
+        counts.into_iter().map(|(format,count)| {
+            let free=self.arrays.iter().filter(|array|array.texture.format()==format).filter_map(|array|array.free()).sum::<usize>() as u64;
+            let layers=(ARRAY_BYTES/page_bytes(format)).max(1);
+            count.saturating_sub(free).div_ceil(layers)*layers*page_bytes(format)
+        }).sum()
+    }
     fn viewed(&mut self,view:&wgpu::TextureView)->Option<&mut Slot> {self.views.get(view).map(|index|&mut self.slots[*index])}
     fn set_key(&mut self,index:usize,key:Option<Key>) {
         if let Some(old)=self.slots[index].key.take() {self.keys.remove(&old);}
@@ -1382,6 +1456,8 @@ impl DecodedTiles {
             if let Some(index)=self.views.get(view) {self.slots[*index].lease.release_demand();}
         }
     }
+    #[cfg(test)]
+    pub(crate) fn live_arrays(&self)->u64 {self.arrays.iter().filter(|array|array.free.lock().unwrap().is_some()).count() as u64}
     #[cfg(test)]
     pub(crate) fn base_demand(&self,base:&layer_core::authored::PaintBase,coordinate:[u32;2])->Option<crate::residency::Class> {
         self.keyed(&Key::base(base,coordinate)).and_then(|slot|slot.lease.demand())
@@ -1580,10 +1656,10 @@ impl DecodedTiles {
     }
 
     pub(in crate::scene) fn plan_exact(&mut self,r:&WgpuRasterizer,source:&Arc<SourceImage>,coordinate:[u32;2])->Result<(RawTile,Option<Arc<PendingTile>>),GpuRasterError> {
-        self.plan_image(r,source,coordinate,SourceUse::Exact)
+        self.plan_image(r,source,coordinate,SourceUse::Exact,None)
     }
-    fn plan_image(&mut self,r:&WgpuRasterizer,source:&Arc<SourceImage>,coordinate:[u32;2],use_:SourceUse)->Result<(RawTile,Option<Arc<PendingTile>>),GpuRasterError> {
-        let (tile,write)=self.plan_key_for(r,Key::Image(Arc::downgrade(source),coordinate),use_)?;
+    fn plan_image(&mut self,r:&WgpuRasterizer,source:&Arc<SourceImage>,coordinate:[u32;2],use_:SourceUse,cohort:Option<&Cohort>)->Result<(RawTile,Option<Arc<PendingTile>>),GpuRasterError> {
+        let (tile,write)=self.plan_key_in(r,Key::Image(Arc::downgrade(source),coordinate),use_,cohort)?;
         let pending = write.map(|write| PendingTile {
             pixels: Pixels::Image(source.clone(), coordinate),
             texture: tile.texture.clone(),
@@ -1603,11 +1679,12 @@ impl DecodedTiles {
         space: RgbSpace,
         destination: RgbSpace,
         use_: SourceUse,
+        cohort: Option<&Cohort>,
     ) -> Result<(RawTile, Option<Arc<PendingTile>>), GpuRasterError> {
         validate_raster(blob, space)?;
         let data = raster_settings(blob.descriptor, space, destination);
         let (tile, write) =
-            self.plan_key_for(r,Key::raster(blob,space,destination),use_)?;
+            self.plan_key_in(r,Key::raster(blob,space,destination),use_,cohort)?;
         let pending = write.map(|write| PendingTile {
             pixels: Pixels::Raster(blob.clone(), space,destination),
             texture: tile.texture.clone(),
@@ -1655,6 +1732,7 @@ impl DecodedTiles {
             .unwrap_or_else(|| {
                 let layers = (ARRAY_BYTES / page_bytes(format)).clamp(1, u64::from(r.device.limits().max_texture_array_layers)) as u32;
                 let array = Arc::new(Layers { texture: Self::texture(r, format, layers), free: std::sync::Mutex::new(Some((0..layers).rev().collect())), pass: Default::default() });
+                #[cfg(test)] crate::test_support::record_source_array();
                 self.arrays.push(array.clone());
                 Layer::take(&array).unwrap()
             });
@@ -1688,7 +1766,8 @@ impl DecodedTiles {
     fn plan_key(&mut self, r: &WgpuRasterizer, key: Key) -> Result<(RawTile, Option<crate::submission::CacheWrite>), GpuRasterError> {
         self.plan_key_for(r,key,SourceUse::Native)
     }
-    fn plan_key_for(&mut self,r:&WgpuRasterizer,key:Key,use_:SourceUse)->Result<(RawTile,Option<crate::submission::CacheWrite>),GpuRasterError> {
+    fn plan_key_for(&mut self,r:&WgpuRasterizer,key:Key,use_:SourceUse)->Result<(RawTile,Option<crate::submission::CacheWrite>),GpuRasterError> {self.plan_key_in(r,key,use_,None)}
+    fn plan_key_in(&mut self,r:&WgpuRasterizer,key:Key,use_:SourceUse,cohort:Option<&Cohort>)->Result<(RawTile,Option<crate::submission::CacheWrite>),GpuRasterError> {
         #[cfg(test)]
         if ACCEPTED_READ_RESULTS.with(|results|results.borrow().is_some()) {READS.with(|reads|reads.borrow_mut().push(key.clone()));}
         self.clock = self.clock.wrapping_add(1);
@@ -1703,7 +1782,8 @@ impl DecodedTiles {
         }
         let mut samples=key.samples(self.destination);
         let format=if use_==SourceUse::Exact {samples=None;wgpu::TextureFormat::Rgba32Float}else{samples.map_or(wgpu::TextureFormat::Rgba32Float,Samples::format)};
-        let unused = self.slots.iter().position(|slot| !slot.leased() && !slot.valid.load(Ordering::Acquire) && slot.layer.format() == format);
+        let unused = self.slots.iter().position(|slot| !slot.leased() && !slot.valid.load(Ordering::Acquire) && slot.layer.format() == format)
+            .or_else(|| cohort.and_then(|cohort| self.slots.iter().position(|slot| slot.layer.format() == format && cohort.spare(slot))));
         let index = unused.unwrap_or_else(|| self.allocate_slot(r, format, samples));
         self.set_key(index,Some(key));
         let slot = &mut self.slots[index];

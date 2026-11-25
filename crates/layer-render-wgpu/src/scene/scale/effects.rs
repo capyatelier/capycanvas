@@ -1,10 +1,5 @@
 use super::*;
 
-pub(super) fn native_alpha_capture(scene: layer_core::SceneView<'_>, handles: &[OccurrenceHandle], level: u32) -> bool {
-    handles.iter().any(|handle| native_pointwise_alpha(scene.effect(*handle).unwrap().program))
-        && (level > 0 || handles.iter().all(|handle| !scene.effect(*handle).unwrap().program.fusion_boundary()))
-}
-
 fn capture_frame<'a>(packet: FramePacket<'a>, target: &Target, regions: &[DocRect]) -> Result<(FramePacket<'a>, display_mips::Plan, Vec<PixelRect>, [i64; 2]), GpuRasterError> {
     if target.plan.doc_bounds == DocRect::from(target.plan.bounds) {
         return Ok((packet, target.plan, regions.iter().map(|region| region.in_frame(packet.document_extent)).collect(), [0; 2]));
@@ -43,7 +38,7 @@ impl Evaluator<'_> {
     ) -> Result<Value, GpuRasterError> {
         let handles: Vec<_> = chain.iter().map(|(handle, _, _)| *handle).collect();
         let effect = self.packet.scene.effect(handles[0]).unwrap();
-        if native_alpha_capture(self.packet.scene, &handles, self.cache.plan.level) {
+        if super::cell_plan::resolution(self.packet.scene, &handles, self.cache.plan.level, self.cache.at_rest(self.r, self.packet)) == super::cell_plan::Resolution::Native {
             return self.native_effect(&handles, output);
         }
         let boundary = !effect.program.passes.is_empty();

@@ -25,9 +25,12 @@ impl Navigator {
     fn held(&self,r:&WgpuRasterizer)->bool {self.view().is_some() && self.cache.as_ref().is_some_and(|cache|cache.held(r))}
     fn behind_contact(&self,display:&Cache)->bool {self.view().is_some() && !self.follows(display) && display.holds_advanced_frame()}
     pub(crate) fn outstanding(&self,r:&WgpuRasterizer)->Option<crate::frame_demand::Outstanding> {
-        if self.held(r) || !self.pending() || r.scale_display.as_ref().is_some_and(|display|self.behind_contact(display)) {return None;}
+        if self.held(r) || !self.pending() || r.scale_display.as_ref().is_some_and(|display|self.behind_contact(display)) || self.awaits_producer(r) {return None;}
         let cache=self.cache.as_ref()?;
         cache.cells_demand(r,false).or_else(||cache.residual_demand(r))
+    }
+    fn awaits_producer(&self,r:&WgpuRasterizer)->bool {
+        self.cache.as_ref().is_some_and(|cache|r.scale_display.as_ref().into_iter().flat_map(|display|std::iter::once(display).chain(display.overview.as_deref())).any(|window|window.produces_for(cache)))
     }
     pub fn waiting_for_name(&self)->bool {
         self.cache.as_ref().is_some_and(|cache|cache.presented_matches_expected().is_none())
@@ -98,9 +101,11 @@ impl Navigator {
             let valid=cache.submission_valid.as_ref().is_none_or(|valid|valid.load(std::sync::atomic::Ordering::Acquire));
             if matches && valid || deferred {return Ok(());}
             let cache=self.cache.as_ref().unwrap();
-            r.scale_display.as_ref().into_iter().flat_map(|display|std::iter::once(display).chain(display.overview.as_deref()))
+            let source=r.scale_display.as_ref().into_iter().flat_map(|display|std::iter::once(display).chain(display.overview.as_deref()))
                 .filter_map(|window|window.current_window(cache).map(|source|(source,window.contact_id()))).max_by_key(|(source,_)|source.level())
-                .map(|(source,contact)|(source,contact,cache.plan.bounds))
+                .map(|(source,contact)|(source,contact,cache.plan.bounds));
+            if source.is_none() && self.awaits_producer(r) {self.stale=true;return Ok(());}
+            source
         };
         let contact=source.as_ref().and_then(|(source,contact,_)|contact.filter(|_|source.current()));
         let cache = self.cache.as_mut().unwrap();
@@ -113,7 +118,7 @@ impl Navigator {
         r.telemetry.phase_begin(13, &r.device, &r.queue, encoder);
         let result=(|| {
             if let Some((source,_,region))=source {
-                cache.release_streaming(encoder);
+                cache.release_streaming();
                 Ok(cache.inherit(&scene,r,encoder,&mut commands,source,region)?.area())
             }else {
                 #[cfg(test)]

@@ -152,28 +152,29 @@ impl Cache {
     }
     pub(super) fn region_sources(&self,scene:&Scene,r:&WgpuRasterizer,packet:FramePacket<'_>,region:PixelRect,tiled:bool)->Vec<(SourceTarget,SourceRequest)> {
         let root=self.graph.root.as_ref().unwrap();
-        let reduced=&root.source_domains(packet.scene)[0];
+        let (level,extent,at_rest)=(self.plan.level,self.plan.extent,self.at_rest(r,packet));
         let input=input_plan(self.plan,packet.scene,Some(self.graph.objects()));
+        let window=input.doc_bounds.in_frame(extent);
         let expected=scene.scale_pages.lock().unwrap().expected().cloned();
         let unit=unit_plan(input,packet.scene,region,tiled,Some(self.graph.objects()));
-        let read=if unit==input {Damage::EMPTY}else {unit.doc_bounds.in_frame(self.plan.extent).into()};
-        let whole=root.required(region.into(),input).union(region.into()).union(read);
+        let read=if unit==input {Damage::EMPTY}else {unit.doc_bounds.in_frame(extent).into()};
+        let whole=cell_plan::Footprint::of(root,packet.scene,region,extent,level,at_rest).reduced;
         let held=self.half_cells(region);
         let inside:BTreeSet<SourceTarget>=self.pivot_halves().iter().flat_map(|node|node.reads().0).collect();
-        let open=Damage::from_regions(pages::coordinates(region.intersect(self.plan.bounds),self.plan.level)
-            .map(|coordinate|pages::bounds(coordinate,self.plan.level,self.plan.extent).intersect(region))
+        let open=Damage::from_regions(pages::coordinates(region.intersect(self.plan.bounds),level)
+            .map(|coordinate|pages::bounds(coordinate,level,extent).intersect(region))
             .filter(|cell|!held.contains(&cell.intersect(self.plan.bounds))));
-        let partial=if open.is_empty() {Damage::EMPTY}else {root.required(open.clone(),input).union(open)};
-        targets(r,packet).filter(|(_,id)|reduced.contains(id) && !r.transforms.as_ref().is_some_and(|t|t.display_source(*id)))
+        let partial=cell_plan::Footprint::of(root,packet.scene,open,extent,level,at_rest).reduced;
+        targets(r,packet).filter(|(_,id)|whole.contains_key(id) && !r.transforms.as_ref().is_some_and(|t|t.display_source(*id)))
             .filter_map(|(handle,id)| {
-                let required=if inside.contains(&id) {&partial}else {&whole};
+                let required=if inside.contains(&id) {partial.get(&id).cloned().unwrap_or_default()}else {whole[&id].clone().union(read.clone())}.intersect(window);
                 if required.is_empty() {return None;}
                 let frame=source_frame(Some(&scene.scale_sources),packet.scene,id);
                 let extent=packet.scene.target_extent(id);let moving=r.moving_layer==Some(handle);
                 let level=expected.as_ref().map_or(0,|expected|expected.source_level(id,frame,extent,region.into(),input.level,moving));
                 let plan=source_plan(input,frame,extent,moving,level);
                 if tiled && self.plan.level==0 && plan.level==0 {return None;}
-                let (required,covered)=local_damage(required,PixelRect::EMPTY,frame,extent,plan.level,moving);
+                let (required,covered)=local_damage(&required,PixelRect::EMPTY,frame,extent,plan.level,moving);
                 Some((id,SourceRequest {plan,required,covered}))
             }).collect()
     }
@@ -195,11 +196,21 @@ impl Cache {
         self.used.truncate(used.len());self.used.clone_from_slice(&used);
         declared
     }
-    #[expect(clippy::too_many_arguments,reason="A parent unit accepts the declaration of the roots it evaluates")]
+    #[expect(clippy::too_many_arguments,reason="A parent unit accepts the declaration of the roots it evaluates and the source writes it streams")]
     pub(super) fn accept_parent(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,region:PixelRect,
-        requests:&[(SourceTarget,SourceRequest)],retained:u64,tiled:bool,roots:&[graph::Node],target:Root,preview:bool,class:Class,objects:Class,allowance:crate::frame_demand::Allowance,encoder:&mut submission::CommandEncoder,
+        requests:&[(SourceTarget,SourceRequest)],retained:u64,tiled:bool,roots:&[graph::Node],target:Root,preview:bool,class:Class,objects:Class,allowance:crate::frame_demand::Allowance,closed:Option<&crate::residency::Blocked>,encoder:&mut submission::CommandEncoder,
     )->Result<Result<pages::Accepted,Option<crate::residency::Blocked>>,GpuRasterError> {
-        let root=self.graph.root.clone().unwrap();let interest=self.parent_interest(region);let parent=interest.key.clone();
+        let interest=self.parent_interest(region);let parent=interest.key.clone();
+        let selection=Selection {roots:roots.to_vec(),preview,target,at_rest:self.at_rest(r,packet)};
+        {
+            let mut store=self.pages.lock().unwrap();
+            if let Some(held)=store.streaming(&interest)? {
+                if store.selects(&held,&selection) {return Ok(Ok(held));}
+                if !class.demanded() {return Ok(Err(None));}
+                store.finish_inputs(&held);
+            }
+        }
+        let root=self.graph.root.clone().unwrap();
         let input=unit_plan(input_plan(self.plan,packet.scene,Some(self.graph.objects())),packet.scene,region,tiled,Some(self.graph.objects()));
         let expected=scene.scale_pages.lock().unwrap().expected().cloned().ok_or(GpuRasterError::Invariant("signature frame is missing or inconsistent"))?;
         let native=match self.declare_unit(scene,r,packet,expected,region,input,tiled,preview,retained,class,encoder,
@@ -208,72 +219,126 @@ impl Cache {
             Err(GpuRasterError::SourceWorkingSetExceeded|GpuRasterError::NotReady)=>return Ok(Err(None)),
             native=>native?,
         };
+        let (sources,mut stream)=match self.plan_writes(scene,r,packet,encoder,requests,class) {
+            Err(GpuRasterError::Waiting(waiting))=>return Ok(Err(Some(waiting.need().clone()))),
+            Err(GpuRasterError::NotReady)=>return Ok(Err(None)),
+            planned=>planned?,
+        };
+        stream.selection=Some(selection);
         let mut areas=if target==Root::Store {vec![(parent,region)]}else {Vec::new()};
         areas.extend(self.held_halves(region).into_iter().map(|(key,cell,_)|(key,cell)));
-        for (id,request) in requests {
-            let source=&scene.scale_sources.entries[id];
-            for area in &request.required.regions {for coordinate in pages::coordinates(*area,request.plan.level) {
-                let key=source.key(r,*id,request.plan.level,coordinate);
-                let area=key.plan().bounds.intersect(*area);
-                if !area.is_empty() {areas.push((key,area));}
-            }}
-        }
+        areas.extend(sources);
         let cost=root.cost();let scratch=if cost.0==0 {0}else {cost.1 as usize+1};
-        self.accept_working(scene,r,interest,areas,native,[scratch,0],input,tiled,class,objects,allowance,encoder)
+        self.accept_working(scene,r,interest,areas,native,[scratch,0],input,tiled,class,objects,allowance,closed,stream,encoder)
     }
-    #[expect(clippy::too_many_arguments,reason="Accepted output, inputs and scratch share one working reservation")]
+    fn plan_writes(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,
+        requests:&[(SourceTarget,SourceRequest)],class:Class,
+    )->Result<(Vec<(pages::Key,PixelRect)>,Stream),GpuRasterError> {
+        if !self.pages.same(&scene.scale_pages) {self.pages=scene.scale_pages.clone();}
+        let native_page=|frame:SourceFrame,local:PixelRect| {let origin=frame.document(local).min;origin.map(|value|value.clamp(0,i64::from(u32::MAX)) as u32/PAGE_SIZE)};
+        let (mut planned,mut writes)=(Vec::new(),Vec::new());
+        for (id,request) in requests {
+            let frame=source_frame(Some(&scene.scale_sources),packet.scene,*id);
+            if frame.aligned() && !r.moving_layer.is_some_and(|layer|packet.scene.source_owner(*id)==Some(layer)) {
+                planned.push(cell_plan::Planned {id:*id,frame,extent:packet.scene.target_extent(*id),required:request.required.map(|local|frame.document(local).in_frame(packet.document_extent))});
+                continue;
+            }
+            let valid=PixelRect::full(scene.scale_sources.entries[id].valid_extent(request.plan.level));
+            writes.extend(page_coordinates(request.required.bounds().intersect(request.plan.bounds))
+                .filter(|coordinate|request.required.intersects(page_rect(*coordinate).intersect(valid)))
+                .map(|coordinate|(native_page(frame,page_rect(coordinate)),*id,coordinate)));
+        }
+        writes.extend(cell_plan::writes(&planned).map(|write|(write.page,write.source,write.coordinate)));
+        writes.sort_by_key(|(page,..)|[page[1],page[0]]);
+        let (mut areas,mut stream,mut seen)=(Vec::<(pages::Key,PixelRect)>::new(),Stream::default(),BTreeSet::new());
+        for (page,id,coordinate) in writes {
+            if !seen.insert((id,coordinate)) {continue;}
+            let plan=requests.iter().find(|(source,_)|*source==id).map(|(_,request)|request.plan).unwrap();
+            let source=&scene.scale_sources.entries[&id];
+            let region=page_rect(coordinate).intersect(PixelRect::full(source.valid_extent(plan.level)));
+            if region.is_empty() {continue;}
+            let key=source.key(r,id,plan.level,coordinate.map(|value|value>>plan.level));
+            match areas.iter_mut().find(|(held,_)|*held==key) {Some((_,area))=>*area=area.union(region),None=>areas.push((key.clone(),region))}
+            if self.pages.lock().unwrap().has(&key,region,pages::Accuracy::Display,plan.level) {continue;}
+            stream.push(page,self.declare_write(scene,r,packet,encoder,id,plan,coordinate,class)?)?;
+        }
+        Ok((areas,stream))
+    }
+    #[expect(clippy::too_many_arguments,reason="Accepted output, inputs, scratch and streamed source writes share one working reservation")]
     pub(super) fn accept_working(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,interest:pages::Interest,areas:Vec<(pages::Key,PixelRect)>,
-        native:super::super::sources::Inputs,scratch:[usize;2],plan:display_mips::Plan,tiled:bool,class:Class,objects:Class,allowance:crate::frame_demand::Allowance,_encoder:&mut submission::CommandEncoder,
+        native:super::super::sources::Inputs,scratch:[usize;2],plan:display_mips::Plan,tiled:bool,class:Class,objects:Class,allowance:crate::frame_demand::Allowance,
+        closed:Option<&crate::residency::Blocked>,mut stream:Stream,_encoder:&mut submission::CommandEncoder,
     )->Result<Result<pages::Accepted,Option<crate::residency::Blocked>>,GpuRasterError> {
         let Some(acceptance)=self.pages.lock().unwrap().accept_version(&interest)? else {return Ok(Err(None));};
         let native=native.for_unit(acceptance.input_unit())?;
         if self.pages.lock().unwrap().holds(&acceptance,&native,&areas) {
-            if self.pages.lock().unwrap().held_refusal(&acceptance).is_none() {return Ok(Ok(acceptance));}
+            if !stream.pending() && self.pages.lock().unwrap().held_refusal(&acceptance).is_none() {return Ok(Ok(acceptance));}
             self.pages.lock().unwrap().finish_inputs(&acceptance);
         }
         #[cfg(test)]
         crate::test_support::PassCounts {unit_acceptances:1,..Default::default()}.record();
-        let scratch_bytes=if tiled {scratch.into_iter().enumerate().map(|(scalar,count)| {
+        let workspace=self.cohort.workspace(&r.source_tiles.borrow(),stream.steps.iter().map(|step|&step.native));
+        let writes=stream.scratch();
+        let pooled=if tiled {[scratch[0].max(writes[0]),scratch[1].max(writes[1])]}else {writes};
+        let shortfall=|scene:&Scene|pooled.into_iter().enumerate().map(|(scalar,count)| {
             let format=if scalar==0 {r.device.working_format()}else {r.device.scalar_format()};
             let available=scene.used.iter().enumerate().filter(|(index,used)|!used.occupied() && scene.pool[*index].texture.format()==format).count();
             count.saturating_sub(available) as u64*super::super::scratch_page_bytes(format)
-        }).sum()}else {
+        }).sum::<u64>();
+        let scratch_bytes=shortfall(scene)+if tiled {0}else {
             let available=self.used.iter().enumerate().filter(|(index,used)|!used.occupied() && self.output[*index].plan.size==plan.size).count();
             scratch[0].saturating_sub(available) as u64*plan.size.map(u64::from).into_iter().product::<u64>()*16
         };
         let keys=areas.iter().map(|(key,_)|key.clone()).collect::<std::collections::HashSet<_>>();
-        let (mut held,missing,bytes)=self.pages.lock().unwrap().reserve_inputs(&keys.into_iter().collect::<Vec<_>>());
+        let (mut held,mut missing,mut bytes)=self.pages.lock().unwrap().reserve_inputs(&keys.into_iter().collect::<Vec<_>>());
+        let native_bytes=native.additional_bytes(&r.source_tiles.borrow())+workspace;
+        let display=&r.scene_tiers.display;
+        let wanted=(native_bytes+bytes+scratch_bytes).saturating_sub(display.headroom(class).min(display.grant().saturating_sub(display.used())));
+        if wanted!=0 && bytes!=0 {
+            held.extend(self.pages.lock().unwrap().recycle(&mut missing,wanted,self.window));
+            bytes=missing.iter().map(pages::Key::bytes).sum();
+        }
+        let asks=[(display,native_bytes+bytes+scratch_bytes),(&self.pages.lock().unwrap().tier(),bytes),(&scene.tiers.gpu,scratch_bytes)];
+        if let Some(closed)=closed.filter(|closed|class>=closed.class() && asks.iter().any(|(tier,ask)|closed.refuses(tier,*ask))) {
+            drop(held);self.cohort=Default::default();self.pages.lock().unwrap().finish_inputs(&acceptance);
+            return Ok(Err(Some(closed.clone())));
+        }
         let refusal=if native.objects().is_empty() {None}else {scene.object_results.admit(r,objects,native.objects(),None)?};
-        let (mut reservations,mut refused)=(None,None);
-        let mut context=(&mut *self,&mut *scene,&mut held,&mut reservations,&mut refused);
-        let result=native.accept(r,&mut context,|(cache,scene,_,reservations,refused),r,inputs| {
-            let native_bytes=inputs.additional_bytes(&r.source_tiles.borrow());
+        let (mut reservations,mut refused,mut funded)=(None,None,None);
+        let mut context=(&mut *self,&mut *scene,&mut held,&mut reservations,&mut refused,&mut funded);
+        let result=native.accept(r,&mut context,|(cache,scene,_,reservations,refused,_),r,_| {
+            let mut native=r.admit_display(Some(scene),class,native_bytes+bytes+scratch_bytes,allowance).map_err(|blocked|**refused=Some(blocked)).ok()?;
             let store=cache.pages.lock().unwrap().tier();
-            let admitted=r.admit_display(Some(scene),class,native_bytes,allowance).and_then(|native|
-                Ok((native,r.admit_tier(Some(scene),&store,class,bytes,allowance)?,r.admit_tier(Some(scene),&scene.tiers.gpu,class,scratch_bytes,allowance)?)));
-            let (native,pages,scratch)=admitted.map_err(|blocked|**refused=Some(blocked.covering(native_bytes+bytes+scratch_bytes))).ok()?;
+            let pages=native.admit_within(&store,bytes).map_err(|blocked|**refused=Some(blocked)).ok()?;
+            let scratch=native.admit_within(&scene.tiers.gpu,scratch_bytes).map_err(|blocked|**refused=Some(blocked)).ok()?;
             **reservations=Some((pages,scratch));
             Some(native)
-        },|(cache,scene,held,reservations,_),r| {
+        },|(cache,scene,held,reservations,..),r| {
             let (pages,scratch_reservation)=reservations.as_mut().unwrap();
             let mut leases=Vec::new();
             let scratch_limit=scene.pool_bytes()+scratch_bytes;
-            for (scalar,count) in scratch.into_iter().enumerate() {for _ in 0..count {
-                leases.push(if tiled {let slot=scene.reserve_with_reserved(r,scalar!=0,scratch_limit,scratch_reservation)?;scene.used[slot].lease(slot)}else {cache.allocate_reserved(r,plan,scratch_reservation)?});
+            for (scalar,count) in pooled.into_iter().enumerate() {for _ in 0..count {
+                let slot=scene.reserve_with_reserved(r,scalar!=0,scratch_limit,scratch_reservation)?;leases.push(scene.used[slot].lease(slot));
             }}
+            if !tiled {for _ in 0..scratch[0] {leases.push(cache.allocate_reserved(r,plan,scratch_reservation)?);}}
             for key in missing {let image=cache.pages.lock().unwrap().claim_reserved(r,key.clone(),cache.window,class,pages)?;held.push((key,image));}
             Ok(std::mem::take(*held))
-        },|(_,_,_,reservations,_),_,_| {reservations.take();Ok(())});
+        },|(_,_,_,reservations,_,funded),_,mut native| {reservations.take();**funded=native.split(workspace);Ok(())});
         let handle=acceptance.clone();
         let result=result.and_then(|accepted| {
             let Some((images,mut sources))=accepted else {return Err(GpuRasterError::NotReady);};
             if let Some(refusal)=refusal.clone() {sources.fall_back_objects(refusal);}
             let images=images.into_iter().collect::<std::collections::HashMap<_,_>>();
             let inputs=areas.into_iter().map(|(key,area)| {let image=images[&key].clone();(key,area,image)}).collect();
+            stream.workspace=funded.take();
+            if stream.pending() {stream.cohort=std::mem::take(&mut self.cohort);}
+            for step in &mut stream.steps {step.pins=step.native.hit_leases(&r.source_tiles.borrow());}
             let mut pages=self.pages.lock().unwrap();pages.accept(&interest,inputs,acceptance)?;
-            pages.hold_inputs(&handle,sources)?;Ok(())
+            pages.hold_inputs(&handle,sources)?;pages.hold_stream(&handle,stream)
         });
-        if result.is_err() {drop(held);self.pages.lock().unwrap().finish_inputs(&handle);}
+        if result.is_err() {drop(held);self.cohort=Default::default();self.pages.lock().unwrap().finish_inputs(&handle);}
+        #[cfg(test)]
+        if result.is_ok() {crate::test_support::PassCounts {unit_admissions:1,..Default::default()}.record();}
         match result {Ok(())=>Ok(Ok(handle)),Err(GpuRasterError::Waiting(waiting))=>Ok(Err(refused.or_else(||Some(waiting.need().clone())))),
             Err(GpuRasterError::SourceWorkingSetExceeded|GpuRasterError::NotReady)=>Ok(Err(refused)),Err(error)=>Err(error)}
     }
@@ -286,6 +351,127 @@ impl Cache {
             region.is_empty() || pages.get(&key,region,pages::Accuracy::Display,request.plan.level,Class::Visible).is_some()
         }))
     }
+    pub(super) fn streaming(&self,region:PixelRect)->Result<bool,GpuRasterError> {Ok(self.pages.lock().unwrap().streaming(&self.parent_interest(region))?.is_some())}
+    #[expect(clippy::too_many_arguments,reason="A cell streams its declared source writes into the pages its admission holds")]
+    pub(super) fn stream_sources(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,handle:&pages::Accepted,
+        requests:&[(SourceTarget,SourceRequest)],class:Class,budget:&mut WorkBudget,finer:Option<&Cache>,
+    )->Result<Streamed,GpuRasterError> {
+        let mut stream=self.pages.lock().unwrap().take_stream(handle)?;
+        let class=stream.class.map_or(class,|held|held.min(class));
+        if stream.class.is_some_and(|held|class<held) {
+            self.pages.lock().unwrap().restamp_inputs(handle,class)?;
+            for accepted in stream.steps.iter_mut().filter_map(|step|step.acquired.as_mut()) {accepted.raise(r,class);}
+        }
+        stream.class=Some(class);
+        let streamed=self.stream_steps(scene,r,packet,encoder,&mut stream,class,budget,finer);
+        let pending=stream.pending();
+        self.pages.lock().unwrap().hold_stream(handle,stream)?;
+        let declarations=self.declarations();
+        match streamed? {
+            Some(Streamed::Refused(need))=>{self.pages.lock().unwrap().finish_inputs(handle);Ok(Streamed::Refused(need))},
+            Some(stopped)=>Ok(stopped),
+            None if pending=>Ok(Streamed::Waiting(None)),
+            None if requests.iter().all(|(id,request)|self.source_ready(scene,r,*id,request))=>Ok(Streamed::Complete),
+            None=>{self.pages.lock().unwrap().finish_inputs(handle);Ok(Streamed::Waiting(waiting_on(scene,r,declarations,&GpuRasterError::NotReady)))},
+        }
+    }
+    #[expect(clippy::too_many_arguments,reason="A stream records its steps with the frame's scene, encoder and budget")]
+    fn stream_steps(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,stream:&mut Stream,
+        class:Class,budget:&mut WorkBudget,finer:Option<&Cache>,
+    )->Result<Option<Streamed>,GpuRasterError> {
+        if budget.source_pages(class)==0 {return Ok(None);}
+        let declarations=self.declarations();
+        let stopped=|scene:&Scene,r:&WgpuRasterizer,error:GpuRasterError|match error {
+            GpuRasterError::Waiting(waiting)=>Streamed::Refused(waiting.need().clone()),error=>Streamed::Waiting(waiting_on(scene,r,declarations,&error)),
+        };
+        let mut waiting=None;
+        let authored=|r:&WgpuRasterizer|r.moving_decode.as_ref().is_some_and(|(_,queue)|queue.awaits(Class::Authored));
+        loop {
+            let mut progressed=false;
+            let mut index=0;
+            while budget.source_pages(class)!=0 && let Some(mut accepted)=stream.steps.get_mut(index).and_then(|step|step.acquired.take()) {
+                let ready=if index==0 {accepted.prepare(r)?}else {accepted.prepare_at(r,(!authored(r)).then_some(Class::Prefetch))?};
+                if !ready {stream.steps[index].acquired=Some(accepted);waiting=Some(stopped(scene,r,GpuRasterError::NotReady));index+=1;continue;}
+                let step=&stream.steps[index];
+                let (start,reads)=(scene.jobs.len(),r.metrics.display_reduction_reads);
+                let mut unit=Unit::default();
+                let recorded=(|| {
+                    #[cfg(test)]
+                    let _record=crate::scene::sources::record_reads(&accepted);
+                    for write in &step.writes {
+                        if self.pages.lock().unwrap().has(&write.key,write.region,pages::Accuracy::Display,write.plan.level) {continue;}
+                        budget.begin_source(class);
+                        let image=self.pages.lock().unwrap().allocated(&write.key,class).ok_or(GpuRasterError::Invariant("a streamed source write has no admitted page"))?;
+                        unit.pages.push(self.pages.lock().unwrap().prepare_write(write.key.clone(),write.region,pages::Accuracy::Display,write.plan.level)?);
+                        scene.record_write(r,packet,write,&image,&mut unit,&mut accepted)?;
+                    }
+                    unit.ready(scene,r,encoder,start,class)
+                })();
+                match recorded {
+                    Ok(true)=>{
+                        #[cfg(test)]
+                        for write in &unit.pages {crate::test_support::record_source_preparation((write.key.source.unwrap(),write.key.level,[write.region.min_x()/PAGE_SIZE,write.region.min_y()/PAGE_SIZE]));}
+                        budget.spend((r.metrics.display_reduction_reads-reads).max(u64::from(PAGE_SIZE).pow(2)));
+                        stream.cohort.read(&accepted,&encoder.submission());
+                        let cell=pages::bounds(step.page,0,self.plan.extent);
+                        if finer.is_some_and(|finer|finer.owes_native(r,cell)) {self.paired.push((cell,accepted.to_vec(),step.bytes));}
+                        unit.sources=accepted;self.encode_units(scene,r,encoder,[unit])?;
+                        stream.steps.remove(index);progressed=true;
+                    },
+                    Ok(false)=>{scene.discard_jobs_from(start);stream.steps[index].acquired=Some(accepted);waiting=Some(stopped(scene,r,GpuRasterError::NotReady));index+=1;},
+                    Err(error@(GpuRasterError::NotReady|GpuRasterError::NotPublished|GpuRasterError::Waiting(_)))=>{scene.discard_jobs_from(start);stream.steps[index].acquired=Some(accepted);return Ok(Some(stopped(scene,r,error)));},
+                    Err(error)=>{scene.discard_unencoded_jobs();return Err(error);},
+                }
+            }
+            let mut ahead=stream.steps.iter().map_while(|step|step.acquired.as_ref().map(|_|step.bytes)).sum::<u64>()+self.paired.iter().map(|(_,_,bytes)|*bytes).sum::<u64>();
+            let mut credit=stream.cohort.spare_credit(&r.source_tiles.borrow(),stream.steps.iter().filter(|step|step.acquired.is_none()).map(|step|&step.native));
+            for (index,step) in stream.steps.iter_mut().enumerate().skip_while(|(_,step)|step.acquired.is_some()) {
+                if ahead>=super::super::sources::ARRAY_BYTES || index!=0 && authored(r) {break;}
+                let (bytes,need)={let cache=r.source_tiles.borrow();(step.native.additional_bytes(&cache),step.native.uncovered_bytes(&cache,&mut credit))};
+                let drawn=if need==0 {None}else {match stream.workspace.as_mut().and_then(|workspace|workspace.split(need)) {
+                    Some(drawn)=>Some(drawn),
+                    None if ahead!=0 || progressed=>break,
+                    None=>return Ok(Some(match stream.cohort.in_flight() {
+                        Some(read)=>Streamed::Waiting(Some(crate::frame_demand::UnitWait::input(crate::frame_demand::Producer::Gpu(read)))),
+                        None=>Streamed::Refused(r.scene_tiers.display.wanting(class,need)),
+                    })),
+                }};
+                let acquired=step.native.acquire_in(r,class,&stream.cohort);drop(drawn);
+                let acquired=acquired?;
+                if index==0 {acquired.prepare(r)?;}else {acquired.prepare_at(r,Some(Class::Prefetch))?;}
+                step.pins.clear();step.acquired=Some(acquired);step.bytes=bytes;ahead+=bytes;progressed=true;
+            }
+            if !progressed || budget.source_pages(class)==0 {break;}
+        }
+        if stream.steps.is_empty() {stream.workspace=None;self.cohort.merge(std::mem::take(&mut stream.cohort));return Ok(None);}
+        Ok(if budget.source_pages(class)==0 {None}else {waiting})
+    }
+    #[expect(clippy::too_many_arguments,reason="A source write names its layer, level page and native coordinate")]
+    fn declare_write(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,
+        id:SourceTarget,plan:display_mips::Plan,coordinate:[u32;2],class:Class,
+    )->Result<SourceWrite,GpuRasterError> {
+        let source=&scene.scale_sources.entries[&id];
+        let region=page_rect(coordinate).intersect(PixelRect::full(source.valid_extent(plan.level)));
+        let key=source.key(r,id,plan.level,coordinate.map(|value|value>>plan.level));
+        let derived=(0..plan.level).rev().find_map(|level| {
+            let input=source.key(r,id,level,coordinate.map(|value|value>>level));
+            self.pages.lock().unwrap().get(&input,region,pages::Accuracy::Display,plan.level,class).map(|image|(input,image))
+        });
+        let (phase,material)=(source.phase,source.watercolor.is_some() && source.raw_material);
+        let scratch=if derived.is_some() {[0,0]}else if matches!(id,SourceTarget::Coverage(_)) {[0,usize::from(phase!=[0;2])]}
+            else {[usize::from(phase!=[0;2])*2+usize::from(source.watercolor.is_some())+usize::from(material)*12,0]};
+        let mut native=super::super::sources::Inputs::default();
+        native.source_placement(id,scene.reduced_placement(packet,id,phase))?;
+        if derived.is_none() {
+            let expected=scene.scale_pages.lock().unwrap().expected().cloned().ok_or(GpuRasterError::Invariant("signature frame is missing or inconsistent"))?;
+            let declaration=super::super::sources::Declaration::scene(expected,Some(encoder.submission()));
+            native=scene.declare(r,native,declaration,|scene,r,accepted| {
+                let output=scene.reserve(r)?;let output=scene.pool[output].view.clone();
+                scene.reduce_source(r,packet,id,key.plan(),&output,coordinate,accepted)
+            })?;
+        }
+        Ok(SourceWrite {id,plan,coordinate,region,key,derived,native,scratch})
+    }
     pub(super) fn prepare_source(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,
         id:SourceTarget,request:SourceRequest,class:Class,allowance:crate::frame_demand::Allowance,budget:&mut WorkBudget,
     )->Result<Prepared,GpuRasterError> {
@@ -295,7 +481,7 @@ impl Cache {
         let candidates=nearest_pages(required.bounds().intersect(plan.bounds),work_view(packet,0),budget.source_pages(class),std::iter::empty(),|coordinate| {
             let region=page_rect(*coordinate).intersect(PixelRect::full(source.valid_extent(plan.level)));
             let key=source.key(r,id,plan.level,coordinate.map(|value|value>>plan.level));
-            required.intersects(region) && region.intersect(covered).is_empty() && !budget.source_admitted((id,plan.level,*coordinate),class)
+            required.intersects(region) && region.intersect(covered).is_empty()
                 && self.pages.lock().unwrap().get(&key,region,pages::Accuracy::Display,plan.level,class).is_none()
         });
         let mut ready=Vec::new();let mut handles=Vec::new();let mut prepared=Prepared::default();
@@ -303,68 +489,33 @@ impl Cache {
             if budget.source_pages(class)==0 {break;}
             budget.begin_source(class);
             let source=&scene.scale_sources.entries[&id];
-            let valid=source.valid_extent(plan.level);
-            let region=page_rect(coordinate).intersect(PixelRect::full(valid));
+            let region=page_rect(coordinate).intersect(PixelRect::full(source.valid_extent(plan.level)));
             if region.is_empty() {continue;}
-            let interest=source.interest(r,id,plan,region,self.evaluation);let key=interest.key.clone();
-            let derived=(0..plan.level).rev().find_map(|level| {
-                let input=source.key(r,id,level,coordinate.map(|value|value>>level));
-                self.pages.lock().unwrap().get(&input,region,pages::Accuracy::Display,plan.level,class).map(|image|(input,image))
-            });
-            let material=source.watercolor.is_some() && source.raw_material;
-            let scratch=if derived.is_some() {[0,0]}else if matches!(id,SourceTarget::Coverage(_)) {[0,usize::from(source.phase!=[0;2])]}
-                else {[usize::from(source.phase!=[0;2])*2+usize::from(source.watercolor.is_some())+usize::from(material)*12,0]};
-            let mut native=super::super::sources::Inputs::default();
-            native.source_placement(id,scene.reduced_placement(packet,id,source.phase))?;
-            if derived.is_none() {
-                let expected=scene.scale_pages.lock().unwrap().expected().cloned().ok_or(GpuRasterError::Invariant("signature frame is missing or inconsistent"))?;
-                let declaration=super::super::sources::Declaration::scene(expected,Some(encoder.submission()));
-                native=match scene.declare(r,native,declaration,|scene,r,accepted| {
-                    let output=scene.reserve(r)?;let output=scene.pool[output].view.clone();
-                    scene.reduce_source(r,packet,id,key.plan(),&output,coordinate,accepted)
-                }) {Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))=>continue,Err(GpuRasterError::NotPublished)=>{prepared.unpublished=true;continue;},native=>native?};
-            }
-            let mut areas=vec![(key.clone(),region)];
-            if let Some((input,_))=&derived {areas.push((input.clone(),region));}
-            let handle=match self.accept_working(scene,r,interest,areas,native,scratch,plan,true,class,Class::Prefetch,allowance,encoder)? {
+            let interest=source.interest(r,id,plan,region,self.evaluation);
+            let mut write=match self.declare_write(scene,r,packet,encoder,id,plan,coordinate,class) {
+                Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_))=>continue,Err(GpuRasterError::NotPublished)=>{prepared.unpublished=true;continue;},write=>write?,
+            };
+            let mut areas=vec![(write.key.clone(),region)];
+            if let Some((input,_))=&write.derived {areas.push((input.clone(),region));}
+            let handle=match self.accept_working(scene,r,interest,areas,std::mem::take(&mut write.native),write.scratch,plan,true,class,Class::Prefetch,allowance,None,Stream::default(),encoder)? {
                 Ok(handle)=>handle,Err(refusal)=>{prepared.refusal=prepared.refusal.or(refusal);continue;},
             };
-            budget.admit_source((id,plan.level,coordinate),class);
-            #[cfg(test)] crate::test_support::PassCounts {source_admissions:1,..Default::default()}.record();
-            let image=self.pages.lock().unwrap().allocated(&key,class).expect("accepted source page");
-            let write=self.pages.lock().unwrap().prepare_write(key.clone(),region,pages::Accuracy::Display,plan.level)?;
-            let mut unit=Unit::default();unit.sources=self.pages.lock().unwrap().take_inputs(&handle)?;
-            unit.reads.push(image.clone());
+            let image=self.pages.lock().unwrap().allocated(&write.key,class).expect("accepted source page");
+            let mut unit=Unit::default();
+            unit.pages.push(self.pages.lock().unwrap().prepare_write(write.key.clone(),region,pages::Accuracy::Display,plan.level)?);
+            let mut sources=self.pages.lock().unwrap().take_inputs(&handle)?;
             let start=scene.jobs.len();let reads=r.metrics.display_reduction_reads;
-            let mut sources=std::mem::take(&mut unit.sources);
             let result=(|| {
                 #[cfg(test)]
                 let _record=crate::scene::sources::record_reads(&sources);
-                let accepted=&mut sources;
-                if let Some((_,input))=derived {
-                    let bounds=input.plan.bounds;
-                    let [x,y,width,height]=paint_transform::texel_rect(region.window_local(image.plan.bounds),1<<plan.level);
-                    let sources=[input.view.clone(),r.empty_view.clone(),r.empty_view.clone(),r.empty_view.clone()];
-                    let mut values=[0;20];
-                    values[..8].copy_from_slice(&[x,y,width,height,valid[0].min(bounds.max_x()).saturating_sub(bounds.min_x()),
-                        valid[1].min(bounds.max_y()).saturating_sub(bounds.min_y()),1<<(plan.level-input.plan.level),(input.plan.level<<8)|8]);
-                    values[14]=((bounds.min_x() as f32-image.plan.bounds.min_x() as f32)/(1<<input.plan.level) as f32).to_bits();
-                    values[15]=((bounds.min_y() as f32-image.plan.bounds.min_y() as f32)/(1<<input.plan.level) as f32).to_bits();
-                    scene.jobs.push(Job::Reduce {output:image.view.clone(),sources,values,
-                        size:[width,height],kernel:Reduction::Pages,format:image.texture.format()});
-                    unit.reads.push(input);
-                } else {
-                    scene.reduce_source(r,packet,id,image.plan,&image.view,coordinate,accepted)?;
-                    if matches!(id,SourceTarget::Paint(_)) {unit.updates.push((id,1));}
-                }
+                scene.record_write(r,packet,&write,&image,&mut unit,&mut sources)?;
                 unit.ready(scene,r,encoder,start,class)
             })();
-            unit.sources.extend(sources)?;unit.sources.check_unit(handle.input_unit())?;
+            unit.sources=sources;unit.sources.check_unit(handle.input_unit())?;
             match result {
                 Ok(true)=>{
                     #[cfg(test)] crate::test_support::record_source_preparation((id,plan.level,coordinate));
                     budget.spend((r.metrics.display_reduction_reads-reads).max(u64::from(PAGE_SIZE).pow(2)));
-                    unit.pages.push(write);
                     ready.push(unit);handles.push(handle);
                 },
                 Ok(false)|Err(GpuRasterError::NotReady|GpuRasterError::Waiting(_)|GpuRasterError::NotPublished)=>{
@@ -385,6 +536,27 @@ impl Cache {
     }
 }
 
+pub(super) struct SourceWrite {id:SourceTarget,plan:display_mips::Plan,coordinate:[u32;2],region:PixelRect,key:pages::Key,derived:Option<(pages::Key,pages::Held)>,native:super::super::sources::Inputs,scratch:[usize;2]}
+struct Step {page:[u32;2],writes:Vec<SourceWrite>,native:super::super::sources::Inputs,pins:Vec<crate::scene::sources::Lease>,acquired:Option<crate::scene::sources::AcceptedInputs>,bytes:u64}
+pub(super) enum Streamed {Complete,Waiting(Option<crate::frame_demand::UnitWait>),Refused(crate::residency::Blocked)}
+#[derive(Clone,PartialEq)]
+pub(super) struct Selection {roots:Vec<graph::Node>,preview:bool,target:Root,at_rest:bool}
+#[derive(Default)]
+pub(super) struct Stream {steps:std::collections::VecDeque<Step>,workspace:Option<crate::residency::Reservation>,cohort:crate::scene::sources::Cohort,class:Option<Class>,selection:Option<Selection>}
+impl Stream {
+    pub(super) fn pending(&self)->bool {!self.steps.is_empty()}
+    pub(super) fn selects(&self,selection:&Selection)->bool {self.selection.as_ref()==Some(selection)}
+    fn push(&mut self,page:[u32;2],mut write:SourceWrite)->Result<(),GpuRasterError> {
+        let native=std::mem::take(&mut write.native);
+        match self.steps.back_mut().filter(|step|step.page==page) {
+            Some(step)=>{step.native.extend(native)?;step.writes.push(write);},
+            None=>self.steps.push_back(Step {page,writes:vec![write],native,pins:Vec::new(),acquired:None,bytes:0}),
+        }
+        Ok(())
+    }
+    fn scratch(&self)->[usize;2] {self.steps.iter().flat_map(|step|&step.writes).fold([0;2],|most,write|[most[0].max(write.scratch[0]),most[1].max(write.scratch[1])])}
+}
+
 impl Scene {
     pub(in crate::scene) fn source_placements(&mut self,packet:FramePacket<'_>,output:scene::Output)->Result<crate::scene::sources::Inputs,GpuRasterError> {
         let placed=|sources:&Sources,id|(source_frame(Some(sources),packet.scene,id),packet.scene.target_extent(id));
@@ -394,6 +566,30 @@ impl Scene {
         }
         let overrides=match output {scene::Output::Source(id)=>[(id,self.raw_placement(Default::default(),PixelRect::full(packet.scene.target_extent(id)),packet.scene.target_offset(id)))].into(),_=>Default::default()};
         Ok(crate::scene::sources::Inputs::placed(crate::scene::sources::PlacementSet::new(self.placement_frame.clone(),overrides)))
+    }
+    #[expect(clippy::too_many_arguments,reason="A source write records its reduction into its admitted page with the inputs that cover it")]
+    fn record_write(&mut self,r:&mut WgpuRasterizer,packet:FramePacket<'_>,write:&SourceWrite,image:&pages::Held,unit:&mut Unit,
+        accepted:&mut crate::scene::sources::AcceptedInputs,
+    )->Result<(),GpuRasterError> {
+        unit.reads.push(image.clone());
+        let SourceWrite {id,plan,coordinate,region,..}=*write;
+        let Some((_,input))=&write.derived else {
+            self.reduce_source(r,packet,id,image.plan,&image.view,coordinate,accepted)?;
+            if matches!(id,SourceTarget::Paint(_)) {unit.updates.push((id,1));}
+            return Ok(());
+        };
+        let valid=self.scale_sources.entries[&id].valid_extent(plan.level);
+        let bounds=input.plan.bounds;
+        let [x,y,width,height]=paint_transform::texel_rect(region.window_local(image.plan.bounds),1<<plan.level);
+        let sources=[input.view.clone(),r.empty_view.clone(),r.empty_view.clone(),r.empty_view.clone()];
+        let mut values=[0;20];
+        values[..8].copy_from_slice(&[x,y,width,height,valid[0].min(bounds.max_x()).saturating_sub(bounds.min_x()),
+            valid[1].min(bounds.max_y()).saturating_sub(bounds.min_y()),1<<(plan.level-input.plan.level),(input.plan.level<<8)|8]);
+        values[14]=((bounds.min_x() as f32-image.plan.bounds.min_x() as f32)/(1<<input.plan.level) as f32).to_bits();
+        values[15]=((bounds.min_y() as f32-image.plan.bounds.min_y() as f32)/(1<<input.plan.level) as f32).to_bits();
+        self.jobs.push(Job::Reduce {output:image.view.clone(),sources,values,size:[width,height],kernel:Reduction::Pages,format:image.texture.format()});
+        unit.reads.push(input.clone());
+        Ok(())
     }
     #[expect(clippy::too_many_arguments,reason="A source page reduction keeps its plan, output and coordinate explicit")]
     fn reduce_source(&mut self,r:&mut WgpuRasterizer,packet:FramePacket<'_>,id:SourceTarget,plan:display_mips::Plan,output:&wgpu::TextureView,coordinate:[u32;2],
@@ -666,7 +862,7 @@ mod replacement_tests {
             let before=r.scene_tiers.display.used();
             let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
             let accepted=cache.accept_working(&mut scene,&mut r,interest,vec![(key.clone(),area)],
-                super::super::super::sources::Inputs::default(),[2,0],plan,tiled,Class::Visible,Class::Visible,crate::frame_demand::Allowance::Fresh,&mut encoder).unwrap();
+                super::super::super::sources::Inputs::default(),[2,0],plan,tiled,Class::Visible,Class::Visible,crate::frame_demand::Allowance::Fresh,None,Default::default(),&mut encoder).unwrap();
             assert!(accepted.is_ok(),"tiled={tiled}");
             let pages=cache.pages.lock().unwrap().bytes();
             let scratch=if tiled {scene.pool_bytes()}else {cache.output.iter().map(|image|image.plan.size.map(u64::from).into_iter().product::<u64>()*16).sum()};
@@ -695,7 +891,7 @@ mod replacement_tests {
         r.scene_tiers.display.update_limit(r.scene_tiers.display.used()+key.bytes()+scratch-1);
         let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
         let refused=cache.accept_working(&mut scene,&mut r,interest,vec![(key.clone(),area)],
-            super::super::super::sources::Inputs::default(),[2,0],plan,true,Class::Visible,Class::Visible,crate::frame_demand::Allowance::Fresh,&mut encoder).unwrap();
+            super::super::super::sources::Inputs::default(),[2,0],plan,true,Class::Visible,Class::Visible,crate::frame_demand::Allowance::Fresh,None,Default::default(),&mut encoder).unwrap();
         let Err(Some(refused))=refused else {panic!("the page fits but its scratch does not, so the unit is refused");};
         assert!(!refused.fits(),"the refused unit cannot fit once its page reservation is released: {refused:?}");
     }
@@ -862,7 +1058,7 @@ mod replacement_tests {
                     let output=scene.reserve(r)?;let output=scene.pool[output].view.clone();
                     scene.reduce_color_pages(r,frame,handle,parent.plan(),&output,&[[1,1]],Some(&placement),[0;2],&BTreeMap::new(),accepted).map(drop)
                 }).unwrap();
-                assert!(cache.accept_working(&mut scene,&mut renderer,interest,vec![(parent.clone(),area)],inputs,[16,0],plan,true,crate::residency::Class::Visible,crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh,&mut encoder).unwrap().is_ok(),"{name}: real native parent must be accepted");
+                assert!(cache.accept_working(&mut scene,&mut renderer,interest,vec![(parent.clone(),area)],inputs,[16,0],plan,true,crate::residency::Class::Visible,crate::residency::Class::Visible,crate::frame_demand::Allowance::Fresh,None,Default::default(),&mut encoder).unwrap().is_ok(),"{name}: real native parent must be accepted");
                 let image=cache.pages.lock().unwrap().claim(&renderer,parent.clone(),u64::MAX,crate::scene::scale::pages::WindowId::default(),crate::residency::Class::Visible).unwrap();
                 let mut inputs=cache.pages.lock().unwrap().take_fixture_inputs(&parent,area,input_level);
                 let _record=crate::scene::sources::record_reads(&inputs);

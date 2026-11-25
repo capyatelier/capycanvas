@@ -75,8 +75,7 @@ pub(crate) const IDLE_FRAME_TILES:usize=(crate::frame_pace::IDLE_TAPS/PASS_TAPS)
 
 use crate::residency::Class;
 thread_local! {static ATTEMPT_OPEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };}
-type SourcePage=(SourceTarget,u32,[u32;2]);
-pub(crate) struct WorkBudget { used: u64, capacity: u64, motion: bool, admitted: crate::IdMap<SourcePage,Class>, sourced: Option<Class> }
+pub(crate) struct WorkBudget { used: u64, capacity: u64, motion: bool, sourced: Option<Class> }
 impl Drop for WorkBudget {
     fn drop(&mut self) {ATTEMPT_OPEN.with(|open|open.set(false));}
 }
@@ -93,8 +92,6 @@ impl WorkBudget {
             .saturating_add(usize::from(self.sourced.is_none_or(|sourced|class<sourced) && self.overruns(class)))
     }
     fn begin_source(&mut self,class:Class) {self.sourced=Some(self.sourced.map_or(class,|sourced|sourced.min(class)));self.spend(PASS_TAPS);}
-    fn source_admitted(&self,page:SourcePage,class:Class)->bool {self.admitted.get(&page).is_some_and(|admitted|*admitted<=class)}
-    fn admit_source(&mut self,page:SourcePage,class:Class) {let admitted=self.admitted.entry(page).or_insert(class);*admitted=(*admitted).min(class);}
     pub(crate) fn spend(&mut self,work:u64) {self.used=self.used.saturating_add(work);}
     fn spent(&self)->u64 {self.used}
 }
@@ -739,7 +736,7 @@ impl Scene {
     }
     pub(crate) fn begin_paced(motion:bool,taps:u64)->WorkBudget {
         debug_assert!(!ATTEMPT_OPEN.with(|open|open.replace(true)),"a work attempt is already open on this thread");
-        WorkBudget {used:0,capacity:taps.max(PASS_TAPS),motion,admitted:Default::default(),sourced:None}
+        WorkBudget {used:0,capacity:taps.max(PASS_TAPS),motion,sourced:None}
     }
     pub fn begin_frame(&mut self) {
         self.clear_material_pages();
@@ -2837,7 +2834,7 @@ impl Scene {
                             pass.set_bind_group(1, &binding, &[]);
                             pass.dispatch_workgroups(values[2].div_ceil(8), values[3].div_ceil(8), 1);
                             #[cfg(test)]
-                            crate::test_support::PassCounts {composed_texels:u64::from(values[2])*u64::from(values[3]),..Default::default()}.record();
+                            crate::test_support::record_composition(output,values);
                         }
                         Job::Resample { size, views, .. } => {
                             pass.set_pipeline(r.scene_pipelines.resample.area(views[1].texture().format()));
