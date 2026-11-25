@@ -255,6 +255,22 @@ impl Cache {
         !reached.is_empty() && reached.into_iter().all(|index|cells.cells[index].shown.as_ref().is_some_and(|shown|!shown.exact))
     }
     #[cfg(test)]
+    pub(crate) fn shows_current_reduced_grid(&self,level:u32,region:PixelRect)->bool {
+        if level==0 || self.plan.level!=level || self.pixels.committed_root().is_none() {return false;}
+        let Some((store,cells,_))=self.cells() else {return false;};
+        let Some(frame)=store.expected() else {return false;};
+        let reached=Cells::reached(self.plan,region);
+        !reached.is_empty() && reached.into_iter().all(|index| {
+            let cell=&cells.cells[index];
+            cell.current && cell.written() && cell.shown.as_ref().is_some_and(|shown| {
+                !shown.submission.discarded() && match &shown.recorded {
+                    Some(recorded)=>recorded.key.level==level && recorded.matches(frame,self.required_input_level())!=Some(false),
+                    None=>self.gesture.is_some() && !shown.exact,
+                }
+            })
+        })
+    }
+    #[cfg(test)]
     pub(crate) fn storm_view_settled(&self,view:layer_render::ViewState)->Result<(),String> {
         let visible=display_mips::view_bounds(view,self.plan.extent,0).unwrap_or(PixelRect::EMPTY).intersect(self.plan.bounds);
         let Some((_store,cells,_))=self.cells() else {return Err(String::from("the view has no cells"));};

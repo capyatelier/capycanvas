@@ -318,7 +318,7 @@ fn live_at(r: &mut WgpuRasterizer, scene: SceneView<'_>, level: u32, blend_space
     };
     layer_render::CanvasRenderer::prepare_moving_layer(r, Some(moving));
     crate::test_support::submit_published(r, frame);
-    assert!(r.scale_display.as_ref().unwrap().shows_reduced(PixelRect::full(EXTENT)), "level {level}: a live transform presents the reduced composition");
+    assert!(r.scale_display.as_ref().unwrap().shows_current_reduced_grid(level, PixelRect::full(EXTENT)), "level {level}: a live transform presents the reduced composition");
     let pixels = read(r);
     layer_render::CanvasRenderer::prepare_moving_layer(r, None);
     pixels

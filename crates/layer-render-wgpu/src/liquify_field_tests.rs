@@ -344,7 +344,7 @@ fn fit_persistent_preview_preserves_untouched_prior_compression_in_same_tile() {
     let target=placement::target(&doc);
     let view=layer_render::ViewState{width_px:32,height_px:32,
         document_to_surface:[0.125,0.,0.,0.125,0.,0.]};
-    let reduced=|r:&WgpuRasterizer|r.scale_display.as_ref().unwrap().shows_reduced(PixelRect::full(extent));
+    let reduced=|r:&WgpuRasterizer|r.scale_display.as_ref().unwrap().shows_current_reduced_grid(3,PixelRect::full(extent));
     let mut still=dab([0.;4]);
     still.center=Point{x:64.,y:128.};
     still.flow=0.;

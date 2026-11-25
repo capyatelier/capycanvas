@@ -148,10 +148,10 @@ fn candidate_errors(name: &str) -> [f32; 2] {
                     let [held, ended] = [stroke(false), stroke(true)];
                     for _ in 0..64 {
                         for renderer in [&mut window, &mut exact] { crate::test_support::submit_ready(renderer, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&held), composite_all: false, ..frame }).unwrap(); }
-                        if window.scale_display.as_ref().unwrap().shows_reduced(visible) { break; }
+                        if window.scale_display.as_ref().unwrap().shows_current_reduced_grid(level, visible) { break; }
                     }
                     let cache = window.scale_display.as_ref().unwrap();
-                    assert!(cache.shows_reduced(visible), "{name} level {level}: the live frame presents the reduced composition");
+                    assert!(cache.shows_current_reduced_grid(level, visible), "{name} level {level}: the live frame presents the reduced composition");
                     assert_eq!(cache.plan.level, level); assert!(cache.evaluation == Evaluation::Display);
                     let error = quality(&display_pixels(&window), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan, cache.texture().format());
                     for renderer in [&mut window, &mut exact] { submit_published(renderer, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&ended), composite_all: false, ..frame }); }
