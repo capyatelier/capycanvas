@@ -17,6 +17,10 @@ pub(super) fn refining(r: &WgpuRasterizer) -> bool {
     r.moving_layer.is_none() && !r.transform_preview.as_ref().is_some_and(|preview| preview.moving)
 }
 
+pub(super) fn refines_at(r: &WgpuRasterizer, view: layer_render::ViewState) -> bool {
+    refining(r) && r.artwork_frame.as_ref().is_none_or(|frame| frame.view.document_to_surface == view.document_to_surface)
+}
+
 enum Outcome {Committed,Waiting(crate::frame_demand::UnitWait),Refused(PixelRect,crate::residency::Blocked),Skipped,Deferred}
 
 struct Admitted {interest:pages::Interest,view:layer_render::ViewState,work:u64,waiting:Option<crate::frame_demand::UnitWait>}

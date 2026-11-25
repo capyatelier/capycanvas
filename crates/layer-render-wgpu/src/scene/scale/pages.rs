@@ -2329,8 +2329,8 @@ impl Cache {
         self.transform.is_none() && self.plan.bounds==PixelRect::full(self.plan.extent) && reader.plan.bounds==self.plan.bounds && self.plan.level<=reader.plan.level
             && self.cells().is_some_and(|(_,cells,_)|cells.cells.iter().any(Cell::live))
     }
-    pub(super) fn owes_native(&self,r:&WgpuRasterizer,region:PixelRect)->bool {
-        let refining=super::refinement::refining(r);
+    pub(super) fn owes_native(&self,r:&WgpuRasterizer,view:layer_render::ViewState,region:PixelRect)->bool {
+        let refining=super::refinement::refines_at(r,view);
         self.plan.level==0 && self.plan.bounds.intersect(region)==region
             && self.cells().is_some_and(|(_,cells,_)|Cells::reached(self.plan,region).into_iter().all(|index|cells.cells[index].awaits_native(refining)))
     }

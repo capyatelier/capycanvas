@@ -401,7 +401,7 @@ impl Cache {
                         budget.spend((r.metrics.display_reduction_reads-reads).max(u64::from(PAGE_SIZE).pow(2)));
                         stream.cohort.read(&accepted,&encoder.submission());
                         let cell=pages::bounds(step.page,0,self.plan.extent);
-                        if finer.is_some_and(|finer|finer.owes_native(r,cell)) {self.paired.push((cell,accepted.to_vec(),step.bytes));}
+                        if finer.is_some_and(|finer|finer.owes_native(r,packet.view,cell)) {self.paired.push((cell,accepted.to_vec(),step.bytes));}
                         unit.sources=accepted;self.encode_units(scene,r,encoder,[unit])?;
                         stream.steps.remove(index);progressed=true;
                     },

@@ -1095,7 +1095,7 @@ impl Cache {
         let Encoding { encoder, commands, retained, budget } = encoding;
         scene.placement_display=true;
         let finer=match destination {Destination::Overview(finer,changed)=>Some((finer,changed)),_=>None};
-        self.paired.retain(|(region,..)|finer.is_some_and(|(finer,_)|finer.owes_native(r,*region)));
+        self.paired.retain(|(region,..)|finer.is_some_and(|(finer,_)|finer.owes_native(r,packet.view,*region)));
         let view=matches!(destination,Destination::View);
         self.ask(pages::Asked {view:packet.view,moving:view && budget.motion});
         let absorbed=match self.retired.take() {
