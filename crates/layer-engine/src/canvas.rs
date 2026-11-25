@@ -2346,7 +2346,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let active = self.active_stroke.as_ref().expect("stroke is active");
         if matches!(active.style.execution, BrushExecution::Smudge | BrushExecution::Liquify) {
             if let Some((point, _)) = input {
-                self.dab_generator.append(point, &active.brush, &mut self.pending_chunk_dabs);
+                if terminal && self.builder.ending() {
+                    self.dab_generator.append_end(point, &active.brush, &mut self.pending_chunk_dabs);
+                } else {
+                    self.dab_generator.append(point, &active.brush, &mut self.pending_chunk_dabs);
+                }
             }
             if terminal { self.dab_generator.finish_contact(&active.brush, &mut self.pending_chunk_dabs); }
             self.flush_material_chunks(false);
@@ -2735,9 +2739,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             };
             if matches!(active.style.execution, BrushExecution::Smudge | BrushExecution::Liquify) {
                 let mut replay_dabs = Vec::new();
-                for point in self.builder.real_points()[..point_count].iter().copied() {
-                    generator.append(point, &active.brush, &mut replay_dabs);
-                }
+                let ending = self.builder.ending() && point_count == self.builder.real_points().len();
+                generator.append_points(&self.builder.real_points()[..point_count], &active.brush, ending, &mut replay_dabs);
                 if let Some((tail, emitted)) = &active.momentum {
                     generator.finish_contact(&active.brush, &mut replay_dabs);
                     replay_dabs.extend_from_slice(&tail[..*emitted]);
@@ -3437,7 +3440,7 @@ mod tests {
         for cancel in [false, true] {
             let (mut input, mut engine) = engine("momentum correction", 256, 128);
             let mut brush = default_brush(DefaultBrushPreset::LiquifyPush);
-            brush.diameter = 64.; brush.deform.momentum = 1.; brush.stabilization.strength = 0.03;
+            brush.diameter = 64.; brush.deform.momentum = 1.;
             engine.set_brush(brush).unwrap();
             engine.settings.instant_feedback.enabled = false;
             input.push(event(1, PenPhase::Down, 32.)).unwrap();

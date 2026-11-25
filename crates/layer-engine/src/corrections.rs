@@ -151,11 +151,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.dabs.clear();
         self.batches.clear();
         for index in 0..count {
-            self.append_real_dab(Some((self.builder.real_points()[index], index)), false);
+            let terminal = momentum.is_some() && index + 1 == count;
+            self.append_real_dab(Some((self.builder.real_points()[index], index)), terminal);
         }
         if let Some(emitted) = momentum {
             let active = self.active_stroke.as_mut().unwrap();
-            self.dab_generator.finish_contact(&active.brush, &mut self.pending_chunk_dabs);
             let tail = self.dab_generator.momentum(&active.brush);
             let emitted = emitted.min(tail.len());
             self.pending_chunk_dabs.extend_from_slice(&tail[..emitted]);
