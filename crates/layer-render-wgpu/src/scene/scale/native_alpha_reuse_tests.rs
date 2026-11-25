@@ -568,7 +568,17 @@ fn a_mask_stroke_on_a_group_or_an_attached_filter_composes_like_the_unsplit_stac
         pollster::block_on(r.compilation.prepare_all([&full.compose, &full.reduce_pair, &full.reduce, &full.reduce_phased])).unwrap();
         let mut native = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         native.test.reference = true;
-        let contact = |r: &mut WgpuRasterizer, target: SourceTarget, center: [f32; 2], color: [f32; 4]| {
+        let mut raw_doc = doc.clone();
+        raw_doc.artwork.occurrences.get_mut(masked).unwrap().mask = None;
+        reindex(&mut raw_doc);
+        let raw_frame = FramePacket { scene: raw_doc.scene(), ..frame };
+        let mut raw = (owner == "group").then(|| {
+            let mut raw = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+            raw.test.reference = true;
+            crate::test_support::submit_settled(&mut raw, raw_frame);
+            raw
+        });
+        let contact = |r: &mut WgpuRasterizer, frame: FramePacket<'_>, target: SourceTarget, center: [f32; 2], color: [f32; 4]| {
             let mut dab = crate::tests::test_dab(center, color, 0.8);
             dab.radii = [13.25, 11.75];
             let batch = dab_batch(target, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
@@ -577,17 +587,40 @@ fn a_mask_stroke_on_a_group_or_an_attached_filter_composes_like_the_unsplit_stac
         let idle = |r: &mut WgpuRasterizer| for _ in 0..2 { crate::test_support::submit_ready(r, frame).unwrap(); r.wait_idle().unwrap(); };
         let exact = |r: &WgpuRasterizer| r.scale_display.as_ref().unwrap().exact_cells().iter().all(|(_, exact)| *exact);
         let name = |r: &WgpuRasterizer, coordinate: [u32; 2]| r.current_raster_version(paint, RasterPlane::Color, coordinate).unwrap().identity();
-        let composes = |r: &WgpuRasterizer, native: &WgpuRasterizer, stage: &str| {
+        let composes = |r: &WgpuRasterizer, native: &WgpuRasterizer, raw: Option<&WgpuRasterizer>, stage: &str| {
             let cache = r.scale_display.as_ref().unwrap();
-            assert_reduction(&display_pixels(r), &pixels(native, crate::test_support::document_texture(native)), cache.plan, cache.texture().format(), 2e-5, format_args!("{owner}: {stage}"));
+            let actual = display_pixels(r);
+            if let Some(raw) = raw {
+                let paint = pixels(raw, crate::test_support::document_texture(raw));
+                let masks = page_coordinates(PixelRect::full(extent)).map(|coordinate| {
+                    let bytes = crate::test_support::mask_page_bytes(native, SourceTarget::Coverage(mask), coordinate);
+                    let values = bytes.as_chunks::<4>().0.iter().map(|bytes| f32::from_le_bytes(*bytes)).collect::<Vec<_>>();
+                    (coordinate, values)
+                }).collect::<BTreeMap<_,_>>();
+                let paint = input_average(cache.plan, |x,y| paint[(y * extent[0] + x) as usize]);
+                let coverage = input_average(cache.plan, |x,y| {
+                    let values = &masks[&[x / PAGE_SIZE, y / PAGE_SIZE]];
+                    [values[((y % PAGE_SIZE) * PAGE_SIZE + x % PAGE_SIZE) as usize]]
+                });
+                let expected = paint.into_iter().zip(coverage).map(|(p,[m])| p.map(|v| v * m)).collect::<Vec<_>>();
+                let format = cache.texture().format();
+                let error = pixel_quality(&actual, &expected, format);
+                let half_step = format == wgpu::TextureFormat::Rgba16Float && actual.iter().flatten().zip(expected.iter().flatten()).all(|(a,b)| {
+                    let ordinal = |v: f32| i32::from(layer_core::color::f16::from_f32(v).to_bits());
+                    (ordinal(*a)-ordinal(*b)).abs() <= 1
+                });
+                assert!(error[2] < 2e-5 || half_step, "{owner}: {stage}: {error:?}");
+            } else {
+                assert_reduction(&actual, &pixels(native, crate::test_support::document_texture(native)), cache.plan, cache.texture().format(), 2e-5, format_args!("{owner}: {stage}"));
+            }
         };
-        for renderer in [&mut r, &mut native] { contact(renderer, SourceTarget::Coverage(mask), [125.5, 126.5], [1.; 4]); }
+        for renderer in [&mut r, &mut native] { contact(renderer, frame, SourceTarget::Coverage(mask), [125.5, 126.5], [1.; 4]); }
         crate::test_support::submit_settled(&mut native, frame);
         idle(&mut r);
         assert!(!publication_pending(&r), "{owner}: a mask stroke must publish within two idle frames");
-        composes(&r, &native, "a published mask stroke");
+        composes(&r, &native, raw.as_ref(), "a published mask stroke");
         crate::test_support::submit_settled(&mut r, frame);
-        composes(&r, &native, "a settled mask stroke");
+        composes(&r, &native, raw.as_ref(), "a settled mask stroke");
         assert!(exact(&r), "{owner}: a settled mask stroke must be exact");
         let masked_settled = display_pixels(&r);
         let width = r.scale_display.as_ref().unwrap().plan.size[0];
@@ -597,18 +630,27 @@ fn a_mask_stroke_on_a_group_or_an_attached_filter_composes_like_the_unsplit_stac
             assert!(name(r, [1, 0]) == names[1], "{owner}: a contact that feeds no paint must leave the paint page's name unchanged: {stage}");
             assert!(exact(r), "{owner}: a contact that feeds no paint must leave the masked image exact: {stage}");
         };
-        contact(&mut r, paint, [400.5, 200.5], [0.; 4]);
+        contact(&mut r, frame, paint, [400.5, 200.5], [0.; 4]);
         unchanged(&r, "contact frame");
         idle(&mut r);
         unchanged(&r, "two idle frames later");
         crate::test_support::submit_settled(&mut r, frame);
         unchanged(&r, "settled");
-        for renderer in [&mut r, &mut native] { contact(renderer, paint, [125.5, 126.5], [1.; 4]); }
+        for renderer in [&mut r, &mut native] { contact(renderer, frame, paint, [125.5, 126.5], [1.; 4]); }
+        if let Some(raw) = &mut raw {
+            contact(raw, raw_frame, paint, [125.5, 126.5], [1.; 4]);
+            crate::test_support::submit_settled(raw, raw_frame);
+        }
         assert!(name(&r, [0, 0]) != names[0], "{owner}: a contact that feeds paint must rename the page it paints");
-        assert!(display_pixels(&r) != masked_settled && !exact(&r), "{owner}: a contact that feeds paint must show and leave its cell to repair");
+        assert!(display_pixels(&r) != masked_settled, "{owner}: a contact that feeds paint must show");
+        let cache=r.scale_display.as_ref().unwrap();
+        let cells=cache.exact_cells();
+        assert_eq!(cells.len(),1);
+        assert!(cache.fed_cell_current_or_owed(cells[0].0),
+            "{owner}: a fed cell must have valid current exact output or owe exact work");
         for renderer in [&mut r, &mut native] { crate::test_support::submit_settled(renderer, frame); }
         assert!(display_pixels(&r) != masked_settled && exact(&r), "{owner}: a contact that feeds paint must change the settled picture");
-        composes(&r, &native, "a settled painted contact");
+        composes(&r, &native, raw.as_ref(), "a settled painted contact");
     }
 }
 

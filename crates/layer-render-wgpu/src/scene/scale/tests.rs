@@ -1899,6 +1899,43 @@ fn committed_color(format:wgpu::TextureFormat,pixel:[f32;4])->[f32;4] {
     }
 }
 
+fn mask_samples(source: &CoverageSource) -> Vec<f32> {
+    let [width, height] = source.domain;
+    let mut values = vec![source.default_coverage; (width * height) as usize];
+    for (key, tile) in &source.raster.wait_data().unwrap().tiles {
+        assert_eq!(key.plane, RasterPlane::Mask);
+        let blob = tile.wait_backing().unwrap();
+        let bytes = pollster::block_on(blob.decode_ready_on_worker()).unwrap();
+        assert_eq!(blob.descriptor.depth(), SampleDepth::U8);
+        let [x, y] = key.coordinate.map(|coordinate| coordinate * PAGE_SIZE);
+        for yy in y..(y + PAGE_SIZE).min(height) {
+            for xx in x..(x + PAGE_SIZE).min(width) {
+                values[(yy * width + xx) as usize] = f32::from(bytes[((yy - y) * PAGE_SIZE + xx - x) as usize]) / 255.;
+            }
+        }
+    }
+    values
+}
+
+fn input_average<const N: usize>(plan: display_mips::Plan, sample: impl Fn(u32, u32) -> [f32; N]) -> Vec<[f32; N]> {
+    let side = 1 << plan.level;
+    (0..plan.size[1]).flat_map(|y| (0..plan.size[0]).map(move |x| [x,y])).map(|[x,y]| {
+        let start = [plan.bounds.min_x() + x * side, plan.bounds.min_y() + y * side];
+        let end = [(start[0] + side).min(plan.bounds.max_x()), (start[1] + side).min(plan.bounds.max_y())];
+        let mut sum = [0.; N];
+        for yy in start[1]..end[1] { for xx in start[0]..end[0] {
+            let p = sample(xx, yy);
+            for c in 0..N { sum[c] += p[c]; }
+        }}
+        sum.map(|v| v / ((end[0] - start[0]) * (end[1] - start[1])) as f32)
+    }).collect()
+}
+
+fn pixel_quality(actual: &[[f32; 4]], expected: &[[f32; 4]], format: wgpu::TextureFormat) -> [f32; 3] {
+    assert_eq!(actual.len(), expected.len());
+    quality(actual, expected, display_mips::Plan::at([actual.len() as u32, 1], 0), format)
+}
+
 pub(crate) fn quality(actual: &[[f32; 4]], exact: &[[f32; 4]], plan: display_mips::Plan, format: wgpu::TextureFormat) -> [f32; 3] {
     quality_linear(actual, exact, plan, format, |color| color)
 }

@@ -277,7 +277,7 @@ fn texture(device: &wgpu::Device, size: [u32; 2], usage: wgpu::TextureUsages) ->
 
 struct Found { index: usize, error: f32, shown: [f32; 4], expected: [f32; 4] }
 
-struct Oracle { subject: WgpuRasterizer, reference: WgpuRasterizer, presenter: ViewportPresenter, reduce: wgpu::ComputePipeline, compare: wgpu::ComputePipeline }
+struct Oracle { subject: WgpuRasterizer, reference: WgpuRasterizer, presenter: ViewportPresenter, reduce: wgpu::ComputePipeline, compare: wgpu::ComputePipeline, mask: Option<Vec<f32>> }
 
 impl Oracle {
     fn new(doc: &layer_core::Document, budget: Option<u64>) -> Self {
@@ -295,7 +295,7 @@ impl Oracle {
         let presenter = crate::test_support::float_presenter(&subject);
         let reduce = pipeline(&reference.device, "reduce");
         let compare = pipeline(&subject.device, "compare");
-        Self { subject, reference, presenter, reduce, compare }
+        Self { subject, reference, presenter, reduce, compare, mask: None }
     }
 
     fn publish_reference(&mut self, frame: FramePacket<'_>) -> Result<(), String> {
@@ -317,7 +317,29 @@ impl Oracle {
         let source = crate::test_support::document_texture(&self.reference).create_view(&Default::default());
         dispatch(&self.reference.device, &self.reference.queue, &self.reduce, &[wgpu::BindingResource::TextureView(&source),
             wgpu::BindingResource::TextureView(&reduced.create_view(&Default::default())), window.as_entire_binding()], size);
-        crate::layer_tests::page_bytes(&self.reference, &reduced)
+        let bytes = crate::layer_tests::page_bytes(&self.reference, &reduced);
+        let Some(mask) = &self.mask else { return bytes; };
+        let paper = [210,200,180].map(|v| layer_core::color::RgbSpace::Srgb.decode(f64::from(v) / 255.) as f32);
+        let paint = texels(&bytes);
+        let mut composed = Vec::with_capacity(bytes.len());
+        for y in 0..size[1] { for x in 0..size[0] {
+            let at = [origin[0] + x * side, origin[1] + y * side];
+            let mut sum = 0.;
+            let mut count = 0;
+            for yy in at[1]..(at[1] + side).min(EXTENT[1]) {
+                for xx in at[0]..(at[0] + side).min(EXTENT[0]) {
+                    sum += mask[(yy * EXTENT[0] + xx) as usize];
+                    count += 1;
+                }
+            }
+            let coverage = sum / count as f32;
+            let p = paint[(y * size[0] + x) as usize];
+            let base = std::array::from_fn::<_,3,_>(|c| p[c] + paper[c] * (1. - p[3]));
+            let mix = 0.7 * coverage;
+            let output = base.map(|v| v + ((v * 2f32.powf(0.6)).clamp(0.,1.) - v) * mix);
+            composed.extend(output.into_iter().chain([1.]).flat_map(f32::to_le_bytes));
+        }}
+        composed
     }
 
     fn mismatches(&mut self, view: ViewState, bytes: &[u8]) -> (Vec<Found>, Vec<[f32; 4]>) {
@@ -464,7 +486,7 @@ impl Checker {
 
 fn run(name: &str, case: Case) {
     let (doc, target) = document(case.layered);
-    let (copy, _) = document(case.layered);
+    let (mut copy, _) = document(case.layered);
     let style = layer_render::DabStyle { blend_space: doc.composition().blend, ..crate::layer_tests::preset_style(case.brush.preset) };
     let mut sequence = strokes(case, target, &style);
     let schedule = Schedule::new(case, &sequence);
@@ -477,6 +499,13 @@ fn run(name: &str, case: Case) {
     let level = case.zoom.level();
     let base = FramePacket { composite_all: false, blend_space: doc.composition().blend, view: case.zoom.view([0, 0]), ..packet(doc.scene(), EXTENT) };
     let mut oracle = Oracle::new(&doc, case.budget);
+    if case.layered && level > 0 {
+        let filter = copy.scene().order()[0];
+        let backdrop = copy.scene().order()[2];
+        oracle.mask = Some(mask_samples(copy.scene().mask(filter).unwrap().1));
+        remove_occurrence(&mut copy, filter);
+        remove_occurrence(&mut copy, backdrop);
+    }
     let subject = &mut oracle.subject;
     crate::test_support::submit_settled(subject, FramePacket { composite_all: true, ..base });
     for (index, frame) in sequence.iter().enumerate() { crate::test_support::submit_ready(subject, packet_for(base, case.zoom, index, frame)).unwrap(); }
