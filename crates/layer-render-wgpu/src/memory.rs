@@ -324,9 +324,12 @@ impl WgpuRasterizer {
         if !evict {self.publish_memory();}
         self.memory.lend(self.raster_tiers.raster.used(),raster,0);
         let mut trimmed=None;
-        let mut admitted=self.try_group(raster,display,allowance);
-        if admitted.is_err() && evict {trimmed=self.yield_to_lane(raster,display);admitted=self.try_group(raster,display,allowance);}
-        if admitted.is_err() && least!=raster {self.memory.lend(self.raster_tiers.raster.used(),least,0);admitted=self.try_group(least,display,allowance);}
+        let prefetched=(least!=raster && evict).then(||self.try_group(raster,display,crate::frame_demand::Allowance::Spent)).and_then(Result::ok);
+        let mut admitted=match prefetched {
+            Some(held)=>Ok(held),
+            None=>{self.memory.lend(self.raster_tiers.raster.used(),least,0);self.try_group(least,display,allowance)},
+        };
+        if admitted.is_err() && evict {trimmed=self.yield_to_lane(least,display);admitted=self.try_group(least,display,allowance);}
         if admitted.is_err() && self.memory.unified && self.liquify_sources.as_mut().is_some_and(crate::liquify_sources::LiquifySources::release) {admitted=self.try_group(least,display,allowance);}
         if admitted.is_err() && self.close_overcommits(least.saturating_add(display)) {
             let class=crate::residency::Class::Authored;
