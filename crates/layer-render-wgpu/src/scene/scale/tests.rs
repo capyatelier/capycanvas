@@ -289,7 +289,11 @@ fn retained_level_pixels(r: &WgpuRasterizer, cache: &Cache, level: u32) -> Vec<[
     output
 }
 
-fn assert_settled(mut r: &mut WgpuRasterizer, frame: FramePacket<'_>, reference: &[[f32; 4]]) {
+fn assert_settled(r: &mut WgpuRasterizer, frame: FramePacket<'_>, reference: &[[f32; 4]]) {
+    assert_settled_with(r, frame, reference, |fresh| crate::test_support::submit_settled(fresh, frame));
+}
+
+fn assert_settled_with(mut r: &mut WgpuRasterizer, frame: FramePacket<'_>, reference: &[[f32; 4]], prepare_fresh: impl FnOnce(&mut WgpuRasterizer)) {
     let revision = r.artwork_revision;
     let pages = page_coordinates(PixelRect::full(frame.document_extent)).count();
     let idle = FramePacket { composite_all: false, reset_layers: false, dabs: &[], dab_batches: &[], restore_rasters: &[], ..frame };
@@ -338,7 +342,7 @@ fn assert_settled(mut r: &mut WgpuRasterizer, frame: FramePacket<'_>, reference:
         }
     } else {
         let mut fresh = WgpuRasterizer::new_native_headless(r.document_color()).unwrap();
-        crate::test_support::submit_settled(&mut fresh, frame);
+        prepare_fresh(&mut fresh);
         assert_eq!(fresh.scale_display.as_ref().unwrap().plan, cache.plan, "a fresh renderer settles the same view");
         let format = cache.texture().format();
         let ordinal = |value: f32| i32::from(layer_core::color::f16::from_f32(value).to_bits() as i16);

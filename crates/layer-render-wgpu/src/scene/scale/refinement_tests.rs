@@ -1006,7 +1006,10 @@ fn idle_display_refines_spatial_effects_and_invalidates_committed_paint() {
         let batch = dab_batch(paint, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
         let stroke = FramePacket { composite_all: false, dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame };
         crate::test_support::submit_ready(&mut r, stroke).unwrap(); submit_published(&mut exact, stroke);
-        assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
+        assert_settled_with(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)), |fresh| {
+            crate::test_support::submit_settled(fresh, frame);
+            crate::test_support::submit_settled(fresh, stroke);
+        });
     }
 }
 

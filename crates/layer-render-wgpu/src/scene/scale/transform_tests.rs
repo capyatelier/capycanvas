@@ -312,7 +312,12 @@ fn transform_zoom_release_and_commit_preserve_native_pixels() {
         assert!(error[0] < 0.004 && error[1] < 0.06, "scale={scale} moving={moving} {error:?}");
         crate::test_support::assert_same_canonical(&mut r, &mut exact);
         assert_eq!(r.test.source_captures.get(), 1);
-        if !moving { assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact))); }
+        if !moving {
+            assert_settled_with(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)), |fresh| {
+                fresh.set_transform_preview(Some(&preview)).unwrap();
+                crate::test_support::submit_settled(fresh, frame);
+            });
+        }
     }
     let expected = exact.readback_srgb_rgba8().unwrap();
     let mut coverage=CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(),extent, [0, 0]);
