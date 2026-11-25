@@ -105,7 +105,7 @@ fn crop(jobs:&mut [crate::scene::Job],[x,y,width,height]:[u32;4]) {
 
 #[derive(Default)]
 struct Declared {cells:Vec<(PixelRect,crate::scene::sources::Inputs,graph::Node)>,inputs:crate::scene::sources::AcceptedInputs,pages:IdMap<pages::Key,pages::Held>,level:Option<u32>,cell_reads:IdMap<[u32;2],Arc<[PixelRect]>>,
-    waits:Vec<(PixelRect,Option<crate::residency::Blocked>)>}
+    waits:Vec<(PixelRect,Option<crate::residency::Blocked>)>,refill:BTreeSet<[u32;2]>}
 #[derive(Default)]
 struct Claimed {pages:Vec<(pages::Key,pages::Held)>,refill:BTreeSet<[u32;2]>,inputs:crate::scene::sources::AcceptedInputs}
 
@@ -246,6 +246,15 @@ impl Cache {
         dab_reach(packet).flat_map(|reach|pages::coordinates(reach.in_frame(extent).intersect(bounds),level)).collect::<BTreeSet<_>>()
             .into_iter().map(|coordinate|pages::bounds(coordinate,level,extent)).collect()
     }
+    fn stroked_cells(&self,packet:FramePacket<'_>,target:SourceTarget,scope:&[PixelRect])->Vec<PixelRect> {
+        let tiles=local_reach(packet,target,[0;2]).into_iter().flat_map(page_coordinates).map(page_rect).collect::<Vec<_>>();
+        let (reads,span)=(self.cell_reads(target,scope),PAGE_SIZE<<self.plan.level);
+        let mut cells=self.dab_cells(packet);
+        let read=scope.iter().filter(|cell|!cells.contains(cell) && reads.get(&[cell.min_x()/span,cell.min_y()/span])
+            .is_some_and(|reads|reads.iter().any(|read|tiles.iter().any(|tile|!tile.intersect(*read).is_empty())))).copied().collect::<Vec<_>>();
+        cells.extend(read);
+        cells
+    }
     pub(super) fn contact_composes(&self)->Vec<PixelRect> {
         let Some(contact)=self.gesture.as_ref() else {return Vec::new();};
         self.contact_cells().into_iter().filter(|region|contact.cells.iter().any(|(cell,..)|cell==region)).collect()
@@ -340,14 +349,15 @@ impl Cache {
         let (Some(guard),Some(composed),Some(generation))=(Guard::capture(r,packet,target,&preview_level),frame.target_versions(target),r.raster_generation(target)) else {return Ok(());};
         let tiled=self.tiled(r,packet,scene,&root);
         let plan=self.plan;
-        let required=self.dab_cells(packet);
+        let required=self.stroked_cells(packet,target,&scope);
         let ahead=self.stroke_lead(scene,packet.scene,target,frame.watercolor(target),&scope,None);
         let ready=scope.into_iter().filter(|cell|required.contains(cell) || !self.holes(*cell)).collect::<Vec<_>>();
         let source=source_frame(Some(&scene.scale_sources),packet.scene,target);
         let previewed=r.preview_input_tiles(target);
         let stale=previewed.iter().flat_map(|tile|phased_tiles(*tile,source.phase)).map(|tile|(tile,page_rect(tile))).collect::<BTreeMap<_,_>>();
-        let reduced=members(frame.watercolor(target),local_reach(packet,target,source.phase).into_iter().flat_map(page_coordinates).chain(stale.keys().copied()));
-        let Some(Declared {cells,inputs,pages,level,cell_reads,waits})=self.declare_contact(scene,r,packet,encoder,retained,budget,&frame,&root,target,tiled,None,ready,&|cell|required.contains(&cell).then_some(Class::Authored),&reduced)? else {return Ok(());};
+        let mut reduced=members(frame.watercolor(target),local_reach(packet,target,source.phase).into_iter().flat_map(page_coordinates).chain(stale.keys().copied()));
+        let Some(Declared {cells,inputs,pages,level,cell_reads,waits,refill})=self.declare_contact(scene,r,packet,encoder,retained,budget,&frame,&root,target,tiled,None,ready,&|cell|required.contains(&cell).then_some(Class::Authored),&reduced)? else {return Ok(());};
+        reduced.extend(&refill);
         let owed=required.into_iter().filter(|region|!cells.iter().any(|(cell,..)|cell==region)).collect::<Vec<_>>();
         self.await_cells(scene,r,waits,&|cell|owed.contains(&cell));
         request_ahead(r,packet.scene,&frame,encoder,target,source.phase,ahead.iter().copied());
@@ -364,7 +374,7 @@ impl Cache {
             ahead,
             footprints,tainted,guard,generation:std::sync::Mutex::new(generation),exit:std::sync::OnceLock::new(),preview_level,cells,inputs,pages,level,
             stale,written:IdMap::default(),submissions:Vec::new(),stamps:Arc::default(),reduced:if level.is_some() {reduced}else {BTreeSet::new()},
-            baselines:BTreeMap::new(),drawn_directly,reduced_from:BTreeMap::new(),tip,cell_reads,diverged:false,owed,refill:BTreeSet::new()});
+            baselines:BTreeMap::new(),drawn_directly,reduced_from:BTreeMap::new(),tip,cell_reads,diverged:false,owed,refill});
         Ok(())
     }
     #[expect(clippy::too_many_arguments,reason="A contact grows with the frame's scene, encoding and budget into the cells its stroke reaches")]
@@ -393,7 +403,7 @@ impl Cache {
         cells.extend(cursor);
         let declared=if cells.is_empty() && tiles.is_empty() {Some(Declared::default())}
             else {self.declare_contact(scene,r,packet,encoder,retained,budget,&frame,&root,target,tiled,level,cells,&|cell|Some(if owed.contains(&cell) {Class::Authored}else {Class::Visible}),&tiles)?};
-        let Some(Declared {cells,inputs,pages:held,level,cell_reads,waits})=declared else {return Ok(false);};
+        let Some(Declared {cells,inputs,pages:held,level,cell_reads,waits,refill})=declared else {return Ok(false);};
         self.await_cells(scene,r,waits,&|cell|owed.contains(&cell) || cursor==Some(cell));
         let readers=cell_reads.iter().flat_map(|(cell,reads)| {
             let reached=self.reached_cells(pages::bounds(*cell,self.plan.level,self.plan.extent).into());
@@ -402,6 +412,7 @@ impl Cache {
         let contact=self.gesture.as_mut().expect("live contact");
         contact.cells.extend(cells);contact.cell_reads.extend(cell_reads);contact.footprints.extend(readers);
         if level.is_some() {contact.level=level;contact.reduced.extend(tiles);}
+        contact.reduced.extend(&refill);contact.refill.extend(refill);
         contact.inputs.adopt(inputs)?;
         for (key,page) in held {contact.pages.entry(key).or_insert(page);}
         owed.retain(|cell|!contact.cells.iter().any(|(declared,..)|declared==cell));
@@ -423,24 +434,26 @@ impl Cache {
     )->Result<Option<Declared>,GpuRasterError> {
         let wet=frame.watercolor(target);
         let mut held:std::collections::HashSet<pages::Key>=self.gesture.iter().flat_map(|contact|contact.pages.keys().cloned()).collect();
-        let (mut ready,mut requests,mut waits,mut claimed,live)=(Vec::new(),Vec::<(SourceTarget,SourceRequest)>::new(),Vec::new(),Vec::new(),self.gesture.is_some());
+        let (mut ready,mut requests,mut waits,mut claimed)=(Vec::new(),Vec::<(SourceTarget,SourceRequest)>::new(),Vec::new(),Vec::new());
+        let (mut pages,mut refill)=(IdMap::default(),BTreeSet::new());
         for cell in cells {
             let (mut wanted,class)=(self.region_sources(scene,r,packet,cell,tiled),prepare(cell));
-            let mut claims=Vec::<(Class,pages::Key,PixelRect,u32)>::new();
-            for (class,request) in class.filter(|_|live).into_iter().flat_map(|class|wanted.iter().filter(|(id,request)|*id==target && request.plan.level>0).map(move|(_,request)|(class,request))) {
+            let mut claims=Vec::<(pages::Key,PixelRect,u32)>::new();
+            for request in wanted.iter().filter(|(id,request)|*id==target && request.plan.level>0).map(|(_,request)|request) {
                 let (source,level)=(&scene.scale_sources.entries[&target],request.plan.level);
                 for coordinate in request.required.regions.iter().flat_map(|area|pages::coordinates(*area,level)) {
                     let key=source.key(r,target,level,coordinate);let valid=key.plan().bounds.intersect(PixelRect::full(key.extent));
-                    if held.contains(&key) || claims.iter().any(|(_,claim,..)|*claim==key) || self.pages.lock().unwrap().has(&key,valid,pages::Accuracy::Display,level) {continue;}
-                    claims.push((class,key,valid,level));
+                    if held.contains(&key) || claims.iter().any(|(claim,..)|*claim==key) || self.pages.lock().unwrap().has(&key,valid,pages::Accuracy::Display,level) {continue;}
+                    claims.push((key,valid,level));
                 }
             }
+            if class.is_none() && !claims.is_empty() {continue;}
             for (id,request) in &mut wanted {
                 let (source,level)=(&scene.scale_sources.entries[id],request.plan.level);
                 let mut unheld=Vec::new();
                 for area in &request.required.regions {for coordinate in pages::coordinates(*area,level) {
                     let key=source.key(r,*id,level,coordinate);
-                    if !held.contains(&key) && !claims.iter().any(|(_,claim,..)|*claim==key) {unheld.push(key.plan().bounds.intersect(*area));}
+                    if !held.contains(&key) && !claims.iter().any(|(claim,..)|*claim==key) {unheld.push(key.plan().bounds.intersect(*area));}
                 }}
                 request.required=Damage::from_regions(unheld);
             }
@@ -451,11 +464,10 @@ impl Cache {
                 }
             }
             if !wanted.iter().all(|(id,request)|self.source_ready(scene,r,*id,request)) {waits.push((cell,refusal));continue;}
-            if !claims.is_empty() {
-                let Claimed {pages,refill,inputs}=match self.claim(scene,r,packet,encoder,frame,target,claims)? {Ok(claim)=>claim,Err(refusal)=>{waits.push((cell,refusal));continue;}};
-                let contact=self.gesture.as_mut().expect("live contact");
-                contact.reduced.extend(&refill);contact.refill.extend(refill);
-                for (key,page) in pages {held.insert(key.clone());contact.pages.insert(key,page);}
+            if let Some(class)=class.filter(|_|!claims.is_empty()) {
+                let Claimed {pages:acquired,refill:missing,inputs}=match self.claim(scene,r,packet,encoder,frame,target,class,claims,tiles)? {Ok(claim)=>claim,Err(refusal)=>{waits.push((cell,refusal));continue;}};
+                refill.extend(missing);
+                for (key,page) in acquired {held.insert(key.clone());pages.insert(key,page);}
                 claimed.push(inputs);
             }
             ready.push(cell);requests.extend(wanted);
@@ -471,7 +483,6 @@ impl Cache {
                 let held=areas.entry(key).or_insert((region,request.plan.level));held.0=held.0.union(region);
             }}
         }
-        let mut pages=IdMap::default();
         for (key,_,page) in self.held_halves(bounds) {pages.insert(key,page);}
         {
             let mut store=self.pages.lock().unwrap();
@@ -480,7 +491,6 @@ impl Cache {
                 pages.insert(key,page);
             }
         }
-        if let Some(contact)=self.gesture.as_mut() {for (key,page) in &pages {contact.pages.entry(key.clone()).or_insert_with(||page.clone());}}
         let input=input_plan(self.plan,packet.scene,Some(self.graph.objects()));
         let mut cells=Vec::new();
         for cell in ready {
@@ -501,22 +511,24 @@ impl Cache {
         let cell_reads=self.cell_reads(target,&cells.iter().map(|(cell,..)|*cell).collect::<Vec<_>>());
         let span=PAGE_SIZE<<self.plan.level;
         cells.retain(|(cell,..)|cell_reads.contains_key(&[cell.min_x()/span,cell.min_y()/span]));
-        Ok(Some(Declared {cells,inputs,pages,level,cell_reads,waits}))
+        Ok(Some(Declared {cells,inputs,pages,level,cell_reads,waits,refill}))
     }
     #[expect(clippy::too_many_arguments,reason="A cell claims its layer's pages with the frame's scene and encoding once the reductions they owe accept their inputs")]
     fn claim(&self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,frame:&Arc<SignatureFrame>,target:SourceTarget,
-        claims:Vec<(Class,pages::Key,PixelRect,u32)>,
+        class:Class,claims:Vec<(pages::Key,PixelRect,u32)>,reduced:&BTreeSet<[u32;2]>,
     )->Result<Result<Claimed,Option<crate::residency::Blocked>>,GpuRasterError> {
-        let Some(&(class,..,level))=claims.first() else {return Ok(Ok(Claimed::default()));};
+        let Some(&(..,level))=claims.first() else {return Ok(Ok(Claimed::default()));};
         let (mut pages,mut refill)=(Vec::new(),BTreeSet::new());
-        for (class,key,valid,level) in claims {
+        for (key,valid,level) in claims {
             let tier=self.pages.lock().unwrap().tier();
             let mut reservation=match r.admit_tier(Some(scene),&tier,class,key.bytes(),crate::frame_demand::Allowance::Fresh) {Ok(reservation)=>reservation,Err(need)=>return Ok(Err(Some(need)))};
             let mut store=self.pages.lock().unwrap();
             refill.extend(page_coordinates(valid).filter(|tile|!store.has(&key,page_rect(*tile).intersect(valid),pages::Accuracy::Display,level)));
             pages.push((key.clone(),store.claim_reserved(r,key,self.window,class,&mut reservation)?));
         }
-        let accepted=Self::declare_reductions(scene,r,packet,frame,target,level,&refill,encoder)
+        let missing=refill.difference(reduced).copied().collect::<BTreeSet<_>>();
+        if missing.is_empty() {return Ok(Ok(Claimed {pages,refill,inputs:Default::default()}));}
+        let accepted=Self::declare_reductions(scene,r,packet,frame,target,level,&missing,encoder)
             .and_then(|inputs|inputs.accept_query(r,Some(scene),class,crate::frame_demand::Allowance::Fresh));
         let inputs=match accepted {
             Ok(inputs)=>inputs,

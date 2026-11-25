@@ -675,22 +675,29 @@ fn predicted_frame(r:&mut WgpuRasterizer,frame:FramePacket<'_>,target:SourceTarg
 }
 fn in_contact(counts:&crate::test_support::PassCounts)->bool {counts.unit_acceptances==0}
 fn predicted_stroke(preset:DefaultBrushPreset,xs:&[f32])->Vec<crate::test_support::PassCounts> {
+    stamped_stroke(preset,xs).into_iter().map(|(_,counts)|counts).collect()
+}
+fn stamped_stroke(preset:DefaultBrushPreset,xs:&[f32])->Vec<(Option<u64>,crate::test_support::PassCounts)> {
     let extent=[2048,1024];let doc=document_at(extent);let target=primary_target(&doc);let style=crate::layer_tests::preset_style(preset);
     let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,4);
     let mut r=renderer(&doc);
     crate::test_support::submit_settled(&mut r,frame);
-    xs.windows(2).enumerate().map(|(step,pair)|predicted_frame(&mut r,frame,target,&style,1,&[material_dab(pair[0],300.,&style),material_dab(pair[1],300.,&style)],step==0,0.01*(step+1) as f32)).collect()
+    xs.windows(2).enumerate().map(|(step,pair)| {
+        let held=r.scale_display.as_ref().unwrap().contact_id();
+        (held,predicted_frame(&mut r,frame,target,&style,1,&[material_dab(pair[0],300.,&style),material_dab(pair[1],300.,&style)],step==0,0.01*(step+1) as f32))
+    }).collect()
 }
 
 #[test]
 fn a_contact_frame_after_the_first_accepts_no_brush_inputs_and_computes_no_preview_versions_for_held_tiles() {
     let xs=[300.,304.,308.,312.,316.,320.,324.];
-    let counts=predicted_stroke(DefaultBrushPreset::Paintbrush,&xs);
-    let contact:Vec<_>=counts.iter().enumerate().filter(|(_,counts)|in_contact(counts)).map(|(step,_)|step).collect();
-    assert!(contact.len()>=3,"the stroke stays in contact: {contact:?}");
-    for step in contact.iter().skip(1) {
-        let counts=&counts[*step];
-        assert_eq!([counts.brush_acceptances,counts.preview_computations],[0;2],"contact frame {step} reuses the contact's brush inputs and preview stamps: {counts:?}");
+    let frames=stamped_stroke(DefaultBrushPreset::Paintbrush,&xs);
+    let held:Vec<_>=frames.iter().map(|(held,_)|*held).collect();
+    assert!(held[0].is_none() && held[1].is_some() && held[1..].iter().all(|contact|*contact==held[1]),
+        "the contact begun at pen down holds the stroke, so every frame after the first carries its stamps: {held:?}");
+    for (step,(_,counts)) in frames.iter().enumerate().skip(2) {
+        assert_eq!([counts.brush_acceptances,counts.preview_computations],[0;2],
+            "frame {step}, after the first frame that carries the contact's stamps, accepts no brush inputs and computes no preview versions: {counts:?}");
     }
 }
 
@@ -973,16 +980,15 @@ fn a_reduced_pencil_stroke_on_a_perceptual_photo_changes_display_texels_outside_
     let plan=r.scale_display.as_ref().unwrap().plan;let side=1u32<<plan.level;
     let xs:Vec<f32>=(0..=frames+1).map(|step|300.+40.*step.min(resting) as f32).collect();
     let dab=|x:f32|layer_render::Dab {radii:[500.;2],..material_dab(x,800.,&style)};
-    let mut shown=display_pixels(&r);let mut previous=Vec::new();let mut moved=Vec::new();let mut composed=Vec::new();
+    let mut shown=display_pixels(&r);let mut previous=Vec::new();let mut moved=Vec::new();let mut held=Vec::new();
     for step in 0..=frames {
         let dabs=[dab(xs[step]),dab(xs[step+1])];
         let [persistent,preview]=predicted_batches(target,&style,1,&dabs,step==0);
         let persistent=layer_render::DabBatch {stroke_end:step==frames,..persistent};
         let batches=if step==frames {vec![persistent.clone()]}else {vec![persistent.clone(),preview]};
         let packet=FramePacket {dabs:&dabs,dab_batches:&batches,time_seconds:0.01*(step+1) as f32,..frame};
-        let counts=crate::test_support::PassCounts::snapshot();
         crate::test_support::submit_ready(&mut r,packet).unwrap();
-        if !in_contact(&crate::test_support::PassCounts::snapshot().delta(counts)) {composed.push(step);}
+        held.push(r.scale_display.as_ref().unwrap().contact_id());
         crate::test_support::submit_ready(&mut paint,FramePacket {dabs:&dabs[..1],dab_batches:std::slice::from_ref(&persistent),..packet}).unwrap();
         let tiles=crate::brush_tiles::plan_packet(packet,|target|r.target_extent(target)).unwrap();
         let current:Vec<_>=tiles.get(1).into_iter().flatten().map(Damage::tile_region).collect();
@@ -1000,7 +1006,8 @@ fn a_reduced_pencil_stroke_on_a_perceptual_photo_changes_display_texels_outside_
     }
     for r in [&mut r,&mut paint] {crate::test_support::submit_settled(r,frame);}
     let error=max_error(&display_pixels(&r),&display_pixels(&paint));
-    assert_eq!(composed,[0,frames],"every frame between the stroke's first and last composes in contact");
+    assert!(held[0].is_some() && held[..frames].iter().all(|contact|*contact==held[0]) && held[frames].is_none(),
+        "the contact begun on the stroke's first frame composes every frame until pen up ends it: {held:?}");
     assert!(moved.is_empty(),"frames after the first changing display texels outside their damaged rects to anything but the paint (frame, texels, largest change): {moved:?}");
     assert!(error<1e-4,"after pen-up the view differs from a renderer given only the persistent dabs by {error}");
 }
