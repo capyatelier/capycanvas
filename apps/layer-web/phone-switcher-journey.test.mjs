@@ -118,6 +118,7 @@ export async function checkPhoneSwitcher({call,evaluate,settle}) {
     assert.equal(g.choices.pills.find(p=>p.selected==='true')?.label,'Sketch');
     assert.equal(g.strip.find(item=>item.name==='swap').asset,'layer-swap-sides-symbolic');
     assert.equal(g.row_height,g.switcher_row_height,'Switcher and menu rows have equal measured heights');
+    assert.equal(g.list_width,viewport[0]>viewport[1]?320:396,'The normal menu list width is unchanged');
   });
   await stage('keyboard',async()=>{
     await openRoot();const expected=await evaluate('[...document.querySelectorAll("#phone-menu-switcher button")].filter(b=>!b.disabled).map(b=>b.id).concat("phone-drawing")');
@@ -178,12 +179,29 @@ export async function checkPhoneSwitcher({call,evaluate,settle}) {
     const created=[];for(let i=0;i<6;i++){
       await workspaceInput({type:'form',action:{type:'new'}});await workspaceInput({type:'submit',name:`Wide pinned workspace ${i+1}`});created.push((await view()).id);
     }
-    await workspaceInput({type:'dismiss'});await wait('!document.querySelector("dialog[open]")');assert.ok(created.every(id=>id));
+    await workspaceInput({type:'dismiss'});await wait('!document.querySelector("dialog[open]")');assert.ok(created.length>=5&&created.every(id=>id));
     const selected=created.at(-1);assert.equal((await view()).id,selected);await openRoot();const g=await shot('root-overflow-active');
     report.overflow={created,selected,before:g.choices};await save();
     const visible=choices=>{const p=choices.pills.find(p=>p.selected==='true');return p&&p.bounds.left>=choices.bounds.left-1&&p.bounds.right<=choices.bounds.right+1;};
+    const visibleRect=(inner,outer)=>inner&&inner.width>0&&inner.height>0&&inner.left>=outer.left-1&&inner.right<=outer.right+1&&inner.top>=outer.top-1&&inner.bottom<=outer.bottom+1;
+    const geometry=measurement=>{
+      const {list,well,options,caret,well_to_caret_gap}=measurement;
+      assert.ok(visibleRect(well,list)&&visibleRect(options,well)&&visibleRect(caret,list),'The well, options and caret remain fully visible');
+      assert.equal(well_to_caret_gap,12,'The overflowing well leaves the 12 px caret gap');
+      if(viewport[0]>viewport[1]){
+        assert.ok(list.width<=480,`The landscape menu list is at most 480 px, measured ${list.width}`);
+        assert.equal(list.width,480,'The overflowing landscape menu list reaches its 480 px cap');
+      }else{
+        assert.equal(list.width,396,'Portrait overflow preserves the prior menu width');
+        assert.equal(well.width,306,'Portrait overflow preserves the prior well width');
+      }
+    };
+    const fixedControls=measurement=>{
+      for(const key of ['options','caret'])assert.deepEqual(measurement[key],g[key],`${key} stays fixed while pills scroll or the menu reopens`);
+    };
     assert.equal(g.choices.pills.find(p=>p.selected==='true')?.label,'Wide pinned workspace 6');
     assert.ok(g.choices.scroll_width>g.choices.client_width,'Extra pinned workspaces overflow the choices viewport');
+    await stage('overflow-geometry',async()=>geometry(g));
     await stage('overflow-active-reveal',async()=>{
       assert.ok(visible(g.choices),`Opening the menu reveals selected pill completely; scrollLeft=${g.choices.scroll_left}, scrollWidth=${g.choices.scroll_width}, visible width=${g.choices.client_width}`);
     });
@@ -198,9 +216,11 @@ export async function checkPhoneSwitcher({call,evaluate,settle}) {
       await settle();const scrolled=await shot('root-overflow-scrolled');report.overflow.after=scrolled.choices;await save();
       assert.ok(await evaluate(rootOpen),'Scrolling never activates a workspace or opens Workspaces');assert.equal((await view()).id,selected);
       assert.ok(Math.abs(scrolled.choices.scroll_left-g.choices.scroll_left)>1,`${device} horizontally scrolls pinned workspaces (before ${g.choices.scroll_left}, after ${scrolled.choices.scroll_left})`);
+      fixedControls(scrolled);
     });
     await stage('overflow-reopened-reveal',async()=>{
       await closeMenu();await openRoot();const reopened=await shot('root-overflow-reopened');assert.ok(visible(reopened.choices),`Selected workspace is revealed again after reopening; scrollLeft=${reopened.choices.scroll_left}`);
+      fixedControls(reopened);
     });
   });
   await save();

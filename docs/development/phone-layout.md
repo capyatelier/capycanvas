@@ -258,8 +258,9 @@ in place. `PhoneMenuView::switcher` publishes the row. The current drawing's
 unsaved dot and name follow, with a dim count when several drawings are open and
 the submenu caret; it opens **Drawings** in place. A separator precedes File
 through Window. In landscape the list is at least `PhoneLayout::MENU_MIN_WIDTH`
-(320) wide. A panel in Window opens that panel as a drawer from Capy, replacing
-the menu and joined to Capy by the bridge.
+(320) and at most `PhoneLayout::MENU_MAX_WIDTH` (480) wide; pills that don't fit
+scroll and longer names ellipsize. A panel in Window opens that panel as a drawer
+from Capy, replacing the menu and joined to Capy by the bridge.
 
 Drawings lists documents in tab order, with the current check in the gutter,
 unsaved dots, titles that ellipsize in the middle and a close button for each.

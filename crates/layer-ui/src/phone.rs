@@ -288,6 +288,7 @@ impl PhoneLayout {
     }
     pub const MENU_GAP: f32 = 1.;
     pub const MENU_MIN_WIDTH: f32 = 320.;
+    pub const MENU_MAX_WIDTH: f32 = Self::MENU_MIN_WIDTH * 1.5;
     pub const MENU_MARGIN: f32 = 8.;
     pub const MENU_TILE_GAP: f32 = 2.;
     pub const SETTINGS: ToolbarControl = ToolbarControl::Panel { panel: crate::Panel::ToolSettings };
@@ -296,7 +297,7 @@ impl PhoneLayout {
     fn menu_strip_extent(row_height: f32) -> f32 { row_height.max(1.) + 2. * Self::MENU_MARGIN }
     pub fn menu_width(&self, minimum: f32, natural: f32, row_height: f32) -> f32 {
         if self.edge == Edge::Top { self.bars[0].width }
-        else { natural.max(minimum).max(Self::MENU_MIN_WIDTH).min((self.work_area.width - Self::menu_strip_extent(row_height) - Self::MENU_GAP).max(1.)) }
+        else { natural.max(minimum).clamp(Self::MENU_MIN_WIDTH, Self::MENU_MAX_WIDTH).min((self.work_area.width - Self::menu_strip_extent(row_height) - Self::MENU_GAP).max(1.)) }
     }
     pub fn menu(&self, viewport: [f32; 2], width: f32, height: f32, row_height: f32) -> Option<DrawerPlacement> {
         let vertical = self.edge != Edge::Top;
@@ -1105,7 +1106,10 @@ mod menu_tests {
             for swapped in [false, true] {
                 let phone = PhoneLayout::resolve(&layout, viewport, [0.; 4], [0.; 2], [0; 2], swapped, false).unwrap();
                 for row in [28., 32., 44.] {
-                    if viewport == [891., 412.] { assert_eq!(phone.menu_width(200., 240., row), PhoneLayout::MENU_MIN_WIDTH, "landscape keeps a roomy menu"); }
+                    if viewport == [891., 412.] {
+                        assert_eq!(phone.menu_width(200., 240., row), PhoneLayout::MENU_MIN_WIDTH, "landscape keeps a roomy menu");
+                        assert_eq!(phone.menu_width(200., 1400., row), PhoneLayout::MENU_MAX_WIDTH, "overflowing pills widen it by half at most, then scroll");
+                    }
                     let width = phone.menu_width(242., 340., row);
                     let placement = phone.menu(viewport, width, 400., row).unwrap();
                     let geometry = phone.menu_geometry(&placement, row);

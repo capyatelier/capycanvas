@@ -9,6 +9,7 @@ extension EditorLaunchTests {
     @MainActor func testPhoneWorkspaceMenuLandscapeLight() throws { try checkPhoneWorkspaceMenu(theme: "light", orientation: .landscapeLeft) }
     @MainActor func testPhoneWorkspaceMenuLandscapeDark() throws { try checkPhoneWorkspaceMenu(theme: "dark", orientation: .landscapeLeft) }
     @MainActor func testPhoneWorkspaceMenuOverflowPortraitLight() throws { try checkPhoneWorkspaceMenu(theme: "light", orientation: .portrait, phase: .overflow) }
+    @MainActor func testPhoneWorkspaceMenuOverflowLandscapeLight() throws { try checkPhoneWorkspaceMenu(theme: "light", orientation: .landscapeLeft, phase: .overflow) }
     @MainActor func testPhoneWorkspaceMenuDrawingsPortraitLight() throws { try checkPhoneWorkspaceMenu(theme: "light", orientation: .portrait, phase: .drawings) }
 
     @MainActor private func checkPhoneWorkspaceMenu(theme: String, orientation: UIDeviceOrientation, phase: PhoneWorkspaceMenuPhase = .all) throws {
@@ -68,7 +69,11 @@ extension EditorLaunchTests {
             XCTAssertEqual(row.frame.height, drawing.frame.height, accuracy: 1)
             XCTAssertGreaterThan(well.frame.height, 0)
             XCTAssertEqual(drawing.frame.minY - row.frame.maxY, 4, accuracy: 1)
-            if orientation != .portrait { XCTAssertGreaterThanOrEqual(list.frame.width, 319) }
+            if orientation != .portrait {
+                XCTAssertGreaterThanOrEqual(list.frame.width, 319)
+                XCTAssertLessThanOrEqual(list.frame.width, 480)
+                if pills.count == 3 { XCTAssertEqual(list.frame.width, 320, accuracy: 0.5) }
+            }
         }
         func captureRoot(_ name: String) throws {
             expectRoot()
@@ -193,6 +198,13 @@ extension EditorLaunchTests {
         }
 
         if phase == .drawings { return }
+        if phase == .overflow && orientation != .portrait {
+            openMenu()
+            XCTAssertEqual(pills.count, 3)
+            XCTAssertEqual(list.frame.width, 320, accuracy: 0.5)
+            try captureRoot("nonoverflow")
+            closeMenu()
+        }
         phoneAlertCommand("Window", label: "Manage Workspaces…", in: app)
         let manager = app.descendants(matching: .any)["workspace-library-manager"].firstMatch
         XCTAssertTrue(manager.waitForExistence(timeout: 15))
@@ -224,7 +236,15 @@ extension EditorLaunchTests {
         workspaceActivate(app.buttons["workspace-manager-close"])
         XCTAssertTrue(manager.waitForNonExistence(timeout: 15))
         openMenu()
-        XCTAssertGreaterThan(pills.count, 3)
+        XCTAssertGreaterThanOrEqual(pills.count, 8)
+        func expectOverflowChrome() {
+            XCTAssertTrue(well.frame.contains(options.frame) && list.frame.contains(options.frame)
+                && window.frame.contains(options.frame), "The options button must remain visible while pills scroll")
+            let caret = CGPoint(x: row.frame.maxX - 13, y: row.frame.midY)
+            XCTAssertTrue(list.frame.contains(caret) && window.frame.contains(caret) && !well.frame.contains(caret),
+                "The caret must remain inside the visible row, outside the scrollable well")
+        }
+        if orientation != .portrait { expectOverflowChrome() }
         let selected = pills.matching(NSPredicate(format: "label == %@ AND selected == YES", lastName)).firstMatch
         XCTAssertTrue(selected.waitForExistence(timeout: 10))
         try captureRoot("overflow-selected-visible")
@@ -232,6 +252,10 @@ extension EditorLaunchTests {
         XCTAssertTrue(well.frame.contains(selectedMidpoint) && list.frame.contains(selectedMidpoint)
             && window.frame.contains(selectedMidpoint) && selectedMidpoint.x < options.frame.minX,
             "Opening the overflow switcher must reveal its selected pill")
+        if orientation != .portrait {
+            XCTAssertTrue(well.frame.contains(selected.frame) && list.frame.contains(selected.frame)
+                && selected.frame.maxX <= options.frame.minX, "The selected landscape pill must be fully visible on open")
+        }
         let beforeX = selected.frame.minX
         let start = point(selected.frame.midX, selected.frame.midY)
         let endX = min(options.frame.minX - 4, selected.frame.midX + 100)
@@ -243,6 +267,19 @@ extension EditorLaunchTests {
         }
         expectRoot()
         try captureRoot("overflow-scrolled")
+        if orientation != .portrait {
+            expectOverflowChrome()
+            for target in [CGPoint(x: options.frame.midX, y: options.frame.midY),
+                           CGPoint(x: row.frame.maxX - 13, y: row.frame.midY)] {
+                point(target.x, target.y).tap()
+                phoneWaitForMenuTitle("Workspaces", in: app)
+                point(back.frame.midX, back.frame.midY).tap()
+                phoneWaitForMenuTitle("Window", in: app)
+                point(back.frame.midX, back.frame.midY).tap()
+                expectRoot()
+                expectOverflowChrome()
+            }
+        }
         closeMenu()
     }
 }

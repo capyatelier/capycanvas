@@ -2322,17 +2322,18 @@ fn native_phone_toolbar_defaults() {
     let right_free = gaps[1] - caret_reserve;
     eprintln!("centered switcher lead={} caret reserve={} free gaps left={} right={}", lead_width, caret_reserve, left_free, right_free);
     assert!((left_free - right_free).abs() <= 2., "the well is centered with equal space beside its spacer and reserved caret: {left_free}/{right_free}");
-    if d.w.surface.width() > d.w.surface.height() { assert!(menu_list_width >= layer_ui::PhoneLayout::MENU_MIN_WIDTH, "landscape list keeps its minimum width: {menu_list_width}"); }
+    let landscape = d.w.surface.width() > d.w.surface.height();
+    if landscape { assert_eq!(menu_list_width, 320., "the non-overflowing landscape list remains 320 px wide"); }
     assert_eq!(caret_widget.margin_start(), 12, "the caret reserves 12 px separation from the well");
     assert!(caret_gap >= 11., "the well keeps at least 12 px separation from the caret: {caret_gap}");
     assert!((0. ..=13.).contains(&caret_end_gap), "the caret stays at the row's trailing inset: {caret_end_gap}");
     inventory_close(&mut d);
-    if d.w.surface.width() == 412 {
+    if d.w.surface.width() == 412 || (landscape && d.w.surface.width() == 891) {
         let manager = d.w.workspaces.manager().unwrap();
         let original = manager.current().unwrap().capture().unwrap();
         let initial_pins = manager.switcher_ids();
         let initial_ids = manager.workspace_ids();
-        let entities: Vec<_> = (0..4).map(|index| layer_workspace::Entity::workspace(
+        let entities: Vec<_> = (0..if landscape { 5 } else { 4 }).map(|index| layer_workspace::Entity::workspace(
             &format!("Overflow study {index}"), original.history.clone().into_history(),
             original.working.clone(), original.history.layout().clone(), now_ms())).collect();
         let ids: Vec<_> = entities.iter().map(|entity| entity.id.clone()).collect();
@@ -2362,6 +2363,9 @@ fn native_phone_toolbar_defaults() {
         let well_bounds = well.compute_bounds(&row).unwrap();
         let caret_bounds = caret.compute_bounds(&row).unwrap();
         let bounds = row.compute_bounds(&row).unwrap();
+        let overflow_list_width = d.named("phone-menu-scroll").compute_bounds(&d.w.surface).unwrap().width();
+        let other_natural = std::iter::successors(row.next_sibling(), |widget| widget.next_sibling())
+            .map(|widget| widget.measure(gtk::Orientation::Horizontal, -1).1).max().unwrap_or(0);
         let gaps = [well_bounds.x() - bounds.x(), bounds.x() + bounds.width() - well_bounds.x() - well_bounds.width()];
         let caret_gap = caret_bounds.x() - well_bounds.x() - well_bounds.width();
         let caret_reserve = caret_bounds.width() + caret.margin_start() as f32;
@@ -2376,7 +2380,7 @@ fn native_phone_toolbar_defaults() {
             (active.widget_name().to_string(), rect.x() >= -1. && rect.x() + rect.width() <= scroll.width() as f32 + 1.)
         };
         let initial_active = active_visible(&scroll, &well);
-        eprintln!("overflow switcher row={} well={} gaps left={} right={} caret={} gap={} margin={} scroll upper={} page_size={} names={names:?} full={labels_full} current={initial_active:?}", bounds.width(),well_bounds.width(),gaps[0],gaps[1],caret_bounds.width(),caret_gap,caret.margin_start(),adjustment.upper(),adjustment.page_size());
+        eprintln!("overflow switcher list={overflow_list_width} other row natural max={other_natural} row={} well={} list-to-well chrome={} gaps left={} right={} caret={} gap={} margin={} scroll upper={} page_size={} names={names:?} full={labels_full} current={initial_active:?}", bounds.width(),well_bounds.width(),overflow_list_width-well_bounds.width(),gaps[0],gaps[1],caret_bounds.width(),caret_gap,caret.margin_start(),adjustment.upper(),adjustment.page_size());
         capture(&mut d, "toolbar-switcher-overflow");
         let before = adjustment.value();
         let scroller = scroll.upcast_ref::<gtk::Widget>();
@@ -2407,9 +2411,21 @@ fn native_phone_toolbar_defaults() {
         until(|| state(&d.w).phone.menu && !d.w.drawer.animation_active()
             && find_named(d.w.window.upcast_ref(), "phone-menu-switcher").is_some_and(|row| row.is_mapped() && row.height() > 0), "the last workspace switcher row is allocated");
         let well = d.named("phone-menu-switcher");
+        let row = d.named("phone-menu-switcher-row").downcast::<gtk::Box>().unwrap();
         let scroll = descendant::<gtk::ScrolledWindow>(&well).unwrap();
         let last_active = active_visible(&scroll, &well);
-        eprintln!("overflow last workspace current={last_active:?} scroll value={} upper={} page_size={}", scroll.hadjustment().value(), scroll.hadjustment().upper(), scroll.hadjustment().page_size());
+        let last_list_width = d.named("phone-menu-scroll").compute_bounds(&d.w.surface).unwrap().width();
+        let last_well_bounds = well.compute_bounds(&row).unwrap();
+        let last_caret = row.last_child().unwrap();
+        let last_caret_bounds = last_caret.compute_bounds(&row).unwrap();
+        let last_row_bounds = row.compute_bounds(&row).unwrap();
+        let last_caret_gap = last_caret_bounds.x() - last_well_bounds.x() - last_well_bounds.width();
+        let last_controls_visible = [d.named("phone-menu-switcher-options"), last_caret].iter().all(|widget| {
+            let actual = widget.compute_bounds(&row).unwrap();
+            widget.is_mapped() && actual.width() > 0. && actual.x() >= last_row_bounds.x() - 1.
+                && actual.x() + actual.width() <= last_row_bounds.x() + last_row_bounds.width() + 1.
+        });
+        eprintln!("overflow last workspace list={last_list_width} well={} gap={last_caret_gap} fixed controls visible={last_controls_visible} current={last_active:?} scroll value={} upper={} page_size={}", last_well_bounds.width(),scroll.hadjustment().value(), scroll.hadjustment().upper(), scroll.hadjustment().page_size());
         capture(&mut d, "toolbar-switcher-overflow-last-workspace");
         inventory_close(&mut d);
         inventory_workspace(&d, WorkspacePreset::Painter);
@@ -2423,9 +2439,32 @@ fn native_phone_toolbar_defaults() {
         d.w.workspaces.send(&d.w, layer_workspace::WorkspaceInput::RefreshSwitcher);
         until(|| !d.w.workspaces.view().switcher_busy && manager.workspace_ids() == initial_ids, "overflow workspaces are removed");
         assert_eq!(manager.switcher_ids(), initial_pins, "the private profile's original pins are restored");
+        click(&mut d, "zen-capy");
+        until(|| state(&d.w).phone.menu && !d.w.drawer.animation_active()
+            && find_named(d.w.window.upcast_ref(), "phone-menu-switcher").is_some_and(|row| row.is_mapped() && row.height() > 0), "the restored switcher row is allocated");
+        let restored_list_width = d.named("phone-menu-scroll").compute_bounds(&d.w.surface).unwrap().width();
+        eprintln!("overflow fixture restored list width={restored_list_width}");
+        capture(&mut d, "toolbar-switcher-overflow-restored");
+        inventory_close(&mut d);
+        assert_eq!(restored_list_width, menu_list_width, "the restored workspace menu returns to its original width");
+        assert_eq!(last_list_width, overflow_list_width, "opening the active last workspace preserves the overflow menu width");
+        assert_eq!(last_well_bounds.width(), well_bounds.width(), "the capped well width is stable after reopening");
+        assert!(well_bounds.width() <= 400., "the overflow well is capped at 400 px: {}", well_bounds.width());
+        if landscape {
+            assert!(other_natural < 480, "the fixture's non-switcher rows are naturally narrower than the cap: {other_natural}");
+            assert!(overflow_list_width <= 480., "the landscape overflow list is at most 480 px wide: {overflow_list_width}");
+            assert_eq!(overflow_list_width, 480., "overflowing landscape pills widen the list to exactly 480 px");
+        } else {
+            assert_eq!(overflow_list_width, menu_list_width, "portrait overflow keeps the original list width");
+            assert_eq!(well_bounds.width(), 306., "the 412 px portrait overflow well remains 306 px wide");
+        }
         assert!(fills_row, "the overflowing well fills the row beside the fixed caret");
         assert!((caret_gap - 12.).abs() <= 1., "the overflowing well and caret stay 12 px apart: {caret_gap}");
+        assert!(last_controls_visible && (last_caret_gap - 12.).abs() <= 1., "the overflow options and caret stay visible with a 12 px gap after opening the active last workspace");
         assert!(labels_full, "workspace pill names must not be ellipsized: {names:?}");
+        assert_eq!(names.len(), initial_pins.len() + ids.len(), "all fixture workspaces are present as pills");
+        assert_eq!(initial_active.0, "phone-menu-switch-painter", "opening the overflow menu selects Sketch");
+        assert_eq!(last_active.0, format!("phone-menu-switch-{}", ids.last().unwrap()), "opening the overflow menu selects the last workspace");
         assert!(initial_active.1 && last_active.1, "current workspace pills remain visible when opening Capy's menu: {initial_active:?}, {last_active:?}");
     }
     assert_eq!(ui_session(&d.w).engine().checkpoint(), checkpoint);
