@@ -36,7 +36,7 @@ HOME = 'C:\\Users\\hogba'
 ROOT = 'AppData/Local/CapyCanvasAgent/bench'
 SOURCES = (
     'tools/performance/bench-chain-windows.ps1', 'tools/performance/WindowsCanvasMotion.ps1', 'tools/performance/WindowsPenMotion.cs',
-    'apps/layer-windows/scripts/CapyUia.ps1', 'apps/layer-windows/scripts/CapyEnvironment.ps1', 'apps/layer-windows/scripts/RowPointerDriver.cs',
+    'apps/layer-windows/scripts/CapyUia.ps1', 'apps/layer-windows/scripts/InputReady.ps1', 'apps/layer-windows/scripts/CapyEnvironment.ps1', 'apps/layer-windows/scripts/RowPointerDriver.cs',
     'apps/layer-windows/scripts/open-application-menu.ps1', 'apps/layer-windows/scripts/probe-displays.ps1')
 PASS_MINUTES = 6
 
@@ -145,12 +145,12 @@ def upload_run(host, run_id, chain, invocations):
 
 def wait_pass(host, task, log, timeout_minutes):
     status = (f'$task=Get-ScheduledTask -TaskName {quote(task)} -ErrorAction SilentlyContinue;$exit={quote(log + ".exit")};'
-              "@{state=[string]$task.State;code=$(if(Test-Path -LiteralPath $exit){[IO.File]::ReadAllText($exit).Trim()})}|ConvertTo-Json -Compress")
+              "$code='';if(Test-Path -LiteralPath $exit){$code=[IO.File]::ReadAllText($exit).Trim()};@{state=[string]$task.State;code=[string]$code}|ConvertTo-Json -Compress")
     deadline, stopped = time.monotonic() + timeout_minutes * 60, 0
     while time.monotonic() < deadline:
         time.sleep(5)
         state = json.loads(powershell(host, status))
-        if state['code'] is not None:
+        if state['code'] not in (None, ''):
             return int(state['code'])
         stopped = stopped + 1 if state['state'] not in ('Running', 'Queued') else 0
         if stopped > 2:
@@ -161,8 +161,9 @@ def wait_pass(host, task, log, timeout_minutes):
 def cleanup_script(task, executable, directory):
     pid = quote(directory + '\\process-id.txt')
     return ';'.join([
-        f"if(Get-ScheduledTask -TaskName {quote(task)} -ErrorAction SilentlyContinue){{Stop-ScheduledTask -TaskName {quote(task)};Unregister-ScheduledTask -TaskName {quote(task)} -Confirm:$false}}",
-        f"if(Test-Path -LiteralPath {pid}){{$app=Get-Process -Id ([int](Get-Content -LiteralPath {pid})) -ErrorAction SilentlyContinue;if($app -and $app.Path -eq {quote(executable)}){{Stop-Process -Id $app.Id -Force}}}}"])
+        f"$ownedTask=Get-ScheduledTask -TaskName {quote(task)} -ErrorAction SilentlyContinue;if($ownedTask){{if($ownedTask.State -in 'Running','Queued'){{Stop-ScheduledTask -TaskName {quote(task)}}};Unregister-ScheduledTask -TaskName {quote(task)} -Confirm:$false}}",
+        f"if(Test-Path -LiteralPath {pid}){{$app=Get-Process -Id ([int](Get-Content -LiteralPath {pid})) -ErrorAction SilentlyContinue;if($app -and $app.Path -eq {quote(executable)}){{Stop-Process -Id $app.Id -Force}}}}",
+        "Write-Output 'cleanup complete'"])
 
 
 def remove_script(*paths):

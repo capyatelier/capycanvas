@@ -215,11 +215,23 @@ class CommandTest(unittest.TestCase):
         self.assertIn('''-Execute conhost.exe -Argument '"powershell.exe" -NoProfile -Sta -ExecutionPolicy Bypass -File "C:\\x\\a.ps1"\'''', limited)
         self.assertIn('LogonUI', limited)
 
+    def test_upload_includes_input_ready_dependency(self):
+        self.assertIn('apps/layer-windows/scripts/InputReady.ps1', bench.SOURCES)
+
+    def test_wait_pass_ignores_empty_exit_code_while_running(self):
+        states = [json.dumps({'state': 'Running', 'code': ''}), json.dumps({'state': 'Ready', 'code': '0'})]
+        with patch.object(bench.time, 'sleep'), patch.object(bench, 'powershell', side_effect=states) as powershell:
+            self.assertEqual(bench.wait_pass('surfacelaptop', 'CapyBench-r1', 'C:\\r\\p', 1), 0)
+        self.assertEqual(powershell.call_count, 2)
+        self.assertIn('code=[string]$code', powershell.call_args_list[0].args[1])
+
     def test_cleanup_stops_only_the_launched_executable(self):
         script = bench.cleanup_script('CapyBench-r1', 'C:\\b\\CapyCanvas.exe', 'C:\\r\\pass-1')
         self.assertIn("Unregister-ScheduledTask -TaskName 'CapyBench-r1'", script)
         self.assertIn("'C:\\r\\pass-1\\process-id.txt'", script)
         self.assertIn("$app.Path -eq 'C:\\b\\CapyCanvas.exe'", script)
+        self.assertIn("$ownedTask.State -in 'Running','Queued'", script)
+        self.assertTrue(script.endswith("Write-Output 'cleanup complete'"))
 
 
 class RunTest(unittest.TestCase):
