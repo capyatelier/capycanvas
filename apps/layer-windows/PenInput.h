@@ -6,14 +6,11 @@
 namespace CapyUi {
 inline J penDevice(Microsoft::UI::Input::PointerPoint const& point) {
     if(point.PointerDeviceType()!=Microsoft::UI::Input::PointerDeviceType::Pen)return {};
-    hstring key,label;
+    hstring key=L"windows:pen";
     try {
         if(auto pen=Microsoft::UI::Input::Interop::PenDeviceInterop::FromPointerPoint(point);pen&&pen.PenId()!=guid{})key=L"windows:pen:"+to_hstring(pen.PenId());
     } catch(hresult_error const&) {}
-    POINTER_INFO pointer{};POINTER_DEVICE_INFO device{};
-    if(GetPointerInfo(point.PointerId(),&pointer)&&GetPointerDevice(pointer.sourceDevice,&device))label=device.productString;
-    if(key.empty())key=label.empty()?hstring(L"windows:pen"):L"windows:product:"+label;
-    return O({{L"id",N(point.PointerId())},{L"key",S(key)},{L"label",S(label)},
+    return O({{L"id",N(point.PointerId())},{L"key",S(key)},{L"label",S(hstring{})},
         {L"native_to_surface",O({{L"reverse_horizontal",B(false)},{L"reverse_vertical",B(false)},{L"swap",B(false)}})}});
 }
 inline J penInput(J const& device,V const& sample=JsonValue::CreateNullValue()) {

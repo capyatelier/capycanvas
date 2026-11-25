@@ -21,6 +21,7 @@
 #include "GamepadInput.h"
 #include "NativeHandles.h"
 #include "PenSourceCache.h"
+#include "PenDevices.h"
 #include "CanvasPointerSample.h"
 #include <winrt/Windows.Devices.Haptics.h>
 #include "PointerModality.h"
@@ -148,6 +149,8 @@ private:
     std::unordered_map<uint32_t,std::pair<std::wstring,std::wstring>> heldKeys; // UI thread
     std::unordered_set<uint32_t> penButtons; // input thread
     PenSourceCache penSources;
+    std::atomic<bool> penIndirect{false};
+    PenTwistCache penTwist;
     CanvasPenContacts penContacts;
     HWND orderedKeys=nullptr; // input thread
     bool orderingKeys=false; // input thread

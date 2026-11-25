@@ -1155,6 +1155,7 @@ std::vector<CapyPointer> CanvasWindow::PointerSamples(Microsoft::UI::Input::Poin
         bool describe;
         {std::lock_guard lock(mutex);describe=penSources.Describe(current.PointerId(),phase==1);}
         if(describe){
+            penIndirect=AttachedPensExternal();
             auto device=CapyUi::penDevice(current);auto source=to_string(device.Stringify());bool changed;
             {std::lock_guard lock(mutex);changed=penSources.Update(current.PointerId(),std::move(source));}
             if(changed||phase==1)Send(to_string(CapyUi::penInput(device).Stringify()));
@@ -1162,12 +1163,8 @@ std::vector<CapyPointer> CanvasWindow::PointerSamples(Microsoft::UI::Input::Poin
         if(phase==4){std::lock_guard lock(mutex);penSources.Forget(current.PointerId());}
     }
     uint64_t view;float scale;{std::lock_guard lock(mutex);view=inputView.revision;scale=inputScale;}
-    uint32_t deviceFlags=0;
-    if(penPointer){
-        POINTER_INFO info{};POINTER_DEVICE_INFO device{};
-        if(GetPointerInfo(current.PointerId(),&info)&&GetPointerDevice(info.sourceDevice,&device)&&device.pointerDeviceType==POINTER_DEVICE_TYPE_EXTERNAL_PEN)deviceFlags=0x40;
-        POINTER_PEN_INFO pen{};if(GetPointerPenInfo(current.PointerId(),&pen)&&(pen.penMask&PEN_MASK_ROTATION))deviceFlags|=0x80;
-    }
+    uint32_t deviceFlags=penPointer&&penIndirect?0x40:0;
+    if(penPointer){std::lock_guard lock(mutex);if(penTwist.Report(current.PointerId(),current.Properties().Twist()!=0.f))deviceFlags|=0x80;}
     auto count=CanvasPointerHistoryCount(points,phase);
     std::vector<CapyPointer> samples;samples.reserve(std::max(1u,count));
     auto capture=[&](Microsoft::UI::Input::PointerPoint const& point,bool predicted){

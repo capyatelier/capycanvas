@@ -31,6 +31,7 @@
 #include <thread>
 #ifdef _WIN32
 #include "../TraceFile.h"
+#include "../PenDevices.h"
 #endif
 
 int main() {
@@ -232,6 +233,26 @@ int main() {
     penSources.Forget(7);assert(!penSources.Describe(8,false));
     assert(penSources.Update(7,"physical-pen"));assert(!penSources.Describe(7,false));
     std::cout<<"Pen sources register again when drawing sessions or epochs change\n";
+    PenTwistCache penTwist;
+    assert(!penTwist.Report(7,false));assert(penTwist.Report(7,true));assert(penTwist.Report(7,false));
+    assert(!penTwist.Report(8,false));assert(!penTwist.Report(7,false));
+    std::cout<<"Barrel twist counts once a pen pointer reports rotation, until a new pointer arrives\n";
+#ifdef _WIN32
+    {
+        auto devices=[](std::initializer_list<POINTER_DEVICE_TYPE> types){
+            std::vector<POINTER_DEVICE_INFO> list;
+            for(auto type:types){POINTER_DEVICE_INFO device{};device.pointerDeviceType=type;list.push_back(device);}
+            return list;
+        };
+        assert(!AllPensExternal(devices({})));
+        assert(!AllPensExternal(devices({POINTER_DEVICE_TYPE_TOUCH,POINTER_DEVICE_TYPE_TOUCH_PAD})));
+        assert(AllPensExternal(devices({POINTER_DEVICE_TYPE_EXTERNAL_PEN})));
+        assert(AllPensExternal(devices({POINTER_DEVICE_TYPE_TOUCH,POINTER_DEVICE_TYPE_EXTERNAL_PEN,POINTER_DEVICE_TYPE_TOUCH_PAD})));
+        assert(!AllPensExternal(devices({POINTER_DEVICE_TYPE_INTEGRATED_PEN})));
+        assert(!AllPensExternal(devices({POINTER_DEVICE_TYPE_EXTERNAL_PEN,POINTER_DEVICE_TYPE_INTEGRATED_PEN})));
+        std::cout<<"Pen samples are indirect only when every attached pen is external\n";
+    }
+#endif
     {
         CanvasContactGate gate;
         gate.Block(1,0,0);

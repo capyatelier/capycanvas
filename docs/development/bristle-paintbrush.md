@@ -45,7 +45,8 @@ projected onto the paper:
 Measured barrel rotation reaches the engine as `SampleFlags::BARREL_TWIST` on
 pen-down. Android sends `AXIS_RZ` once the stylus has reported a nonzero value
 since entering proximity, so pens without a rotation sensor keep the
-lean-facing behavior. Android-predicted samples reuse the last real angle.
+lean-facing behavior. Windows does the same per pen pointer from WinUI's `Twist`.
+Android-predicted samples reuse the last real angle.
 On the Wacom DTHA140 the Art Pen (tool 0x804) reports `ABS_Z` from −900 to 899,
 which the system exposes as `AXIS_RZ` in radians for the combined
 touchscreen/stylus source; other pens report zero.
