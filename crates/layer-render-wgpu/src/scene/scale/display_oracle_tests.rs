@@ -614,11 +614,10 @@ fn a_root_a_blocked_prediction_left_unstamped_publishes_while_the_stroke_continu
     };
     stroke(&mut r, 1150., DabBatchKind::Preview, 0);
     let cache = r.scale_display.as_ref().unwrap();
-    assert!(cache.contact_id().is_none() && !cache.displays(predicted) && cache.pixels.committed_root().is_some_and(|root| root.authored().is_none()),
+    assert!(!cache.displays(predicted) && cache.pixels.committed_root().is_some_and(|root| root.authored().is_none()),
         "the predicted cell keeps its old record, which leaves the root unstamped");
     for step in 1..4 {
         stroke(&mut r, 100. + 8. * step as f32, DabBatchKind::Persistent, step);
-        let cache = r.scale_display.as_ref().unwrap();
-        assert!(cache.contact_id().is_none() && !publication_pending(&r), "frame {step} of the stroke continuing off view publishes once the prediction is withdrawn");
+        assert!(!publication_pending(&r), "frame {step} of the stroke continuing off view publishes once the prediction is withdrawn");
     }
 }

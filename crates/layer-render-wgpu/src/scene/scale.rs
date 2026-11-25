@@ -1158,7 +1158,7 @@ impl Cache {
                 written=written.union(texels(*region));
             }
             shown=done.iter().filter(|(_,changed)|!changed.is_empty()).fold(PixelRect::EMPTY,|shown,(_,changed)|shown.union(texels(*changed)));
-            if !written.is_empty() || self.pixels.committed_root().is_none() {self.commit_window(r,encoder)?;}
+            self.publish_window(r,encoder,written)?;
             for region in blocked {self.block(region,waiting_on(scene,r,declarations,&GpuRasterError::NotReady));}
             composed=done.into_iter().map(|(region,_)|region).collect();
         } else if !composes.is_empty() || !copies.is_empty() || !halves.is_empty() || self.graph.prepared.is_some() || transition {
@@ -1325,8 +1325,7 @@ impl Cache {
                 written=written.union(texels(region));
             }
             shown=shown.union(texels(copied));
-            if !held && (!written.is_empty() || transition || self.pixels.committed_root().is_none())
-                && !(written.is_empty() && self.current_authored().is_some_and(|(frame,authored)|self.pixels.restamp(&frame,authored))) {self.commit_window(r,encoder)?;}
+            if !held {self.publish_window(r,encoder,written)?;}
             if presented==pages::Accuracy::Exact {blocks.extend(composed.iter().map(|region|(*region,waiting_on(scene,r,declarations,&GpuRasterError::NotReady))));}
             for (region,wait) in blocks {self.block(region,wait);}
             if !matches!(destination,Destination::Navigator) {for (region,waits) in sleeping {self.sleep(region,waits);}}
@@ -1365,6 +1364,13 @@ impl Cache {
             r.telemetry.phase_end(11, encoder);
         }
         Ok(document(shown.union(texels(absorbed))))
+    }
+    fn publish_window(&mut self,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,written:PixelRect)->Result<(),GpuRasterError> {
+        if let Some(stamped)=self.pixels.committed_root().map(pages::CommittedImage::authored).filter(|_|written.is_empty()) {
+            let current=self.current_authored();
+            if stamped==current.as_ref().map(|(_,authored)|*authored) || current.is_some_and(|(frame,authored)|self.pixels.restamp(&frame,authored)) {return Ok(());}
+        }
+        self.commit_window(r,encoder)
     }
     fn prepare_native(&self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>, encoder: &mut submission::CommandEncoder, region: PixelRect, input: display_mips::Plan)
         -> Result<(), GpuRasterError> {
