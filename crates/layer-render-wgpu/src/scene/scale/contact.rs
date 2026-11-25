@@ -344,7 +344,9 @@ impl Cache {
         let ahead=self.stroke_lead(scene,packet.scene,target,frame.watercolor(target),&scope,None);
         let ready=scope.into_iter().filter(|cell|required.contains(cell) || !self.holes(*cell)).collect::<Vec<_>>();
         let source=source_frame(Some(&scene.scale_sources),packet.scene,target);
-        let reduced=local_reach(packet,target,source.phase).into_iter().flat_map(page_coordinates).collect();
+        let previewed=r.preview_input_tiles(target);
+        let stale=previewed.iter().flat_map(|tile|phased_tiles(*tile,source.phase)).map(|tile|(tile,page_rect(tile))).collect::<BTreeMap<_,_>>();
+        let reduced=members(frame.watercolor(target),local_reach(packet,target,source.phase).into_iter().flat_map(page_coordinates).chain(stale.keys().copied()));
         let Some(Declared {cells,inputs,pages,level,cell_reads,waits})=self.declare_contact(scene,r,packet,encoder,retained,budget,&frame,&root,target,tiled,None,ready,&|cell|required.contains(&cell).then_some(Class::Authored),&reduced)? else {return Ok(());};
         let owed=required.into_iter().filter(|region|!cells.iter().any(|(cell,..)|cell==region)).collect::<Vec<_>>();
         self.await_cells(scene,r,waits,&|cell|owed.contains(&cell));
@@ -357,14 +359,12 @@ impl Cache {
         static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);
         self.hold_current(&frame);
         let tip=pointwise_reach(packet,plan,&frame,target,drawn_directly,&[DabBatchKind::Preview]);
-        let mut contact=Contact {id:NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed),stroke,target,plan:self.plan,source,window,root,tiled,frame,composed,predicted,
-            previewed:r.preview_input_tiles(target),next:None,
+        self.gesture=Some(Contact {id:NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed),stroke,target,plan:self.plan,source,window,root,tiled,frame,composed,predicted,
+            previewed,next:None,
             ahead,
             footprints,tainted,guard,generation:std::sync::Mutex::new(generation),exit:std::sync::OnceLock::new(),preview_level,cells,inputs,pages,level,
-            stale:BTreeMap::new(),written:IdMap::default(),submissions:Vec::new(),stamps:Arc::default(),reduced:if level.is_some() {reduced}else {BTreeSet::new()},
-            baselines:BTreeMap::new(),drawn_directly,reduced_from:BTreeMap::new(),tip,cell_reads,diverged:false,owed,refill:BTreeSet::new()};
-        contact.stale=contact.phased(&contact.previewed).map(|tile|(tile,page_rect(tile))).collect();
-        self.gesture=Some(contact);
+            stale,written:IdMap::default(),submissions:Vec::new(),stamps:Arc::default(),reduced:if level.is_some() {reduced}else {BTreeSet::new()},
+            baselines:BTreeMap::new(),drawn_directly,reduced_from:BTreeMap::new(),tip,cell_reads,diverged:false,owed,refill:BTreeSet::new()});
         Ok(())
     }
     #[expect(clippy::too_many_arguments,reason="A contact grows with the frame's scene, encoding and budget into the cells its stroke reaches")]
