@@ -60,6 +60,24 @@ test("logging cannot hide a failed validation command", () => {
   assert.match(job(checks, "windows"), /    defaults:\n      run:\n        shell: pwsh/);
 });
 
+test("hosted CPU checks keep model tests while excluding native GPU cases", () => {
+  const renderer = job(checks, "renderer");
+  const selected = (crate, name) => {
+    const args = renderer.split(`cargo test --locked --release -p ${crate} --lib --`)[1].split("2>&1")[0].match(/[^\s\\]+/g);
+    const skips = args.flatMap((arg, i) => arg === "--skip" ? [args[i + 1]] : []);
+    const filters = args.filter((arg, i) => !arg.startsWith("--") && args[i - 1] !== "--skip");
+    return filters.some(filter => name.includes(filter)) && !skips.some(skip => name.includes(skip));
+  };
+  const models = "layer-render-wgpu";
+  assert.ok(selected(models, "attached::renderer_replacement_keeps_native_stack_usage_bounded"));
+  assert.ok(selected(models, "paint_transform::snapshot::tests::transforms_the_shared_page_check_admits_always_plan"));
+  assert.ok(!selected(models, "attached::attached_renderer_forwards_fill_preview_and_reveal"));
+  assert.ok(!selected(models, "paint_transform::snapshot::tests::captured_mask_aliases_reject_other_storage_and_overwritten_history"));
+  const bridge = "layer-apple";
+  assert.ok(selected(bridge, "tests::toolbar_component::apple_phone_queries_round_trip_without_a_session"));
+  assert.ok(!selected(bridge, "tests::toolbar_component::apple_stamp_bytes_match_the_canonical_mask_and_known_receipts_omit_pixels"));
+});
+
 test("release success permits only the jobs skipped by the selected mode", () => {
   const gate = job(release, "summary").split("      - name: Require successful checks and packages")[1]
     .match(/python3 - <<'PYCODE'\n([\s\S]*?)\n          PYCODE/)[1].replace(/^          /gm, "");

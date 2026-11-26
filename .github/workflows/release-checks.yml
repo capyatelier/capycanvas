@@ -118,6 +118,8 @@ jobs:
             tests::clipped_empty_damage_never_visits_a_page \
             tests::pixel_rect_subtraction_preserves_every_pixel_outside_the_overlap \
             raster::native_tests::raster_capture_waits_share_the_selected_gpu_budget \
+            --skip attached::attached_renderer_forwards_fill_preview_and_reveal \
+            --skip paint_transform::snapshot::tests::captured_mask_aliases_reject_other_storage_and_overwritten_history \
             --skip cached_gpu_startup_matches_eager_pixels_and_waits_for_catalog \
             --skip positions_grow_and_keep_their_texture_for_smaller_windows \
             2>&1 | tee artifacts/release-tests/renderer.log
@@ -163,6 +165,7 @@ jobs:
             tests::papers::apple_paper_worker_failure_retires_its_request_without_authored_changes \
             tests::papers::apple_initial_paper_is_prepared_before_publication_and_later_library_reload_does_not_enqueue_another_load \
             tests::papers::apple_failed_initial_material_notifies_once_and_reload_does_not_repeat_the_failed_default_request \
+            --skip tests::toolbar_component::apple_stamp_bytes_match_the_canonical_mask_and_known_receipts_omit_pixels \
             --test-threads=1 2>&1 | tee artifacts/release-tests/apple-bridge.log
       - name: Android bridge tests
         if: ${{ !cancelled() }}
