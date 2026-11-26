@@ -396,6 +396,30 @@ fn a_capture_requests_its_cold_decodes_at_the_class_its_inputs_were_admitted_at(
 }
 
 #[test]
+fn capture_plans_consume_held_decodes_after_the_worker_finishes() {
+    use crate::{object_image_mips::{PreparedImageWork,PreparedMipTile,prepare_image_tile},scene::sources::SourceUse};
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut scene=Scene::new(&r).unwrap();
+    let source=layer_core::color::source::rgba8_source(EXTENT,|_,_|[97,113,149,255]);
+    let space=r.device.working_space();
+    let pixels=prepare_image_tile(&source,[0;2],space,&r.device.source_samples,None).unwrap();
+    pollster::block_on(r.compilation.prepare_all([&r.scene_pipelines.source.pipeline,&r.scene_pipelines.source.integer])).unwrap();
+    r.source_results.push_back((space,PreparedImageWork::Image(PreparedMipTile {
+        class:Class::Visible,use_:SourceUse::Exact,id:PortableId::random(),source,coordinate:[0;2],pixels:Ok(pixels),
+    }),r.scene_tiers.ram.charge(0)));
+    assert!(r.moving_decode.is_none() && r.held_result_ready());
+    let progress=r.preparation_progress;
+    let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+    let declaration=sources::Inputs::default().for_unit(sources::InputUnit::tile([0;2])).unwrap();
+    let result=pollster::block_on(scene.complete_capture_plan(&mut r,&mut encoder,None,&declaration,&mut None,|_,r,_,_| {
+        if r.source_results.is_empty() {Ok(())}else {Err(GpuRasterError::NotReady)}
+    }));
+    assert_eq!(result,Ok(()));
+    assert!(r.source_results.is_empty());
+    assert_eq!(r.preparation_progress,progress+1);
+}
+
+#[test]
 fn capture_plans_end_a_refusal_nothing_will_release() {
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let cancelled=Arc::new(std::sync::atomic::AtomicBool::new(false));

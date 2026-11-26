@@ -2152,8 +2152,10 @@ impl Scene {
         }
         if !self.jobs.is_empty() { self.jobs_ready(r,0); }
         let (materialization,effects)=(r.transforms.as_ref().unwrap().materialization_needs(),self.effects.needs());
+        let capture_pending=|scene:&Self,r:&WgpuRasterizer| scene.exact_object_results.pending()
+            || r.held_result_ready() || r.moving_decode.as_ref().is_some_and(|(_,queue)|queue.pending());
         let outstanding=released || r.compilation.pending()!=0 || [&materialization,&self.pending_pipelines,&effects].into_iter().any(|needs|!needs.ready())
-            || self.exact_object_results.pending() || r.moving_decode.as_ref().is_some_and(|(_,queue)|queue.pending());
+            || capture_pending(self,r);
         materialization.prepare(&r.compilation).await.map_err(GpuRasterError::Effect)?;
         self.pending_pipelines.prepare(&r.compilation).await.map_err(GpuRasterError::Effect)?;
         effects.prepare(&r.compilation).await.map_err(GpuRasterError::Effect)?;
@@ -2161,7 +2163,7 @@ impl Scene {
             let sampler=r.scene_pipelines.objects.clone();
             r.compilation.prepare_all(sampler.pipelines().into_iter().chain([&r.scene_pipelines.constant.2])).await.map_err(GpuRasterError::Effect)?;
         }
-        while self.exact_object_results.pending() || r.moving_decode.as_ref().is_some_and(|(_,queue)|queue.pending()) {
+        while capture_pending(self,r) {
             if r.snapshot_cancelled.as_ref().is_some_and(|cancelled|cancelled.load(std::sync::atomic::Ordering::Relaxed)) {
                 return Err(GpuRasterError::Color("Snapshot capture cancelled".into()));
             }
