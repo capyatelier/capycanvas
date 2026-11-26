@@ -230,16 +230,21 @@ import Foundation
         precondition(successor.state["brush"]["diameter"].number == 95, "Suspension must save before releasing the claim")
         try await successor.apply(["type": "set_brush_size", "value": 96])
         try await successor.workspaces!.answer(["type": "new_toolbar", "value": NSNull()], name: "Successor tools")
+        try await successor.workspaces!.flushed()
         let successorLayout = successor.state["workspace"]["layout"].stableKey
-        precondition(successorLayout != editor.state["workspace"]["layout"].stableKey)
+        let retainedLayout = editor.state["workspace"]["layout"].stableKey
+        precondition(successorLayout != retainedLayout && editor.state["brush"]["diameter"].number == 95)
         workspaces.resume()
-        try await wait("stale owner revalidation") { workspaces.view["owner_lost"].bool && workspaces.error != nil }
-        precondition(workspaces.readOnly && editor.state["brush"]["diameter"].number == 95)
+        try await wait("stale owner revalidation and durable editing refresh") {
+            workspaces.view["owner_lost"].bool && workspaces.error != nil && !workspaces.switcherBusy
+                && editor.state["brush"]["diameter"].number == 96
+        }
+        precondition(workspaces.readOnly && editor.state["workspace"]["layout"].stableKey == retainedLayout)
         try await workspaces.answer(["type": "save_as_new"], name: "Ownership Recovery")
         let recovered = workspaces.view["id"].string
         try require(recovered != original && !workspaces.readOnly && workspaces.error == nil
-            && [95, 96].contains(editor.state["brush"]["diameter"].number),
-            "Save as New after losing ownership keeps this window's brush or the peer's durable one: id \(recovered) from \(original), read-only \(workspaces.readOnly), error \(workspaces.error ?? "none"), brush \(editor.state["brush"]["diameter"].number)")
+            && editor.state["brush"]["diameter"].number == 96,
+            "Save as New after losing ownership retains the refreshed durable brush: id \(recovered) from \(original), read-only \(workspaces.readOnly), error \(workspaces.error ?? "none"), brush \(editor.state["brush"]["diameter"].number)")
         try await successor.workspaces!.closed()
         try await workspaces.perform(["type": "focus"])
         precondition(editor.state["brush"]["diameter"].number == 96, "The peer's durable brush preference must be adopted before switching")
