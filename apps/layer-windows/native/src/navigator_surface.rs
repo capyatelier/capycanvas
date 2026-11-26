@@ -84,10 +84,10 @@ mod tests {
         for renderer in [before, sizing] {
             for current in [[160., 120.], [400., 300.]] {
                 for dpi in [1., 1.25, 1.5, 2.] {
-                    for i in 0..2 {
+                    for (i, value) in current.into_iter().enumerate() {
                         let result = renderer.capacity[i] as f32 * renderer.matrix()[i]
-                            * current[i] / renderer.nominal[i] * dpi;
-                        assert!((result - current[i] * dpi).abs() < 0.001);
+                            * value / renderer.nominal[i] * dpi;
+                        assert!((result - value * dpi).abs() < 0.001);
                     }
                 }
             }
@@ -105,6 +105,7 @@ mod tests {
     }
 }
 
+#[cfg(target_os = "windows")]
 #[derive(Clone, Copy, Default)]
 #[repr(C)]
 pub struct CapyNavigatorSurfaceInfo {
