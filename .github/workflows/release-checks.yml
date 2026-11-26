@@ -317,6 +317,7 @@ jobs:
         run: |
           ./apps/layer-windows/tests/script-encoding.ps1
           ./apps/layer-windows/tests/architecture.ps1
+          ./apps/layer-windows/tests/native-test-process.ps1
           ./apps/layer-windows/tests/application-menu.ps1
           ./apps/layer-windows/tests/application-menu-query.ps1
           ./apps/layer-windows/tests/model-snapshot-reader.ps1
@@ -334,12 +335,9 @@ jobs:
             RedirectStandardOutput = 'artifacts/windows/test-stdout.log'
             RedirectStandardError = 'artifacts/windows/test-stderr.log'
           }
-          $testProcess = Start-Process @launch
-          $null = $testProcess.Handle
-          $testProcess.WaitForExit()
-          Get-Content artifacts/windows/test-stdout.log
-          Get-Content artifacts/windows/test-stderr.log
-          if ($testProcess.ExitCode -ne 0) { throw "Windows tests exited $($testProcess.ExitCode)" }
+          . ./apps/layer-windows/scripts/NativeTestProcess.ps1
+          $exitCode = Invoke-NativeTestProcess $launch
+          if ($exitCode -ne 0) { throw "Windows tests exited $exitCode" }
       - run: cargo clippy --locked --target ${{ matrix.target }} -p layer-windows --all-targets --no-deps -- -D warnings
       - name: Preserve native crash events
         if: failure()

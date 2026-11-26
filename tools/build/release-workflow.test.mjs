@@ -58,6 +58,9 @@ test("heavy validation is called only by the release workflow", () => {
 test("logging cannot hide a failed validation command", () => {
   assert.match(checks, /^defaults:\n  run:\n    shell: bash$/m);
   assert.match(job(checks, "windows"), /    defaults:\n      run:\n        shell: pwsh/);
+  const native = job(checks, "windows");
+  assert.match(native, /\.\/apps\/layer-windows\/tests\/native-test-process\.ps1/);
+  assert.match(native, /\$exitCode = Invoke-NativeTestProcess \$launch\n +if \(\$exitCode -ne 0\) \{ throw/);
 });
 
 test("hosted CPU checks keep model tests while excluding native GPU cases", () => {

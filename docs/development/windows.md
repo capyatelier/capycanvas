@@ -468,8 +468,10 @@ such as `["canvas-bar:default","canvas-bar:light"]`. For a document crash,
 select a narrow `documents` journey and set `capture_crashes=true` to record CDB
 stacks. Run
 `gh workflow run release-checks.yml -f windows-only=true -f source_ref=<commit-sha>`
-for the x64 and ARM64 release build, test and Clippy jobs. Neither workflow
-qualifies hardware rendering or performance.
+for the x64 and ARM64 release build, test and Clippy jobs. The release jobs
+stream the native test process's stdout and stderr while it runs and retain the
+separate logs and crash-event reports. Neither workflow qualifies hardware
+rendering or performance.
 
 `canvas-bar:resize-dark` and `canvas-bar:resize-light` check Near Object and Quick Mask bar placement across window resize and restore.
 
