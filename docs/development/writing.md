@@ -50,7 +50,15 @@ written, with examples, and its section 12 sets the voice and structure of
 release notes. Check every draft against both before you show it to anyone or
 commit it.
 
-Check these first; they are the ones drafts fall into most often:
+Start from what the artist can now do in their own work that they couldn't
+before, and make that the main sentence: "Now you can draw on the go, directly on
+your iPhone and Android." A detail goes in only if it changes whether the reader
+can use the feature; platforms, input methods and mechanisms usually don't ("or
+in your phone's browser"). Ask of every line whether an artist would do
+something differently after reading it. The checks below catch badly written or
+untrue sentences, not sentences that shouldn't be there.
+
+These are the patterns drafts fall into most often:
 
 | Pattern | Fix |
 | --- | --- |
@@ -61,7 +69,6 @@ Check these first; they are the ones drafts fall into most often:
 | A verb or condition chosen to keep an unverified claim technically true | Verify the plain claim or leave it out |
 | Device models, megapixels or "X instead of Y" in prose | One multiplier in prose; measurements in a chart |
 | Words from the code, or words with two meanings ("the format is stable") | Say what the artist sees or can rely on |
-| A detail added after the main point only because it's true ("or in your phone's browser") | Say the main point and stop |
 | A feature named without its place in the app, or a menu command written up as a tool | Check the app; use its label and menu path, such as Edit ▸ Flat All Areas |
 | A verb that doesn't match what changed ("include pen pressure"), or a share nobody measured ("most of the work") | Check the code; use the verb for what happens, and state the intent instead of an unmeasured number |
 
