@@ -268,10 +268,11 @@ struct PhoneMenu: View {
                     ScrollViewReader { reader in
                         EditorPositionedScrollView(position: input.position, offsetChanged: { _ in input.cancelPress() }) {
                             page(input.page, live: true).id(input.route.stableKey)
+                                .offset(x: list["width"].number * input.progress * (input.rtl ? -1 : 1))
                         }.modifier(EditorScrollActivity { input.cancelPress() })
                             .onChange(of: input.focused) { _, hit in if let hit { reader.scrollTo(hit) } }
-                    }.offset(x: list["width"].number * input.progress * (input.rtl ? -1 : 1))
-                }.clipped().placed(list).accessibilityIdentifier("phone-menu-scroll")
+                    }
+                }.placed(list).accessibilityIdentifier("phone-menu-scroll")
                 Rectangle().fill(palette.panelBorder).placed(input.geometry["separator"])
                 ForEach(input.model["strip"].array.indices, id: \.self) { index in
                     stripButton(index).placed(input.geometry["buttons"][index])
