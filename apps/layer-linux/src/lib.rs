@@ -137,17 +137,26 @@ fn start_process() {
 
 pub fn run() -> gtk::glib::ExitCode {
     start_process();
-    if let Err(error) = gtk::init() {
-        eprintln!("{error}");
-        return gtk::glib::ExitCode::FAILURE;
-    }
-    if !gtk::gdk::Display::default().is_some_and(|display| unsupported_session::supported(&display)) {
-        return unsupported_session::run(storage::APP_ID, launch_localization());
-    }
     let (app, active) = application(storage::APP_ID);
+    let unsupported = Rc::new(std::cell::Cell::new(false));
+    app.connect_handle_local_options(glib::clone!(#[strong] unsupported, move |_, _| {
+        if let Err(error) = gtk::init() {
+            eprintln!("{error}");
+            return std::ops::ControlFlow::Break(glib::ExitCode::FAILURE);
+        }
+        if !gtk::gdk::Display::default().is_some_and(|display| unsupported_session::supported(&display)) {
+            unsupported.set(true);
+            return std::ops::ControlFlow::Break(glib::ExitCode::FAILURE);
+        }
+        std::ops::ControlFlow::Continue(())
+    }));
     let result = app.run();
     let windows = std::mem::take(&mut *active.borrow_mut());
     drop(windows);
+    if unsupported.get() {
+        drop(app);
+        return unsupported_session::run(storage::APP_ID, launch_localization());
+    }
     if let Err(error) = layer_host::gpu::finish_process_gpu() {
         eprintln!("{error}");
         return gtk::glib::ExitCode::FAILURE;
