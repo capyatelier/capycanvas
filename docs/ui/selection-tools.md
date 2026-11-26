@@ -112,7 +112,8 @@ mask and ancestor group masks, clipping and position. Hidden layers and hidden g
 are excluded. Tolerance compares each reference with its own colour at the tap;
 a mismatch on any reference stops the region. With Reference layers, Stop at
 colours on this layer is on by default and adds the destination to that comparison.
-Enclose and Fill compares each source with transparency instead of a tap colour.
+Enclose and Fill compares each source with transparency instead of a tap colour;
+All visible layers leaves out Paper for Enclose and Fill and Flat all areas.
 
 Close gaps offers Auto and Off. Auto seals compatible line ends at 16 px,
 then tries 32 and 48 px while the tapped region still reaches the canvas edge.

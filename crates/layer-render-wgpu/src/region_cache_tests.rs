@@ -936,3 +936,78 @@ fn drawings_opened_after_fill_taps_on_a_photo_finish_their_region_preparation_an
         settle(&mut second,name);
     }
 }
+
+fn startup_ring_session()->layer_ui::UiSession<WgpuRasterizer> {
+    use layer_ui::{Localizer,UiLanguage,ScreenInfo,UiSession,Platform};
+    let extent=[1440,1080];
+    let mut doc=layer_ui::startup_drawing(Some(ScreenInfo {extent,ppi:None}),&Localizer::new(UiLanguage::English)).unwrap();
+    let SourceTarget::Paint(handle)=doc.drawing_content().unwrap() else {unreachable!()};
+    let image=layer_core::color::source::rgba8_source(extent,|x,y| {
+        let radius=(x as f32+0.5-720.).hypot(y as f32+0.5-540.);
+        [0,0,0,((3.5-(radius-150.).abs()).clamp(0.,1.)*255.).round() as u8]
+    });
+    let paint=doc.artwork.paint.get_mut(handle).unwrap();
+    paint.domain=image.extent;
+    paint.base=Some(layer_core::authored::PaintBase::new(image.into()));
+    let r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    UiSession::new(r,doc,[1200,900],Platform::Gtk).unwrap()
+}
+
+fn settle_ring_session(s:&mut layer_ui::UiSession<WgpuRasterizer>,clock:&std::time::Instant) {
+    crate::test_support::wait_until("region tool must settle",|| {
+        let now=clock.elapsed().as_nanos() as u64;
+        s.frame(now,now).unwrap();
+        crate::test_support::complete(s.renderer_mut());
+        if s.paint_ready() && !s.holding_input() && !s.engine().has_pending_input() && s.require_document_idle().is_ok() && !s.engine().raster_backing_pending() && !s.engine().has_pending_document_edits() && s.renderer_mut().next_frame()!=layer_render::FrameDemand::Work {Ok(())} else {Err(())}
+    });
+}
+
+#[test]
+fn enclose_fill_all_visible_layers_fills_a_closed_ring_on_paper() {
+    use layer_ui::{UiAction,CommandId};
+    use layer_engine::{PenEvent,PenPhase,SampleFlags,ToolKind};
+    let mut s=startup_ring_session();
+    let clock=std::time::Instant::now();
+    settle_ring_session(&mut s,&clock);
+    let before=s.renderer_mut().readback_srgb_rgba8().unwrap();
+    s.dispatch(UiAction::Invoke {command:CommandId::EncloseFill}).unwrap();
+    s.dispatch(UiAction::SetColor {rgba:[1.,0.,0.,1.]}).unwrap();
+    settle_ring_session(&mut s,&clock);
+    for i in 0..=49 {
+        let angle=std::f32::consts::TAU*i.min(48) as f32/48.;
+        let point=[720.+250.*angle.cos(),540.+250.*angle.sin()];
+        let [a,b,c,d,x,y]=s.camera().document_to_surface();
+        let now=clock.elapsed().as_nanos() as u64;
+        s.pen(PenEvent {device_id:1,sequence:i+1,timestamp_ns:now,view_revision:s.camera().revision,
+            surface_position:Point {x:a*point[0]+c*point[1]+x,y:b*point[0]+d*point[1]+y},
+            pressure:1.,tilt_radians:[0.;2],twist_radians:0.,distance:0.,
+            phase:if i==0 {PenPhase::Down}else if i==49 {PenPhase::Up}else{PenPhase::Move},
+            tool:ToolKind::Pen,flags:SampleFlags::PRIMARY});
+        s.frame(now,now).unwrap();
+    }
+    settle_ring_session(&mut s,&clock);
+    let filled=s.renderer_mut().readback_srgb_rgba8().unwrap();
+    let pixel=|bytes:&[u8],x,y|bytes[((y*1440+x)*4) as usize..][..4].to_vec();
+    assert_eq!(pixel(&filled,720,540),[255,0,0,255]);
+    assert_eq!(pixel(&filled,920,540),pixel(&before,920,540));
+}
+
+#[test]
+fn flat_all_areas_all_visible_layers_fills_a_closed_ring_on_paper() {
+    use layer_ui::{UiAction,CommandId};
+    let mut s=startup_ring_session();
+    let clock=std::time::Instant::now();
+    settle_ring_session(&mut s,&clock);
+    let original=s.engine().document().drawing_content().unwrap();
+    s.dispatch(UiAction::Invoke {command:CommandId::Fill}).unwrap();
+    s.dispatch(UiAction::Invoke {command:CommandId::SelectionVisible}).unwrap();
+    settle_ring_session(&mut s,&clock);
+    s.dispatch(UiAction::Invoke {command:CommandId::FlatAllAreas}).unwrap();
+    settle_ring_session(&mut s,&clock);
+    let doc=s.engine().document();
+    let flats=doc.drawing_content().unwrap();
+    assert_ne!(flats,original);
+    let mut capture=s.engine().backend().snapshot_gpu().capture_scene(doc.snapshot(),SceneScope::Raw(flats),Default::default()).unwrap();
+    assert_eq!(capture.read_region([720,540,1,1]).unwrap()[0][3],1.);
+    assert_eq!(capture.read_region([920,540,1,1]).unwrap()[0][3],0.);
+}

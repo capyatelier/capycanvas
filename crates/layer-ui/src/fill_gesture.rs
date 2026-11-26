@@ -251,7 +251,7 @@ impl<R:CanvasRenderer> UiSession<R> {
         let extent=self.engine.document().composition().size.map(f64::from);
         if !(0. ..extent[0]).contains(&point[0]) || !(0. ..extent[1]).contains(&point[1]) {return Ok(false);}
         let target=self.engine.document().scene().source_target(layer);
-        if self.region_source(source,None,target,true).is_none(){return Ok(false);}
+        if self.region_source(source,None,target,Lines::Tap).is_none(){return Ok(false);}
         let doc=self.engine.document();let [ox,oy]=doc.scene().occurrence_offset64(layer);
         let object=doc.scene().vector_layer(layer).ok_or("The vector layer was removed")?;
         let hit=self.vector_fill_hit(object,[point[0]-ox,point[1]-oy],source);

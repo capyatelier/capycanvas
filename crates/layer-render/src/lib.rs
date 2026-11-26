@@ -632,6 +632,14 @@ impl RegionSource {
         occurrence.blend = layer_core::LayerBlend::Normal;
         Some(Self::Scene { snapshot, scope: SceneScope::Members(vec![leaf].into()) })
     }
+    pub fn visible_without_paper(mut snapshot: std::sync::Arc<SceneSnapshot>) -> Self {
+        let paper = snapshot.view().order().iter().copied()
+            .filter(|&id| layer_core::paper::is_paper_layer(snapshot.view(), id)).collect::<Vec<_>>();
+        for id in paper {
+            std::sync::Arc::make_mut(&mut snapshot).artwork.occurrences.get_mut(id).unwrap().visible = false;
+        }
+        Self::Scene { snapshot, scope: SceneScope::All }
+    }
     pub fn sources(&self) -> &[Self] {
         match self { Self::Intersection(sources) => sources, _ => std::slice::from_ref(self) }
     }

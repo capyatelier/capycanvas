@@ -70,6 +70,9 @@ impl Target {
         doc.owner==self.owner && doc.revision==self.revision && doc.working.occurrence==self.layer && doc.working.target==self.source
     }
 }
+#[derive(Clone, Copy)]
+enum Lines { Tap, Enclosure, Flats }
+
 enum Purpose {
     FlatAreas,
     Trace {layer:OccurrenceHandle,style:std::sync::Arc<Style>,at_back:bool},
@@ -269,7 +272,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let target=doc.working.occurrence.and_then(|id|doc.scene().source_target(id));
         let reference_count=(source==RegionSource::Reference).then(||doc.scene().reference_leaves().len());
         let paper=doc.nearest_paper_binding(target);
-        let Some(source)=self.region_source(source,None,target,false) else{return Ok(());};
+        let Some(source)=self.region_source(source,None,target,Lines::Flats) else{return Ok(());};
         let reach=self.region_tools.gap_reach.or_else(||(!self.region_tools.refinement.close_gaps).then_some(0)).unwrap_or(16);
         let request=RegionRequest {fill_areas:Some(FillAreas::TransparentOrWhite),colour_mode:Default::default(),
             fill:Some(layer_render::RegionFillQuery {reach:Some(reach),..Default::default()}),reference_count,paper,
@@ -451,13 +454,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         if source != RegionSource::Auto { return source; }
         if self.engine.document().scene().references().is_empty() { RegionSource::Visible } else { RegionSource::Reference }
     }
-    fn region_source(&mut self, source: RegionSource, from: Option<layer_render::RegionSource>, source_target: Option<SourceTarget>,include_stop:bool) -> Option<layer_render::RegionSource> {
+    fn region_source(&mut self, source: RegionSource, from: Option<layer_render::RegionSource>, source_target: Option<SourceTarget>,lines:Lines) -> Option<layer_render::RegionSource> {
         let doc = self.engine.document();
         let source = self.lines_from(source);
         let mut sources = match (from, source) {
                 (Some(from), _) => return Some(from),
                 (None, RegionSource::Auto) => unreachable!(),
-                (None, RegionSource::Visible) => vec![layer_render::RegionSource::Scene {snapshot:doc.snapshot(),scope:SceneScope::All}],
+                (None, RegionSource::Visible) => vec![match lines {
+                    Lines::Tap=>layer_render::RegionSource::Scene {snapshot:doc.snapshot(),scope:SceneScope::All},
+                    Lines::Enclosure|Lines::Flats=>layer_render::RegionSource::visible_without_paper(doc.snapshot()),
+                }],
                 (None, RegionSource::Editing) => {
                     if let Some(target) = source_target {
                         vec![layer_render::RegionSource::Scene {snapshot:doc.snapshot(),scope:SceneScope::Raw(target)}]
@@ -484,7 +490,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     doc.scene().reference_leaves().into_iter().filter_map(|leaf| layer_render::RegionSource::reference(snapshot.clone(), leaf)).collect()
                 }
             };
-        if include_stop && self.region_tools.stop_at_colors && source == RegionSource::Reference && !self.layer_interaction.tool.encloses() {
+        if matches!(lines,Lines::Tap) && self.region_tools.stop_at_colors && source == RegionSource::Reference {
             let doc = self.engine.document();
             if let Some(target) = source_target.and_then(|target| doc.target_owner(target))
                 && !doc.scene().reference_leaves().contains(&target)
@@ -509,7 +515,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let target=doc.drawing_target().or(doc.active_target());
         let reference_count=(source==RegionSource::Reference).then(||doc.scene().reference_leaves().len());
         let paper=doc.nearest_paper_binding(doc.drawing_content());
-        let Some(source)=self.region_source(source,None,target,true) else {self.engine.backend_mut().prepare_regions(None);return;};
+        let Some(source)=self.region_source(source,None,target,if enclosed {Lines::Enclosure}else{Lines::Tap}) else {self.engine.backend_mut().prepare_regions(None);return;};
         self.engine.backend_mut().prepare_regions(Some(&layer_render::RegionPreparation {
             source,reference_count,paper,tolerance:self.region_tools.tolerance,refinement:self.region_tools.refinement,
             enclosed,
@@ -540,7 +546,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let source_target=if mask_target.is_some() {
             self.selection_masks.artwork().and_then(|h|doc.scene().source_target(h))
         } else {doc.drawing_target().or(doc.active_target())};
-        let Some(mut resolved) = self.region_source(source, from.clone(), source_target,true) else { return };
+        let Some(mut resolved) = self.region_source(source, from.clone(), source_target,if enclosed {Lines::Enclosure}else{Lines::Tap}) else { return };
         let reference=source==RegionSource::Reference;
         let mut reference_count=reference.then(||self.engine.document().scene().reference_leaves().len());
         let vector=(fill && mask_target.is_none()).then(||self.editing_vector_layer()).flatten();
