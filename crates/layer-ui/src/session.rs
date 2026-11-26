@@ -7261,7 +7261,7 @@ mod tests {
     fn fresh_users_start_with_pencil_and_saved_editing_restores_the_last_brush_and_color() {
         let mut first = UiSession::blank(Recorder::default(), [1000, 1000], Platform::Gtk).unwrap();
         assert_eq!((first.state().brush.preset, first.state().brush.tool, first.state().brush.diameter),
-            (DefaultBrushPreset::Pencil as u32, Tool::Pencil, 9.));
+            (DefaultBrushPreset::Pencil as u32, Tool::Pencil, 14.));
         assert_eq!(first.state().colors.definition(), layer_core::color::RgbColor::new(
             layer_core::color::RgbSpace::Srgb, [46. / 255., 46. / 255., 46. / 255., 1.]).unwrap());
         let fresh = EditingState::default();
@@ -7271,7 +7271,7 @@ mod tests {
         invoke(&mut first, CommandId::DrawingBrush);
         assert_eq!(first.state().brush.preset, DefaultBrushPreset::Pencil as u32);
         first.dispatch(UiAction::SelectBrush { id: DefaultBrushPreset::PointyPencil as u32 }).unwrap();
-        assert_eq!(first.state().brush.diameter, 6.);
+        assert_eq!(first.state().brush.diameter, 9.);
         first.dispatch(UiAction::SetToolSetting { id: "size".into(), value: 17. }).unwrap();
         first.dispatch(UiAction::SetColor { rgba: [0.6, 0.2, 0.1, 1.] }).unwrap();
         let saved = serde_json::to_string(&first.editing_state()).unwrap();
@@ -7280,7 +7280,7 @@ mod tests {
         assert_eq!(reopened.state().brush.preset, DefaultBrushPreset::PointyPencil as u32);
         assert_eq!(reopened.state().brush.diameter, 17.);
         assert_eq!(reopened.state().colors, first.state().colors);
-        for (preset, size) in [(DefaultBrushPreset::Pencil, 9.), (DefaultBrushPreset::PointyPencil, 6.)] {
+        for (preset, size) in [(DefaultBrushPreset::Pencil, 14.), (DefaultBrushPreset::PointyPencil, 9.)] {
             reopened.dispatch(UiAction::SelectBrush { id: preset as u32 }).unwrap();
             reopened.dispatch(UiAction::SetToolSetting { id: "size".into(), value: 17. }).unwrap();
             reopened.dispatch(UiAction::ResetToolSetting { id: "size".into() }).unwrap();

@@ -444,10 +444,12 @@ pub fn default_setup() -> DrawingSetup { built_in(DEFAULT_PRESET, None).expect("
 /// The sheet a new window opens with.
 pub fn startup_setup(screen: Option<ScreenInfo>) -> DrawingSetup {
     let screen = screen.unwrap_or(ScreenInfo { extent: [1440, 1080], ppi: None });
-    let height = screen.extent[1].max(1);
-    let width = (f64::from(height) * 4. / 3.).round();
+    let [width, height] = screen.extent.map(|side| f64::from(side.max(1)));
+    let short = width.min(height).min(width.max(height) * 3. / 4.).round();
+    let long = (short * 4. / 3.).round();
+    let [width, height] = if width >= height { [long, short] } else { [short, long] };
     let resolution = screen.ppi.unwrap_or(SCREEN_PPI).clamp(SCREEN_PPI, MAX_NEW_DOCUMENT_RESOLUTION);
-    sheet(LengthUnit::Px, width, f64::from(height), resolution, RgbSpace::Srgb, SampleDepth::U8, Some("cold_press"), 100, NATURAL, false)
+    sheet(LengthUnit::Px, width, height, resolution, RgbSpace::Srgb, SampleDepth::U8, Some("cold_press"), 100, NATURAL, false)
 }
 
 pub fn startup_drawing(screen: Option<ScreenInfo>, l: &Localizer) -> Result<Document, String> {
@@ -1138,13 +1140,16 @@ mod tests {
     }
 
     #[test]
-    fn startup_sheet_uses_screen_height_and_density_with_cold_press_paper() {
+    fn startup_sheet_is_the_largest_four_by_three_sheet_on_the_screen_with_its_density_and_cold_press_paper() {
         for (screen, extent, ppi) in [
             (None, [1440, 1080], 144),
             (Some(ScreenInfo { extent: [2880, 1800], ppi: Some(220) }), [2400, 1800], 220),
             (Some(ScreenInfo { extent: [1920, 1080], ppi: Some(96) }), [1440, 1080], 144),
-            (Some(ScreenInfo { extent: [1080, 1920], ppi: None }), [2560, 1920], 144),
             (Some(ScreenInfo { extent: [1920, 1081], ppi: Some(0) }), [1441, 1081], 144),
+            (Some(ScreenInfo { extent: [1280, 1024], ppi: None }), [1280, 960], 144),
+            (Some(ScreenInfo { extent: [1080, 1920], ppi: None }), [1080, 1440], 144),
+            (Some(ScreenInfo { extent: [1206, 2622], ppi: Some(460) }), [1206, 1608], 460),
+            (Some(ScreenInfo { extent: [2048, 2732], ppi: Some(264) }), [2048, 2731], 264),
         ] {
             let opened = startup_drawing(screen, &english()).unwrap();
             assert_eq!((opened.composition().size, opened.composition().resolution), (extent, Some(layer_core::ImageResolution::ppi(ppi))));

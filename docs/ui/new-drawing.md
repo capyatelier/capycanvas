@@ -4,12 +4,13 @@
 
 New drawing asks for a sheet the way an art store sells one: a size in the
 unit the artist thinks in, a resolution, a color mode and a paper. A fresh workspace on every platform
-opens on a 4:3 landscape sheet with the current monitor's height in device pixels.
+opens on the largest 4:3 sheet that fits the current monitor in device pixels,
+turned to match it: landscape on a landscape screen, portrait on a portrait one.
 It uses the monitor's PPI, with a minimum of 144 and a fallback of 144 when unknown,
 sRGB 8-bit color, Cold press paper at 100% Texture visibility and Natural white.
 The selected brush and drawing color are restored from the saved editing state.
 New users start with Pencil and drawing color #2E2E2E (30% lightness). Pencil's
-default size is 9 px and Pointy Pencil's is 6 px; saved custom sizes are preserved.
+default size is 14 px and Pointy Pencil's is 9 px; saved custom sizes are preserved.
 If display dimensions are unavailable, the sheet is 1,440 × 1,080 px.
 
 ## What artists see

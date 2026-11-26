@@ -51,7 +51,7 @@ fn launch_keeps_each_windows_display_with_shared_settings_and_load_failures() {
     let (first, retained) = SettingsService::launch_at(Ok(storage(&directory)), &["en"], screen([2880, 1800], Some(220))).unwrap();
     let (second, _) = SettingsService::launch_at(Ok(storage(&directory)), &["en"], screen([1920, 1080], Some(96))).unwrap();
     let (fallback, _) = SettingsService::launch_at(Err("unavailable settings".into()), &["en"], screen([1080, 1920], None)).unwrap();
-    for (host, size, ppi) in [(first, [2400, 1800], 220), (second, [1440, 1080], 144), (fallback, [2560, 1920], 144)] {
+    for (host, size, ppi) in [(first, [2400, 1800], 220), (second, [1440, 1080], 144), (fallback, [1080, 1440], 144)] {
         assert_eq!(host.session.engine().document().composition().size, size);
         assert_eq!(host.session.engine().document().composition().resolution, Some(layer_core::ImageResolution::ppi(ppi)));
     }

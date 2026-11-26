@@ -1417,7 +1417,7 @@ mod tests {
             for (extent, ppi, expected, resolution) in [
                 ([2880, 1800], Some(220), [2400, 1800], 220),
                 ([1920, 1080], Some(96), [1440, 1080], 144),
-                ([1080, 1920], None, [2560, 1920], 144),
+                ([1080, 1920], None, [1080, 1440], 144),
             ] {
                 let host = NativeHost::launch_on_screen(platform, "", layer_ui::Localizer::shared(layer_ui::UiLanguage::English), Some(layer_ui::ScreenInfo { extent, ppi })).unwrap();
                 let document = host.session.engine().document();

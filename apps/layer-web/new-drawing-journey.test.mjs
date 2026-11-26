@@ -49,9 +49,9 @@ export async function checkNewDrawing({call,evaluate,settle}) {
   const shut=id=>wait(`document.querySelector('#${id}').hidden`);
   await wait('window.layerApp && layerApp.startupTimes.complete!==null');
   await wait('JSON.parse(layerApp.app.workspace_view())?.ready && !JSON.parse(layerApp.app.workspace_view()).busy');
-  const startup=await evaluate(`(()=>{const s=layerApp.state(),height=Math.round(screen.height*(devicePixelRatio||1));return{width:s.tabs[0].width,height:s.tabs[0].height,expected:[Math.round(height*4/3),height],diameter:s.brush.diameter,rgba:s.colors.foreground.rgba};})()`);
-  assert.deepEqual([startup.width,startup.height],startup.expected,'The startup sheet uses the display height at 4:3');
-  assert.equal(startup.diameter,9,'A fresh user starts with Pencil at 9 px');
+  const startup=await evaluate(`(()=>{const s=layerApp.state(),[width,height]=[screen.width,screen.height].map(side=>Math.round(side*(devicePixelRatio||1))),short=Math.round(Math.min(width,height,Math.max(width,height)*3/4)),long=Math.round(short*4/3);return{width:s.tabs[0].width,height:s.tabs[0].height,expected:width>=height?[long,short]:[short,long],diameter:s.brush.diameter,rgba:s.colors.foreground.rgba};})()`);
+  assert.deepEqual([startup.width,startup.height],startup.expected,'The startup sheet is the largest 4:3 sheet that fits the display');
+  assert.equal(startup.diameter,14,'A fresh user starts with Pencil at 14 px');
   for(const channel of startup.rgba.slice(0,3))assert.ok(Math.abs(channel-46/255)<.000001,'The startup drawing color is 30% lightness');
   for(const theme of ['light','dark']) {
     await evaluate(`layerApp.dispatch({type:'set_theme',theme:'${theme}'})`);await settle();

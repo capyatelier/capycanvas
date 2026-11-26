@@ -34,13 +34,13 @@ pub(crate) fn dry_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
     use DefaultBrushPreset::*;
     let pose = |radii, relief| BrushDryPose { radii, relief };
     let (diameter, flow, paper, loading, corner, poses) = match preset {
-        Pencil => (9., 0.70, 1.1, 0.70, 0., [
+        Pencil => (14., 0.70, 1.1, 0.70, 0., [
             pose([0.65, 0.65], [0., 0.70, 0.]), pose([1., 0.65], [0., 0.5, 0.25]),
             pose([4.8, 1.2], [0.04, 0.25, 0.5])]),
-        PointyPencil => (6., 0.70, 0.9, 0.75, 0., [
+        PointyPencil => (9., 0.70, 0.9, 0.75, 0., [
             pose([0.55, 0.55], [0., 0.95, 0.]), pose([0.9, 0.5], [0., 0.8, 0.]),
             pose([5., 0.8], [0.05, 0.35, 0.45])]),
-        ShadingPencil => (64./2.6, 0.63, 1.35, 0.65, 0., [
+        ShadingPencil => (37., 0.63, 1.35, 0.65, 0., [
             pose([0.28, 0.28], [0., 0.7, 0.]), pose([1., 0.55], [0.04, 0.3, 0.3]),
             pose([2.6, 0.8], [0.10, 0.08, 0.6])]),
         Charcoal => (24., 0.85, 1.6, 0.55, 0., [
@@ -78,7 +78,7 @@ pub(crate) fn dry_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
 
 pub(crate) fn bristle_paintbrush() -> BrushSnapshot {
     BrushSnapshot {
-        diameter: 460.,
+        diameter: 92.,
         opacity: 1.,
         flow: 1.,
         color_rgba_linear: [0.12, 0.025, 0.012, 1.],

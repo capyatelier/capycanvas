@@ -123,7 +123,7 @@ fn assert_startup_sheet(w: &Workspace) {
     let screen = crate::new_drawing::screen(&w.window.surface().unwrap()).unwrap();
     let expected = layer_ui::startup_setup(Some(screen));
     assert_eq!(opened.composition().size, expected.extent());
-    assert_eq!(opened.composition().size[1], screen.extent[1]);
+    assert!(opened.composition().size.iter().zip(screen.extent).all(|(sheet, screen)| *sheet <= screen));
     assert_eq!(opened.composition().resolution, Some(layer_core::ImageResolution::ppi(expected.resolution)));
     let paper = opened.bottom_paper().unwrap();
     assert_eq!(opened.scene().effect(paper).unwrap().constant_color(), Some(expected.paper.color));
@@ -144,7 +144,7 @@ fn native_startup_canvas_uses_current_monitor() {
         ready(&w);
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         assert_startup_sheet(&w);
-        assert_eq!((state(&w).brush.preset, state(&w).brush.diameter), (layer_core::DefaultBrushPreset::Pencil as u32, 9.));
+        assert_eq!((state(&w).brush.preset, state(&w).brush.diameter), (layer_core::DefaultBrushPreset::Pencil as u32, 14.));
         assert_eq!(state(&w).colors.definition().rgba, [46. / 255., 46. / 255., 46. / 255., 1.]);
         capture_ui(&w, &output, &format!("{theme:?}.png"));
         w.window.destroy();

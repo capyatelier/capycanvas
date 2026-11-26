@@ -385,9 +385,9 @@ fn toolbar_dry_settings_preserve_writing_size_and_default_pose_footprints() {
     use layer_core::DefaultBrushPreset as P;
     let mut s=session(Platform::Gtk);
     for (preset,diameter,poses,block,loading,gain) in [
-        (P::Pencil,43.2f64,[[0.65f64,0.65],[1.,0.65],[4.8,1.2]],false,0.70,0.7),
-        (P::PointyPencil,100./3.,[[0.55,0.55],[0.9,0.5],[5.,0.8]],false,0.75,0.7),
-        (P::ShadingPencil,64.,[[0.28,0.28],[1.,0.55],[2.6,0.8]],false,0.65,0.63),
+        (P::Pencil,67.2f64,[[0.65f64,0.65],[1.,0.65],[4.8,1.2]],false,0.70,0.7),
+        (P::PointyPencil,50.,[[0.55,0.55],[0.9,0.5],[5.,0.8]],false,0.75,0.7),
+        (P::ShadingPencil,96.2,[[0.28,0.28],[1.,0.55],[2.6,0.8]],false,0.65,0.63),
         (P::Charcoal,48.,[[0.65,0.65],[1.,0.65],[2.,0.8]],false,0.55,0.85),
         (P::Chalk,36.,[[0.55,0.55],[1.,0.8],[1.6,0.85]],true,0.15,0.75),
         (P::PastelBlock,64.,[[0.55,0.55],[1.,0.65],[3.2,0.55]],true,0.60,0.85),

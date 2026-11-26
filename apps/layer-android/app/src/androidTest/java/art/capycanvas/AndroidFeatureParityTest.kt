@@ -57,11 +57,12 @@ class AndroidFeatureParityTest {
     private fun capture(name: String) = screenshot("parity-$name.png")
     @Test fun startupCanvasUsesCurrentDisplayInBothThemes() {
         val screen = screenInfo(androidx.core.content.ContextCompat.getDisplayOrDefault(compose.activity))!!
-        val height = screen.getJSONArray("extent").getInt(1)
+        val (width, height) = screen.getJSONArray("extent").let { it.getInt(0) to it.getInt(1) }
+        val short = Math.round(minOf(minOf(width, height).toDouble(), maxOf(width, height) * 3.0 / 4.0)).toInt()
+        val long = Math.round(short * 4.0 / 3.0).toInt()
         val tab = state().array("tabs").objects().first()
-        assertEquals(height, tab.getInt("height"))
-        assertEquals(kotlin.math.round(height * 4.0 / 3.0).toInt(), tab.getInt("width"))
-        assertEquals(9.0, state().getJSONObject("brush").getDouble("diameter"), 0.0)
+        assertEquals(if (width >= height) long to short else short to long, tab.getInt("width") to tab.getInt("height"))
+        assertEquals(14.0, state().getJSONObject("brush").getDouble("diameter"), 0.0)
         val rgba = state().getJSONObject("colors").getJSONObject("foreground").getJSONArray("rgba")
         for (channel in 0..2) assertEquals(46.0 / 255.0, rgba.getDouble(channel), 0.000001)
         for (theme in listOf("light", "dark")) {

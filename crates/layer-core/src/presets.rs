@@ -133,7 +133,7 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
         DefaultBrushPreset::Paintbrush => BrushSnapshot {
             contact: Some(crate::contact_presets::dry_material(preset)),
             color_rgba_linear: [0.12, 0.025, 0.012, 1.0],
-            diameter: 460.0,
+            diameter: 92.0,
             opacity: 0.95,
             hardness: 0.9,
             flow: 1.0,
@@ -207,7 +207,7 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
         DefaultBrushPreset::DualTexture => BrushSnapshot {
             contact: Some(crate::contact_presets::dry_material(preset)),
             color_rgba_linear: [0.08, 0.025, 0.42, 1.0],
-            diameter: 260.0,
+            diameter: 80.0,
             flow: 0.7,
             spacing: 0.16,
             aspect: 0.72,
@@ -311,7 +311,7 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
         DefaultBrushPreset::SpotHealingBrush => retouching(BrushExecution::SpotHeal, 60.0, 0.6),
         DefaultBrushPreset::MultiplyGlaze => BrushSnapshot {
             color_rgba_linear: [0.12, 0.28, 0.72, 1.0],
-            diameter: 240.0,
+            diameter: 80.0,
             hardness: 0.62,
             flow: 0.22,
             spacing: 0.07,
@@ -325,7 +325,7 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
         DefaultBrushPreset::TexturedFlat => BrushSnapshot {
             contact: Some(crate::contact_presets::dry_material(preset)),
             ..painter_brush(PainterBrushSpec {
-                diameter: 360.0,
+                diameter: 80.0,
                 aspect: 0.62,
                 flow: 1.0,
                 opacity: 0.9,
@@ -339,7 +339,7 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
         },
         DefaultBrushPreset::DryScumble => BrushSnapshot {
             contact: Some(crate::contact_presets::dry_material(preset)),
-            diameter: 430.0,
+            diameter: 86.0,
             aspect: 0.72,
             flow: 0.95,
             opacity: 0.86,
@@ -367,7 +367,7 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
         DefaultBrushPreset::TransparentGlaze => BrushSnapshot {
             contact: Some(crate::contact_presets::dry_material(preset)),
             ..painter_brush(PainterBrushSpec {
-                diameter: 520.0,
+                diameter: 100.0,
                 aspect: 0.52,
                 flow: 0.25,
                 opacity: 0.62,
@@ -380,7 +380,7 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
             })
         },
         DefaultBrushPreset::OpaqueGouache => painter_brush(PainterBrushSpec {
-            diameter: 410.0,
+            diameter: 82.0,
             aspect: 0.68,
             flow: 0.76,
             opacity: 0.84,
