@@ -581,12 +581,16 @@ its field the same way; accept it rather than restrict these tools.
   from its array layer. Above 208 pages reconstruction binds at most eleven
   arrays per source chunk, with the previous sum and the tile's original as the
   other two textures. Large sources use
-  additional chunks, each in its own pass; every tile accumulates their disjoint
-  contributions in its own scratch texture, so no dispatch in a pass waits for
+  additional chunks, each one step later; every tile accumulates their disjoint
+  contributions in its own scratch texture, so no dispatch in a step waits for
   another. The scratch pool holds two pages' bytes at the preview's block size,
-  and tiles beyond it take further passes. A
-  tile's chunk is its block of 16 × 11 pages, so the order of those sums never
-  depends on which tiles a session copied first or rebuilt later. No
+  and tiles beyond it take further steps. Every map and reconstruction dispatch
+  of a batch is encoded in step order into compute passes of at most 64
+  dispatches; wgpu orders and barriers dependent dispatches within a pass, and
+  each pass costs Metal two command buffers. `liquify::memory_tests` checks the
+  bound and the pixels of a Fit pen-up across two chunks. A tile's chunk is its
+  block of 16 × 11 pages, so the order of those sums never depends on which
+  tiles a session copied first or rebuilt later. No
   Float32 filtering, Float32 blending, bindless texture arrays or float atomics
   are required. The same manual sampling path runs on Mali and other GPUs.
 - **Lazy originals.** A tile is captured before its first deformation or source

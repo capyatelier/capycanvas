@@ -7,6 +7,7 @@ const ORIGINAL_BINDINGS: usize = 11;
 const WHOLE_BINDINGS: usize = 13;
 pub(super) const ORIGINAL_ATLAS_BYTES: u64 = 87381 * ORIGINAL_LAYERS as u64 * 16;
 const MAP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Uint;
+const DISPATCHES_PER_PASS: usize = 64;
 static NEXT_RESOURCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -725,8 +726,8 @@ impl Liquify {
     }
 
     fn dispatch(&self, r: &mut WgpuRasterizer, encoder: &mut submission::CommandEncoder, batch_index: usize,
-        batch: &DabBatch, passes: &[Vec<Dispatch>], reconstruct: Option<Layout>) {
-        let count = passes.iter().map(Vec::len).sum::<usize>();
+        batch: &DabBatch, steps: &[Vec<Dispatch>], reconstruct: Option<Layout>) {
+        let count = steps.iter().map(Vec::len).sum::<usize>();
         if count == 0 { return; }
         let map = reconstruct.is_none();
         let phase = if map { 16 } else { 18 };
@@ -734,14 +735,16 @@ impl Liquify {
         performance_trace::counter(if map { c"Capy Liquify map dispatches" } else { c"Capy Liquify reconstruct dispatches" }, count as u64);
         #[cfg(test)] crate::test_support::PassCounts {liquify_dispatches:count as u64,..Default::default()}.record();
         let size = PAGE_SIZE / r.dry_material_block(batch);
-        for jobs in passes.iter().filter(|jobs| !jobs.is_empty()) {
+        let mut jobs = steps.iter().flatten().peekable();
+        while jobs.peek().is_some() {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("liquify sparse tiles"), timestamp_writes: None });
+            #[cfg(test)] crate::test_support::PassCounts {liquify_passes:1,..Default::default()}.record();
             pass.set_pipeline(reconstruct.map_or_else(|| self.pipelines.update(&batch.style), |layout| &self.pipelines.reconstruct[usize::from(layout.whole)]));
             if map {
                 let key = WgpuRasterizer::texture_set_key(&batch.style);
                 pass.set_bind_group(3, &r.texture_sets.iter().find(|t| t.key == key).unwrap().bind_group, &[]);
             }
-            for job in jobs {
+            for job in jobs.by_ref().take(DISPATCHES_PER_PASS) {
                 pass.set_bind_group(0, &job.output, &[batch_index as u32 * r.style_stride as u32]);
                 pass.set_bind_group(1, r.paint_target_binding(&batch.style), &[r.layer_target_offset(batch.target, job.coordinate)]);
                 pass.set_bind_group(2, &job.sources, &[job.record]);
@@ -937,12 +940,12 @@ impl Liquify {
         }).collect::<Result<Vec<_>,GpuRasterError>>()?;
         let partials_of=|source:usize|region_chunks[source].0.len().saturating_sub(1).min(2);
         let slots=self.partials.reserve(r,encoder,block,sources.iter().map(|source|partials_of(*source)).sum());
-        let (mut passes,mut round,mut used)=(Vec::<Vec<Dispatch>>::new(),0,0);
+        let (mut steps,mut round,mut used)=(Vec::<Vec<Dispatch>>::new(),0,0);
         #[cfg(test)] let call=crate::test_support::next_liquify_reconstruct();
         for ((coordinate, field), source) in outputs.iter().zip(sources) {
             let (chunks,mut complete)=(&region_chunks[source].0,region_chunks[source].1);
-            if used+partials_of(source)>slots {(round,used)=(passes.len(),0);}
-            if passes.len()<round+chunks.len() {passes.resize_with(round+chunks.len(),Vec::new);}
+            if used+partials_of(source)>slots {(round,used)=(steps.len(),0);}
+            if steps.len()<round+chunks.len() {steps.resize_with(round+chunks.len(),Vec::new);}
             let current=current_tiles.remove(coordinate).map(|view|view.take(&mut complete));
             let prior_view=stroke.colored(coordinate).and_then(|tile|tile.read(&receipt).ok()).map(|read|read.value().view.clone());
             let field_view=field.read(&receipt)?.value().view.clone();
@@ -997,12 +1000,12 @@ impl Liquify {
                         .chain(partial.into_iter().filter(|_| !originals.layout.whole))
                         .chain([index_buffer.as_entire_binding(),
                             wgpu::BindingResource::TextureView(current), wgpu::BindingResource::TextureView(prior_view.as_ref().unwrap_or(&self.empty.view))]));
-                passes[round + index].push(Dispatch { output: output_binding, sources: inputs, coordinate: *coordinate,
+                steps[round + index].push(Dispatch { output: output_binding, sources: inputs, coordinate: *coordinate,
                     record: r.material_records.offset(first_record + index) });
             }
             used += partials_of(source);
         }
-        self.dispatch(r, encoder, batch_index, batch, &passes, Some(originals.layout));
+        self.dispatch(r, encoder, batch_index, batch, &steps, Some(originals.layout));
         let actual=encoder.submission();
         r.publish_material(batch,publications.into_iter().map(|publication|publication.encoded(&actual)).collect())?;
         drop(originals);

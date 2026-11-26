@@ -477,7 +477,7 @@ fn on_unified_memory_a_dab_that_fits_once_the_liquify_sources_yield_takes_their_
 
 fn drag<T>(extent: [u32; 2], scale: f32, start: [f32; 2], mut frame: impl FnMut(&mut WgpuRasterizer, &mut dyn FnMut(&mut WgpuRasterizer)) -> T) -> Vec<T> {
     use crate::layer_tests::{dab, placement, preset_style};
-    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut r = crate::memory::memory_tests::renderer(Default::default(), layer_core::DeviceMemoryFacts { budget_bytes: Some(4 << 30), ..Default::default() }).unwrap();
     let mut doc = placement::paint_document(extent, "Liquify passes");
     placement::set_source(&mut doc, layer_core::color::source::rgba8_source(extent, |x, y| [(x % 251) as u8, (y % 239) as u8, ((x + y) % 173) as u8, 255]));
     let target = placement::target(&doc);
@@ -508,15 +508,15 @@ fn drag<T>(extent: [u32; 2], scale: f32, start: [f32; 2], mut frame: impl FnMut(
 }
 
 #[test]
-fn a_fit_drag_across_original_chunks_reconstructs_no_tile_that_waits_on_another_in_its_pass() {
+fn a_fit_drag_across_original_chunks_reconstructs_no_tile_that_waits_on_another_in_its_step() {
     let frames = drag([4608, 3072], 0.25, [200., 2750.], |r, submit| crate::test_support::liquify_writes(|| submit(r)).1);
     assert!(frames.iter().any(|writes| writes.iter().any(|(_, _, previous)| writes.iter().any(|(_, written, _)| written == previous))),
         "the drag across page row 11 of a 216-page target reconstructs tiles from two chunks of originals");
     for (frame, writes) in frames.iter().enumerate() {
-        for (pass, written, _) in writes {
-            assert!(writes.iter().filter(|(other, again, _)| other == pass && again == written).count() == 1
-                && writes.iter().all(|(other, _, previous)| other != pass || previous != written),
-                "frame {frame}: reconstruct pass {pass:?} writes a surface that another dispatch of the same pass writes or reads");
+        for (step, written, _) in writes {
+            assert!(writes.iter().filter(|(other, again, _)| other == step && again == written).count() == 1
+                && writes.iter().all(|(other, _, previous)| other != step || previous != written),
+                "frame {frame}: reconstruct step {step:?} writes a surface that another dispatch of the same step writes or reads");
         }
     }
 }
@@ -541,6 +541,38 @@ fn a_fit_drag_across_page_row_11_of_a_204_page_target_reconstructs_each_destinat
                 "frame {frame}: a destination reconstructs in more than one dispatch or from a partial sum");
         }
     }
+}
+
+#[test]
+fn a_fit_pen_up_across_original_chunks_shares_its_compute_passes_and_reconstructs_what_one_dispatch_per_tile_does() {
+    let pen_up = |extent: [u32; 2]| drag(extent, 0.25, [200., 2750.], |r, submit| {
+        let before = crate::test_support::PassCounts::snapshot();
+        let writes = crate::test_support::liquify_writes(|| submit(r)).1;
+        let counts = crate::test_support::PassCounts::snapshot().delta(before);
+        let r = &*r;
+        let pages = (r.preview_level == 0).then(|| r.paint_layers.iter().flat_map(|layer| layer.pages.iter().map(move |page| (layer.id, page)))
+            .filter(|(_, page)| page.coordinate[0] < 5 && (9..12).contains(&page.coordinate[1]))
+            .map(|(id, page)| (page.coordinate, crate::test_support::float_pixels(r, &r.read_color_page(id, page, false, None).unwrap().value().texture)))
+            .collect::<BTreeMap<_, _>>());
+        (counts, writes, pages)
+    }).pop().unwrap();
+    let (counts, writes, blocked) = pen_up([4608, 3072]);
+    let (blocked, whole) = (blocked.expect("the last frame lifts the pen"), pen_up([4352, 3072]).2.expect("the last frame lifts the pen"));
+    assert!(writes.iter().any(|(_, _, previous)| writes.iter().any(|(_, written, _)| written == previous)),
+        "the pen-up on the 216-page target sums tiles across two chunks of originals");
+    assert!(blocked.keys().eq(whole.keys()) && blocked.contains_key(&[2, 10]) && blocked.contains_key(&[2, 11]), "both targets read back the pages under the drag");
+    let moved = blocked.iter().any(|(at, pixels)| pixels.iter().enumerate().any(|(index, pixel)| {
+        let [x, y] = [at[0] * PAGE_SIZE + index as u32 % PAGE_SIZE, at[1] * PAGE_SIZE + index as u32 / PAGE_SIZE];
+        [x % 251, y % 239, (x + y) % 173].iter().zip(pixel).any(|(code, value)| (layer_core::color::RgbSpace::Srgb.decode(f64::from(*code) / 255.) as f32 - value).abs() > 0.05)
+    }));
+    assert!(moved, "the drag deforms the photo");
+    let difference = blocked.iter().flat_map(|(at, pixels)| pixels.iter().zip(&whole[at]).flat_map(|(x, y)| (0..4).map(move |c| (x[c] - y[c]).abs()))).fold(0., f32::max);
+    assert!(difference <= 1e-5, "the blocked pen-up reconstructs the pixels of one dispatch per tile, largest difference {difference}");
+    let reconstructs = writes.len() as u64;
+    let maps = counts.liquify_dispatches - reconstructs;
+    let bound = maps.div_ceil(DISPATCHES_PER_PASS as u64) + reconstructs.div_ceil(DISPATCHES_PER_PASS as u64);
+    assert!(counts.liquify_passes <= bound,
+        "the pen-up encodes {maps} map and {reconstructs} reconstruct dispatches in {} compute passes, more than {bound}", counts.liquify_passes);
 }
 
 #[test]
