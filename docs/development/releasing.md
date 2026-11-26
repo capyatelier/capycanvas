@@ -65,8 +65,7 @@ Add the matching `<release>` with notes in words a painter knows to
 these notes with Google Play, which allows
 [500 Unicode characters per language](https://support.google.com/googleplay/android-developer/answer/9859348).
 Keep any compatibility warning within that limit; validation runs before platform
-jobs and before a direct Play upload. Include: **Returning to 1.0.15 or earlier
-can reset your workspaces.** Generate and review the
+jobs and before a direct Play upload. Generate and review the
 [saved-data fixtures](#saved-data-fixtures) at this version before committing.
 Commit these files together. Fetch and
 rebase onto `origin/main`, rerun checks, and land the tested
