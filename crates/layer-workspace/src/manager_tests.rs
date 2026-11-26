@@ -102,11 +102,11 @@ fn editing_saves_from_two_windows_keep_both_changes() {
         b.activate(incoming);
         let english = layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
         let mut from_b = b.editing().map(|e| *e).unwrap_or_default();
-        from_b.tools.set_override(from_b.preset, "size", 91., false, &english).unwrap();
+        from_b.tools.set_override(from_b.preset, "size", 91., &english).unwrap();
         b.observe_editing(from_b);
         b.flush().await.unwrap();
         let mut from_a = a.editing().map(|e| *e).unwrap_or_default();
-        from_a.tools.set_override(5, "size", 53., false, &english).unwrap();
+        from_a.tools.set_override(5, "size", 53., &english).unwrap();
         from_a.colors.set_rgba([0.4, 0.2, 0.7, 1.]).unwrap();
         a.observe_editing(from_a.clone());
         a.flush().await.unwrap();
@@ -122,7 +122,7 @@ fn editing_saves_from_two_windows_keep_both_changes() {
         a.observe_editing(from_a);
         a.flush().await.unwrap();
         let mut from_b = *b.editing().unwrap();
-        from_b.tools.set_override(7, "size", 77., false, &english).unwrap();
+        from_b.tools.set_override(7, "size", 77., &english).unwrap();
         from_b.colors.set_rgba([0.7, 0.1, 0.3, 1.]).unwrap();
         from_b.color_library.history.push(from_b.colors.foreground);
         b.observe_editing(from_b.clone());
@@ -1170,7 +1170,7 @@ fn editing_only_save_retries_and_loads_without_advancing_layout_generations() {
         let m = &f.manager;
         let record = m.current_record().unwrap();
         let mut editing = layer_ui::EditingState::default();
-        editing.tools.set_override(editing.preset, "size", 91., false, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+        editing.tools.set_override(editing.preset, "size", 91., &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         editing.colors.set_rgba([0.4, 0.2, 0.7, 1.]).unwrap();
         m.observe_editing(editing.clone());
         m.store.lose_reply.set(true);
@@ -1193,7 +1193,7 @@ fn interrupted_editing_recovers_without_creating_a_workspace() {
         let f = Fixture::new();
         let m = &f.manager;
         let mut editing = layer_ui::EditingState::default();
-        editing.tools.set_override(editing.preset, "size", 91., false, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+        editing.tools.set_override(editing.preset, "size", 91., &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         let mut batch = CommitBatch::prepare(Owner::fresh(), vec![]).unwrap();
         batch.editing_json = Some(serde_json::to_string(&editing).unwrap());
         batch.editing_fields = Some(vec!["/tools".into()]);

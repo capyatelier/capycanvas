@@ -158,7 +158,7 @@ fn browser_transactions_match_sqlite_contract() {
     )
     .unwrap();
     let mut editing = layer_ui::EditingState::default();
-    editing.tools.set_override(editing.preset, "size", 91., false, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+    editing.tools.set_override(editing.preset, "size", 91., &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     batch.editing_json = Some(serde_json::to_string(&editing).unwrap());
     let request = StoreRequest::Commit { batch: batch.clone() };
     let decoded: StoreRequest = serde_json::from_str(&serde_json::to_string(&request).unwrap()).unwrap();

@@ -67,7 +67,7 @@ tile does not make it evaluate intervening contacts elsewhere on the canvas.
 
 ## Stroke smoothing
 
-Smoothing is one control from 0 to 100, initially 6, or 20 for pens and on a phone
+Smoothing is one control from 0 to 100, initially 6, or 20 for pens
 (`tools::defaults`), without a section heading.
 Slider travel is logarithmic, with 30 at 75% of the track.
 Zero bypasses position and pressure smoothing. Each brush keeps its own choices. Selection

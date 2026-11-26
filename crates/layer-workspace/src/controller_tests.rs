@@ -2821,7 +2821,7 @@ fn focus_refresh_keeps_pending_and_submitted_paths_and_saves_remote_palettes_wit
     for _ in 0..20 { b.tick(&mut host_b.session,1000); }
     assert!(b.view.switcher_busy);
     let mut editing = host_b.session.editing_state();
-    editing.tools.set_override(editing.preset,"size",55.,false,host_b.session.localization()).unwrap();
+    editing.tools.set_override(editing.preset,"size",55.,host_b.session.localization()).unwrap();
     editing.region_smooth_edges = false;
     host_b.session.restore_editing(editing).unwrap();
     b.observe(&mut host_b.session,1000);

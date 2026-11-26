@@ -574,10 +574,10 @@ impl Default for BrushStabilization {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TaperMode {
+    #[default]
     Off,
     Fixed,
     Proportional,
-    #[default]
     Auto,
 }
 
@@ -628,7 +628,7 @@ impl BrushTaper {
 impl Default for BrushTaper {
     fn default() -> Self {
         Self {
-            mode: TaperMode::Auto,
+            mode: TaperMode::Off,
             fixed_widths: [4.0, 4.0],
             proportional_shares: [0.3, 0.3],
             pointiness: 0.5,

@@ -79,7 +79,7 @@ impl EditingState {
         self.colors.validate()?;
         self.mask_colors.validate()?;
         self.color_library.validate()?;
-        let mut brush = self.tools.brush(preset(self.preset)?, false);
+        let mut brush = self.tools.brush(preset(self.preset)?);
         self.colors.load_paint(&mut brush, layer_core::color::RgbSpace::Srgb)?;
         brush.validate().map_err(error)?;
         if !(layer_render::RegionRefinement { edges:self.region_edges, ..Default::default() }).is_valid() { return Err("Invalid region edges".into()); }
@@ -284,7 +284,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         state.colors.set_rgb_space(space)?;
         state.colors.set_document_depth(self.engine.document().composition().color.depth)?;
         state.mask_colors.set_document_depth(layer_core::color::SampleDepth::U8)?;
-        let mut brush = state.tools.brush_in(preset(state.preset)?, space, self.phone_device());
+        let mut brush = state.tools.brush_in(preset(state.preset)?, space);
         let tool = stroke_paint(tools::tool(state.preset), &state.colors, space, &mut brush)?;
         let mut region = region_tools::RegionTools::default();
         region.last_fill = self.region_tools.last_fill;
@@ -335,7 +335,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.tools.overrides.is_empty() {
             return Ok(UiChange::default());
         }
-        let mut brush = tools::ToolMemory::default().brush_in(preset(self.state.brush.preset)?, self.engine.document().composition().color.space, self.phone_device());
+        let mut brush = tools::ToolMemory::default().brush_in(preset(self.state.brush.preset)?, self.engine.document().composition().color.space);
         self.state.colors.load_paint(&mut brush, self.engine.document().composition().color.space)?;
         self.engine.set_brush(brush.clone()).map_err(error)?;
         self.tools.overrides.clear();

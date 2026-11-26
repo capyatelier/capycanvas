@@ -5946,7 +5946,7 @@ mod tests {
                 engine.render_frame().unwrap();
             }
             assert!(!engine.active_stroke.as_ref().unwrap().feedback.enabled);
-            assert_eq!(engine.backend.preview.is_empty(), engine.active_stroke.as_ref().unwrap().taper.is_none(), "{tool:?}");
+            assert!(engine.backend.preview.is_empty());
             input
                 .push(PenEvent {
                     tool,
@@ -7173,7 +7173,6 @@ mod tests {
             let (mut input, mut engine) = engine("vector smoothing", 1024, 512);
             let mut brush = default_brush(DefaultBrushPreset::GPen);
             brush.stabilization.strength = 0.5;
-            brush.taper.mode = layer_core::TaperMode::Off;
             engine.set_brush(brush).unwrap();
             engine.set_view(ViewState { document_to_surface: [2., 0., 0., 2., 0., 0.], ..view(1024, 512) },
                 ViewTransform { revision: 2, surface_to_document: [0.5, 0., 0., 0.5, 0., 0.] });
@@ -7314,7 +7313,7 @@ mod tests {
 
     #[test]
     fn auto_taper_tapers_only_strokes_without_pen_pressure() {
-        let auto = layer_core::BrushTaper::default();
+        let auto = layer_core::BrushTaper { mode: layer_core::TaperMode::Auto, ..Default::default() };
         for (tool, tapered) in [(ToolKind::Pen, false), (ToolKind::Mouse, true), (ToolKind::Finger, true)] {
             let (mut input, mut engine) = tapered_engine(auto, false);
             let events: Vec<_> = circle(240).into_iter().map(|sample| PenEvent { tool, ..sample }).collect();

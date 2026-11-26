@@ -110,7 +110,7 @@ fn smoothing_controls_keep_per_brush_choices_and_restore_defaults() {
 
         reopened.dispatch(UiAction::ResetToolSetting { id: "smoothing_strength".into() }).unwrap();
 
-        assert_eq!(reopened.engine.configured_brush().stabilization, crate::tools::defaults(DefaultBrushPreset::GPen, false).stabilization);
+        assert_eq!(reopened.engine.configured_brush().stabilization, crate::tools::defaults(DefaultBrushPreset::GPen).stabilization);
         assert!(reopened.tools.overrides.get(&pen).is_none_or(|values| !values.keys().any(|id| id.starts_with("smoothing_"))));
         reopened.dispatch(UiAction::Invoke { command: CommandId::RectangleSelect }).unwrap();
         assert!(!reopened.state.tool_settings.iter().any(|c| c.id == "smoothing_strength"));

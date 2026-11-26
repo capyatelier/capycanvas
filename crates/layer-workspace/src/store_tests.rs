@@ -154,7 +154,7 @@ fn editing_merge_keeps_unreadable_fields_and_rejects_invalid_submissions() {
         snapshot["editing"] = current.into();
         let mut browser = BrowserDatabase::decode(&snapshot.to_string()).unwrap();
         let mut incoming = layer_ui::EditingState::default();
-        incoming.tools.set_override(incoming.preset,"size",91.,false,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+        incoming.tools.set_override(incoming.preset,"size",91.,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         let json = serde_json::to_string(&incoming).unwrap();
         let mut batch = CommitBatch::prepare(f.owner.clone(),vec![]).unwrap();
         batch.editing_json = Some(json.clone());

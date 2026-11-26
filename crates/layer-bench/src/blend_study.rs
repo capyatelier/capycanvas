@@ -55,7 +55,7 @@ impl Painter<'_> {
         pen.flow = 1.0;
         pen.stabilization = BrushStabilization { strength: 0.0, pressure_smoothing: 0.0, ..pen.stabilization };
         pen.mappings = std::sync::Arc::from([]);
-        pen.taper.mode = layer_core::TaperMode::Off;
+        pen.taper = Default::default();
         let points: Vec<_> = points.iter().map(|&(x, y)| (x, y, 1.0)).collect();
         self.stroke(&pen, &points).expect("seed stroke");
     }

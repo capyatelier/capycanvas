@@ -23,7 +23,7 @@ fn generate(output: &Path) {
     let mut editing = EditingState::default();
     for id in layer_ui::brush_ids() {
         editing.tools.remember(id);
-        editing.tools.set_override(id, "size", 37., false, &localizer).unwrap();
+        editing.tools.set_override(id, "size", 37., &localizer).unwrap();
     }
     for slot in layer_ui::ToolSlotId::ALL {
         editing.tool_slots.choices.insert(slot, *slot.variants().last().unwrap());
