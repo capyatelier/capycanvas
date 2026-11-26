@@ -24,7 +24,9 @@ import Vision
         return (request.results ?? []).compactMap { $0.topCandidates(1).first }
     }
     @MainActor static func run() async throws {
-        for platform: UInt32 in [0, 1] {
+        for (platform, nativeAppearance) in [UInt32(0), 1].flatMap({ platform in
+            [NSAppearance.Name.aqua, .darkAqua].map { (platform, $0) }
+        }) {
             let store = EditorStore(platform: platform, persistence: EditorPersistence(root: nil))
             try await wait("Initial Settings owner", failure: { store.failure }) { !store.state.isNull && !store.catalog.isNull }
             try await uncover(store)
@@ -34,6 +36,7 @@ import Vision
             let window = NSWindow(contentRect: CGRect(x: 100, y: 100, width: 900, height: 700),
                 styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: nativeAppearance)
             defer { window.contentView = nil; window.close() }
             var accepted = false
             var urls: [URL] = []
@@ -43,6 +46,7 @@ import Vision
             }
             func settings(page: Bool) -> some View {
                 SettingsView(store: store).environment(\.openURL, browser).environment(\.editorDialogPage, page)
+                    .background(Color(nsColor: window.backgroundColor))
             }
             let host = NSHostingView(rootView: settings(page: false))
             window.contentView = host; window.makeKeyAndOrderFront(nil)
@@ -132,7 +136,7 @@ import Vision
             }
             try require(try text(in: host).contains { $0.string.contains("github.com/capyatelier/capycanvas") },
                 "Opening the Settings search result must render its shared Source code destination")
-            note("PASS platform \(platform): native Settings Website/Source code rejection displays an error; accepted retry clears it and preserves artwork")
+            note("PASS platform \(platform)/\(nativeAppearance.rawValue): native Settings Website/Source code rejection displays an error; accepted retry clears it and preserves artwork")
         }
     }
     @MainActor static func main() {
