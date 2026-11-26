@@ -1832,9 +1832,17 @@ mod tests {
         host.dispatch(UiAction::SelectBrush { id: layer_core::DefaultBrushPreset::GPen as u32 }).unwrap();
         host.dispatch(UiAction::SetBrushSize { value: 400. }).unwrap();
         serve(&mut host, Duration::from_secs(10));
-        let resident = budget.snapshot().devices.into_iter().find(|d| d.device == device).unwrap().physical_bytes;
-        budget.update_device(device, layer_core::DeviceMemoryFacts { fixed_bytes: (4u64 << 30) * 80 / 100 - resident.saturating_sub(260 * MIB), ..roomy });
+        let snapshot = || budget.snapshot().devices.into_iter().find(|d| d.device == device).unwrap();
+        let before = snapshot();
+        let retiring_bytes = 64 * MIB;
+        assert!(before.limit_bytes - before.physical_bytes >= retiring_bytes);
+        let release = host.session.engine().backend().0.as_ref().unwrap().fixture_hold_retiring_display(retiring_bytes);
         budget.flush_reports();
+        let occupied = snapshot().physical_bytes;
+        assert_eq!(occupied, before.physical_bytes + retiring_bytes);
+        budget.update_device(device, layer_core::DeviceMemoryFacts { fixed_bytes: before.limit_bytes - before.physical_bytes, ..roomy });
+        budget.flush_reports();
+        assert_eq!(snapshot().limit_bytes, before.physical_bytes);
         let surface = layer_core::Affine(host.session.state().camera.document_to_surface());
         for sample in 0..24u32 {
             let at = surface.map(Point { x: 4096. * (0.2 + 0.6 * sample as f32 / 23.), y: 1600. });
@@ -1845,6 +1853,7 @@ mod tests {
         let waiting = serve(&mut host, Duration::from_secs(2));
         assert!(host.session.engine().has_pending_document_edits() && host.session.engine().metrics().stroke_memory_refusals == 0, "the stroke waits on memory");
         assert!(waiting <= 4, "a stroke waiting on memory drove {waiting} frames that could not admit it");
+        release();
         budget.update_device(device, roomy);
         budget.flush_reports();
         serve(&mut host, Duration::from_secs(10));

@@ -339,6 +339,13 @@ impl WgpuRasterizer {
         Ok(renderer)
     }
 
+    #[cfg(all(any(test, feature = "test-support"), not(target_arch = "wasm32")))]
+    pub fn fixture_hold_retiring_display(&self, bytes: u64) -> impl FnOnce() + use<> {
+        let charge = crate::present_transition::Charge::new(bytes, &self.device.transient_display, self.device.transient_memory.clone());
+        let retirement = self.device.transient_display.heap().retire();
+        move || drop((charge, retirement))
+    }
+
     pub(crate) fn native_capture_on_factory(factory: RendererFactory, device: PipelineDevice, color: DocumentColor) -> Result<Self, GpuRasterError> {
         let device = device.with_working_space(color.space).with_depth(color.depth);
         let mut r = Self::from_factory_inner(factory, device, Initialization::Snapshot)?;
