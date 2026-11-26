@@ -405,6 +405,8 @@ native intermediates and input-test binaries in your own build directory.
 Software-adapter runs use WARP. The `software-adapter-tests` feature gives GPU
 readbacks one shared 180-second budget, because WARP's first Levels Auto dispatch
 takes about two minutes; hardware tests and performance runs keep it disabled.
+The hardware-only host GPU replacement test remains in the normal
+`layer-host` suite, not the WARP run.
 Native x64 tests use the system WARP, and the test script refuses an app-local
 WARP DLL beside Cargo test executables. For ARM64 the test script stages the
 pinned `Microsoft.Direct3D.WARP` 1.0.21 from
