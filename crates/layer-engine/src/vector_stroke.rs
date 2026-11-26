@@ -152,7 +152,7 @@ impl VectorStroke {
 
 impl<B: CanvasRenderer> CanvasEngine<B> {
     pub fn begin_vector_stroke(&self, id: u64, event: PenEvent, offset: [f64; 2], tolerance: f64) -> VectorStroke {
-        let mut stroke = VectorStroke::new(id, self.stroke_brush(event.tool), self.configured_pressure_curve().clone(), offset,
+        let mut stroke = VectorStroke::new(id, self.stroke_brush(&event), self.configured_pressure_curve().clone(), offset,
             self.instant_feedback(), self.view().document_to_surface, tolerance);
         self.push_vector_stroke(&mut stroke, event);
         stroke

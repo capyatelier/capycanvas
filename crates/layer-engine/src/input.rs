@@ -60,6 +60,7 @@ impl SampleFlags {
     pub const INDIRECT_POINTER: Self = Self(1 << 6);
     /// `twist_radians` is a measured barrel rotation, not a missing axis.
     pub const BARREL_TWIST: Self = Self(1 << 7);
+    pub const MEASURED_TILT: Self = Self(1 << 8);
 
     pub const fn contains(self, flag: Self) -> bool {
         self.0 & flag.0 != 0
@@ -95,11 +96,14 @@ impl PenEvent {
     }
 }
 
+const TILTING_PENS: usize = 16;
+
 pub struct PenInput {
     contacts: Box<[Option<PenEvent>]>,
+    tilting: std::collections::VecDeque<u64>,
 }
 impl Default for PenInput {
-    fn default()->Self {Self {contacts:vec![None;16].into_boxed_slice()}}
+    fn default()->Self {Self {contacts:vec![None;16].into_boxed_slice(),tilting:Default::default()}}
 }
 impl PenInput {
     pub fn clear(&mut self) {self.contacts.fill(None);}
@@ -116,6 +120,13 @@ impl PenInput {
             let previous=self.contacts[contact?]?;
             event=PenEvent {phase:PenPhase::Cancel,sequence:event.sequence,
                 timestamp_ns:event.timestamp_ns.max(previous.timestamp_ns),..previous};
+        }
+        if event.tool.is_pen() {
+            if event.tilt_radians!=[0.;2] && !self.tilting.contains(&event.device_id) {
+                if self.tilting.len()==TILTING_PENS {self.tilting.pop_front();}
+                self.tilting.push_back(event.device_id);
+            }
+            if self.tilting.contains(&event.device_id) {event.flags.0|=SampleFlags::MEASURED_TILT.0;}
         }
         if real {
             match event.phase {
@@ -518,6 +529,20 @@ mod tests {
         assert_eq!(cancel.tool,pen.tool);assert_eq!(cancel.surface_position,pen.surface_position);
         let remaining=input.cancel(touch.device_id,touch.tool).unwrap();
         assert_eq!(remaining.tool,touch.tool);assert_eq!(remaining.surface_position,touch.surface_position);
+    }
+
+    #[test]
+    fn a_pen_measures_tilt_once_any_of_its_samples_tilts_and_fingers_and_mice_never_do() {
+        let mut input=PenInput::default();
+        let measured=|event:Option<PenEvent>|event.unwrap().flags.contains(SampleFlags::MEASURED_TILT);
+        let upright=crate::test_support::event(1,PenPhase::Hover,16.);
+        assert!(!measured(input.filter(upright)));
+        assert!(measured(input.filter(PenEvent {tilt_radians:[0.3,0.],..upright})));
+        assert!(measured(input.filter(PenEvent {phase:PenPhase::Down,..upright})), "a tilting pen held upright still measures tilt");
+        assert!(!measured(input.filter(PenEvent {device_id:2,phase:PenPhase::Down,..upright})), "a pen that never tilted has no tilt sensor");
+        for tool in [ToolKind::Finger,ToolKind::Mouse] {
+            assert!(!measured(input.filter(PenEvent {device_id:3,tool,phase:PenPhase::Down,tilt_radians:[0.3,0.],..upright})), "{tool:?}");
+        }
     }
 
     #[test]

@@ -566,8 +566,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             point.pressure = 1.0;
             hover.set_space(self.document().composition().color.space);
             hover.set_barrel_twist(event.flags.contains(SampleFlags::BARREL_TWIST));
-            hover.cursor_seed(self.document().next_stroke_id(), self.brush());
-            hover.cursor_contacts(point, self.brush())
+            let brush = self.input_brush(&event);
+            hover.cursor_seed(self.document().next_stroke_id(), &brush);
+            hover.cursor_contacts(point, &brush)
         };
         for dab in &mut contacts {
             dab.center.x += offset.x;
@@ -2107,9 +2108,23 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         Ok(())
     }
 
-    pub(crate) fn stroke_brush(&self, tool: ToolKind) -> BrushSnapshot {
-        let mut brush = self.settings.brush.clone();
-        brush.taper = brush.taper.for_input(tool.is_pen());
+    fn input_brush(&self, event: &PenEvent) -> std::borrow::Cow<'_, BrushSnapshot> {
+        let brush = &self.settings.brush;
+        let untilted = !event.flags.contains(SampleFlags::MEASURED_TILT) && event.tilt_radians == [0.; 2]
+            && brush.contact.is_some_and(|contact| contact.dry.is_some());
+        if !untilted && brush.taper.for_input(event.tool.is_pen()) == brush.taper {
+            return std::borrow::Cow::Borrowed(brush);
+        }
+        let mut brush = brush.clone();
+        brush.taper = brush.taper.for_input(event.tool.is_pen());
+        if untilted && let Some(contact) = &mut brush.contact {
+            contact.dry = contact.dry.map(layer_core::BrushDryMedia::without_tilt);
+        }
+        std::borrow::Cow::Owned(brush)
+    }
+
+    pub(crate) fn stroke_brush(&self, event: &PenEvent) -> BrushSnapshot {
+        let mut brush = self.input_brush(event).into_owned();
         brush.stabilization.input_scale = self.view.document_to_surface[0].hypot(self.view.document_to_surface[1]).max(f32::EPSILON);
         brush
     }
@@ -2183,7 +2198,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     return Ok(());
                 }
                 let id = self.editor.allocate_stroke_id();
-                let mut brush = self.stroke_brush(event.tool);
+                let mut brush = self.stroke_brush(&event);
                 let mut feedback = self.settings.instant_feedback;
                 if is_mask {
                     // Coverage brushes use the same tip/dynamics, not pigment or fluid state.
@@ -7326,6 +7341,36 @@ mod tests {
             assert_eq!(engine.completed_stroke.as_ref().unwrap().brush.taper, expected, "{tool:?}");
             let width = |dab: &layer_render::Dab| dab.radii[0] * 2.;
             assert_eq!(width(&engine.backend.persistent[0]) < 0.5 * 18., tapered, "{tool:?}");
+        }
+    }
+
+    #[test]
+    fn input_without_tilt_draws_dry_brushes_upright_at_their_full_size() {
+        use layer_core::DefaultBrushPreset as P;
+        for preset in [P::Pencil, P::PointyPencil, P::ShadingPencil, P::Charcoal, P::Chalk, P::PastelBlock, P::Crayon] {
+            let dry = default_brush(preset).contact.unwrap().dry.unwrap();
+            let upright = dry.poses[0].radii[0].max(dry.poses[0].radii[1]);
+            for (tool, flags, long) in [
+                (ToolKind::Mouse, SampleFlags::PRIMARY, 1.),
+                (ToolKind::Finger, SampleFlags::PRIMARY, 1.),
+                (ToolKind::Pen, SampleFlags::PRIMARY, 1.),
+                (ToolKind::Pen, SampleFlags(SampleFlags::PRIMARY.0 | SampleFlags::MEASURED_TILT.0), upright),
+            ] {
+                let (mut input, mut engine) = engine("upright", 1024, 1024);
+                let mut brush = default_brush(preset);
+                (brush.diameter, brush.stabilization.strength) = (18., 0.);
+                engine.set_brush(brush).unwrap();
+                engine.set_instant_feedback(InstantFeedbackConfig { enabled: false, ..Default::default() }).unwrap();
+                let events: Vec<_> = pen_stroke(1, 40, 1_000_000_000, |i| ([300. + 6. * i as f32, 512.], 1.))
+                    .into_iter().map(|sample| PenEvent { tool, flags, ..sample }).collect();
+                let mut hover = DabGenerator::default();
+                let outline = engine.cursor_contacts(PenEvent { phase: PenPhase::Hover, ..events[0] }, &mut hover, events[0].timestamp_ns);
+                draw_tapered(&mut engine, &mut input, &events, 4, |_, _| {});
+                let widest = |dabs: &[layer_render::Dab]| dabs.iter().map(|dab| dab.radii[0].max(dab.radii[1])).fold(0f32, f32::max);
+                let label = format!("{preset:?} {tool:?} {flags:?}");
+                assert!((widest(&engine.backend.persistent) - 9. * long).abs() < 1e-3, "{label}: {}", widest(&engine.backend.persistent));
+                assert!((widest(&outline) - 9. * long).abs() < 1e-3, "{label}: hover outline {}", widest(&outline));
+            }
         }
     }
 

@@ -95,15 +95,16 @@ fn queued_correction_updates_the_unrendered_pen_up_lift() {
         correction.surface_position
     );
     let real = engine.builder.real_points();
+    let stroke_brush = engine.brush();
     let mut lift = engine.dab_generator.clone();
     let mut expected = Vec::new();
     lift.append_points(
         &real[engine.finalized_real_points..],
-        &brush,
+        stroke_brush,
         true,
         &mut expected,
     );
-    lift.finish_lift(&brush, &mut expected);
+    lift.finish_lift(stroke_brush, &mut expected);
     let end = |dabs: &[Dab]| {
         *dabs
             .iter()

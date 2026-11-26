@@ -20,7 +20,11 @@ at 60° from the surface normal. Cubic Hermite interpolation resolves the dimens
 and relief coefficients between keys; endpoint poses clamp outside their range. Tilt azimuth rotates the
 contact. Pressure changes its size through the existing size mapping. Displayed
 size is the long axis of the writing pose at full pressure. Other poses scale
-relative to that axis. The largest pose supplies a separate reference diameter
+relative to that axis. Input without tilt (fingers, mice and pens that never
+report tilt) draws the upright pose scaled so its long axis is the displayed size
+(`BrushDryMedia::without_tilt`). A pen reports tilt once any of its samples,
+hovering or touching, has (`SampleFlags::MEASURED_TILT`, set by `PenInput`).
+The choice is made at pen-down and kept in the stroke's brush. The largest pose supplies a separate reference diameter
 for stroke retention and taper distances.
 The keys use physical inclination after the shared projected-angle input
 conversion, independently of tilt azimuth. Pointy Pencil's tip offset reaches its

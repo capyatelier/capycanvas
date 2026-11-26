@@ -37,6 +37,14 @@ impl BrushDryMedia {
             .min(pair[0].radii[1].max(pair[1].radii[1]) / aspect)).fold(0., f32::max)
     }
 
+    pub fn without_tilt(self) -> Self {
+        let mut poses = self.poses;
+        let upright = poses[0];
+        let long = upright.radii[0].max(upright.radii[1]);
+        poses[0].radii = upright.radii.map(|radius| radius / long);
+        Self { poses, ..self }
+    }
+
     pub fn pose(self, inclination_radians: f32) -> BrushDryPose {
         let (i, t) = if inclination_radians < Self::WRITING_TILT_RADIANS {
             (0, inclination_radians / Self::WRITING_TILT_RADIANS)

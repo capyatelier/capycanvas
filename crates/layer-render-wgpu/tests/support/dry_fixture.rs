@@ -25,7 +25,7 @@ pub fn pen_sample(index: u64, last: u64, timestamp_ns: u64, surface_position: Po
             PenPhase::Move
         },
         tool: ToolKind::Pen,
-        flags: SampleFlags::PRIMARY,
+        flags: SampleFlags(SampleFlags::PRIMARY.0 | SampleFlags::MEASURED_TILT.0),
     }
 }
 
