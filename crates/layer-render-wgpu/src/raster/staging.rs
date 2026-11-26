@@ -835,13 +835,9 @@ impl WgpuRasterizer {
         let Some(preview)=preview else {
             self.transforms.as_mut().unwrap().cancel_preparation();return true;
         };
-        let request=match scene::scale::request(self,packet) {Ok(request)=>request,Err(_)=>return true};
-        if request.plan.level==0 || request.evaluation==scene::scale::Evaluation::Native {self.transforms.as_mut().unwrap().cancel_preparation();return true;}
-        let pipelines=if request.evaluation.fine_capacity().is_some() {&self.scene_pipelines.fine_resample} else {&self.scene_pipelines.resample};
-        let entries:&[usize]=if preview.transform.placement.mesh.is_some() {&[0,1,2,3]} else {&[4,5]};
-        let window=Some(self.display_precision(packet.scene).format()).filter(|format|*format!=wgpu::TextureFormat::Rgba32Float);
-        let formats=std::iter::once(wgpu::TextureFormat::Rgba32Float).chain(window);
-        if !self.compilation.require(formats.flat_map(|format|entries.iter().map(move|&i|&pipelines.mesh(format)[i])),startup::BRUSH) {return false;}
+        let Ok(reduced)=self.reduced_transform_request(packet) else {return true};
+        let Some(request)=reduced else {self.transforms.as_mut().unwrap().cancel_preparation();return true;};
+        if !self.compilation.require(self.transform_preview_pipelines(packet,preview,request),startup::BRUSH) {return false;}
         let mut transforms=self.transforms.take().unwrap();
         let result=self.record_restore_uploads(|r,encoder|transforms.prepare_preview(r,encoder,preview,packet.scene,request.plan.level,request.evaluation.fine_capacity().is_some()));
         self.transforms=Some(transforms);
@@ -850,6 +846,17 @@ impl WgpuRasterizer {
             Err(error) if error.is_preparation_pending()=>false,
             Err(error)=>{if let Some(restore)=&mut self.restore_preflight {restore.failure=Some(error);}true},
         }
+    }
+    pub(crate) fn reduced_transform_request(&self,packet:FramePacket<'_>)->Result<Option<scene::scale::Request>,GpuRasterError> {
+        let request=scene::scale::request(self,packet)?;
+        Ok((request.plan.level!=0 && request.evaluation!=scene::scale::Evaluation::Native).then_some(request))
+    }
+    pub(crate) fn transform_preview_pipelines(&self,packet:FramePacket<'_>,preview:&layer_render::TransformPreview,request:scene::scale::Request)
+        ->impl Iterator<Item=&Deferred<wgpu::RenderPipeline>> {
+        let pipelines=if request.evaluation.fine_capacity().is_some() {&self.scene_pipelines.fine_resample} else {&self.scene_pipelines.resample};
+        let entries:&'static [usize]=if preview.transform.placement.mesh.is_some() {&[0,1,2,3]} else {&[4,5]};
+        let window=Some(self.display_precision(packet.scene).format()).filter(|format|*format!=wgpu::TextureFormat::Rgba32Float);
+        std::iter::once(wgpu::TextureFormat::Rgba32Float).chain(window).flat_map(move|format|entries.iter().map(move|&i|&pipelines.mesh(format)[i]))
     }
     pub(crate) fn record_restore_uploads<T>(&mut self,work:impl FnOnce(&mut Self,&mut submission::CommandEncoder)->Result<T,GpuRasterError>)->Result<T,GpuRasterError> {
         let mut encoder=submission::CommandEncoder::new(&self.device,&Default::default());

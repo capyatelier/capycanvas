@@ -4590,6 +4590,9 @@ impl WgpuRasterizer {
             required.render.extend([self.scene_pipelines.pipeline[pipeline].clone(),self.layer_masks.initialize.clone()]);
             required.compute.extend(self.selection_clip.pipelines().into_iter().cloned());
         }
+        if let Some(preview)=preview.filter(|_|!self.snapshot_worker) && let Ok(Some(request))=self.reduced_transform_request(packet) {
+            required.render.extend(self.transform_preview_pipelines(packet,preview,request).cloned());
+        }
         let compiled=required.require(&self.compilation,startup::BRUSH)
             & self.compilation.require(self.scene_pipelines.for_scene(self,packet.scene,packet.dab_batches), startup::DOCUMENT)
             & self.compilation.require(self.scene_scale_recipes(packet.scene).chain([&self.scene_pipelines.fold.pipeline]), startup::DOCUMENT);

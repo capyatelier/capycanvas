@@ -1705,6 +1705,63 @@ mod gpu_tests {
     }
 
     #[test]
+    fn a_display_warp_held_on_its_resample_entries_sleeps_on_their_compile_and_draws_once_woken() {
+        use crate::frame_demand::{Input, Outstanding};
+        use layer_render::{CanvasRenderer, FrameDemand, SubmissionTurn};
+        let extent = [512; 2];
+        let reference = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let mut renderer = crate::test_support::staged_renderer(&reference, Default::default());
+        let (signal, woken) = std::sync::mpsc::channel();
+        renderer.set_preparation_wake(Arc::new(move || { let _ = signal.send(()); }));
+        let mut document = crate::layer_tests::placement::paint_document(extent, "Held warp");
+        crate::layer_tests::placement::set_source(&mut document,
+            layer_core::color::source::rgba8_source(extent, |_, _| [127, 63, 191, 255]));
+        renderer.prepare_startup(&document, &layer_core::default_brush(layer_core::DefaultBrushPreset::GPen), true).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        crate::test_support::wait_startup(&mut renderer, deadline, |progress| progress.brush_ready,
+            format_args!("Transform startup timed out"));
+        let mut packet = crate::test_support::packet(document.scene(), extent);
+        packet.view = layer_render::ViewState { width_px: 128, height_px: 128,
+            document_to_surface: [0.25, 0., 0., 0.25, 0., 0.] };
+        let mut preview = layer_render::TransformPreview { transaction: 1, moving: true,
+            target: crate::layer_tests::placement::target(&document), selection: None,
+            transform: layer_core::ImageTransform::affine(layer_core::Affine::translation(layer_core::Point { x: 1.25, y: 0.5 })) };
+        renderer.set_transform_preview(Some(&preview)).unwrap();
+        while !renderer.raster_dependencies_ready(packet, Some(&preview)) {
+            renderer.poll_startup().unwrap();
+            assert!(std::time::Instant::now() < deadline, "Display transform preparation timed out");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        crate::test_support::submit_published(&mut renderer, packet);
+        let mesh = layer_core::MeshMap::identity(layer_core::Rect::from_extent(extent), [3, 3]).unwrap()
+            .move_node(1, layer_core::Point { x: 0., y: 40. }).unwrap();
+        preview.transform.placement = layer_core::LayerPlacement { mesh: Some(Arc::new(mesh)), ..Default::default() };
+        renderer.set_transform_preview(Some(&preview)).unwrap();
+        let mut placement = Needs::default();
+        renderer.transforms.as_ref().unwrap().require_frame(&renderer, packet, Some(&preview), &mut placement);
+        pollster::block_on(placement.prepare(&renderer.compilation)).unwrap();
+        renderer.wait_idle().unwrap();
+        let warp = |renderer: &WgpuRasterizer| renderer.scene_pipelines.resample.mesh(wgpu::TextureFormat::Rgba32Float)[..4].iter().all(Deferred::ready);
+        assert!(!warp(&renderer), "the warp's resample entries start cold");
+        let paused = renderer.compilation.batch();
+        assert!(matches!(renderer.submission_turn(packet, Some(&preview)), SubmissionTurn::Held), "a warp whose resample entries are cold holds its frame");
+        assert!(renderer.outstanding_terms().contains(&("held frame", Outstanding::Blocked(Input::Compile))),
+            "the held warp sleeps on the compile of its resample entries: {:?}", renderer.outstanding_terms());
+        assert_ne!(renderer.frame_demand(), FrameDemand::Work, "a warp waiting on its compile asks for no frame");
+        drop(paused);
+        let submissions = renderer.metrics.submissions;
+        loop {
+            while renderer.frame_demand() != FrameDemand::Work {
+                assert!(woken.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).is_ok(),
+                    "the compile that held the warp never asked for its frame: {:?}", renderer.outstanding_terms());
+            }
+            renderer.poll_pending(packet.view).unwrap();
+            if let std::task::Poll::Ready(result) = renderer.submit_when_ready(packet, Some(&preview)) { break result.unwrap(); }
+        }
+        assert!(warp(&renderer) && renderer.metrics.submissions > submissions, "the woken warp draws its frame");
+    }
+
+    #[test]
     fn cold_preview_prepares_the_drawn_filter_without_unused_planes() {
         let reference = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         let mut renderer = crate::test_support::staged_renderer(&reference, Default::default());
