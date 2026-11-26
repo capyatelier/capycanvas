@@ -550,23 +550,33 @@ fn a_fit_pen_up_across_original_chunks_shares_its_compute_passes_and_reconstruct
         let writes = crate::test_support::liquify_writes(|| submit(r)).1;
         let counts = crate::test_support::PassCounts::snapshot().delta(before);
         let r = &*r;
+        let destinations = writes.iter().map(|(_, written, _)| written).filter(|written| writes.iter().all(|(_, _, previous)| previous != *written)).collect::<Vec<_>>();
         let pages = (r.preview_level == 0).then(|| r.paint_layers.iter().flat_map(|layer| layer.pages.iter().map(move |page| (layer.id, page)))
-            .filter(|(_, page)| page.coordinate[0] < 5 && (9..12).contains(&page.coordinate[1]))
-            .map(|(id, page)| (page.coordinate, crate::test_support::float_pixels(r, &r.read_color_page(id, page, false, None).unwrap().value().texture)))
-            .collect::<BTreeMap<_, _>>());
-        (counts, writes, pages)
+            .filter_map(|(id, page)| {
+                let read = r.read_color_page(id, page, false, None).ok()?;
+                let reconstructed = destinations.contains(&&read.value().view);
+                (reconstructed || page.coordinate[0] < 5 && (9..12).contains(&page.coordinate[1]))
+                    .then(|| (page.coordinate, (reconstructed, crate::test_support::float_pixels(r, &read.value().texture))))
+            }).collect::<BTreeMap<_, _>>());
+        let destinations = destinations.len();
+        (counts, writes, destinations, pages)
     }).pop().unwrap();
-    let (counts, writes, blocked) = pen_up([4608, 3072]);
-    let (blocked, whole) = (blocked.expect("the last frame lifts the pen"), pen_up([4352, 3072]).2.expect("the last frame lifts the pen"));
+    let (counts, writes, destinations, blocked) = pen_up([4608, 3072]);
+    let (_, _, whole_destinations, whole) = pen_up([4352, 3072]);
+    let (blocked, whole) = (blocked.expect("the last frame lifts the pen"), whole.expect("the last frame lifts the pen"));
     assert!(writes.iter().any(|(_, _, previous)| writes.iter().any(|(_, written, _)| written == previous)),
         "the pen-up on the 216-page target sums tiles across two chunks of originals");
-    assert!(blocked.keys().eq(whole.keys()) && blocked.contains_key(&[2, 10]) && blocked.contains_key(&[2, 11]), "both targets read back the pages under the drag");
-    let moved = blocked.iter().any(|(at, pixels)| pixels.iter().enumerate().any(|(index, pixel)| {
+    let reconstructed = |pages: &BTreeMap<[u32; 2], (bool, Vec<[f32; 4]>)>| pages.iter().filter(|(_, (written, _))| *written).map(|(at, _)| *at).collect::<BTreeSet<_>>();
+    let (tiles, whole_tiles) = (reconstructed(&blocked), reconstructed(&whole));
+    assert!(tiles.len() == destinations && whole_tiles.len() == whole_destinations && tiles == whole_tiles && tiles.contains(&[2, 10]) && tiles.contains(&[2, 11]),
+        "both targets read back every page their pen-up reconstructs: {tiles:?} of {destinations} and {whole_tiles:?} of {whole_destinations}");
+    let moved = blocked.iter().any(|(at, (_, pixels))| pixels.iter().enumerate().any(|(index, pixel)| {
         let [x, y] = [at[0] * PAGE_SIZE + index as u32 % PAGE_SIZE, at[1] * PAGE_SIZE + index as u32 / PAGE_SIZE];
         [x % 251, y % 239, (x + y) % 173].iter().zip(pixel).any(|(code, value)| (layer_core::color::RgbSpace::Srgb.decode(f64::from(*code) / 255.) as f32 - value).abs() > 0.05)
     }));
     assert!(moved, "the drag deforms the photo");
-    let difference = blocked.iter().flat_map(|(at, pixels)| pixels.iter().zip(&whole[at]).flat_map(|(x, y)| (0..4).map(move |c| (x[c] - y[c]).abs()))).fold(0., f32::max);
+    let difference = blocked.iter().filter_map(|(at, (_, pixels))| whole.get(at).map(|(_, other)| pixels.iter().zip(other)))
+        .flat_map(|pairs| pairs.flat_map(|(x, y)| (0..4).map(move |c| (x[c] - y[c]).abs()))).fold(0., f32::max);
     assert!(difference <= 1e-5, "the blocked pen-up reconstructs the pixels of one dispatch per tile, largest difference {difference}");
     let reconstructs = writes.len() as u64;
     let maps = counts.liquify_dispatches - reconstructs;
