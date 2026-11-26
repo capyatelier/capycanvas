@@ -396,7 +396,7 @@ impl Phone {
             let movable = !w.window.is_fullscreen();
             if (native, native_counts, movable) != (state.phone.native, state.phone.native_counts, state.phone.movable)
                 && self.reported.replace(Some((native, native_counts, movable))) != Some((native, native_counts, movable)) {
-                glib::idle_add_local_once(glib::clone!(#[weak] w, move || w.dispatch(UiAction::Phone { action: PhoneAction::Metrics { keyboard: 0., corners: [0.; 4], native, native_counts, insets: [0.; 4], movable } })));
+                glib::idle_add_local_once(glib::clone!(#[weak] w, move || w.dispatch(UiAction::Phone { action: PhoneAction::Metrics { keyboard: 0., corners: [0.; 4], safe_area: [0.; 4], native, native_counts, insets: [0.; 4], movable } })));
             }
         }
         let tiles = state.workspace.layout.phone.as_deref().unwrap_or(&[]);

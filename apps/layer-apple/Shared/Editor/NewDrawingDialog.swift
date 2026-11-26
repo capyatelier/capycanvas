@@ -148,10 +148,6 @@ private struct NewDrawingForm: View {
                 }.buttonStyle(.bordered).focusable().focused($focused, equals: "presets").accessibilityIdentifier("new-drawing-presets-button")
                 Spacer(minLength: 8)
             } }
-            if phonePage {
-                Button(copy["presets"].string) { open("presets", source: "presets") }
-                    .accessibilityIdentifier("new-drawing-presets-button").padding(12)
-            }
         }
     }
 
@@ -172,6 +168,10 @@ private struct NewDrawingForm: View {
                 }.accessibilityElement(children: .combine).accessibilityIdentifier("new-drawing-caption")
                 Text(page["capacity"].string).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     .help(page["memory"].string).accessibilityIdentifier("new-drawing-capacity")
+            }
+            if phonePage {
+                Button(copy["presets"].string) { open("presets", source: "presets") }.buttonStyle(.bordered)
+                    .accessibilityIdentifier("new-drawing-presets-button")
             }
         }.frame(width: bounds.width)
     }
@@ -353,6 +353,10 @@ private struct NewDrawingForm: View {
                     primaryIdentifier: drawer["save"].isNull ? "new-drawing-select" : "new-drawing-save-confirm", cancelsOnEscape: false,
                     cancel: { send(["op": "cancel"]) }, back: { send(["op": "back"]) },
                     primary: { send(["op": drawer["save"].isNull ? "use_preset" : "save_preset"]) })
+                if !drawer["save"].isNull {
+                    saveRow(drawer["save"]).padding(.horizontal, 20).padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
+                    EditorLine(color: palette.settingsBorder)
+                }
                 EditorScrollView { VStack(spacing: 0) { presetSearch; presetGrid; EditorLine(color: palette.settingsBorder); presetFooter } }
             } else {
                 presetSearch
@@ -402,7 +406,7 @@ private struct NewDrawingForm: View {
                 if !phonePage { summary; Spacer(minLength: 8) }
                 ZStack {
                     if drawer["save"].isNull { browserActions.transition(.opacity) }
-                    else { saveRow(drawer["save"]).transition(.opacity) }
+                    else if !phonePage { saveRow(drawer["save"]).transition(.opacity) }
                 }.animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: drawer["save"].isNull)
             }
         }.padding(.horizontal, 20).padding(.vertical, 12)

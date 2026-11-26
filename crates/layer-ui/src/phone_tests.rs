@@ -70,7 +70,7 @@ fn rounded_screen_corners_raise_bar_end_insets_and_scale_with_the_layout() {
         assert_eq!(serde_json::to_value(state.resolve(&layout,viewport).unwrap()).unwrap(),serde_json::to_value(original).unwrap());
     }
     let mut s = phone_session([412,891]);
-    let metrics = |corners| UiAction::Phone { action:PhoneAction::Metrics { keyboard: 0., native:[0.;2],native_counts:[0;2],insets:[0.;4],corners,movable:false } };
+    let metrics = |corners| UiAction::Phone { action:PhoneAction::Metrics { safe_area: [0.; 4], keyboard: 0., native:[0.;2],native_counts:[0;2],insets:[0.;4],corners,movable:false } };
     s.dispatch(metrics([40.;4])).unwrap();
     assert_eq!(s.state.phone.corners,[40.;4]);
     assert_eq!(s.dispatch(metrics([40.;4])).unwrap().regions,0);
@@ -133,6 +133,24 @@ fn phone_editor_pages_clip_to_the_visible_viewport_without_changing_modes() {
 }
 
 #[test]
+fn phone_editor_pages_keep_inside_the_safe_area_that_the_bars_ignore() {
+    let viewport = [896., 414.];
+    let mut s = phone_session([896, 414]);
+    let metrics = |safe_area| UiAction::Phone { action: PhoneAction::Metrics { keyboard: 0., native: [0.; 2], native_counts: [0; 2],
+        insets: [0., 0., 48., 0.], corners: [0.; 4], safe_area, movable: false } };
+    s.dispatch(metrics([0.; 4])).unwrap();
+    let bars = s.phone_layout().unwrap();
+    let full = Bounds { x: 0., y: 0., width: viewport[0], height: viewport[1] };
+    assert_eq!(s.state.dialog_presentation_in(DialogRole::Editor, viewport, full),
+        DialogPresentation::Page(Bounds { x: 0., y: 0., width: 848., height: 414. }));
+    s.dispatch(metrics([48., 0., 48., 21.])).unwrap();
+    assert_eq!(s.state.phone.safe_area, [48., 0., 48., 21.]);
+    assert_eq!(serde_json::to_value(s.phone_layout().unwrap()).unwrap(), serde_json::to_value(bars).unwrap());
+    assert_eq!(s.state.dialog_presentation_in(DialogRole::Editor, viewport, full),
+        DialogPresentation::Page(Bounds { x: 48., y: 0., width: 800., height: 393. }));
+}
+
+#[test]
 fn stateless_dialog_presentations_match_the_published_phone_context() {
     let mut s = phone_session([412, 891]);
     let phone = s.state.workspace.layout.phone.clone();
@@ -140,14 +158,15 @@ fn stateless_dialog_presentations_match_the_published_phone_context() {
         s.state.workspace.layout.phone = if enabled { phone.clone() } else { None };
         for viewport in [[320.,568.],[479.,700.],[480.,700.],[700.,479.],[1000.,800.]] {
             s.set_viewport(viewport, viewport.map(|v| v as u32)).unwrap();
-            for insets in [[0.;4],[5.,7.,11.,13.]] {
+            for (insets, safe_area) in [([0.;4],[0.;4]),([5.,7.,11.,13.],[0.;4]),([0.,0.,11.,0.],[48.,3.,48.,21.])] {
                 s.state.phone.insets = insets;
+                s.state.phone.safe_area = safe_area;
                 let work_area = s.state.phone_presentation(viewport).map(|phone| phone.work_area);
                 for visible in [Bounds {x:0.,y:0.,width:viewport[0],height:viewport[1]},
                     Bounds {x:20.,y:10.,width:viewport[0]-40.,height:200.}, Bounds {x:2000.,y:2000.,width:10.,height:10.}] {
                     for role in [DialogRole::Alert,DialogRole::Editor,DialogRole::CanvasPanel] {
                         let request = serde_json::json!({"kind":"presentation","role":role,"viewport":viewport,
-                            "insets":insets,"work_area":work_area,"visible":visible});
+                            "insets":insets,"safe_area":safe_area,"work_area":work_area,"visible":visible});
                         assert_eq!(crate::dialog_ui(&request.to_string()).unwrap(),
                             serde_json::to_value(s.state.dialog_presentation_in(role,viewport,visible)).unwrap(),"{request}");
                     }
@@ -405,7 +424,7 @@ fn phone_metrics_are_host_reports_while_rendering_is_suspended() {
         s.set_viewport([412., 891.], [412, 891]).unwrap();
         s.suspend_renderer().unwrap();
         assert!(s.dispatch(UiAction::Phone { action: PhoneAction::SwapSides }).is_err());
-        let action = UiAction::Phone { action: PhoneAction::Metrics { keyboard: 0., corners: [0.; 4],
+        let action = UiAction::Phone { action: PhoneAction::Metrics { safe_area: [0.; 4], keyboard: 0., corners: [0.; 4],
             native: [32., 16.], native_counts: [1, 1], insets: [19., 7., 13., 5.], movable: true,
         } };
         assert!(action.is_host_report());
@@ -436,7 +455,7 @@ fn document_interaction_admits_only_existing_reports_and_phone_metrics() {
         UiAction::MeasureColumnDrawers { measurements: Vec::new() },
         UiAction::MeasureDrawerTiles { measurements: Vec::new() },
         UiAction::MeasureColumnScroll { column: 1, offset: 0. },
-        UiAction::Phone { action: PhoneAction::Metrics { keyboard: 0., corners: [0.; 4], native: [0.; 2], native_counts: [0; 2], insets: [0.; 4], movable: false } },
+        UiAction::Phone { action: PhoneAction::Metrics { safe_area: [0.; 4], keyboard: 0., corners: [0.; 4], native: [0.; 2], native_counts: [0; 2], insets: [0.; 4], movable: false } },
     ];
     for action in allowed { assert!(action.allowed_during_document_interaction(), "{action:?}"); }
     for action in [
@@ -472,7 +491,7 @@ fn phone_movable_metrics_update_the_title_without_changing_saved_state() {
     assert!(matches!(legacy, PhoneAction::Metrics { movable: false, .. }));
     assert_eq!(s.dispatch(UiAction::Phone { action: legacy }).unwrap().regions, 0);
     for movable in [true, false] {
-        let action = PhoneAction::Metrics { keyboard: 0., corners: [0.; 4], native: [0.; 2], native_counts: [0; 2], insets: [0.; 4], movable };
+        let action = PhoneAction::Metrics { safe_area: [0.; 4], keyboard: 0., corners: [0.; 4], native: [0.; 2], native_counts: [0; 2], insets: [0.; 4], movable };
         let change = s.dispatch(UiAction::Phone { action: action.clone() }).unwrap();
         assert_ne!(change.regions & regions::LAYOUT, 0);
         assert_eq!(s.state.phone.movable, movable);
@@ -1042,7 +1061,7 @@ fn phone_runtime_controls_preserve_raw_layout_and_retained_resolution() {
         UiAction::Phone { action: PhoneAction::Slider {
             control: ToolbarControl::BrushSizeSlider, phase: ContactPhase::Up,
         } },
-        UiAction::Phone { action: PhoneAction::Metrics { keyboard: 0., corners: [0.; 4],
+        UiAction::Phone { action: PhoneAction::Metrics { safe_area: [0.; 4], keyboard: 0., corners: [0.; 4],
             native: [0., 48.], native_counts: [0, 1], insets: [0., 24., 0., 16.], movable: false,
         } },
     ].into_iter().enumerate() {
@@ -1387,7 +1406,7 @@ fn phone_drawer_opener_contacts_keep_extended_hits_until_release() {
         for swapped in [false, true] {
             for opener in 0..3 {
                 let mut s = phone_session(viewport);
-                s.dispatch(UiAction::Phone { action: PhoneAction::Metrics { keyboard: 0., native: [0.; 2], native_counts: [0; 2],
+                s.dispatch(UiAction::Phone { action: PhoneAction::Metrics { safe_area: [0.; 4], keyboard: 0., native: [0.; 2], native_counts: [0; 2],
                     insets: [62., 62., 34., 34.], corners: [0.; 4], movable: false } }).unwrap();
                 if swapped { s.dispatch(UiAction::Phone { action: PhoneAction::SwapSides }).unwrap(); }
                 let phone = s.phone_layout().unwrap();
@@ -1493,7 +1512,7 @@ fn phone_keyboard_metrics_validate_roundtrip_and_preserve_authored_state() {
     })).unwrap();
     assert!(matches!(legacy, PhoneAction::Metrics { keyboard: 0., .. }));
     for keyboard in [377.524, 0.] {
-        let action = PhoneAction::Metrics { keyboard, native: [0.; 2], native_counts: [0; 2], insets: [0.; 4], corners: [0.; 4], movable: false };
+        let action = PhoneAction::Metrics { safe_area: [0.; 4], keyboard, native: [0.; 2], native_counts: [0; 2], insets: [0.; 4], corners: [0.; 4], movable: false };
         assert_eq!(serde_json::from_value::<PhoneAction>(serde_json::to_value(&action).unwrap()).unwrap(), action);
         assert_ne!(s.dispatch(UiAction::Phone { action: action.clone() }).unwrap().regions & regions::LAYOUT, 0);
         assert_eq!(s.state.phone.keyboard, keyboard);
@@ -1502,7 +1521,7 @@ fn phone_keyboard_metrics_validate_roundtrip_and_preserve_authored_state() {
     }
     for keyboard in [-1., f32::NAN, f32::INFINITY] {
         let before = s.state.phone.clone();
-        assert!(s.dispatch(UiAction::Phone { action: PhoneAction::Metrics { keyboard, native: [0.; 2], native_counts: [0; 2], insets: [0.; 4], corners: [0.; 4], movable: false } }).is_err());
+        assert!(s.dispatch(UiAction::Phone { action: PhoneAction::Metrics { safe_area: [0.; 4], keyboard, native: [0.; 2], native_counts: [0; 2], insets: [0.; 4], corners: [0.; 4], movable: false } }).is_err());
         assert_eq!(s.state.phone, before);
     }
     assert_eq!(s.capture_workspace().unwrap(), saved);
@@ -1511,7 +1530,7 @@ fn phone_keyboard_metrics_validate_roundtrip_and_preserve_authored_state() {
 
 #[test]
 fn keyboard_viewport_changes_keep_the_phone_class_and_its_drawer() {
-    let keyboard = |keyboard| UiAction::Phone { action: PhoneAction::Metrics { keyboard, native: [0.; 2], native_counts: [0; 2], insets: [0.; 4], corners: [0.; 4], movable: false } };
+    let keyboard = |keyboard| UiAction::Phone { action: PhoneAction::Metrics { safe_area: [0.; 4], keyboard, native: [0.; 2], native_counts: [0; 2], insets: [0.; 4], corners: [0.; 4], movable: false } };
     let transition = regions::LAYOUT | regions::CUSTOMIZATION | regions::COMMANDS | regions::BUBBLES | regions::BRUSH;
     let mut s = phone_session([891, 308]);
     let saved = s.capture_workspace().unwrap();

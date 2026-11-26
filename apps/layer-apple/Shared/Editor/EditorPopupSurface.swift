@@ -220,8 +220,8 @@ private struct EditorSheet<Sheet: View>: ViewModifier {
     private var presentation: JSON {
         let layout = store.snapshot["layout"], insets = store.state["phone"]["insets"]
         guard !intent["role"].isNull, layout["viewport"].array.count == 2, insets.array.count == 4 else { return JSON() }
-        return DialogUI.resolve(["kind": "presentation", "role": intent["role"].raw,
-            "viewport": layout["viewport"].raw, "insets": insets.raw, "work_area": layout["phone"]["work_area"].raw, "visible": visible])
+        return DialogUI.resolve(["kind": "presentation", "role": intent["role"].raw, "viewport": layout["viewport"].raw, "insets": insets.raw,
+            "safe_area": store.state["phone"]["safe_area"].raw, "work_area": layout["phone"]["work_area"].raw, "visible": visible])
     }
     private var alert: Bool { !store.snapshot["layout"]["phone"].isNull && intent["role"].string == "alert" }
     private var visible: [String: Any] {
@@ -302,7 +302,7 @@ struct EditorPageHeader: View {
                         .accessibilityIdentifier(cancelIdentifier ?? identifier + "-done").keyboardShortcut(.cancelAction)
                 }
             }.frame(minWidth: 56)
-        }.padding(.horizontal, 8).frame(minHeight: 48)
+        }.padding(.leading, 8).padding(.trailing, 20).frame(minHeight: 48)
     }
 }
 

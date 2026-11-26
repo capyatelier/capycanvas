@@ -232,7 +232,9 @@ final class CanvasView: UIView {
             default: insets = UIEdgeInsets(top: insets.top, left: 0, bottom: 0, right: 0)
             }
         }
+        let safe = window.safeAreaInsets
         let metrics = JSON(["kind": "metrics", "insets": [insets.left, insets.top, insets.right, insets.bottom],
+            "safe_area": [safe.left, safe.top, safe.right, safe.bottom],
             "corners": [0, 0, 0, 0], "native": [0, 0], "native_counts": [0, 0], "movable": false,
             "keyboard": keyboardFrame?.height ?? 0])
         guard phoneMetricsOwner !== owner || phoneMetricsKey != metrics.stableKey else { return }

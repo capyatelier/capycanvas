@@ -126,9 +126,9 @@ extension XCTestCase {
                 let field = app.textFields.matching(NSPredicate(format: "hasKeyboardFocus == YES")).firstMatch
                 guard field.exists, !field.identifier.isEmpty else { fail("Keyboard dismissal needs its identified editor field"); return }
                 let identifier = field.identifier, value = field.value as? String
-                let scroll = app.scrollViews.allElementsBoundByIndex.filter {
-                    $0.isHittable && $0.frame.maxY <= keyboard.frame.minY
-                }.max { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }
+                func uncovered(_ frame: CGRect) -> CGFloat { frame.width * max(0, min(frame.maxY, keyboard.frame.minY) - frame.minY) }
+                let scroll = app.scrollViews.allElementsBoundByIndex.filter { $0.isHittable && uncovered($0.frame) > 0 }
+                    .max { uncovered($0.frame) < uncovered($1.frame) }
                 guard let scroll else { fail("The keyboard needs a visible editor page scroll"); return }
                 guard let snapshot = try? scroll.snapshot() else { fail("The editor scroll needs its current native contents"); return }
                 let end = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95))

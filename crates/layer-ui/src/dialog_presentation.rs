@@ -5,7 +5,7 @@ pub fn dialog_ui(source: &str) -> Result<serde_json::Value, String> {
     #[serde(tag = "kind", rename_all = "snake_case")]
     enum Request {
         Header { intent: DialogIntent, subpage: bool },
-        Presentation { role: DialogRole, viewport: [f32; 2], insets: [f32; 4], work_area: Option<Bounds>, visible: Bounds },
+        Presentation { role: DialogRole, viewport: [f32; 2], insets: [f32; 4], #[serde(default)] safe_area: [f32; 4], work_area: Option<Bounds>, visible: Bounds },
         Escape { subpage: bool, search_focused: bool, search_has_text: bool },
         AlertShort { height: f32 },
         AlertLayout { viewport: [f32; 2], metrics: AlertMetrics, font_pixels: f32, prefer_wide: bool },
@@ -27,7 +27,7 @@ pub fn dialog_ui(source: &str) -> Result<serde_json::Value, String> {
     use serde_json::json;
     Ok(match serde_json::from_str(source).map_err(|error| error.to_string())? {
         Request::Header { intent, subpage } => json!(intent.header(subpage)),
-        Request::Presentation { role, viewport, insets, work_area, visible } => json!(dialog_presentation_in(role, viewport, insets, work_area, visible)),
+        Request::Presentation { role, viewport, insets, safe_area, work_area, visible } => json!(dialog_presentation_in(role, viewport, insets, safe_area, work_area, visible)),
         Request::Escape { subpage, search_focused, search_has_text } => json!(dialog_escape(subpage, search_focused, search_has_text)),
         Request::AlertShort { height } => json!(alert_dialog_short(height)),
         Request::AlertLayout { viewport, metrics, font_pixels, prefer_wide } => json!(alert_dialog_layout(viewport, &metrics, font_pixels / (crate::UI_TEXT_PT as f32 * 4. / 3.), prefer_wide)),
@@ -209,18 +209,18 @@ impl UiState {
         self.dialog_presentation_in(role, viewport, Bounds { x: 0., y: 0., width: viewport[0], height: viewport[1] })
     }
     pub fn dialog_presentation_in(&self, role: DialogRole, viewport: [f32; 2], visible: Bounds) -> DialogPresentation {
-        dialog_presentation_in(role, viewport, self.phone.insets, self.phone_presentation(viewport).map(|phone| phone.work_area), visible)
+        dialog_presentation_in(role, viewport, self.phone.insets, self.phone.safe_area, self.phone_presentation(viewport).map(|phone| phone.work_area), visible)
     }
 }
 
-fn dialog_presentation_in(role: DialogRole, viewport: [f32; 2], insets: [f32; 4], work_area: Option<Bounds>, visible: Bounds) -> DialogPresentation {
+fn dialog_presentation_in(role: DialogRole, viewport: [f32; 2], insets: [f32; 4], safe_area: [f32; 4], work_area: Option<Bounds>, visible: Bounds) -> DialogPresentation {
     let Some(work_area) = work_area else { return DialogPresentation::Floating; };
     match role {
         DialogRole::Alert => DialogPresentation::Floating,
         DialogRole::CanvasPanel => DialogPresentation::CanvasPanel(work_area.intersection(visible)
             .filter(|area| area.height >= crate::HEADER_HEIGHT.min(work_area.height)).unwrap_or(work_area)),
         DialogRole::Editor => {
-            let [left, top, right, bottom] = insets;
+            let [left, top, right, bottom] = std::array::from_fn(|side| insets[side].max(safe_area[side]));
             DialogPresentation::Page(Bounds { x: left, y: top,
                 width: (viewport[0] - left - right).max(0.), height: (viewport[1] - top - bottom).max(0.) }.intersection(visible).unwrap_or_default())
         }

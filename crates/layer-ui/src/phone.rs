@@ -61,6 +61,7 @@ pub struct PhoneState {
     pub(crate) platform: Option<crate::Platform>,
     pub insets: [f32; 4],
     pub corners: [f32; 4],
+    pub safe_area: [f32; 4],
     pub keyboard: f32,
     #[serde(skip)]
     pub(crate) keyboard_phone: Option<bool>,
@@ -94,7 +95,7 @@ pub enum PhoneAction {
     Drawing { id: u64, close: bool },
     SwapSides,
     Slider { control: ToolbarControl, phase: crate::ContactPhase },
-    Metrics { native: [f32; 2], native_counts: [u32; 2], insets: [f32; 4], #[serde(default)] corners: [f32; 4], #[serde(default)] movable: bool, #[serde(default)] keyboard: f32 },
+    Metrics { native: [f32; 2], native_counts: [u32; 2], insets: [f32; 4], #[serde(default)] corners: [f32; 4], #[serde(default)] safe_area: [f32; 4], #[serde(default)] movable: bool, #[serde(default)] keyboard: f32 },
 }
 impl crate::UiState {
     pub fn phone_settings(&self) -> crate::TileView {

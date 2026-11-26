@@ -23,16 +23,10 @@ struct SettingsView: View {
         Group {
             if pagePresented {
                 VStack(spacing: 0) {
-                    HStack {
-                        if layout["subpage"].bool {
-                            backButton
-                        }
-                        Text(model["navigation"]["title"].isNull ? (model["page_requested"].bool ? page["title"].string
-                            : store.catalog["native_copy"]["shortcuts"]["settings"].string) : model["navigation"]["title"].string)
-                            .font(.headline).accessibilityIdentifier("shortcut-pane-title")
-                        Spacer()
-                        doneButton
-                    }.padding()
+                    EditorPageHeader(intent: model["dialog"], title: model["navigation"]["title"].isNull ? (model["page_requested"].bool ? page["title"].string
+                            : store.catalog["native_copy"]["shortcuts"]["settings"].string) : model["navigation"]["title"].string,
+                        identifier: "shortcut-pane", subpage: layout["subpage"].bool, backIdentifier: "settings-back", cancelIdentifier: "settings-done",
+                        cancel: close, back: { action(model["navigation"]["back"].object) })
                     if model["page_requested"].bool { detail } else { phoneSidebar }
                 }.modifier(EditorDialogFrame(minHeight: 420))
             } else { floating }
@@ -123,11 +117,12 @@ struct SettingsView: View {
         .frame(minWidth: 560)
         #endif
     }
+    private func close() {
+        _ = admissions.finish()
+        store.dispatch(["type": "close_settings"])
+    }
     private var doneButton: some View {
-        Button(store.bootstrap["common"]["done"].string) {
-            _ = admissions.finish()
-            store.dispatch(["type": "close_settings"])
-        }.accessibilityIdentifier("settings-done")
+        Button(store.bootstrap["common"]["done"].string, action: close).accessibilityIdentifier("settings-done")
     }
     private var backButton: some View {
         Button { action(model["navigation"]["back"].object) } label: { SharedIcon(name: "go-previous") }

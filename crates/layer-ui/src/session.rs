@@ -3415,19 +3415,20 @@ impl<R: CanvasRenderer> UiSession<R> {
                         self.state.customization.drawer = None;
                         save_settings = true;
                     }
-                    PhoneAction::Metrics { native, native_counts, insets, corners, movable, keyboard } => {
+                    PhoneAction::Metrics { native, native_counts, insets, corners, safe_area, movable, keyboard } => {
                         if native.iter().chain(&insets).chain(&corners).chain([&keyboard]).any(|v| !v.is_finite() || *v < 0.) || native_counts.iter().any(|n| *n > 4) {
                             return Err("Invalid native control metrics".into());
                         }
                         let before = self.phone_layout().map(|p| p.edge);
                         let viewport = self.workspace_viewport();
                         let state = &mut self.state.phone;
-                        if (state.native, state.native_counts, state.insets, state.corners, state.movable, state.keyboard) == (native, native_counts, insets, corners, movable, keyboard) { return Ok(UiChange::default()); }
+                        if (state.native, state.native_counts, state.insets, state.corners, state.safe_area, state.movable, state.keyboard) == (native, native_counts, insets, corners, safe_area, movable, keyboard) { return Ok(UiChange::default()); }
                         state.keyboard_phone = (keyboard > 0.).then(|| state.keyboard_phone.unwrap_or_else(|| crate::phone_window(viewport)));
                         state.native = native;
                         state.native_counts = native_counts;
                         state.insets = insets;
                         state.corners = corners;
+                        state.safe_area = safe_area;
                         state.movable = movable;
                         state.keyboard = keyboard;
                         if self.phone_layout().map(|p| p.edge) != before { cancelled = self.cancel_phone_presentation()?; }
