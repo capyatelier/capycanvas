@@ -294,11 +294,13 @@ jobs:
           - architecture: x64
             target: x86_64-pc-windows-msvc
             runner: windows-2025
+            timeout_minutes: 120
           - architecture: arm64
             target: aarch64-pc-windows-msvc
             runner: windows-11-arm
+            timeout_minutes: 180
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
+    timeout-minutes: ${{ matrix.timeout_minutes }}
     defaults:
       run:
         shell: pwsh

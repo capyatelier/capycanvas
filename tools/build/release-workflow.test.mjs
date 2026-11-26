@@ -63,6 +63,14 @@ test("logging cannot hide a failed validation command", () => {
   assert.match(native, /\$exitCode = Invoke-NativeTestProcess \$launch\n +if \(\$exitCode -ne 0\) \{ throw/);
 });
 
+test("hosted Windows jobs reserve architecture-specific build time", () => {
+  const native = job(checks, "windows");
+  assert.match(native, /- architecture: x64\n +target: x86_64-pc-windows-msvc\n +runner: windows-2025\n +timeout_minutes: 120\b/);
+  assert.match(native, /- architecture: arm64\n +target: aarch64-pc-windows-msvc\n +runner: windows-11-arm\n +timeout_minutes: 180\b/);
+  assert.match(native, /timeout-minutes: \$\{\{ matrix\.timeout_minutes \}\}/);
+  assert.match(native, /name: Windows script regressions\n +timeout-minutes: 5\b/);
+});
+
 test("hosted CPU checks keep model tests while excluding native GPU cases", () => {
   const renderer = job(checks, "renderer");
   const selected = (crate, name) => {

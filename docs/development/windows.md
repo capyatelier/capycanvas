@@ -470,8 +470,10 @@ stacks. Run
 `gh workflow run release-checks.yml -f windows-only=true -f source_ref=<commit-sha>`
 for the x64 and ARM64 release build, test and Clippy jobs. The release jobs
 stream the native test process's stdout and stderr while it runs and retain the
-separate logs and crash-event reports. Neither workflow qualifies hardware
-rendering or performance.
+separate logs and crash-event reports. The x64 job has a 120-minute budget;
+ARM64 has 180 minutes to accommodate the additional build time for its second
+Rust test configuration and Clippy. Test deadlines are the same for both.
+Neither workflow qualifies hardware rendering or performance.
 
 `canvas-bar:resize-dark` and `canvas-bar:resize-light` check Near Object and Quick Mask bar placement across window resize and restore.
 
