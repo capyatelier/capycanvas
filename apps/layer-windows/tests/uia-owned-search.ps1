@@ -964,10 +964,10 @@ namespace CapyHeaderMenuTest {
     function Reset-Header([bool]$Compact,[int]$Dpi){
         $script:compact=$Compact;$script:current=[pscustomobject]@{hwnd=7};[CapyHeaderMenuTest.Pointer]::Dpi=$Dpi;$script:identityChecks=0;$scale=$Dpi/96.
         $specs=@(foreach($id in @('file','edit','image','layer','select','filter','view','window')){[pscustomobject]@{id=$id;label=$id}})
-        $script:view=[pscustomobject]@{windows_active_tag='it';application_menus=$specs;header=[pscustomobject]@{editing=$false;model=[pscustomobject]@{zones=@(@([pscustomobject]@{id=2;item=[pscustomobject]@{kind='menu_labels'}}))}}}
+        $script:view=[pscustomobject]@{windows_active_tag='it';application_menus=$specs;header=[pscustomobject]@{editing=$false;sizes=@([pscustomobject]@{id='small';tile=36});model=[pscustomobject]@{size='small';zones=@(@([pscustomobject]@{id=2;item=[pscustomobject]@{kind='menu_labels'}}))}}}
         $width=if($Compact){36}else{504};$script:bounds=[pscustomobject]@{x=48;y=6;width=$width;height=36}
-        $metric=[pscustomobject]@{id=2;width=$(if($Compact){704.860523223877}else{504});compact=36}
-        $script:presentation=[pscustomobject]@{metrics=@($metric);geometry=[pscustomobject]@{items=@([pscustomobject]@{id=2;bounds=$bounds})};actual_items=@([pscustomobject]@{id=2;bounds=($bounds|ConvertTo-Json|ConvertFrom-Json)})}
+        $metric=[pscustomobject]@{id=2;width=$(if($Compact){704.860523223877}else{504})}
+        $script:presentation=[pscustomobject]@{metrics=@($metric);geometry=[pscustomobject]@{items=@([pscustomobject]@{id=2;bounds=$bounds});compact=@(if($Compact){2})};actual_items=@([pscustomobject]@{id=2;bounds=($bounds|ConvertTo-Json|ConvertFrom-Json)})}
         $script:nodes=@{'title-bar'=(Header-TestNode 'Title bar' ([Windows.Rect]::new(100,50,1600*$scale,48*$scale)));'application-menus'=(Header-TestNode 'Menus' ([Windows.Rect]::new(100+48*$scale,50+6*$scale,36*$scale,36*$scale)) @() 'button');'fit_canvas'=(Header-TestNode 'Fit' ([Windows.Rect]::new(900,200,100,30)))}
         $nodes['title-bar'].Current|Add-Member ScriptProperty ItemStatus {$script:presentation|ConvertTo-Json -Depth 12 -Compress}
         $script:headings=@{};$i=0
@@ -1007,13 +1007,15 @@ namespace CapyHeaderMenuTest {
         }
         if(& $menuPredicate){throw "Compact menu accepted $bad"}
     }
-    foreach($bad in @('allocation mismatch','undersized compact control','wrong compact caption','inline padding')){
+    foreach($bad in @('allocation mismatch','undersized compact control','wrong compact caption','inline padding','missing compact membership','wrong compact size')){
         Reset-Header ($bad -ne 'inline padding') 144
         switch($bad){
             'allocation mismatch' {$presentation.actual_items[0].bounds.x+=1.01}
             'undersized compact control' {$nodes['application-menus'].Current.BoundingRectangle=[Windows.Rect]::new(172,59,1,54)}
             'wrong compact caption' {$nodes['application-menus'].Current.Name='Old menus'}
             'inline padding' {$nodes['application-menu-file'].Children[0].Current.BoundingRectangle=[Windows.Rect]::new(180,72,63,27)}
+            'missing compact membership' {$presentation.geometry.compact=@()}
+            'wrong compact size' {$view.header.sizes[0].tile=48}
         }
         $failed=$false
         try{Header-MenuState $view $identities|Out-Null}catch{if($_.Exception.Message -notlike 'Retained application menus did not present*'){throw};$failed=$true}
