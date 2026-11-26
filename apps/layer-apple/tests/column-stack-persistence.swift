@@ -68,11 +68,11 @@ import Foundation
             precondition(member(12)["open"].isNull, "Restart does not restore transient opening")
             for expected in [preferred, stacked, beforeStack] {
                 try await store.apply(["type":"invoke", "command":"undo_workspace"])
-                precondition(layout() == expected, "Width, preference and membership each retain one history step")
+                try await wait("Width, preference and membership each retain one history step", failure: { store.failure ?? store.workspaces?.error }) { layout() == expected }
             }
             for expected in [stacked, preferred, resized] {
                 try await store.apply(["type":"invoke", "command":"redo_workspace"])
-                precondition(layout() == expected)
+                try await wait("Redo restores one stored revision", failure: { store.failure ?? store.workspaces?.error }) { layout() == expected }
             }
             precondition(store.state["brush"].stableKey == brush, "Workspace history preserves working brush settings")
             try await store.workspaces!.closed()

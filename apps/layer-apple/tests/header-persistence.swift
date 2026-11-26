@@ -52,9 +52,13 @@ import Foundation
                 precondition(!store.snapshot["header"]["editing"].bool)
                 precondition(store.state["workspace"]["layout"].stableKey == accepted, "Restart discards unfinished customization")
                 try await store.apply(["type":"invoke", "command":"undo_workspace"])
-                precondition(store.state["workspace"]["layout"].stableKey == original, "The accepted edit is one persisted history step")
+                try await wait("The accepted edit is one persisted history step", failure: { store.failure ?? store.workspaces?.error }) {
+                    store.state["workspace"]["layout"].stableKey == original
+                }
                 try await store.apply(["type":"invoke", "command":"redo_workspace"])
-                precondition(store.state["workspace"]["layout"].stableKey == accepted)
+                try await wait("Redo restores the accepted layout", failure: { store.failure ?? store.workspaces?.error }) {
+                    store.state["workspace"]["layout"].stableKey == accepted
+                }
                 print("PASS platform \(platform), \(workspace["title"].string): Done, switch, unfinished-preview close/restart and persisted Undo/Redo")
             }
             try await store.workspaces!.closed()
