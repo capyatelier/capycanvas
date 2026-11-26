@@ -134,6 +134,7 @@ These failed in the release candidate's test round and were judged not visible i
     - On the M4 iPad Pro, one of the two main passes on each blank row dropped to 114–116 frames/s with 12–17 drawable-acquire denials; v1.0.15 held 119–120. Repeat the blank rows before treating this as a regression.
     - On the M1 iPad Air (60 Hz) frame rates match, but main's CPU per frame rises 12% on blank rows and 54% over the photo (3.3 to 5.0 ms).
 16. **The full Apple test round on the M4, iPad Air and Mac has not run on the 1.0.16 candidate.** The 12.9-inch iPad Pro round found the Liquify abort fixed in 24c15b1c8. Run the iPad and Mac UI suites and the painting journeys in both themes.
+17. **Saving a New drawing preset outlines the empty name field in red before the painter types.** `PresetSaveView.can_save` (`crates/layer-ui/src/new_drawing_dialog.rs`) is false for an empty name, because `check_preset_name` (`crates/layer-ui/src/new_drawing.rs`) treats a blank name as invalid. Every host draws its error outline from `can_save`: Apple `saveRow` in `NewDrawingDialog.swift`, Android `NewDrawingDialog.kt`, Web `new-drawing.js` (`.error` and `aria-invalid`) and GTK `new_drawing.rs` (`error` CSS class). Publish a separate shared field that marks the name invalid only once it holds text: too long, control characters, or another preset's name while renaming. Keep `can_save` for the Save button, and draw the outline from the new field on every host.
 
 ## Renderer tests failing on the release that pass on main
 
