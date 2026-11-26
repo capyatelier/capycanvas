@@ -1986,7 +1986,7 @@ mod gpu_tests {
         let mut r=crate::test_support::staged_renderer(&reference,color);
         let mut doc=crate::layer_tests::paper_shade::rough_gray_paper();
         crate::layer_tests::paper_shade::set_paper(&mut doc,&[(layer_core::paper::RELIEF,layer_core::EffectValue::Number(150.))]);
-        let mut brush=layer_core::default_brush(layer_core::DefaultBrushPreset::Pencil);
+        let mut brush=layer_core::default_brush(layer_core::DefaultBrushPreset::Pencil);brush.diameter=9.;
         let style=brush_style(&doc,&brush,StrokeTool::Brush);
         let deadline=std::time::Instant::now()+Duration::from_secs(60);
         r.shader_idle(true,false);

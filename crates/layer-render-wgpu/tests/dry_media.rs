@@ -393,12 +393,13 @@ fn dry_full_strength_and_pressure_color_covers_graphite_and_saturates() {
 
 #[test]
 fn light_dry_caps_match_additive_reference() {
-    for (preset,pressure,hardness,paper,pixel,expected,measured_error) in [
-        (DefaultBrushPreset::PointyPencil,0.15,0.,0.563,[33,128],57,9),
-        (DefaultBrushPreset::PointyPencil,0.15,0.25,0.564,[33,128],42,6),
-        (DefaultBrushPreset::Chalk, 0.3, 0., 0.627, [226, 132], 231, 0),
+    for (preset,diameter,pressure,hardness,paper,pixel,expected,measured_error) in [
+        (DefaultBrushPreset::PointyPencil,6.,0.15,0.,0.563,[33,128],57,9),
+        (DefaultBrushPreset::PointyPencil,6.,0.15,0.25,0.564,[33,128],42,6),
+        (DefaultBrushPreset::Chalk,36./1.6_f32.hypot(0.85),0.3,0.,0.627,[226,132],231,0),
     ] {
         let mut brush=default_brush(preset);
+        brush.diameter=diameter;
         let contact=brush.contact.as_mut().unwrap();
         contact.paper*=2.*paper-1.;contact.dry.as_mut().unwrap().loading=hardness;
         let image=line(brush,pressure,0.,Run::default());
