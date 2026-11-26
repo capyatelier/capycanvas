@@ -70,6 +70,7 @@ These are the patterns drafts fall into most often:
 | A verb or condition chosen to keep an unverified claim technically true | Verify the plain claim or leave it out |
 | Device models, megapixels or "X instead of Y" in prose | One multiplier in prose; measurements in a chart |
 | Words from the code, or words with two meanings ("the format is stable") | Say what the artist sees or can rely on |
+| A homemade phrase in place of a word artists already use ("will keep opening" for "compatible") | Use the everyday word; plain means the word people say, not avoiding familiar terms |
 | A feature named without its place in the app, or a menu command written up as a tool | Check the app; use its label and menu path, such as Edit ▸ Flat All Areas |
 | A verb that doesn't match what changed ("include pen pressure"), or a share nobody measured ("most of the work") | Check the code; use the verb for what happens, and state the intent instead of an unmeasured number |
 
