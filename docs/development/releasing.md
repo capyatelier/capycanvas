@@ -456,10 +456,13 @@ workflow instead. Release validation calls the same CI workflow, and
 
 `.github/workflows/release-checks.yml` supports reusable calls and manual dispatch.
 Manual dispatch defaults to Windows-only checks; set `windows-only=false` for full
-validation. Both a full release dry run and a tag-push release call it alongside
-packaging, exposing test and build failures in the same run. Tag pushes
-repeat validation on the exact tagged commit. Store uploads and GitHub Release
-creation require successful validation and every platform package.
+validation. A release dry run calls it alongside packaging; tag pushes don't. The
+release gate is whether each package builds, installs and runs: store uploads and
+GitHub Release creation require every platform package job, including its own
+package checks such as signing, notarization and the MSIX install test, followed by
+the install and launch checks below. The full suites catch app regressions before
+the tag; a failure there is fixed on `main`, but it doesn't hold a release whose
+packages install and run.
 
 | Job | Checks without a hardware GPU |
 | --- | --- |

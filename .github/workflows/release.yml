@@ -73,7 +73,7 @@ jobs:
           test "$status" = identical || test "$status" = behind
 
   checks:
-    if: ${{ !inputs.windows-packages-only }}
+    if: ${{ !inputs.windows-packages-only && github.event_name != 'push' }}
     needs: version
     uses: ./.github/workflows/release-checks.yml
     with:
@@ -292,7 +292,7 @@ jobs:
 
   android-publish:
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs: [version, checks, flatpak, web, android, windows, apple]
+    needs: [version, flatpak, web, android, windows, apple]
     runs-on: ubuntu-24.04
     environment: release
     permissions:
@@ -342,7 +342,7 @@ jobs:
 
   apple-publish:
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs: [version, checks, flatpak, web, android, windows, apple]
+    needs: [version, flatpak, web, android, windows, apple]
     runs-on: macos-26
     environment: release
     strategy:
@@ -417,7 +417,7 @@ jobs:
             report/results.json
             report/SHA256SUMS
           if-no-files-found: error
-      - name: Require successful checks and packages
+      - name: Require successful packages, and checks when they ran
         env:
           RESULTS: ${{ toJSON(needs) }}
           WINDOWS_PACKAGES_ONLY: ${{ inputs.windows-packages-only }}
@@ -425,7 +425,7 @@ jobs:
           python3 - <<'PYCODE'
           import json, os, sys
           results = json.loads(os.environ['RESULTS'])
-          required = {'version', 'windows'} if os.environ.get('WINDOWS_PACKAGES_ONLY', 'false') == 'true' else set(results) - ({'android-publish', 'apple-publish'} if os.environ['SIGNED'] != 'true' else set())
+          required = {'version', 'windows'} if os.environ.get('WINDOWS_PACKAGES_ONLY', 'false') == 'true' else set(results) - ({'android-publish', 'apple-publish'} if os.environ['SIGNED'] != 'true' else set()) - ({'checks'} if os.environ['GITHUB_EVENT_NAME'] == 'push' else set())
           sys.exit(any(results[name]['result'] != 'success' for name in required))
           PYCODE
 
