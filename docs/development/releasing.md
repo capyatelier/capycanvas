@@ -461,6 +461,8 @@ creation require successful validation and every platform package.
 
 The Arch job builds the photo decoder in the library tests' profile so their
 executable-relative helper lookup uses the matching binary.
+It excludes only `gpu_worker_first_preview_stroke_*`, which require hardware
+Vulkan and run in the ordinary native GTK test suite.
 
 The Android package job also builds its debug app and instrumentation APK and
 runs debug/release lint. The instrumentation APK is retained but not executed:

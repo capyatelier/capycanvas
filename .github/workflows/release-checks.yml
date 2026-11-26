@@ -236,7 +236,7 @@ jobs:
       - run: |
           export LD_LIBRARY_PATH="$PWD/target/gtk-runtime/prefix/lib"
           cargo build --locked -p layer-linux --bin capy-photo-reader
-          cargo test --locked -p layer-linux --lib --test command_line
+          cargo test --locked -p layer-linux --lib --test command_line -- --skip render_thread::tests::gpu_worker_first_preview_stroke
       - name: Independent ICC and JPEG references
         env:
           LAYER_TEST_WORKING_PROFILES: /usr/share/color/icc/colord

@@ -76,6 +76,8 @@ test("hosted CPU checks keep model tests while excluding native GPU cases", () =
   const bridge = "layer-apple";
   assert.ok(selected(bridge, "tests::toolbar_component::apple_phone_queries_round_trip_without_a_session"));
   assert.ok(!selected(bridge, "tests::toolbar_component::apple_stamp_bytes_match_the_canonical_mask_and_known_receipts_omit_pixels"));
+  const gtk = job(checks, "arch").match(/^ +cargo test --locked -p layer-linux --lib --test command_line -- (.+)$/m)?.[1];
+  assert.equal(gtk, "--skip render_thread::tests::gpu_worker_first_preview_stroke");
 });
 
 test("release success permits only the jobs skipped by the selected mode", () => {
