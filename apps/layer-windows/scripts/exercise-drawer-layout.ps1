@@ -4,11 +4,6 @@ $repo=(Resolve-Path(Join-Path $PSScriptRoot '../../..')).Path;$scripts=$PSScript
 . (Join-Path $scripts 'CapyUia.ps1')
 Add-Type -Path (Join-Path $scripts 'RowPointerDriver.cs')
 Add-Type -Path (Join-Path $scripts 'BubbleFixtureNative.cs')
-$tokens=$null;$errors=$null
-$ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $scripts 'exercise-tools.ps1'),[ref]$tokens,[ref]$errors)
-if($errors.Count){throw 'Tools helper parse failed'}
-$definition=$ast.Find({param($node)$node-is[Management.Automation.Language.FunctionDefinitionAst]-and$node.Name-eq'Select-Tool'},$true)
-if(!$definition){throw 'Select-Tool helper missing'};Invoke-Expression $definition.Extent.Text
 [CapyRowPointer]::VerifyPrivateDesktop($env:CAPY_PRIVATE_DESKTOP)
 $run=Join-Path $repo ('artifacts/windows/drawer-layout/'+$Theme+'-'+[guid]::NewGuid().ToString('N'));[IO.Directory]::CreateDirectory($run)|Out-Null
 $review=$null;$window=[IntPtr]::Zero;$checks=[Collections.Generic.List[object]]::new()
@@ -66,8 +61,12 @@ function Color-Check([string]$phase){
  Snapshot $phase
 }
 function Select-PenForScroll{
- $ProcessId=$review.Id
- Select-Tool 'pen'
+ Invoke-Id (Tool-Tile 'pen')
+ Wait-Until {@((Model).state.commands|Where-Object {$_.id-eq'pen'-and$_.selected}).Count-eq1} 'Pen did not activate'
+ if((Model).state.customization.drawer){
+  (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Key($review.Id,0x1B)
+  Wait-Until {$null-eq(Model).state.customization.drawer-and!(Find 'tool-drawer')} 'Tool drawer did not dismiss after selection'
+ }
  Wait-Canvas {(Model).brush_ready -and (Model).state.brush.tool -eq 'pen' -and @((Model).state.tool_set.subtools).Count -eq 10} 'Pen brush choices did not prepare'
 }
 function Scroll-Check([string]$phase){
