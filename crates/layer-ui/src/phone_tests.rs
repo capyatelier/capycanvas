@@ -1547,3 +1547,27 @@ fn keyboard_viewport_changes_keep_the_phone_class_and_its_drawer() {
     assert!(s.state.customization.drawer.is_none());
     assert_eq!(s.capture_workspace().unwrap(), saved);
 }
+
+#[test]
+fn phone_tile_press_moves_an_open_tool_drawer_instead_of_closing_it() {
+    for viewport in [[402, 874], [874, 402]] {
+        let tiles = phone_session(viewport).state.workspace.layout.phone.clone().unwrap();
+        let opener = tiles.iter().find(|tile| tile.control.tool_group().is_some()).unwrap().id;
+        for target in tiles.iter().filter(|tile| tile.id != opener && tile.control.drawer_columns().is_some()
+            && (tile.control.tool_group().is_some() || matches!(tile.control, ToolbarControl::Panel { .. }))) {
+            let mut s = phone_session(viewport);
+            s.dispatch(UiAction::Phone { action: PhoneAction::Tool { tile: opener } }).unwrap();
+            if s.state.customization.drawer.is_none() { s.dispatch(UiAction::Phone { action: PhoneAction::Tool { tile: opener } }).unwrap(); }
+            let open = DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Tool(opener) };
+            assert_eq!(s.state.customization.drawer.as_ref().map(|drawer| drawer.anchor), Some(open));
+            let phone = s.phone_layout().unwrap();
+            let hit = phone.tool_hits[tiles.iter().position(|tile| tile.id == target.id).unwrap()];
+            s.input(UiInput::Chrome { event: ChromeEvent::Contact { position: [hit.x + hit.width / 2., hit.y + hit.height / 2.], canvas: false },
+                facts: ChromeFacts::default(), viewport: viewport.map(|v| v as f32) }).unwrap();
+            assert_eq!(s.state.customization.drawer.as_ref().map(|drawer| drawer.anchor), Some(open), "{viewport:?} {:?}", target.control);
+            s.dispatch(UiAction::Phone { action: PhoneAction::Tool { tile: target.id } }).unwrap();
+            assert_eq!(s.state.customization.drawer.as_ref().map(|drawer| drawer.anchor),
+                Some(DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Tool(target.id) }), "{viewport:?} {:?}", target.control);
+        }
+    }
+}

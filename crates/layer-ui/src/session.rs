@@ -1497,7 +1497,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .and_then(|m| self.state.workspace.layout.header.entry(m.id).ok());
                     let switches_header = matches!(drawer.anchor, DrawerAnchor::Header { .. })
                         && header_item.is_some_and(|e| matches!(e.item, HeaderItem::Tool { control } if control.selectable() && control.drawer_columns().is_some()));
+                    let switches_phone = matches!(drawer.anchor, DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Tool(_) | PhoneDrawerAnchor::ToolSettings })
+                        && self.phone_layout().and_then(|phone| phone.anchor_at(&self.state.workspace.layout, position))
+                            .and_then(|anchor| self.state.workspace.layout.anchor_control(DrawerAnchor::Phone { anchor }))
+                            .is_some_and(|control| control.drawer_columns().is_some());
                     if !switches_header
+                        && !switches_phone
                         && !tile.is_some_and(|anchor| self.switches_toolbar_drawer(anchor))
                     {
                         reply.change = merge_change(reply.change, self.dispatch(UiAction::Customize {

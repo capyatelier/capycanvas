@@ -344,6 +344,11 @@ impl PhoneLayout {
             crate::PhoneDrawerAnchor::Tool(id) => layout.phone.as_ref()?.iter().position(|t| t.id == id).map(|i| self.tool_hits[i]),
         }
     }
+    pub fn anchor_at(&self, layout: &DockLayout, point: [f32; 2]) -> Option<crate::PhoneDrawerAnchor> {
+        if self.settings_hit.contains(point[0], point[1]) { return Some(crate::PhoneDrawerAnchor::ToolSettings); }
+        let index = self.tool_hits.iter().position(|hit| hit.contains(point[0], point[1]))?;
+        layout.phone.as_ref()?.get(index).map(|tile| crate::PhoneDrawerAnchor::Tool(tile.id))
+    }
     pub fn drawer_area(&self, viewport: [f32; 2]) -> Bounds {
         let mut area = if self.edge != Edge::Top {
             Bounds { y: self.bars[0].y, height: self.bars[0].height, ..self.work_area }
