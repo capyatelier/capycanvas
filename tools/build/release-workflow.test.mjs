@@ -14,7 +14,7 @@ const condition = (expression, event, ref) => Function("github", `return (${expr
 const signed = release.match(/^  SIGNED: (.+)$/m)?.[1];
 const publicRelease = release.match(/^  CAPY_PUBLIC_RELEASE: (.+)$/m)?.[1];
 const platforms = ["web", "flatpak", "android", "windows", "apple"];
-const publishers = ["android-publish", "ipad-publish", "release"];
+const publishers = ["android-publish", "apple-publish", "release"];
 
 test("only a tag push enables signing, publication and the public About version", () => {
   for (const event of ["workflow_dispatch", "push", "pull_request"])
@@ -29,7 +29,7 @@ test("only a tag push enables signing, publication and the public About version"
 
 test("packages build alongside checks and stores wait for every result", () => {
   for (const name of platforms) assert.match(job(release, name), /^    needs: version$/m);
-  for (const name of ["android-publish", "ipad-publish"]) {
+  for (const name of ["android-publish", "apple-publish"]) {
     const needs = job(release, name).match(/^    needs: \[(.+)\]$/m)[1].split(", ");
     for (const prerequisite of ["checks", ...platforms]) assert.ok(needs.includes(prerequisite), `${name}: ${prerequisite}`);
   }
@@ -38,9 +38,11 @@ test("packages build alongside checks and stores wait for every result", () => {
 
 test("private archives and reports never enter GitHub Release assets", () => {
   assert.match(job(release, "release"), /pattern: '\*-package'/);
-  assert.match(job(release, "apple"), /name: ipad-archive/);
+  assert.match(job(release, "apple"), /platform: \[ipad, mac, mac-store\]/);
+  assert.match(job(release, "apple"), /name: \$\{\{ matrix.platform \}\}-archive/);
+  assert.match(job(release, "summary"), /pattern: '\*-archive'/);
   assert.match(job(release, "summary"), /name: release-report/);
-  assert.doesNotMatch(job(release, "release"), /name: (ipad-archive|release-report)/);
+  assert.doesNotMatch(job(release, "release"), /name: (ipad-archive|mac-store-archive|release-report)/);
 });
 
 test("heavy validation is called only by the release workflow", () => {
@@ -61,10 +63,10 @@ test("logging cannot hide a failed validation command", () => {
 test("release success permits only the jobs skipped by the selected mode", () => {
   const gate = job(release, "summary").split("      - name: Require successful checks and packages")[1]
     .match(/python3 - <<'PYCODE'\n([\s\S]*?)\n          PYCODE/)[1].replace(/^          /gm, "");
-  const results = Object.fromEntries(["version", "checks", ...platforms, "android-publish", "ipad-publish"].map(name => [name, { result: "success" }]));
+  const results = Object.fromEntries(["version", "checks", ...platforms, "android-publish", "apple-publish"].map(name => [name, { result: "success" }]));
   const run = (signed, windowsOnly = false) => spawnSync(process.env.PYTHON ?? "python3", ["-c", gate], { env: { ...process.env, SIGNED: String(signed), WINDOWS_PACKAGES_ONLY: String(windowsOnly), RESULTS: JSON.stringify(results) }, encoding: "utf8" });
   assert.equal(run(true).status, 0);
-  results["android-publish"].result = results["ipad-publish"].result = "skipped";
+  results["android-publish"].result = results["apple-publish"].result = "skipped";
   assert.equal(run(false).status, 0);
   assert.equal(run(true).status, 1);
   for (const result of ["failure", "cancelled", "skipped"]) {
@@ -80,4 +82,14 @@ test("release success permits only the jobs skipped by the selected mode", () =>
       assert.equal(run(false, true).status, 1, `${name}: ${result}`);
       results[name].result = "success";
     }
+});
+
+test("Apple Store jobs reuse both retained archives without touching DMG packaging", () => {
+  const publish = job(release, "apple-publish");
+  assert.match(publish, /platform: \[ipad, mac-store\]/);
+  assert.match(publish, /name: \$\{\{ matrix.platform \}\}-archive/);
+  assert.match(publish, /release\.sh \$\{\{ matrix.platform \}\} publish/);
+  assert.doesNotMatch(publish, /release\.sh.* build|DEVELOPER_ID|notarytool/);
+  assert.match(job(release, "apple"), /if: matrix.platform != 'mac'\n        run: ditto/);
+  assert.match(job(release, "apple"), /if: matrix.platform == 'mac'\n        uses: actions\/upload-artifact/);
 });

@@ -133,7 +133,8 @@ capyatelier/capycanvas` to inspect results. If a job fails, follow
 CI creates a draft with the [package outputs](#release-workflow), `SHA256SUMS`
 and provenance attestations. Expect fourteen assets: the thirteen output files in the
 table, including the Flatpak reference and repository archive, plus `SHA256SUMS`.
-The iPad build is uploaded to App Store Connect, not attached to the release.
+The iPad and Mac Store builds are uploaded to App Store Connect; their archives
+are retained privately and are not attached to the release.
 The macOS DMG uses HFS+ with capacity calculated from logical payload sizes and
 filesystem headroom; allocated source blocks and automatic image-size estimates
 can undercount resources. Image creation and verification must both succeed
@@ -331,7 +332,7 @@ version. A delivery or store-setup failure can be retried with the preserved,
 unchanged build. Download retained artifacts with `gh run download <run-id>
 --repo capyatelier/capycanvas --dir artifacts/release/<tag>/recovered` and follow
 the [Android recovery steps](#android-apk). Inspect completed store uploads before
-rerunning any job: rerunning the successful `ipad-publish` job repeats the same
+rerunning any job: rerunning a successful `apple-publish` matrix job repeats the same
 version/build upload, and the workflow has no duplicate-upload recovery for it.
 Rerun only failed jobs when safe, rather than the whole release workflow.
 
@@ -495,16 +496,32 @@ the same scripts developers run and the Rust version pinned in the workflow:
 | Web | `node apps/layer-web/package.mjs` | `capycanvas-<version>-web.zip` |
 | Android | `./gradlew :app:bundleRelease -PcapyAbi=arm64-v8a` | `capycanvas-<version>-android.aab`; on a tag also a Play-signed `capycanvas-<version>-android.apk` without Play licensing checks |
 | Windows x64 and ARM64 | `package.ps1 -Architecture x64` / `-Architecture arm64`, `package-msix.ps1`, `test-msix.ps1` and `package-installer.ps1` | Separate `capycanvas-<version>-windows-<architecture>.zip`, `-setup.exe` and `.msix` |
-| macOS, iPadOS | `apps/layer-apple/scripts/release.sh mac` and `ipad` | `capycanvas-<version>-macos-arm64.dmg`; retained iPad archive, uploaded separately on tag pushes |
+| macOS, iPadOS | `apps/layer-apple/scripts/release.sh mac`, `mac-store` and `ipad` | `capycanvas-<version>-macos-arm64.dmg`; private `mac-store-archive` and `ipad-archive`, uploaded separately on tag pushes |
 
 Manual dispatch always validates and builds unsigned packages for every platform.
 Only a version-tag push enables signing and publishing. CI checks that the tag
 names the workspace version and its commit belongs to `main`. After validation
 and every package succeed, `android-publish` uses the preserved AAB and
-`ipad-publish` exports the preserved archive with `release.sh ipad publish`.
-Their success allows the draft GitHub Release. Release downloads include only
-`-package` artifacts, keeping logs and private iPad archives out of public assets.
-Neither store processing nor tester availability is checked by that job.
+the `apple-publish` matrix exports the preserved iPad and Mac Store archives with
+`release.sh <platform> publish`. Their success allows the draft GitHub Release.
+Release downloads include only `-package` artifacts, keeping logs and both Store
+archives out of public assets. The dry-run report includes both archive checksums;
+it does not exercise Store signing or export. Upload success does not establish
+Store processing, tester availability or App Review approval.
+
+`release.sh mac` keeps the Developer ID signed, notarized DMG path. `mac-store`
+uses the same sandboxed Mac target with automatic Apple Development signing for
+the archive; App Store export uses cloud distribution signing. The Store path
+needs the API key's cloud-managed certificate permissions and Xcode-managed Mac
+App Store provisioning. Read-only API authentication and an unsigned archive do
+not verify those permissions. See Apple's [cloud-managed certificates](https://developer.apple.com/help/account/certificates/cloud-managed-certificates/)
+and [Mac distribution signing](https://developer.apple.com/documentation/xcode/creating-distribution-signed-code-for-the-mac/).
+
+On an Apple Silicon Mac, `release.sh mac-store` without `CAPY_APPLE_TEAM` builds
+only an unsigned archive. With the signing variables below configured,
+`release.sh mac-store export` exports an existing archive to a local Store
+package without uploading. That signed export can update Apple signing resources;
+run it only when signing is authorized. `publish` explicitly uploads the archive.
 
 The Windows release matrix builds both targets on x64 runners, keeping the
 signing plugin and SDK packaging tools on their host architecture. Each package
@@ -649,7 +666,7 @@ Workers Scripts, Workers R2 Storage and Zone WAF edit access) and
 | `ANDROID_UPLOAD_KEYSTORE`, `ANDROID_UPLOAD_KEYSTORE_PASSWORD` | Secrets | Base64 PKCS12 upload keystore with the alias `upload`, and its password |
 | `APPLE_API_KEY` | Secret | Base64 App Store Connect team API key (`.p8`) with the Admin role, for cloud signing, upload and notarization |
 | `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`, `APPLE_TEAM_ID` | Variables | That key's identifiers and the team |
-| `APPLE_DEVELOPMENT_P12`, `APPLE_DEVELOPMENT_PASSWORD` | Secrets | Base64 PKCS12 Apple Development certificate with its private key, and its password, reused for iPad archives |
+| `APPLE_DEVELOPMENT_P12`, `APPLE_DEVELOPMENT_PASSWORD` | Secrets | Base64 PKCS12 Apple Development certificate with its private key, and its password, reused for iPad and Mac Store archives |
 | `APPLE_DEVELOPER_ID_P12`, `APPLE_DEVELOPER_ID_PASSWORD` | Secrets | Base64 Developer ID Application certificate and its password; Xcode cannot cloud-sign Developer ID builds with an API key |
 | `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT` | Variables | The Google Cloud workload identity provider that trusts the `release` environment, and the service account it acts as; Play Console grants that account release access |
 | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` | Variables | The Microsoft Entra app the Windows job signs in as through OIDC; it holds the Artifact Signing Certificate Profile Signer role and trusts the `release` environment |
@@ -661,9 +678,9 @@ Each Apple job imports its stored signing identity into a temporary keychain and
 checks that the certificate has a valid private key before building. Signing
 expressions reference each secret by name so the runner receives only explicitly
 referenced secrets. A missing platform credential fails instead of selecting the
-other platform's identity. The iPad archive reuses an Apple Development identity;
-App Store export uses cloud
-distribution signing through the API key. Retain the development identity across
+other platform's identity. The iPad and Mac Store archives reuse an Apple
+Development identity; App Store export uses cloud distribution signing through
+the API key. Retain the development identity across
 runs: disposable runners otherwise create certificates whose private keys are
 lost when the job ends. Rotate the stored identity before it expires, and revoke
 an old certificate only after confirming no active developer or build uses it.
@@ -671,8 +688,8 @@ an old certificate only after confirming no active developer or build uses it.
 Locally, `CAPY_UPLOAD_KEYSTORE` and `CAPY_UPLOAD_KEYSTORE_PASSWORD` sign the
 Android bundle, and `CAPY_APPLE_TEAM`, `CAPY_APPLE_KEY`, `CAPY_APPLE_KEY_ID` and
 `CAPY_APPLE_ISSUER` make `release.sh` sign or notarize; `release.sh ipad publish`
-explicitly uploads an existing signed archive. On a tag push, the
-Windows job passes Azure Artifact Signing's `signtool` plugin to the packagers'
+and `release.sh mac-store publish` explicitly upload existing signed archives.
+On a tag push, the Windows job passes Azure Artifact Signing's `signtool` plugin to the packagers'
 `-SignArguments` ([Windows](windows.md#portable-zip)), signing the app
 executables and the setup program; the Store signs the MSIX.
 

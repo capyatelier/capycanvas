@@ -5,23 +5,27 @@ CAPY_APP="$(cd "$(dirname "$0")/.." && pwd)"
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 case "${1:-}" in
   ipad) CAPY_SCHEME=CapyCanvas-iPad; CAPY_DEST='generic/platform=iOS'; CAPY_RUST_TARGET=aarch64-apple-ios ;;
-  mac) CAPY_SCHEME=CapyCanvas-Mac; CAPY_DEST='generic/platform=macOS'; CAPY_RUST_TARGET=aarch64-apple-darwin ;;
-  *) echo 'Usage: release.sh ipad|mac [build|publish]' >&2; exit 1 ;;
+  mac|mac-store) CAPY_SCHEME=CapyCanvas-Mac; CAPY_DEST='generic/platform=macOS'; CAPY_RUST_TARGET=aarch64-apple-darwin ;;
+  *) echo 'Usage: release.sh ipad|mac|mac-store [build|export|publish]' >&2; exit 1 ;;
 esac
 CAPY_ACTION=${2:-build}
-[[ $CAPY_ACTION == build || $CAPY_ACTION == publish ]] || { echo 'Expected build or publish' >&2; exit 1; }
+[[ $CAPY_ACTION == build || $CAPY_ACTION == export || $CAPY_ACTION == publish ]] || { echo 'Expected build, export or publish' >&2; exit 1; }
 CAPY_VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$CAPY_APP/../../Cargo.toml")
 CAPY_OUT="$CAPY_APP/../../dist/apple-$1"
 CAPY_ARCHIVE="$CAPY_OUT/$CAPY_SCHEME.xcarchive"
 CAPY_APP_BUNDLE="$CAPY_ARCHIVE/Products/Applications/$CAPY_SCHEME.app"
 CAPY_AUTH=(-allowProvisioningUpdates -authenticationKeyPath "${CAPY_APPLE_KEY:-}"
   -authenticationKeyID "${CAPY_APPLE_KEY_ID:-}" -authenticationKeyIssuerID "${CAPY_APPLE_ISSUER:-}")
-if [[ $CAPY_ACTION == publish ]]; then
-  [[ $1 == ipad && -n "${CAPY_APPLE_TEAM:-}" && -d "$CAPY_ARCHIVE" ]] || { echo 'Publishing needs a signed iPad archive and Apple credentials' >&2; exit 1; }
+if [[ $CAPY_ACTION != build ]]; then
+  [[ $1 != mac && -n "${CAPY_APPLE_TEAM:-}" && -d "$CAPY_ARCHIVE" && -f "${CAPY_APPLE_KEY:-}" &&
+    -n "${CAPY_APPLE_KEY_ID:-}" && -n "${CAPY_APPLE_ISSUER:-}" ]] || { echo 'Store export needs an iPad or Mac Store archive and Apple credentials' >&2; exit 1; }
+  CAPY_EXPORT_DESTINATION=export
+  [[ $CAPY_ACTION != publish ]] || CAPY_EXPORT_DESTINATION=upload
   cat > "$CAPY_OUT/export.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict><key>method</key><string>app-store-connect</string>
-<key>destination</key><string>upload</string><key>teamID</key><string>$CAPY_APPLE_TEAM</string></dict></plist>
+<key>destination</key><string>$CAPY_EXPORT_DESTINATION</string><key>teamID</key><string>$CAPY_APPLE_TEAM</string>
+<key>signingStyle</key><string>automatic</string><key>manageAppVersionAndBuildNumber</key><false/></dict></plist>
 PLIST
   exec xcodebuild -exportArchive -archivePath "$CAPY_ARCHIVE" -exportOptionsPlist "$CAPY_OUT/export.plist" \
     -exportPath "$CAPY_OUT/export" "${CAPY_AUTH[@]}"
@@ -37,13 +41,13 @@ elif [[ $1 == mac ]]; then
   CAPY_SIGNING=("DEVELOPMENT_TEAM=$CAPY_APPLE_TEAM" CODE_SIGN_STYLE=Manual
     'CODE_SIGN_IDENTITY=Developer ID Application' OTHER_CODE_SIGN_FLAGS=--timestamp)
 else
-  CAPY_SIGNING=("DEVELOPMENT_TEAM=$CAPY_APPLE_TEAM" "${CAPY_AUTH[@]}")
+  CAPY_SIGNING=("DEVELOPMENT_TEAM=$CAPY_APPLE_TEAM" CODE_SIGN_STYLE=Automatic 'CODE_SIGN_IDENTITY=Apple Development' "${CAPY_AUTH[@]}")
 fi
 xcodebuild archive -quiet -project "$CAPY_APP/CapyCanvas.xcodeproj" -scheme "$CAPY_SCHEME" \
   -destination "$CAPY_DEST" -archivePath "$CAPY_ARCHIVE" \
   -resultBundlePath "$CAPY_OUT/$CAPY_SCHEME.xcresult" \
   -derivedDataPath "${CAPY_DERIVED_DATA:-$CAPY_APP/DerivedData}" "${CAPY_SIGNING[@]}" 2>&1 | tee "$CAPY_OUT/archive.log"
-[[ $1 == ipad ]] && exit 0
+[[ $1 != mac ]] && exit 0
 mkdir "$CAPY_OUT/dmg"
 ditto "$CAPY_APP_BUNDLE" "$CAPY_OUT/dmg/Capy Canvas.app"
 ln -s /Applications "$CAPY_OUT/dmg/Applications"

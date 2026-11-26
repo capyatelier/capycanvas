@@ -1,6 +1,7 @@
 """Exercise archive and upload boundaries without Xcode or signing services."""
 import json
 import os
+import plistlib
 from pathlib import Path
 import shutil
 import subprocess
@@ -82,7 +83,10 @@ class ReleaseTests(unittest.TestCase):
     def run_release(self, *arguments, team=None):
         environment = dict(self.environment)
         if team:
-            environment["CAPY_APPLE_TEAM"] = team
+            key = self.root / 'AuthKey.p8'
+            key.touch()
+            environment.update(CAPY_APPLE_TEAM=team, CAPY_APPLE_KEY=str(key),
+                               CAPY_APPLE_KEY_ID='KEY', CAPY_APPLE_ISSUER='ISSUER')
         return subprocess.run(["bash", str(self.script), *arguments], env=environment, capture_output=True, text=True)
 
     def test_unsigned_archive_cannot_upload(self):
@@ -110,17 +114,42 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn("exit 65", result.stderr)
         self.assertFalse((self.archive.parent / "export.plist").exists())
 
-    def test_publish_uses_the_existing_archive_without_rebuilding(self):
-        self.archive.mkdir(parents=True)
-        marker = self.archive / "preserved"
-        marker.write_bytes(b"original archive")
-        self.environment["CAPY_TEST_PUBLISH"] = "1"
-        result = self.run_release("ipad", "publish", team="TEAM")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        call = json.loads(self.log.read_text())
-        self.assertEqual(call[0], "-exportArchive")
-        self.assertEqual(Path(call[call.index("-archivePath") + 1]).resolve(), self.archive)
-        self.assertEqual(marker.read_bytes(), b"original archive")
+    def test_store_exports_preserve_archives_and_upload_only_when_requested(self):
+        for platform, scheme in [('ipad', 'CapyCanvas-iPad'), ('mac-store', 'CapyCanvas-Mac')]:
+            archive = self.root / f'dist/apple-{platform}/{scheme}.xcarchive'
+            archive.mkdir(parents=True)
+            marker = archive / 'preserved'
+            marker.write_bytes(b'original archive')
+            self.environment['CAPY_TEST_PUBLISH'] = '1'
+            for action, destination in [('export', 'export'), ('publish', 'upload')]:
+                with self.subTest(platform=platform, action=action):
+                    result = self.run_release(platform, action, team='TEAM')
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    call = json.loads(self.log.read_text())
+                    self.assertEqual(call[0], '-exportArchive')
+                    self.assertEqual(Path(call[call.index('-archivePath') + 1]).resolve(), archive)
+                    self.assertIn('-allowProvisioningUpdates', call)
+                    options = plistlib.loads((archive.parent / 'export.plist').read_bytes())
+                    self.assertEqual(options, {'method': 'app-store-connect', 'destination': destination,
+                                              'teamID': 'TEAM', 'signingStyle': 'automatic',
+                                              'manageAppVersionAndBuildNumber': False})
+                    self.assertEqual(marker.read_bytes(), b'original archive')
+                    self.assertFalse(self.dmg_log.exists())
+
+    def test_mac_store_archive_is_separate_from_direct_distribution(self):
+        for team in (None, 'TEAM'):
+            with self.subTest(team=team):
+                result = self.run_release('mac-store', team=team)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                call = json.loads(self.log.read_text())
+                archive = self.root / 'dist/apple-mac-store/CapyCanvas-Mac.xcarchive'
+                self.assertTrue(archive.is_dir())
+                self.assertEqual(call[call.index('-scheme') + 1], 'CapyCanvas-Mac')
+                self.assertNotIn('CODE_SIGN_IDENTITY=Developer ID Application', call)
+                self.assertIn('CODE_SIGN_IDENTITY=Apple Development' if team else 'CODE_SIGNING_ALLOWED=NO', call)
+                self.assertFalse((archive.parent / 'export.plist').exists())
+                self.assertFalse(self.dmg_log.exists())
+                self.assertFalse((self.root / 'dist/apple-mac').exists())
 
     def test_unsigned_mac_package_verifies_the_disk_image(self):
         result = self.run_release("mac")
@@ -156,14 +185,15 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn("exit 73", result.stderr)
 
     def test_publish_refuses_missing_credentials_or_archive(self):
-        for team in (None, "TEAM"):
-            with self.subTest(team=team):
-                result = self.run_release("ipad", "publish", team=team)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertFalse(self.log.exists())
+        for platform in ('ipad', 'mac-store'):
+            for team in (None, 'TEAM'):
+                with self.subTest(platform=platform, team=team):
+                    result = self.run_release(platform, 'publish', team=team)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(self.log.exists())
 
     def test_invalid_action_and_mac_upload_are_rejected(self):
-        for arguments in (("ipad", "unknown"), ("mac", "publish")):
+        for arguments in (("ipad", "unknown"), ("mac", "publish"), ("mac", "export")):
             with self.subTest(arguments=arguments):
                 result = self.run_release(*arguments, team="TEAM")
                 self.assertNotEqual(result.returncode, 0)

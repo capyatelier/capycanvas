@@ -248,7 +248,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [ipad, mac]
+        platform: [ipad, mac, mac-store]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: |
@@ -258,21 +258,21 @@ jobs:
       - if: env.SIGNED == 'true'
         env:
           API_KEY: ${{ secrets.APPLE_API_KEY }}
-          SIGNING_CERTIFICATE: ${{ matrix.platform == 'ipad' && secrets.APPLE_DEVELOPMENT_P12 || matrix.platform == 'mac' && secrets.APPLE_DEVELOPER_ID_P12 || '' }}
-          SIGNING_PASSWORD: ${{ matrix.platform == 'ipad' && secrets.APPLE_DEVELOPMENT_PASSWORD || matrix.platform == 'mac' && secrets.APPLE_DEVELOPER_ID_PASSWORD || '' }}
-          SIGNING_IDENTITY: ${{ matrix.platform == 'ipad' && 'Apple Development' || 'Developer ID Application' }}
+          SIGNING_CERTIFICATE: ${{ (matrix.platform == 'ipad' || matrix.platform == 'mac-store') && secrets.APPLE_DEVELOPMENT_P12 || matrix.platform == 'mac' && secrets.APPLE_DEVELOPER_ID_P12 || '' }}
+          SIGNING_PASSWORD: ${{ (matrix.platform == 'ipad' || matrix.platform == 'mac-store') && secrets.APPLE_DEVELOPMENT_PASSWORD || matrix.platform == 'mac' && secrets.APPLE_DEVELOPER_ID_PASSWORD || '' }}
+          SIGNING_IDENTITY: ${{ matrix.platform == 'mac' && 'Developer ID Application' || 'Apple Development' }}
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER_ID: ${{ vars.APPLE_API_ISSUER_ID }}
         run: bash apps/layer-apple/scripts/import-signing.sh
       - run: apps/layer-apple/scripts/release.sh ${{ matrix.platform }}
-      - if: matrix.platform == 'ipad'
-        run: ditto -c -k --keepParent dist/apple-ipad/CapyCanvas-iPad.xcarchive dist/ipad-archive.zip
-      - if: matrix.platform == 'ipad'
+      - if: matrix.platform != 'mac'
+        run: ditto -c -k --keepParent dist/apple-${{ matrix.platform }}/*.xcarchive dist/${{ matrix.platform }}-archive.zip
+      - if: matrix.platform != 'mac'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ipad-archive
-          path: dist/ipad-archive.zip
+          name: ${{ matrix.platform }}-archive
+          path: dist/${{ matrix.platform }}-archive.zip
           if-no-files-found: error
       - if: matrix.platform == 'mac'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -340,20 +340,24 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: python3 tools/build/android_publish.py promote "$VERSION" internal
 
-  ipad-publish:
+  apple-publish:
     if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: [version, checks, flatpak, web, android, windows, apple]
     runs-on: macos-26
     environment: release
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ipad, mac-store]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: ipad-archive
+          name: ${{ matrix.platform }}-archive
           path: dist
       - run: |
-          mkdir -p dist/apple-ipad
-          ditto -x -k dist/ipad-archive.zip dist/apple-ipad
+          mkdir -p dist/apple-${{ matrix.platform }}
+          ditto -x -k dist/${{ matrix.platform }}-archive.zip dist/apple-${{ matrix.platform }}
       - env:
           API_KEY: ${{ secrets.APPLE_API_KEY }}
           SIGNING_CERTIFICATE: ${{ secrets.APPLE_DEVELOPMENT_P12 }}
@@ -363,11 +367,11 @@ jobs:
           APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER_ID: ${{ vars.APPLE_API_ISSUER_ID }}
         run: bash apps/layer-apple/scripts/import-signing.sh
-      - run: bash apps/layer-apple/scripts/release.sh ipad publish
+      - run: bash apps/layer-apple/scripts/release.sh ${{ matrix.platform }} publish
 
   summary:
     if: ${{ always() }}
-    needs: [version, checks, flatpak, web, android, windows, apple, android-publish, ipad-publish]
+    needs: [version, checks, flatpak, web, android, windows, apple, android-publish, apple-publish]
     runs-on: ubuntu-24.04
     steps:
       - name: Record every job and the tested revision
@@ -381,14 +385,15 @@ jobs:
           import json, os, pathlib
           results = json.loads(os.environ['RESULTS'])
           publish = os.environ['SIGNED'] == 'true'
-          excluded = 'Hardware required: renderer pixel/reference suites, GPU timestamp/timing and pipeline-cache qualification, native canvas UI journeys, physical pen/touch, HDR, device loss and performance. CPU models and Windows WARP tests do not qualify hardware rendering. Signing and store acceptance are exercised only by tag pushes.'
-          report = {'commit': os.environ['SOURCE_REF'], 'workflow_commit': os.environ['GITHUB_SHA'], 'ref': os.environ['GITHUB_REF'], 'publish': publish, 'windows_packages_only': os.environ.get('WINDOWS_PACKAGES_ONLY', 'false') == 'true', 'jobs': {name: job['result'] for name, job in results.items()}, 'hardware_checks': excluded}
+          excluded = 'Hardware required: renderer pixel/reference suites, GPU timestamp/timing and pipeline-cache qualification, native canvas UI journeys, physical pen/touch, HDR, device loss and performance. CPU models and Windows WARP tests do not qualify hardware rendering. Signing and store uploads are exercised only by tag pushes; processing and App Review are checked separately.'
+          stores = {'archives': ['ipad-archive', 'mac-store-archive'], 'archive_job_result': results.get('apple', {}).get('result', 'skipped'), 'upload_job_result': results.get('apple-publish', {}).get('result', 'skipped'), 'unsigned_dry_run': not publish}
+          report = {'apple_stores': stores, 'commit': os.environ['SOURCE_REF'], 'workflow_commit': os.environ['GITHUB_SHA'], 'ref': os.environ['GITHUB_REF'], 'publish': publish, 'windows_packages_only': os.environ.get('WINDOWS_PACKAGES_ONLY', 'false') == 'true', 'jobs': {name: job['result'] for name, job in results.items()}, 'hardware_checks': excluded}
           pathlib.Path('report/results.json').write_text(json.dumps(report, indent=2) + '\n')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               summary.write(f"{'Release' if publish else 'Release dry run'} at `{report['commit']}`\n\n| Job | Result |\n| --- | --- |\n")
               for name, result in report['jobs'].items():
                   summary.write(f'| {name} | {result} |\n')
-              summary.write('\n' + excluded + '\n')
+              summary.write('\nApple Store archive build: ' + stores['archive_job_result'] + ' (`ipad-archive`, `mac-store-archive`). ' + ('Store uploads require both Apple publish matrix jobs to succeed.' if publish else 'Unsigned dry run: no Store export, signing or upload.') + '\n\n' + excluded + '\n')
           PYCODE
       - if: needs.windows.result == 'success' && (inputs.windows-packages-only || (needs.apple.result == 'success' && needs.web.result == 'success' && needs.flatpak.result == 'success' && needs.android.result == 'success'))
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -399,7 +404,8 @@ jobs:
       - if: github.event_name == 'workflow_dispatch' && needs.apple.result == 'success'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: ipad-archive
+          pattern: '*-archive'
+          merge-multiple: true
           path: report/packages
       - run: |
           if [[ -d report/packages ]]; then (cd report/packages && sha256sum -- * > ../SHA256SUMS); fi
@@ -419,7 +425,7 @@ jobs:
           python3 - <<'PYCODE'
           import json, os, sys
           results = json.loads(os.environ['RESULTS'])
-          required = {'version', 'windows'} if os.environ.get('WINDOWS_PACKAGES_ONLY', 'false') == 'true' else set(results) - ({'android-publish', 'ipad-publish'} if os.environ['SIGNED'] != 'true' else set())
+          required = {'version', 'windows'} if os.environ.get('WINDOWS_PACKAGES_ONLY', 'false') == 'true' else set(results) - ({'android-publish', 'apple-publish'} if os.environ['SIGNED'] != 'true' else set())
           sys.exit(any(results[name]['result'] != 'success' for name in required))
           PYCODE
 
