@@ -364,6 +364,7 @@ workspace-tool-description-transform-lanczos = 세부 묘사를 최대한 유지
 workspace-tool-description-color-mix-oklab = 눈에 보이는 색상을 기준으로 흡수한 색상을 고르게 섞습니다.
 workspace-tool-description-color-mix-linear = 빛이 섞이는 방식으로 흡수한 색상을 섞습니다.
 workspace-tool-description-color-mix-classic = Clip Studio Paint와 같은 방식으로 흡수한 색상을 섞습니다.
+workspace-tool-description-taper-auto = 필압 없이 그릴 때 각 끝을 가늘게 합니다.
 workspace-tool-description-taper-off = 선 끝을 원래 굵기로 그립니다.
 workspace-tool-description-taper-fixed = 각 끝을 정해진 선 너비 수만큼 가늘게 합니다.
 workspace-tool-description-taper-proportional = 각 끝을 선 길이의 일부만큼 가늘게 합니다.

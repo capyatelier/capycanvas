@@ -2943,7 +2943,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::ColorMixOklab | CommandId::ColorMixLinear | CommandId::ColorMixClassic => {
                 tool_settings::color_mixing_visible(self.engine.configured_brush())
             }
-            CommandId::TaperOff | CommandId::TaperFixed | CommandId::TaperProportional => {
+            CommandId::TaperAuto | CommandId::TaperOff | CommandId::TaperFixed | CommandId::TaperProportional => {
                 tool_settings::taper_visible(self.state.brush.preset, self.engine.configured_brush())
             }
             CommandId::EraseTouchedPart | CommandId::EraseWholePaths | CommandId::EraseToIntersection => self.vector_erasing_layer(false).is_some(),
@@ -5641,7 +5641,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.edit_brush(tool_settings::COLOR_MIXING, f32::from(space as u8))?;
                 Ok((BRUSH, false))
             }
-            CommandId::TaperOff | CommandId::TaperFixed | CommandId::TaperProportional => {
+            CommandId::TaperAuto | CommandId::TaperOff | CommandId::TaperFixed | CommandId::TaperProportional => {
                 let mode = tool_settings::taper(command).expect("a taper choice");
                 self.edit_brush(tool_settings::TAPER, f32::from(mode as u8))?;
                 Ok((BRUSH, false))
@@ -6308,7 +6308,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         let Ok(preset) = preset(self.state.brush.preset) else { return; };
         let device = self.tools.brush(preset, self.phone_device());
         let mut brush = self.engine.configured_brush().clone();
-        brush.taper = device.taper;
         brush.stabilization.strength = device.stabilization.strength;
         if brush != *self.engine.configured_brush() && self.engine.set_brush(brush).is_ok() {
             self.refresh_tools();
@@ -10543,6 +10542,7 @@ mod tests {
         let mut active = original.clone();
         let [a, b, ..] = s.state.camera.document_to_surface();
         active.stabilization.input_scale = a.hypot(b);
+        active.taper = active.taper.for_input(true);
         let enabled: Vec<_> = s.state.commands.iter().map(|c| c.enabled).collect();
         s.pen(event(&s, 1, PenPhase::Down, 1.0));
         s.frame(10_000_000, 18_000_000).unwrap();
@@ -10658,6 +10658,7 @@ mod tests {
         let mut active = original.clone();
         let [a, b, ..] = s.state.camera.document_to_surface();
         active.stabilization.input_scale = a.hypot(b);
+        active.taper = active.taper.for_input(true);
         s.pen(event(&s, 1, PenPhase::Down, 1.0));
         s.frame(10_000_000, 18_000_000).unwrap();
         for (id, value) in [("flow", 0.35), ("spacing", 0.2), ("size_jitter", 0.3)] {

@@ -364,6 +364,7 @@ workspace-tool-description-transform-lanczos = En fazla ayrıntıyı koruyarak y
 workspace-tool-description-color-mix-oklab = Alınan renkleri gözün gördüğü gibi eşit karıştırın
 workspace-tool-description-color-mix-linear = Alınan renkleri ışığın karıştığı gibi karıştırın
 workspace-tool-description-color-mix-classic = Alınan renkleri Clip Studio Paint gibi karıştırın
+workspace-tool-description-taper-auto = Kalem basıncı olmadan çizerken her ucu inceltin
 workspace-tool-description-taper-off = Uçları tam genişlikte çizin
 workspace-tool-description-taper-fixed = Her ucu belirli sayıda çizgi genişliği boyunca inceltin
 workspace-tool-description-taper-proportional = Her ucu çizginin bir payı boyunca inceltin

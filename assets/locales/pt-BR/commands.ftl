@@ -226,6 +226,7 @@ command-merge-group = Mesclar grupo
 command-color-mix-oklab = Mistura Oklab
 command-color-mix-linear = Mistura em luz linear
 command-color-mix-classic = Mistura clássica
+command-taper-auto = Afinamento automático
 command-taper-off = Sem afinamento
 command-taper-fixed = Afinamento fixo
 command-taper-proportional = Afinamento proporcional

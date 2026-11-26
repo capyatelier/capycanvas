@@ -715,6 +715,7 @@ workspace-tool-description-color-mix-oklab = Campur warna yang diambil secara me
 workspace-tool-description-color-mix-linear = Campur warna yang diambil seperti pencampuran cahaya
 
 workspace-tool-description-color-mix-classic = Campur warna yang diambil seperti Clip Studio Paint
+workspace-tool-description-taper-auto = Runcingkan setiap ujung saat menggambar tanpa tekanan pena
 workspace-tool-description-taper-off = Gambar ujung dengan lebar penuh
 workspace-tool-description-taper-fixed = Runcingkan setiap ujung sepanjang sejumlah lebar garis
 workspace-tool-description-taper-proportional = Runcingkan setiap ujung sepanjang sebagian garis

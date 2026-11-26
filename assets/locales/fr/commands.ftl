@@ -226,6 +226,7 @@ command-merge-group = Fusionner le groupe
 command-color-mix-oklab = Mélange Oklab
 command-color-mix-linear = Mélange en lumière linéaire
 command-color-mix-classic = Mélange classique
+command-taper-auto = Effilement automatique
 command-taper-off = Sans effilement
 command-taper-fixed = Effilement fixe
 command-taper-proportional = Effilement proportionnel

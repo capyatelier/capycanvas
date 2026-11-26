@@ -710,7 +710,7 @@ fn command_section(command: CommandId) -> ShortcutSection {
         | C::TransformFree | C::TransformUniform | C::TransformDistort | C::TransformPerspective | C::TransformNearest
         | C::TransformBilinear | C::TransformBicubic | C::TransformLanczos | C::CropFitContent | C::MoveLeaveCopy => ShortcutSection::Transform,
         C::FillConnected | C::FillEverywhere | C::SmoothRegionEdges | C::StopAtColors | C::CloseGapsAuto | C::CloseGapsOff | C::EdgesLineMiddle | C::EdgesExact | C::EdgesGrowShrink | C::ColorMixOklab | C::ColorMixLinear | C::ColorMixClassic
-        | C::TaperOff | C::TaperFixed | C::TaperProportional
+        | C::TaperAuto | C::TaperOff | C::TaperFixed | C::TaperProportional
         | C::EraseTouchedPart | C::EraseWholePaths | C::EraseToIntersection | C::ScaleOutlineWidths => ShortcutSection::Painting,
         command if CommandId::TOOLS.contains(&command) => ShortcutSection::Tools,
         C::CloneSourceArm | C::CloneAligned | C::CloneFlipHorizontal | C::CloneFlipVertical | C::CloneResetOffset => {

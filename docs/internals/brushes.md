@@ -67,7 +67,7 @@ tile does not make it evaluate intervening contacts elsewhere on the canvas.
 
 ## Stroke smoothing
 
-Smoothing is one control from 0 to 100, initially 6, or 20 on a phone
+Smoothing is one control from 0 to 100, initially 6, or 20 for pens and on a phone
 (`tools::defaults`), without a section heading.
 Slider travel is logarithmic, with 30 at 75% of the track.
 Zero bypasses position and pressure smoothing. Each brush keeps its own choices. Selection
@@ -100,10 +100,13 @@ available for mouse and screenless tablets without adding input prediction lead.
 
 ## Tapers
 
-Taper narrows a line's ends. Off, Fixed and Proportional are one choice that opens
-the Taper section, between Smoothing and Tip. Pens start at Off, or at Fixed on a
-phone, as the host's `DeviceClass` reports it (`tools::defaults`); a saved choice
-wins.
+Taper narrows a line's ends. Auto, Off, Fixed and Proportional are one choice that
+opens the Taper section, between Smoothing and Tip. Pens start at Auto; a saved
+choice wins.
+- Auto is decided at pen-down from the event's tool (`BrushTaper::for_input`): a
+  pen or its eraser draws with Off, and a mouse, finger or unknown tool with
+  Fixed ends of 4 widths at pointiness 0.5. The stroke keeps the resolved choice,
+  so replays never see Auto. Auto shows no sliders.
 - Fixed measures each end in full line widths: the slider follows Smoothness's
   curve up to 50 and typed values reach 200 (`BrushTaper::MAX_FIXED_WIDTHS`).
 - Proportional measures each end as a share of the line (0–50 %), at most 50
@@ -116,12 +119,13 @@ wins.
   the end towards the highest pressure between the end's start and that point, so
   a light touch-down or a fading lift does not shorten either, and a press near
   the lift widens only the end from the press on.
-- Pointiness shapes the end: 0 is a round, blunt bullet, 0.5 a soft point and 1 a
-  sharp point with straight sides. The outline is `(1 − (1 − u)²)^(0.5 + 0.5 ×
-  pointiness)` of the end's reference, with `u` the distance from the tip in end
-  lengths; the pen's own value blends back in over the outer half, never below
-  the line's value where the end begins, so a fading lift leaves the end's shape
-  unchanged (`brush::taper::shaped`).
+- Pointiness shapes the end: 0 is a stubby bullet, 0.5 a round end and 1 a sharp
+  point with straight sides. The outline is `(1 − (1 − u)²)^e` of the end's
+  reference, with `u` the distance from the tip in end lengths and `e` the
+  pointiness from 0.5 up, or rising from 0.12 to 0.5 below it; the pen's own
+  value blends back in over the outer half, never below the line's value where
+  the end begins, so a fading lift leaves the end's shape unchanged
+  (`brush::taper::shaped`).
 
 Taper acts on the output of the brush's Pressure → size curve and on the ink's
 contact pressure, so size ranges and floors still apply. It never moves or drops a

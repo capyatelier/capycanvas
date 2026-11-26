@@ -302,7 +302,7 @@ fn a_light_touch_down_and_a_slow_lift_keep_full_length_tapers() {
 
 fn end_profile(brush: &BrushSnapshot) -> f32 {
     let dabs = draw(brush, line(400., |_| 1.));
-    let exponent = 0.5 + 0.5 * brush.taper.pointiness;
+    let exponent = super::taper::exponent(brush.taper.pointiness);
     let zone = brush.taper.fixed_widths[1] * 18.;
     let expected = |x: f32| 18. * (0.99 * super::taper::shaped(1., 1., 1., x / zone, exponent) + 0.01);
     let drawn = |x: f32| {
@@ -315,11 +315,21 @@ fn end_profile(brush: &BrushSnapshot) -> f32 {
 }
 
 #[test]
-fn a_round_end_follows_its_profile_over_the_last_width() {
-    let mut brush = pen(taper(TaperMode::Fixed, [3., 3.]));
-    brush.taper.pointiness = 0.;
-    let error = end_profile(&brush);
-    assert!(error <= 0.1, "{error}");
+fn round_and_blunt_ends_follow_their_profiles_over_the_last_width() {
+    for pointiness in [0.5, 0.25, 0.] {
+        let mut brush = pen(taper(TaperMode::Fixed, [3., 3.]));
+        brush.taper.pointiness = pointiness;
+        let error = end_profile(&brush);
+        assert!(error <= 0.1, "{pointiness}: {error}");
+    }
+}
+
+#[test]
+fn pointiness_keeps_todays_range_above_half_and_blunts_the_end_below() {
+    let exponent = super::taper::exponent;
+    assert_eq!([0.5, 0.75, 1.].map(exponent), [0.5, 0.75, 1.]);
+    assert!((exponent(0.25) - 0.31).abs() < 1e-6, "{}", exponent(0.25));
+    assert!((exponent(0.) - 0.12).abs() < 1e-6, "{}", exponent(0.));
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -489,11 +499,11 @@ fn failures(situation: Situation, raw: bool) -> Vec<&'static str> {
         let reach = if steady { 1. } else { 0.5 };
         let grid = |to: f32| (1..=(to * 500.) as u32).map(|i| i as f32 / 500.);
         match situation.pointiness {
-            0. => {
+            0.5 => {
                 if grid(reach).filter(|u| *u >= 0.02).any(|u| (profile(u) - ellipse(u)).abs() > 0.1 * ellipse(u)) { failed.push("a ellipse"); }
                 if profile(0.25) < 0.6 { failed.push("a W(0.25)"); }
             }
-            0.5 => {
+            0.75 => {
                 if !(0.08..=0.2).contains(&profile(0.02)) { failed.push("b W(0.02)"); }
                 if profile(0.25) > 0.65 { failed.push("b W(0.25)"); }
             }
@@ -515,7 +525,7 @@ fn failures(situation: Situation, raw: bool) -> Vec<&'static str> {
         let reference = Shape { raw, ..Situation { pressure: Pressure::LiftFade(0.), ..situation }.shape(length) };
         if [0.1, 0.25, 0.5].iter().any(|u| (shape.end(*u) - reference.end(*u)).abs() > 0.08) { failed.push("f lift"); }
     }
-    let outline = |u: f32| super::taper::outline(u, 0.5 + 0.5 * situation.pointiness);
+    let outline = |u: f32| super::taper::outline(u, super::taper::exponent(situation.pointiness));
     let grid = (0..=500).map(|i| i as f32 / 500.);
     let [start, end] = shape.settles();
     let dip = 2e-3 * situation.diameter;
@@ -539,7 +549,7 @@ fn situations() -> Vec<Situation> {
     for preset in [DefaultBrushPreset::GPen, DefaultBrushPreset::Monoline] {
         for diameter in [6., 18., 100.] {
             for widths in [1., 3., 10., 50.] {
-                for pointiness in [0., 0.5, 1.] {
+                for pointiness in [0.5, 0.75, 1.] {
                     for pressure in [
                         Pressure::Constant(1.),
                         Pressure::Constant(0.5),

@@ -364,6 +364,7 @@ workspace-tool-description-transform-lanczos = 重采样并保留最多细节
 workspace-tool-description-color-mix-oklab = 按视觉感受均匀混合拾取的颜色
 workspace-tool-description-color-mix-linear = 按光的方式混合拾取的颜色
 workspace-tool-description-color-mix-classic = 像 Clip Studio Paint 一样混合拾取的颜色
+workspace-tool-description-taper-auto = 不使用笔压绘画时，让两端变细
 workspace-tool-description-taper-off = 以完整宽度绘制线条两端
 workspace-tool-description-taper-fixed = 让两端在固定数量的线宽内变细
 workspace-tool-description-taper-proportional = 让两端在线条的一定比例内变细

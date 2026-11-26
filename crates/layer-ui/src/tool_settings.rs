@@ -196,7 +196,7 @@ impl Definition {
         match self.id {
             "taper_start_widths" | "taper_end_widths" => taper(|mode| mode == TaperMode::Fixed),
             "taper_start_share" | "taper_end_share" => taper(|mode| mode == TaperMode::Proportional),
-            "taper_pointiness" => taper(|mode| mode != TaperMode::Off),
+            "taper_pointiness" => taper(|mode| matches!(mode, TaperMode::Fixed | TaperMode::Proportional)),
             "paint" | "dilution" => brush.execution_class() != BrushExecution::Smudge,
             "pull" => brush.execution_class() != BrushExecution::Smudge || !matches!(brush.blender.kind,
                 BlenderKind::Blur | BlenderKind::Sharpen | BlenderKind::Crystal | BlenderKind::Comb | BlenderKind::Dither),
@@ -350,9 +350,9 @@ pub(crate) fn stored<'a>(id: &'a str, brush: &BrushSnapshot) -> &'a str {
 }
 
 pub(crate) const TAPER: &str = "taper";
-pub(crate) const TAPER_COMMANDS: [crate::CommandId; 3] =
-    [crate::CommandId::TaperOff, crate::CommandId::TaperFixed, crate::CommandId::TaperProportional];
-const TAPER_MODES: [TaperMode; 3] = [TaperMode::Off, TaperMode::Fixed, TaperMode::Proportional];
+pub(crate) const TAPER_COMMANDS: [crate::CommandId; 4] =
+    [crate::CommandId::TaperAuto, crate::CommandId::TaperOff, crate::CommandId::TaperFixed, crate::CommandId::TaperProportional];
+const TAPER_MODES: [TaperMode; 4] = [TaperMode::Auto, TaperMode::Off, TaperMode::Fixed, TaperMode::Proportional];
 pub(crate) const NOT_TAPERING: &str = "Choose a pen first";
 
 pub(crate) fn taper(command: crate::CommandId) -> Option<TaperMode> {
@@ -943,7 +943,7 @@ mod tests {
             for mode in TAPER_MODES {
                 brush.taper.mode = mode;
                 let ids = controls(choice.id, &brush, &english).into_iter().map(|c| c.id).filter(|id| id.starts_with("taper_")).count();
-                assert_eq!(ids, if shown && mode != TaperMode::Off { 3 } else { 0 }, "{} {mode:?}", choice.label);
+                assert_eq!(ids, if shown && matches!(mode, TaperMode::Fixed | TaperMode::Proportional) { 3 } else { 0 }, "{} {mode:?}", choice.label);
                 assert_eq!(value(choice.id, &brush, TAPER).is_some(), shown, "{}", choice.label);
             }
         }

@@ -364,6 +364,7 @@ workspace-tool-description-transform-lanczos = Remuestrear conservando el mayor 
 workspace-tool-description-color-mix-oklab = Mezclar uniformemente los colores recogidos según su percepción visual
 workspace-tool-description-color-mix-linear = Mezclar los colores recogidos como se mezcla la luz
 workspace-tool-description-color-mix-classic = Mezclar los colores recogidos como Clip Studio Paint
+workspace-tool-description-taper-auto = Estrechar cada extremo al dibujar sin presión del lápiz
 workspace-tool-description-taper-off = Dibujar los extremos con la anchura completa
 workspace-tool-description-taper-fixed = Estrechar cada extremo a lo largo de un número fijo de anchuras de línea
 workspace-tool-description-taper-proportional = Estrechar cada extremo a lo largo de una parte de la línea

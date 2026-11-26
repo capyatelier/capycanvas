@@ -133,8 +133,8 @@ it. Command search labels the control Smoothing.
 Secondary categories follow a shared order: Taper, Tip, Material, Texture, Bristles,
 Mixing, Watercolor, Bleed, Liquify and Blending. Brush Color mixing joins the
 secondary Mixing category in Tool Options. For pens, the Taper section opens with
-the Taper type choice (Off, Fixed, Proportional), a labeled row of icon radio
-buttons, and then Taper start, Taper end and Pointiness. Fixed and Proportional
+the Taper type choice (Auto, Off, Fixed, Proportional), a labeled row of icon radio
+buttons, and then, for Fixed and Proportional, Taper start, Taper end and Pointiness. Fixed and Proportional
 share the `taper_start` and `taper_end` rows, whose range, unit and value follow
 the type; each type keeps its saved values under `taper_*_widths` or
 `taper_*_share`, which commands and saved rings still accept. Opacity belongs to

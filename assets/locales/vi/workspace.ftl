@@ -363,6 +363,7 @@ workspace-tool-description-transform-lanczos = Lấy mẫu lại giữ nhiều c
 workspace-tool-description-color-mix-oklab = Hòa đều màu đã lấy theo cảm nhận của mắt
 workspace-tool-description-color-mix-linear = Hòa màu đã lấy như ánh sáng
 workspace-tool-description-color-mix-classic = Hòa màu đã lấy như Clip Studio Paint
+workspace-tool-description-taper-auto = Thon mỗi đầu khi vẽ không có lực nhấn bút
 workspace-tool-description-taper-off = Vẽ hai đầu nét với độ rộng đầy đủ
 workspace-tool-description-taper-fixed = Thon mỗi đầu trong một số lần độ rộng nét cố định
 workspace-tool-description-taper-proportional = Thon mỗi đầu trong một phần của nét

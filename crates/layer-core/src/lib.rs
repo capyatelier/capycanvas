@@ -574,10 +574,11 @@ impl Default for BrushStabilization {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TaperMode {
-    #[default]
     Off,
     Fixed,
     Proportional,
+    #[default]
+    Auto,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -591,10 +592,25 @@ pub struct BrushTaper {
 impl BrushTaper {
     pub const MAX_FIXED_WIDTHS: f32 = 200.0;
     pub const MAX_PROPORTIONAL_SHARE: f32 = 0.5;
+    pub const AUTO_WIDTHS: f32 = 4.0;
+    pub const AUTO_POINTINESS: f32 = 0.5;
+
+    pub fn for_input(self, pressure: bool) -> Self {
+        match self.mode {
+            TaperMode::Auto if pressure => Self { mode: TaperMode::Off, ..self },
+            TaperMode::Auto => Self {
+                mode: TaperMode::Fixed,
+                fixed_widths: [Self::AUTO_WIDTHS; 2],
+                pointiness: Self::AUTO_POINTINESS,
+                ..self
+            },
+            _ => self,
+        }
+    }
 
     pub fn lengths(&self) -> Option<[f32; 2]> {
         match self.mode {
-            TaperMode::Off => None,
+            TaperMode::Off | TaperMode::Auto => None,
             TaperMode::Fixed => Some(self.fixed_widths),
             TaperMode::Proportional => Some(self.proportional_shares),
         }
@@ -612,7 +628,7 @@ impl BrushTaper {
 impl Default for BrushTaper {
     fn default() -> Self {
         Self {
-            mode: TaperMode::Off,
+            mode: TaperMode::Auto,
             fixed_widths: [4.0, 4.0],
             proportional_shares: [0.3, 0.3],
             pointiness: 0.5,

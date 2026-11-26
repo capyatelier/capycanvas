@@ -226,6 +226,7 @@ command-merge-group = Unisci gruppo
 command-color-mix-oklab = Mescolanza Oklab
 command-color-mix-linear = Mescolanza in luce lineare
 command-color-mix-classic = Mescolanza classica
+command-taper-auto = Assottigliamento automatico
 command-taper-off = Nessun assottigliamento
 command-taper-fixed = Assottigliamento fisso
 command-taper-proportional = Assottigliamento proporzionale

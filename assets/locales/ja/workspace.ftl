@@ -364,6 +364,7 @@ workspace-tool-description-transform-lanczos = 細部を最も多く保って再
 workspace-tool-description-color-mix-oklab = 取り込んだ色を、見た目に均等に混ぜます。
 workspace-tool-description-color-mix-linear = 取り込んだ色を、光と同様に混ぜます。
 workspace-tool-description-color-mix-classic = 取り込んだ色を、Clip Studio Paintと同様に混ぜます。
+workspace-tool-description-taper-auto = 筆圧なしで描くとき、線の両端を細くします。
 workspace-tool-description-taper-off = 線の端も同じ太さで描きます。
 workspace-tool-description-taper-fixed = 線の両端を、決まった線幅の数だけかけて細くします。
 workspace-tool-description-taper-proportional = 線の両端を、線の長さの一部をかけて細くします。

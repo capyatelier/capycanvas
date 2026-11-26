@@ -364,6 +364,7 @@ workspace-tool-description-transform-lanczos = Resample keeping the most detail
 workspace-tool-description-color-mix-oklab = Mix picked-up colors evenly, as the eye sees them
 workspace-tool-description-color-mix-linear = Mix picked-up colors as light mixes
 workspace-tool-description-color-mix-classic = Mix picked-up colors like Clip Studio Paint
+workspace-tool-description-taper-auto = Narrow each end when drawing without pen pressure
 workspace-tool-description-taper-off = Draw ends at full width
 workspace-tool-description-taper-fixed = Narrow each end over a set number of line widths
 workspace-tool-description-taper-proportional = Narrow each end over a share of the line

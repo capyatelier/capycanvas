@@ -431,6 +431,7 @@ command-color-mix-oklab = Pencampuran Oklab
 command-color-mix-linear = Pencampuran cahaya linear
 
 command-color-mix-classic = Pencampuran klasik
+command-taper-auto = Peruncingan otomatis
 command-taper-off = Tanpa peruncingan
 command-taper-fixed = Peruncingan tetap
 command-taper-proportional = Peruncingan proporsional

@@ -18,6 +18,7 @@ const THIN_SHARE: f32 = 0.02;
 const PREVIEW_SHARE: f32 = 0.04;
 const FIRST_SAMPLE: f32 = 1e-4;
 const SAMPLE_RATIO: f32 = 1.5;
+const BLUNTEST: f32 = 0.12;
 
 #[derive(Clone, Copy, Debug)]
 struct Resolution {
@@ -76,6 +77,10 @@ impl Transfer {
     pub(super) fn apply(self, value: f32, scale: impl Fn(f32) -> f32) -> f32 {
         shaped(value, scale(self.pressure), scale(self.floor), self.progress, self.exponent)
     }
+}
+
+pub(super) fn exponent(pointiness: f32) -> f32 {
+    if pointiness >= 0.5 { pointiness } else { BLUNTEST + (0.5 - BLUNTEST) * 2. * pointiness }
 }
 
 pub(super) fn outline(progress: f32, exponent: f32) -> f32 {
@@ -164,7 +169,7 @@ impl TaperPlan {
         Some(Self {
             proportional: brush.taper.mode == TaperMode::Proportional,
             lengths,
-            exponent: 0.5 + 0.5 * brush.taper.pointiness,
+            exponent: exponent(brush.taper.pointiness),
             mapping: index,
             full_width,
             pages: MAX_HELD_PAGES.max(Self::contact_pages(full_width)),

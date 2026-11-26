@@ -1428,6 +1428,7 @@ pub fn tool_choice_localized(control: ToolbarControl, localization: &Localizer) 
                 CommandId::ColorMixOklab => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_COLOR_MIX_OKLAB).to_string(),
                 CommandId::ColorMixLinear => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_COLOR_MIX_LINEAR).to_string(),
                 CommandId::ColorMixClassic => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_COLOR_MIX_CLASSIC).to_string(),
+                CommandId::TaperAuto => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_TAPER_AUTO).to_string(),
                 CommandId::TaperOff => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_TAPER_OFF).to_string(),
                 CommandId::TaperFixed => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_TAPER_FIXED).to_string(),
                 CommandId::TaperProportional => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_TAPER_PROPORTIONAL).to_string(),

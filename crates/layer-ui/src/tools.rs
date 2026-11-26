@@ -378,12 +378,11 @@ pub fn preset(id: u32) -> Result<DefaultBrushPreset, String> {
         .map(|p| p.0)
         .ok_or_else(|| "Unknown brush".into())
 }
-const PHONE_SMOOTHING: f32 = 0.2;
+const SMOOTHING: f32 = 0.2;
 pub(crate) fn defaults(preset: DefaultBrushPreset, phone: bool) -> BrushSnapshot {
     let mut brush = layer_core::default_brush(preset);
-    if phone {
-        brush.stabilization.strength = PHONE_SMOOTHING;
-        if crate::tool_settings::taper_visible(preset as u32, &brush) { brush.taper.mode = layer_core::TaperMode::Fixed; }
+    if phone || group(preset as u32) == ToolGroup::Pen {
+        brush.stabilization.strength = SMOOTHING;
     }
     brush
 }

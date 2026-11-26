@@ -2107,8 +2107,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         Ok(())
     }
 
-    pub(crate) fn stroke_brush(&self) -> BrushSnapshot {
+    pub(crate) fn stroke_brush(&self, tool: ToolKind) -> BrushSnapshot {
         let mut brush = self.settings.brush.clone();
+        brush.taper = brush.taper.for_input(tool.is_pen());
         brush.stabilization.input_scale = self.view.document_to_surface[0].hypot(self.view.document_to_surface[1]).max(f32::EPSILON);
         brush
     }
@@ -2182,7 +2183,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     return Ok(());
                 }
                 let id = self.editor.allocate_stroke_id();
-                let mut brush = self.stroke_brush();
+                let mut brush = self.stroke_brush(event.tool);
                 let mut feedback = self.settings.instant_feedback;
                 if is_mask {
                     // Coverage brushes use the same tip/dynamics, not pigment or fluid state.
@@ -5945,7 +5946,7 @@ mod tests {
                 engine.render_frame().unwrap();
             }
             assert!(!engine.active_stroke.as_ref().unwrap().feedback.enabled);
-            assert!(engine.backend.preview.is_empty());
+            assert_eq!(engine.backend.preview.is_empty(), engine.active_stroke.as_ref().unwrap().taper.is_none(), "{tool:?}");
             input
                 .push(PenEvent {
                     tool,
@@ -7172,6 +7173,7 @@ mod tests {
             let (mut input, mut engine) = engine("vector smoothing", 1024, 512);
             let mut brush = default_brush(DefaultBrushPreset::GPen);
             brush.stabilization.strength = 0.5;
+            brush.taper.mode = layer_core::TaperMode::Off;
             engine.set_brush(brush).unwrap();
             engine.set_view(ViewState { document_to_surface: [2., 0., 0., 2., 0., 0.], ..view(1024, 512) },
                 ViewTransform { revision: 2, surface_to_document: [0.5, 0., 0., 0.5, 0., 0.] });
@@ -7307,6 +7309,24 @@ mod tests {
             let persistent = &engine.backend.persistent;
             assert!(width(&persistent[0]) <= 0.15 * 18. && width(persistent.last().unwrap()) <= 0.15 * 18.);
             assert_matches_replay(&mut engine, &live);
+        }
+    }
+
+    #[test]
+    fn auto_taper_tapers_only_strokes_without_pen_pressure() {
+        let auto = layer_core::BrushTaper::default();
+        for (tool, tapered) in [(ToolKind::Pen, false), (ToolKind::Mouse, true), (ToolKind::Finger, true)] {
+            let (mut input, mut engine) = tapered_engine(auto, false);
+            let events: Vec<_> = circle(240).into_iter().map(|sample| PenEvent { tool, ..sample }).collect();
+            draw_tapered(&mut engine, &mut input, &events, 4, |_, _| {});
+            let expected = if tapered {
+                layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: [4.; 2], pointiness: 0.5, ..auto }
+            } else {
+                layer_core::BrushTaper { mode: layer_core::TaperMode::Off, ..auto }
+            };
+            assert_eq!(engine.completed_stroke.as_ref().unwrap().brush.taper, expected, "{tool:?}");
+            let width = |dab: &layer_render::Dab| dab.radii[0] * 2.;
+            assert_eq!(width(&engine.backend.persistent[0]) < 0.5 * 18., tapered, "{tool:?}");
         }
     }
 

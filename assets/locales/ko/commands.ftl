@@ -226,6 +226,7 @@ command-merge-group = 그룹 병합
 command-color-mix-oklab = Oklab 혼색
 command-color-mix-linear = 선형광 혼색
 command-color-mix-classic = 클래식 혼색
+command-taper-auto = 자동 테이퍼
 command-taper-off = 테이퍼 없음
 command-taper-fixed = 고정 테이퍼
 command-taper-proportional = 비율 테이퍼

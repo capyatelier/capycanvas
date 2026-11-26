@@ -259,7 +259,7 @@ fn taper_preview_widths(taper: &BrushTaper) -> f32 {
             let [start, end] = taper.fixed_widths;
             (start + end + 2.).max(3. * start.max(end)).min(28.)
         }
-        TaperMode::Off | TaperMode::Proportional => 12.,
+        TaperMode::Off | TaperMode::Auto | TaperMode::Proportional => 12.,
     }
 }
 

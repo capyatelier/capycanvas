@@ -74,7 +74,7 @@ fn taper_section_follows_smoothing_with_its_choice_then_the_current_mode_sliders
         let options = s.state.tool_options();
         let at = options.iter().position(|o| matches!(o, ToolOption::Choice { id: "taper", .. }))?;
         let ToolOption::Choice { label, labeled: true, segmented: true, items, heading, .. } = &options[at] else { panic!("an inline labeled bar") };
-        assert_eq!((label.as_ref(), items.len()), ("Taper type", 3));
+        assert_eq!((label.as_ref(), items.len()), ("Taper type", 4));
         let field = |o: &ToolOption| match o { ToolOption::Numeric(f) => Some(f.clone()), _ => None };
         assert_eq!(field(&options[at - 1]).unwrap().id, "smoothing_strength", "the section follows Smoothing");
         assert_eq!(options[at].anchor(), options.get(at + 1).and_then(field).map(|f| f.id), "hosts place the choice by its anchor");
@@ -89,7 +89,7 @@ fn taper_section_follows_smoothing_with_its_choice_then_the_current_mode_sliders
     };
     let mut s = session(Platform::Gtk);
     s.select_brush(DefaultBrushPreset::GPen as u32).unwrap();
-    assert!(s.command(CommandId::TaperOff).selected);
+    assert!(s.command(CommandId::TaperAuto).selected);
     assert!(s.state.tool_actions.iter().all(|a| tool_settings::taper(a.command).is_none()), "the choice is not a mode bar");
     assert_eq!(section(&s).unwrap(), [""; 0]);
     s.dispatch(UiAction::Invoke { command: CommandId::TaperFixed }).unwrap();
@@ -128,7 +128,7 @@ fn stored_taper_overrides_restore_in_either_order() {
     assert_eq!(expected, layer_core::BrushTaper {
         mode: layer_core::TaperMode::Proportional, fixed_widths: [6., 4.], proportional_shares: [0.3, 0.2], pointiness: 0.8,
     });
-    for (id, value) in [("taper", 3.), ("taper_start_widths", 200.5), ("taper_end_share", 0.6), ("taper_pointiness", -0.1)] {
+    for (id, value) in [("taper", 4.), ("taper_start_widths", 200.5), ("taper_end_share", 0.6), ("taper_pointiness", -0.1)] {
         assert!(edit_value(pen as u32, &layer_core::default_brush(pen), id, value).is_err(), "{id} {value}");
     }
 
@@ -143,7 +143,7 @@ fn stored_taper_overrides_restore_in_either_order() {
 }
 
 #[test]
-fn phone_brushes_default_to_twenty_percent_smoothing_that_saves_nothing() {
+fn pens_and_phone_brushes_default_to_twenty_percent_smoothing_that_saves_nothing() {
     let pencil = DefaultBrushPreset::Pencil as u32;
     let smoothing = |s: &UiSession<Recorder>| s.engine.configured_brush().stabilization.strength;
     for (platform, device, expected) in [(Platform::Gtk, None, 0.06), (Platform::Android, Some(DeviceClass::Tablet), 0.06), (Platform::Android, Some(DeviceClass::Phone), 0.2)] {
@@ -151,6 +151,10 @@ fn phone_brushes_default_to_twenty_percent_smoothing_that_saves_nothing() {
         if let Some(device) = device { s.set_device_class(device); }
         s.select_brush(pencil).unwrap();
         assert_eq!(smoothing(&s), expected, "{platform:?} {device:?}");
+        for pen in crate::tools::group_presets(crate::ToolGroup::Pen) {
+            s.select_brush(pen).unwrap();
+            assert_eq!(smoothing(&s), 0.2, "{platform:?} {device:?} pen {pen}");
+        }
         assert!(s.editing_state().tools.overrides.is_empty());
     }
     let mut s = session(Platform::Android);
@@ -167,7 +171,7 @@ fn phone_brushes_default_to_twenty_percent_smoothing_that_saves_nothing() {
 }
 
 #[test]
-fn phone_pens_default_to_a_fixed_taper_that_saves_nothing() {
+fn pens_default_to_auto_taper_that_saves_nothing() {
     use layer_core::TaperMode;
     let pen = DefaultBrushPreset::GPen as u32;
     let sized = |platform, device: Option<DeviceClass>, viewport: [u32; 2], overrides: Option<(&str, f32)>| {
@@ -184,31 +188,25 @@ fn phone_pens_default_to_a_fixed_taper_that_saves_nothing() {
         s
     };
     let mode = |s: &UiSession<Recorder>| s.engine.configured_brush().taper.mode;
-    for (platform, device) in [(Platform::Gtk, None), (Platform::Web, Some(DeviceClass::Desktop)), (Platform::Android, None), (Platform::Android, Some(DeviceClass::Tablet))] {
+    let devices = [(Platform::Gtk, None), (Platform::Web, Some(DeviceClass::Desktop)), (Platform::Android, Some(DeviceClass::Tablet)), (Platform::Android, Some(DeviceClass::Phone))];
+    for (platform, device) in devices {
         for viewport in [[1280, 800], [412, 891]] {
             let s = sized(platform, device, viewport, None);
-            assert_eq!(s.phone_layout().is_some(), viewport == [412, 891], "{platform:?} {viewport:?}");
-            assert_eq!(mode(&s), TaperMode::Off, "{platform:?} {device:?} {viewport:?}");
+            assert_eq!(mode(&s), TaperMode::Auto, "{platform:?} {device:?} {viewport:?}");
+            assert!(s.command(CommandId::TaperAuto).selected);
+            assert!(!s.state.tool_settings.iter().any(|c| c.id.starts_with("taper_")), "Auto shows no sliders");
         }
     }
 
     let mut s = sized(Platform::Android, Some(DeviceClass::Phone), [412, 891], None);
-    assert_eq!(mode(&s), TaperMode::Fixed);
-    assert!(s.command(CommandId::TaperFixed).selected);
     assert!(!s.editing_state().tools.overrides.contains_key(&pen), "the default saves nothing");
     s.dispatch(UiAction::Invoke { command: CommandId::TaperOff }).unwrap();
     assert_eq!(s.editing_state().tools.overrides[&pen]["taper"], TaperMode::Off as u8 as f32);
     s.reset_brushes().unwrap();
-    assert_eq!(mode(&s), TaperMode::Fixed, "Reset returns to the phone default");
+    assert_eq!(mode(&s), TaperMode::Auto, "Reset returns to Auto");
     assert!(s.editing_state().tools.overrides.is_empty());
-    s.set_viewport([891., 412.], [891, 412]).unwrap();
-    s.set_viewport([1280., 800.], [1280, 800]).unwrap();
-    assert_eq!(mode(&s), TaperMode::Fixed, "a phone keeps its default in any window");
     s.set_device_class(DeviceClass::Tablet);
-    assert_eq!(mode(&s), TaperMode::Off, "an unfolded phone reports a tablet");
-    s.set_device_class(DeviceClass::Phone);
-    assert_eq!(mode(&s), TaperMode::Fixed);
-    assert!(s.editing_state().tools.overrides.is_empty(), "following the device saves nothing");
+    assert_eq!(mode(&s), TaperMode::Auto, "the device class leaves the taper alone");
 
     let s = sized(Platform::Android, Some(DeviceClass::Phone), [412, 891], Some(("taper", TaperMode::Off as u8 as f32)));
     assert_eq!(mode(&s), TaperMode::Off, "a stored choice wins");

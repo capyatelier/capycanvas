@@ -226,6 +226,7 @@ command-merge-group = Grubu birleştir
 command-color-mix-oklab = Oklab karıştırma
 command-color-mix-linear = Doğrusal ışıkta karıştırma
 command-color-mix-classic = Klasik karıştırma
+command-taper-auto = Otomatik incelme
 command-taper-off = İncelme yok
 command-taper-fixed = Sabit incelme
 command-taper-proportional = Orantılı incelme

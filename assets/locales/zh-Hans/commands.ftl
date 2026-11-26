@@ -226,6 +226,7 @@ command-merge-group = 合并图层组
 command-color-mix-oklab = Oklab 混色
 command-color-mix-linear = 线性光混色
 command-color-mix-classic = 经典混色
+command-taper-auto = 自动锥度
 command-taper-off = 无锥度
 command-taper-fixed = 固定锥度
 command-taper-proportional = 比例锥度

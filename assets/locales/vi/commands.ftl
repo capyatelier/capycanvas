@@ -226,6 +226,7 @@ command-merge-group = Gộp nhóm
 command-color-mix-oklab = Hòa màu Oklab
 command-color-mix-linear = Hòa màu ánh sáng tuyến tính
 command-color-mix-classic = Hòa màu cổ điển
+command-taper-auto = Thon nét tự động
 command-taper-off = Không thon nét
 command-taper-fixed = Thon nét cố định
 command-taper-proportional = Thon nét theo tỉ lệ

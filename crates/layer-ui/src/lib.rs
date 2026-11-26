@@ -746,6 +746,7 @@ command_ids! {
     ColorMixOklab,
     ColorMixLinear,
     ColorMixClassic,
+    TaperAuto,
     TaperOff,
     TaperFixed,
     TaperProportional,
@@ -787,7 +788,7 @@ impl CommandId {
                 | Self::TransformSnapping | Self::TransformFree | Self::TransformUniform | Self::TransformDistort | Self::TransformPerspective
                 | Self::TransformNearest | Self::TransformBilinear | Self::TransformBicubic | Self::TransformLanczos
                 | Self::ColorMixOklab | Self::ColorMixLinear | Self::ColorMixClassic
-                | Self::TaperOff | Self::TaperFixed | Self::TaperProportional
+                | Self::TaperAuto | Self::TaperOff | Self::TaperFixed | Self::TaperProportional
                 | Self::EraseTouchedPart | Self::EraseWholePaths | Self::EraseToIntersection | Self::ScaleOutlineWidths
                 | Self::TransformWarp | Self::WarpGridThree | Self::WarpGridFour | Self::WarpGridFive
                 | Self::WarpSplitVertical | Self::WarpSplitHorizontal | Self::WarpSplitCross | Self::WarpSelectPoints
@@ -1051,6 +1052,7 @@ impl CommandId {
             Self::ColorMixOklab => "color-mix-oklab",
             Self::ColorMixLinear => "color-mix-linear",
             Self::ColorMixClassic => "color-mix-classic",
+            Self::TaperAuto => "taper-auto",
             Self::TaperOff => "none",
             Self::TaperFixed => "taper-fixed",
             Self::TaperProportional => "taper-proportional",
@@ -1375,6 +1377,7 @@ impl CommandId {
             Self::ColorMixOklab => MessageId::COMMAND_COLOR_MIX_OKLAB,
             Self::ColorMixLinear => MessageId::COMMAND_COLOR_MIX_LINEAR,
             Self::ColorMixClassic => MessageId::COMMAND_COLOR_MIX_CLASSIC,
+            Self::TaperAuto => MessageId::COMMAND_TAPER_AUTO,
             Self::TaperOff => MessageId::COMMAND_TAPER_OFF,
             Self::TaperFixed => MessageId::COMMAND_TAPER_FIXED,
             Self::TaperProportional => MessageId::COMMAND_TAPER_PROPORTIONAL,
@@ -2077,7 +2080,7 @@ mod icon_tests {
             &[CommandId::CanvasSize, CommandId::ImageSize, CommandId::CropFitContent, CommandId::FitCanvas],
             &[CommandId::TransformNearest, CommandId::TransformBilinear, CommandId::TransformBicubic, CommandId::TransformLanczos],
             &[CommandId::ColorMixOklab, CommandId::ColorMixLinear, CommandId::ColorMixClassic],
-            &[CommandId::TaperOff, CommandId::TaperFixed, CommandId::TaperProportional],
+            &[CommandId::TaperAuto, CommandId::TaperOff, CommandId::TaperFixed, CommandId::TaperProportional],
         ] {
             let icons: std::collections::BTreeSet<_> = commands.iter().map(|c| c.icon()).collect();
             assert_eq!(

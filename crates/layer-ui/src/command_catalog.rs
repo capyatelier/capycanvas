@@ -477,7 +477,7 @@ fn action_description(action: &UiAction, l: &Localizer) -> String {
             NewDodgeBurnLayer => l.text(MessageId::COMMANDS_HELP_NEW_DODGE_BURN_LAYER).to_string(),
             FrequencySeparation => l.text(MessageId::COMMANDS_HELP_FREQUENCY_SEPARATION).to_string(),
             ColorMixOklab | ColorMixLinear | ColorMixClassic => l.text(MessageId::COMMANDS_HELP_COLOR_MIX_OKLAB).to_string(),
-            TaperOff | TaperFixed | TaperProportional => l.text(MessageId::COMMANDS_HELP_TAPER).to_string(),
+            TaperAuto | TaperOff | TaperFixed | TaperProportional => l.text(MessageId::COMMANDS_HELP_TAPER).to_string(),
             _ => String::new(),
         },
         UiAction::CycleTool { .. } => l.text(MessageId::COMMANDS_CYCLE_THROUGH_TOOLS_IN_THIS_FAMILY).to_string(),
@@ -1155,7 +1155,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::TransformNearest | C::TransformBilinear | C::TransformBicubic | C::TransformLanczos => l.text(MessageId::COMMANDS_START_A_TRANSFORM_FIRST),
             C::TransformDistort => l.text(MessageId::COMMANDS_START_A_TRANSFORM_FIRST),
             C::ColorMixOklab | C::ColorMixLinear | C::ColorMixClassic => l.text(MessageId::COMMANDS_PAINT_MIXING_UNAVAILABLE),
-            C::TaperOff | C::TaperFixed | C::TaperProportional => l.text(MessageId::COMMANDS_TAPER_UNAVAILABLE),
+            C::TaperAuto | C::TaperOff | C::TaperFixed | C::TaperProportional => l.text(MessageId::COMMANDS_TAPER_UNAVAILABLE),
             C::SnapRulers => l.text(MessageId::COMMANDS_SHOW_RULERS_FIRST),
             C::DeleteRuler => l.text(MessageId::COMMANDS_SELECT_A_RULER_FIRST),
             C::CompleteSelection

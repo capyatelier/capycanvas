@@ -226,6 +226,7 @@ command-merge-group = Объединить группу
 command-color-mix-oklab = Смешивание Oklab
 command-color-mix-linear = Смешивание в линейном свете
 command-color-mix-classic = Классическое смешивание
+command-taper-auto = Автоматическое сужение
 command-taper-off = Без сужения
 command-taper-fixed = Фиксированное сужение
 command-taper-proportional = Пропорциональное сужение

@@ -361,6 +361,7 @@ workspace-tool-description-transform-lanczos = สุ่มตัวอย่า
 workspace-tool-description-color-mix-oklab = ผสมสีที่รับมาอย่างสม่ำเสมอตามการเห็นของตา
 workspace-tool-description-color-mix-linear = ผสมสีที่รับมาแบบการผสมแสง
 workspace-tool-description-color-mix-classic = ผสมสีที่รับมาแบบ Clip Studio Paint
+workspace-tool-description-taper-auto = เรียวแต่ละปลายเมื่อวาดโดยไม่มีแรงกดปากกา
 workspace-tool-description-taper-off = วาดปลายเส้นด้วยความกว้างเต็ม
 workspace-tool-description-taper-fixed = เรียวแต่ละปลายตามจำนวนความกว้างเส้นที่กำหนด
 workspace-tool-description-taper-proportional = เรียวแต่ละปลายตามสัดส่วนของเส้น

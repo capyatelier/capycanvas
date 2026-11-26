@@ -226,6 +226,7 @@ command-merge-group = グループを結合
 command-color-mix-oklab = Oklabで混色
 command-color-mix-linear = リニアライトで混色
 command-color-mix-classic = クラシック混色
+command-taper-auto = 自動の入り抜き
 command-taper-off = 入り抜きなし
 command-taper-fixed = 固定の入り抜き
 command-taper-proportional = 比率の入り抜き

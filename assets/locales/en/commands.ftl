@@ -226,6 +226,7 @@ command-merge-group = Merge Group
 command-color-mix-oklab = Oklab mixing
 command-color-mix-linear = Linear light mixing
 command-color-mix-classic = Classic mixing
+command-taper-auto = Auto taper
 command-taper-off = No taper
 command-taper-fixed = Fixed taper
 command-taper-proportional = Proportional taper

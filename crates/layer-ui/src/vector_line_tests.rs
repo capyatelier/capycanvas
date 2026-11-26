@@ -289,6 +289,7 @@ fn late_pressure_corrections_reshape_the_drawn_line_in_its_undo_step() {
 fn vector_line_previews_reach_predicted_samples_without_drawing_them() {
     let (mut s, layer) = vector_session_on(Platform::Android);
     s.set_platform_prediction_available(true);
+    s.dispatch(UiAction::SetToolSetting { id: "smoothing_strength".into(), value: 0.06 }).unwrap();
     let farthest = |path: &layer_core::authored::vector::PathItem, axis: usize, sign: f64| path.geometry.subpaths()[0].to_vec().iter().map(|anchor| anchor.point()[axis] * sign).fold(f64::MIN, f64::max) * sign;
     let document = |s: &UiSession<Recorder>, point: Point| { let p = s.state.camera.input_transform().map(point); [f64::from(p.x), f64::from(p.y)] };
     let (mut real, mut predicted_reach) = ([0.; 2], [0.; 2]);

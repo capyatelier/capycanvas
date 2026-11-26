@@ -364,6 +364,7 @@ workspace-tool-description-transform-lanczos = Mit größtmöglichem Detail neu 
 workspace-tool-description-color-mix-oklab = Aufgenommene Farben gleichmäßig nach Farbwahrnehmung mischen
 workspace-tool-description-color-mix-linear = Aufgenommene Farben wie Licht mischen
 workspace-tool-description-color-mix-classic = Aufgenommene Farben wie in Clip Studio Paint mischen
+workspace-tool-description-taper-auto = Jedes Ende verjüngen, wenn ohne Stiftdruck gezeichnet wird
 workspace-tool-description-taper-off = Enden in voller Breite zeichnen
 workspace-tool-description-taper-fixed = Jedes Ende über eine feste Anzahl von Linienbreiten verjüngen
 workspace-tool-description-taper-proportional = Jedes Ende über einen Anteil der Linie verjüngen

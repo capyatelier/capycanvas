@@ -226,6 +226,7 @@ command-merge-group = Combinar grupo
 command-color-mix-oklab = Mezcla Oklab
 command-color-mix-linear = Mezcla en luz lineal
 command-color-mix-classic = Mezcla clásica
+command-taper-auto = Estrechamiento automático
 command-taper-off = Sin estrechamiento
 command-taper-fixed = Estrechamiento fijo
 command-taper-proportional = Estrechamiento proporcional

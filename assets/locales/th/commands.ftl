@@ -226,6 +226,7 @@ command-merge-group = รวมกลุ่ม
 command-color-mix-oklab = ผสมสี Oklab
 command-color-mix-linear = ผสมสีแสงเชิงเส้น
 command-color-mix-classic = ผสมสีคลาสสิก
+command-taper-auto = เรียวปลายอัตโนมัติ
 command-taper-off = ไม่เรียวปลาย
 command-taper-fixed = เรียวปลายแบบคงที่
 command-taper-proportional = เรียวปลายตามสัดส่วน

@@ -366,6 +366,7 @@ workspace-tool-description-transform-lanczos = Пересчитывать с м�
 workspace-tool-description-color-mix-oklab = Смешивать набранные цвета равномерно для глаза
 workspace-tool-description-color-mix-linear = Смешивать набранные цвета по законам света
 workspace-tool-description-color-mix-classic = Смешивать набранные цвета как Clip Studio Paint
+workspace-tool-description-taper-auto = Сужать каждый конец при рисовании без нажима пера
 workspace-tool-description-taper-off = Рисовать концы полной ширины
 workspace-tool-description-taper-fixed = Сужать каждый конец на заданное число ширин линии
 workspace-tool-description-taper-proportional = Сужать каждый конец на долю линии

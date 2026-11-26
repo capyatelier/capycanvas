@@ -365,6 +365,7 @@ workspace-tool-description-transform-lanczos = Reamostrar mantendo o máximo de 
 workspace-tool-description-color-mix-oklab = Misturar as cores captadas uniformemente, como o olho as vê
 workspace-tool-description-color-mix-linear = Misturar as cores captadas como a luz se mistura
 workspace-tool-description-color-mix-classic = Misturar as cores captadas como o Clip Studio Paint
+workspace-tool-description-taper-auto = Afinar cada ponta ao desenhar sem pressão da caneta
 workspace-tool-description-taper-off = Desenhar as pontas com a largura total
 workspace-tool-description-taper-fixed = Afinar cada ponta ao longo de um número fixo de larguras de linha
 workspace-tool-description-taper-proportional = Afinar cada ponta ao longo de uma parte da linha

@@ -226,6 +226,7 @@ command-merge-group = Gruppe vereinen
 command-color-mix-oklab = Oklab-Mischung
 command-color-mix-linear = Mischen in linearem Licht
 command-color-mix-classic = Klassische Mischung
+command-taper-auto = Automatische Verjüngung
 command-taper-off = Keine Verjüngung
 command-taper-fixed = Feste Verjüngung
 command-taper-proportional = Proportionale Verjüngung
