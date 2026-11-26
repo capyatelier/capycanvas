@@ -230,7 +230,7 @@ pub(crate) fn backup_database(source: &Path, destination: &Path) -> Result<()> {
             std::fs::canonicalize(source).map_err(unavailable)?,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )?;
-        database.backup(rusqlite::MAIN_DB, std::fs::canonicalize(temporary).map_err(unavailable)?, None)?;
+        database.backup(rusqlite::MAIN_DB, std::fs::canonicalize(temporary).map_err(unavailable)?, rusqlite::backup::NO_PROGRESS)?;
         Ok(())
     })
 }
