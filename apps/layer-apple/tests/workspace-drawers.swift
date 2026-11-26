@@ -174,14 +174,25 @@ import SwiftUI
         precondition(presenter.drawer === phone.contentDrawers.menu && presenter.focused == nil,
             "Touch opens the common menu without a keyboard focus highlight")
         let openedHeight = presenter.frame["placement"]["bounds"]["height"].number
-        phone.dispatch(["type": "phone", "action": ["kind": "capy"]])
-        try await wait("The common menu owner starts closing") {
-            !presenter.drawer.interactive && !presenter.frame["placement"].isNull
-                && presenter.frame["placement"]["bounds"]["height"].number < openedHeight
+        var shrinking = false
+        let closing = presenter.drawer.$geometry.sink { frame in
+            if !presenter.drawer.interactive && !frame["placement"].isNull
+                && frame["placement"]["bounds"]["height"].number < openedHeight {
+                shrinking = true
+            }
         }
+        phone.dispatch(["type": "phone", "action": ["kind": "capy"]])
+        if presenter.reduceMotion {
+            try await wait("The common menu owner retires without animation") {
+                !presenter.drawer.interactive && presenter.frame["placement"].isNull && phone.contentDrawers.sources["menu"] == nil
+            }
+        } else {
+            try await wait("The common menu owner starts closing") { shrinking }
+        }
+        closing.cancel()
         presenter.refresh(layout: phone.snapshot["layout"]["phone"], phone: phone.state["phone"])
         phone.dispatch(["type": "phone", "action": ["kind": "capy"]])
-        try await wait("Reopening interrupts closing at the unchanged menu placement") {
+        try await wait("Reopening restores the unchanged menu placement") {
             phone.state["phone"]["menu"].bool && presenter.drawer.interactive
                 && presenter.frame["placement"].stableKey == ContentDrawerPresentation.frame(["to": presenter.target.raw, "progress": 1, "clip_contents": true], pixelScale: phone.contentDrawers.pixelScale)["placement"].stableKey
         }
