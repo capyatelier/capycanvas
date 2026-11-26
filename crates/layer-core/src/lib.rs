@@ -592,7 +592,7 @@ pub struct BrushTaper {
 impl BrushTaper {
     pub const MAX_FIXED_WIDTHS: f32 = 200.0;
     pub const MAX_PROPORTIONAL_SHARE: f32 = 0.5;
-    pub const AUTO_WIDTHS: f32 = 4.0;
+    pub const AUTO_WIDTHS: f32 = 5.0;
     pub const AUTO_POINTINESS: f32 = 0.5;
 
     pub fn for_input(self, pressure: bool) -> Self {
@@ -629,7 +629,7 @@ impl Default for BrushTaper {
     fn default() -> Self {
         Self {
             mode: TaperMode::Off,
-            fixed_widths: [4.0, 4.0],
+            fixed_widths: [5.0, 5.0],
             proportional_shares: [0.3, 0.3],
             pointiness: 0.5,
         }

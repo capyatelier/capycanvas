@@ -378,7 +378,7 @@ pub fn preset(id: u32) -> Result<DefaultBrushPreset, String> {
         .map(|p| p.0)
         .ok_or_else(|| "Unknown brush".into())
 }
-const PEN_SMOOTHING: f32 = 0.2;
+const PEN_SMOOTHING: f32 = 0.12;
 pub(crate) fn defaults(preset: DefaultBrushPreset) -> BrushSnapshot {
     let mut brush = layer_core::default_brush(preset);
     if group(preset as u32) == ToolGroup::Pen {

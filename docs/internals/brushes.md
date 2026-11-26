@@ -67,7 +67,7 @@ tile does not make it evaluate intervening contacts elsewhere on the canvas.
 
 ## Stroke smoothing
 
-Smoothing is one control from 0 to 100, initially 6, or 20 for pens
+Smoothing is one control from 0 to 100, initially 6, or 12 for pens
 (`tools::defaults`), without a section heading.
 Slider travel is logarithmic, with 30 at 75% of the track.
 Zero bypasses position and pressure smoothing. Each brush keeps its own choices. Selection
@@ -105,7 +105,7 @@ opens the Taper section, between Smoothing and Tip. Pens start at Auto; a saved
 choice wins.
 - Auto is decided at pen-down from the event's tool (`BrushTaper::for_input`): a
   pen or its eraser draws with Off, and a mouse, finger or unknown tool with
-  Fixed ends of 4 widths at pointiness 0.5. The stroke keeps the resolved choice,
+  Fixed ends of 5 widths at pointiness 0.5. The stroke keeps the resolved choice,
   so replays never see Auto. Auto shows no sliders.
 - Fixed measures each end in full line widths: the slider follows Smoothness's
   curve up to 50 and typed values reach 200 (`BrushTaper::MAX_FIXED_WIDTHS`).

@@ -126,7 +126,7 @@ fn stored_taper_overrides_restore_in_either_order() {
     let expected = apply(&[mode, values[0], values[1], values[2]]);
     assert_eq!(apply(&[values[0], values[1], values[2], mode]), expected);
     assert_eq!(expected, layer_core::BrushTaper {
-        mode: layer_core::TaperMode::Proportional, fixed_widths: [6., 4.], proportional_shares: [0.3, 0.2], pointiness: 0.8,
+        mode: layer_core::TaperMode::Proportional, fixed_widths: [6., 5.], proportional_shares: [0.3, 0.2], pointiness: 0.8,
     });
     for (id, value) in [("taper", 4.), ("taper_start_widths", 200.5), ("taper_end_share", 0.6), ("taper_pointiness", -0.1)] {
         assert!(edit_value(pen as u32, &layer_core::default_brush(pen), id, value).is_err(), "{id} {value}");
@@ -143,7 +143,7 @@ fn stored_taper_overrides_restore_in_either_order() {
 }
 
 #[test]
-fn only_pens_default_to_twenty_percent_smoothing_that_saves_nothing() {
+fn only_pens_default_to_twelve_percent_smoothing_that_saves_nothing() {
     let pencil = DefaultBrushPreset::Pencil as u32;
     let smoothing = |s: &UiSession<Recorder>| s.engine.configured_brush().stabilization.strength;
     for (platform, device) in [(Platform::Gtk, None), (Platform::Android, Some(DeviceClass::Tablet)), (Platform::Android, Some(DeviceClass::Phone))] {
@@ -153,7 +153,7 @@ fn only_pens_default_to_twenty_percent_smoothing_that_saves_nothing() {
         assert_eq!(smoothing(&s), 0.06, "{platform:?} {device:?}");
         for pen in crate::tools::group_presets(crate::ToolGroup::Pen) {
             s.select_brush(pen).unwrap();
-            assert_eq!(smoothing(&s), 0.2, "{platform:?} {device:?} pen {pen}");
+            assert_eq!(smoothing(&s), 0.12, "{platform:?} {device:?} pen {pen}");
         }
         assert!(s.editing_state().tools.overrides.is_empty());
     }
@@ -163,7 +163,7 @@ fn only_pens_default_to_twenty_percent_smoothing_that_saves_nothing() {
     s.dispatch(UiAction::SetToolSetting { id: "smoothing_strength".into(), value: 0.06 }).unwrap();
     assert_eq!(s.editing_state().tools.overrides[&pen]["smoothing_strength"], 0.06);
     s.reset_brushes().unwrap();
-    assert_eq!(smoothing(&s), 0.2, "Reset returns to the pen default");
+    assert_eq!(smoothing(&s), 0.12, "Reset returns to the pen default");
 }
 
 #[test]

@@ -7334,7 +7334,7 @@ mod tests {
             let events: Vec<_> = circle(240).into_iter().map(|sample| PenEvent { tool, ..sample }).collect();
             draw_tapered(&mut engine, &mut input, &events, 4, |_, _| {});
             let expected = if tapered {
-                layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: [4.; 2], pointiness: 0.5, ..auto }
+                layer_core::BrushTaper { mode: layer_core::TaperMode::Fixed, fixed_widths: [5.; 2], pointiness: 0.5, ..auto }
             } else {
                 layer_core::BrushTaper { mode: layer_core::TaperMode::Off, ..auto }
             };
