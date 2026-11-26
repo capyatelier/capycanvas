@@ -59,8 +59,8 @@ import Foundation
     }
     @MainActor static func oneDeadlineIncludesStorageAndGPU() {
         let release = DispatchSemaphore(value: 0), exited = DispatchSemaphore(value: 0)
-        let started = ProcessInfo.processInfo.systemUptime
-        let attempt = ProcessTermination(deadline: started + 0.15)
+        let deadline = ProcessInfo.processInfo.systemUptime + 0.15
+        let attempt = ProcessTermination(deadline: deadline)
         attempt.start(flush: { callback in
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) { callback(true) }
         }, detach: { callback in
@@ -72,7 +72,8 @@ import Foundation
             return true
         })
         precondition(attempt.wait() == .incomplete)
-        precondition(ProcessInfo.processInfo.systemUptime - started < 0.2)
+        precondition(ProcessInfo.processInfo.systemUptime >= deadline, "Pending GPU work must reach the shared deadline")
+        precondition(exited.wait(timeout: .now()) == .timedOut, "Termination cannot wait for GPU completion")
         release.signal()
         precondition(exited.wait(timeout: .now() + 1) == .success)
     }
@@ -85,15 +86,16 @@ import Foundation
     @MainActor static func durableDeadlineSelectsIncomplete() {
         let release = DispatchSemaphore(value: 0)
         let exited = DispatchSemaphore(value: 0)
-        let attempt = ProcessTermination(deadline: ProcessInfo.processInfo.systemUptime + 0.03)
+        let deadline = ProcessInfo.processInfo.systemUptime + 0.03
+        let attempt = ProcessTermination(deadline: deadline)
         attempt.start(flush: { $0(true) }, detach: { $0() }, finishGPU: { _ in
             release.wait()
             exited.signal()
             return true
         })
-        let started = ProcessInfo.processInfo.systemUptime
         precondition(attempt.wait() == .incomplete)
-        precondition(ProcessInfo.processInfo.systemUptime - started < 0.08)
+        precondition(ProcessInfo.processInfo.systemUptime >= deadline, "Pending GPU work must reach its deadline")
+        precondition(exited.wait(timeout: .now()) == .timedOut, "Termination cannot wait for GPU completion")
         release.signal()
         precondition(exited.wait(timeout: .now() + 1) == .success)
         precondition(attempt.outcome == .incomplete)
