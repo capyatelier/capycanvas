@@ -212,7 +212,7 @@ impl Definition {
         }
         if self.id == "spread" && brush.execution == BrushExecution::Smudge && matches!(brush.blender.kind, BlenderKind::Dither | BlenderKind::Scatter) {
             numeric.mapping = crate::NumericMapping::Log;
-            numeric.log_offset = SMOOTHING_LOG_OFFSET;
+            numeric.log_offset = LOG_SLIDER_OFFSET;
         }
         numeric
     }
@@ -238,14 +238,15 @@ fn default_primary(brush: &BrushSnapshot) -> &'static [&'static str] {
     }
 }
 
-const SMOOTHING_LOG_OFFSET: f64 = 0.00886269125382811;
+pub(crate) const LOG_SLIDER_OFFSET: f64 = 0.00886269125382811;
+const SMOOTHING_LOG_OFFSET: f64 = 0.03721178355562826;
 
 fn blender_cell_size() -> NumericControl {
     let max = f64::from(layer_core::BLENDER_CELL_SIZE_LIMIT);
     NumericControl {
         kind: crate::NumericKind::Slider,
         mapping: crate::NumericMapping::Log,
-        log_offset: (max - 1.) * SMOOTHING_LOG_OFFSET - 1.,
+        log_offset: (max - 1.) * LOG_SLIDER_OFFSET - 1.,
         ..NumericControl::whole_pixels(1., max)
     }
 }
@@ -759,7 +760,7 @@ fn taper_widths() -> NumericControl {
     NumericControl {
         soft_max: 50.,
         mapping: crate::NumericMapping::Log,
-        log_offset: 50. * SMOOTHING_LOG_OFFSET,
+        log_offset: 50. * LOG_SLIDER_OFFSET,
         ..NumericControl::number(0., f64::from(BrushTaper::MAX_FIXED_WIDTHS), 0.1, 1)
     }
 }

@@ -143,17 +143,14 @@ fn stored_taper_overrides_restore_in_either_order() {
 }
 
 #[test]
-fn only_pens_default_to_twelve_percent_smoothing_that_saves_nothing() {
-    let pencil = DefaultBrushPreset::Pencil as u32;
+fn every_brush_defaults_to_ten_percent_smoothing_that_saves_nothing() {
     let smoothing = |s: &UiSession<Recorder>| s.engine.configured_brush().stabilization.strength;
     for (platform, device) in [(Platform::Gtk, None), (Platform::Android, Some(DeviceClass::Tablet)), (Platform::Android, Some(DeviceClass::Phone))] {
         let mut s = session(platform);
         if let Some(device) = device { s.set_device_class(device); }
-        s.select_brush(pencil).unwrap();
-        assert_eq!(smoothing(&s), 0.06, "{platform:?} {device:?}");
-        for pen in crate::tools::group_presets(crate::ToolGroup::Pen) {
-            s.select_brush(pen).unwrap();
-            assert_eq!(smoothing(&s), 0.12, "{platform:?} {device:?} pen {pen}");
+        for choice in crate::brush_catalog() {
+            s.select_brush(choice.id).unwrap();
+            assert_eq!(smoothing(&s), 0.1, "{platform:?} {device:?} {}", choice.label);
         }
         assert!(s.editing_state().tools.overrides.is_empty());
     }
@@ -163,7 +160,7 @@ fn only_pens_default_to_twelve_percent_smoothing_that_saves_nothing() {
     s.dispatch(UiAction::SetToolSetting { id: "smoothing_strength".into(), value: 0.06 }).unwrap();
     assert_eq!(s.editing_state().tools.overrides[&pen]["smoothing_strength"], 0.06);
     s.reset_brushes().unwrap();
-    assert_eq!(smoothing(&s), 0.12, "Reset returns to the pen default");
+    assert_eq!(smoothing(&s), 0.1, "Reset returns to the default");
 }
 
 #[test]
@@ -274,20 +271,19 @@ fn taper_rows_keep_their_identity_when_the_taper_type_changes() {
 }
 
 #[test]
-fn fixed_taper_sliders_follow_the_smoothness_curve_to_fifty_widths() {
+fn fixed_taper_sliders_follow_the_shared_log_curve_to_fifty_widths() {
     use crate::{NumericMapping, NumericOperation};
     let mut s = session(Platform::Gtk);
     s.select_brush(DefaultBrushPreset::GPen as u32).unwrap();
     let numeric = |s: &UiSession<Recorder>, id: &str| s.state.tool_settings.iter().find(|c| c.id == id).unwrap().numeric.clone();
     let at = |control: &crate::NumericControl, position: f64| control.resolve(0., NumericOperation::Position { position }).unwrap().value;
-    let smoothness = numeric(&s, "smoothing_strength");
-    let curve = |position: f64| smoothness.log_offset * ((1. + smoothness.log_offset) / smoothness.log_offset).powf(position) - smoothness.log_offset;
+    let offset = crate::tool_settings::LOG_SLIDER_OFFSET;
+    let curve = |position: f64| offset * ((1. + offset) / offset).powf(position) - offset;
     s.dispatch(UiAction::Invoke { command: CommandId::TaperFixed }).unwrap();
     for id in ["taper_start", "taper_end"] {
         let widths = numeric(&s, id);
         assert_eq!((widths.mapping, widths.soft_max, widths.max), (NumericMapping::Log, 50., 200.), "{id}");
         for position in [0., 0.1, 0.25, 0.5, 0.75, 0.9, 1.] {
-            assert!((at(&smoothness, position) - curve(position)).abs() <= 0.005, "Smoothness at {position}");
             assert!((at(&widths, position) - 50. * curve(position)).abs() <= 0.05, "{id} at {position}: {}", at(&widths, position));
         }
         assert_eq!(widths.resolve(0., NumericOperation::Expression { text: "120".into() }).unwrap().value, 120.);

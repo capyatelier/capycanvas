@@ -2637,14 +2637,13 @@ fn dither_and_scatter_cell_size_is_a_localized_whole_pixel_log_slider() {
         let english = Localizer::shared(UiLanguage::English);
         let controls = tool_settings::controls(preset as u32, &brush, &english);
         let cell = controls.iter().find(|c| c.id == cell_id).unwrap();
-        let smooth = controls.iter().find(|c| c.id == "smoothing_strength").unwrap();
         let spread_index = controls.iter().position(|c| c.id == "spread").unwrap();
         let cell_index = controls.iter().position(|c| c.id == cell.id).unwrap();
         let spread = &controls[spread_index];
         assert_eq!(cell_index, spread_index + 1);
         assert_eq!(cell.group_id, spread.group_id);
         assert_eq!(spread.numeric.mapping, NumericMapping::Log);
-        assert_eq!(spread.numeric.log_offset, smooth.numeric.log_offset);
+        assert_eq!(spread.numeric.log_offset, tool_settings::LOG_SLIDER_OFFSET);
         let other = tool_settings::controls(DefaultBrushPreset::CrystalBlender as u32, &layer_core::default_brush(DefaultBrushPreset::CrystalBlender), &english);
         assert_eq!(other.iter().find(|c| c.id == "spread").unwrap().numeric.mapping, NumericMapping::Linear);
         for (position, expected) in [(0., 0.), (0.5, 0.09), (1., 1.)] {
@@ -2658,7 +2657,7 @@ fn dither_and_scatter_cell_size_is_a_localized_whole_pixel_log_slider() {
         assert_eq!((cell.numeric.min, cell.numeric.max), (1., 50.));
         assert_eq!((cell.numeric.resolution, cell.numeric.step, cell.numeric.digits), (1., 1., 0));
         assert_eq!(cell.numeric.unit, "px");
-        assert!((cell.numeric.log_offset - (49. * smooth.numeric.log_offset - 1.)).abs() < 1e-12);
+        assert!((cell.numeric.log_offset - (49. * tool_settings::LOG_SLIDER_OFFSET - 1.)).abs() < 1e-12);
         for position in [0., 0.1, 0.25, 0.5, 0.75, 0.9, 1.] {
             let value = cell.numeric.resolve(1., NumericOperation::Position { position }).unwrap().value;
             assert_eq!(value.fract(), 0.);

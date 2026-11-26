@@ -67,9 +67,9 @@ tile does not make it evaluate intervening contacts elsewhere on the canvas.
 
 ## Stroke smoothing
 
-Smoothing is one control from 0 to 100, initially 6, or 12 for pens
+Smoothing is one control from 0 to 100, initially 10 for every brush
 (`tools::defaults`), without a section heading.
-Slider travel is logarithmic, with 30 at 75% of the track.
+Slider travel is logarithmic, with 12 at 43% of the track and 30 at 66%.
 Zero bypasses position and pressure smoothing. Each brush keeps its own choices. Selection
 and coverage-mask painting use unsmoothed positions.
 
@@ -107,8 +107,8 @@ choice wins.
   pen or its eraser draws with Off, and a mouse, finger or unknown tool with
   Fixed ends of 5 widths at pointiness 0.5. The stroke keeps the resolved choice,
   so replays never see Auto. Auto shows no sliders.
-- Fixed measures each end in full line widths: the slider follows Smoothness's
-  curve up to 50 and typed values reach 200 (`BrushTaper::MAX_FIXED_WIDTHS`).
+- Fixed measures each end in full line widths: the slider is logarithmic up
+  to 50 and typed values reach 200 (`BrushTaper::MAX_FIXED_WIDTHS`).
 - Proportional measures each end as a share of the line (0–50 %), at most 50
   full widths.
 - A Fixed line shorter than its start and end together shrinks both in
@@ -237,7 +237,7 @@ distinguish them from deliberately painted intermediate colors. Alpha lock
 keeps each destination pixel's opacity and chooses existing source hues.
 
 Cell size chooses whole squares from 1 to 50 document pixels per side. Its
-slider follows Smoothing's logarithmic curve and starts at 4 px. Larger cells
+slider is logarithmic and starts at 4 px. Larger cells
 share one source-color choice. A source cell that crosses a color boundary
 contributes its native colors through stable sampling, without averaging them.
 The grid stays fixed while painting, zooming and crossing rendering pages.
@@ -248,8 +248,8 @@ alpha lock keeps each native destination pixel's opacity. Unchanged cells keep
 their original detail.
 
 Dither shows Spread above Cell size in Tool Settings and on the left side of
-its bubble, with Cell size on the right. Spread follows Smoothing's logarithmic
-curve over its percentage range.
+its bubble, with Cell size on the right. Spread is logarithmic over its
+percentage range.
 
 Scatter uses square cells from 1 to 50 document pixels per side, starting at
 3 px, with Spread starting at 20%. Each stroke offsets its rows independently:
