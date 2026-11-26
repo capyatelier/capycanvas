@@ -64,7 +64,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 }
                 if(kind==L"divider"){
                     auto bounds=rects.GetObjectAt(i);auto slot=button(data,str(tile,L"label"),[]{});slot.AllowFocusOnInteraction(false);place(slot,bounds);
-                    auto line=dividerLine(data,num(bounds,L"width")>num(bounds,L"height"));
+                    auto line=dividerLine(data,false);fitDivider(line,bounds);
                     slot.Content(line);dividers.emplace(uint32_t(id),line);tiles.Children().Append(slot);attach(slot);
                     tileControls.emplace(uint32_t(id),slot);
                     AutomationProperties::SetAutomationId(slot,L"tile-"+panelId+L"-"+to_hstring(uint32_t(id)));
@@ -249,7 +249,7 @@ void PanelBody::Layout(J const& geometry){
         if(!shown)continue;
         place(element,box);
         if(auto found=components.find(tileOrder[i]);found!=components.end())found->second->Layout(box,vertical);
-        if(auto found=dividers.find(tileOrder[i]);found!=dividers.end())orientDivider(found->second,num(box,L"width")>num(box,L"height"));
+        if(auto found=dividers.find(tileOrder[i]);found!=dividers.end())fitDivider(found->second,box);
     }
     if(tileGrip){
         auto grip=object(layout,L"grip");tileGrip.Visibility(grip.Size()?Visibility::Visible:Visibility::Collapsed);

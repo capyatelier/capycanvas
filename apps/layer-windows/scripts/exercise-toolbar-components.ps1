@@ -87,6 +87,41 @@ function Check-ThemeInk{
     $pattern.SetValue($start)
     Wait-Until {[Math]::Abs($pattern.Current.Value-$start) -lt .01} 'Theme slider did not restore its initial value'
 }
+function Check-DividerLines{
+    Switch-Workspace 'Paint' 'builtin:workspace:illustrator'
+    $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Normal)
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -StateDirectory $run -Action Resize -Width 1200 -Height 560
+    $slots=@(foreach($panel in @((Model).panels)){foreach($tile in @($panel.tiles)){if($tile.control.kind -eq 'divider'){"tile-$($panel.id)-$($tile.id)"}}})
+    $tool="tile-toolbar-$(@(@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {$_.control.kind -ne 'divider' -and !$_.component})[0].id)"
+    Wait-Until {$width=(Box $tool).Width;@($slots|Where-Object {$found=Find $_ -Visible;$found -and $found.Current.BoundingRectangle.Width -gt 1.5*$width}).Count -gt 0} 'A short Paint window did not wrap its Tools toolbar into several columns'
+    $canvas=Box 'drawing-canvas';[CapyRowPointer]::Hover([int]($canvas.X+$canvas.Width/2),[int]($canvas.Y+$canvas.Height/2));Start-Sleep -Milliseconds 250
+    $name="toolbar-dividers-$Theme";Capture $name -WithModel -Composed
+    $origin=[CapyRowPointer+Point]::new();if(![CapyRowPointer]::ClientToScreen($drawingWindow,[ref]$origin)){throw 'Divider capture has no owned client origin'}
+    $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+    $records=[Collections.Generic.List[object]]::new()
+    $image=[System.Drawing.Bitmap]::new((Join-Path $run ($name+'.png')))
+    try{
+        foreach($slot in $slots){
+            $found=Find $slot -Visible;if(!$found){continue}
+            $box=$found.Current.BoundingRectangle;$wide=$box.Width -gt $box.Height
+            $left=[int][Math]::Ceiling($box.X-$origin.x);$top=[int][Math]::Ceiling($box.Y-$origin.y)
+            $along=[int][Math]::Floor($(if($wide){$box.Width}else{$box.Height}));$across=[int][Math]::Floor($(if($wide){$box.Height}else{$box.Width}))
+            $pixel={param($i,$j)if($wide){$image.GetPixel($left+$i,$top+$j)}else{$image.GetPixel($left+$j,$top+$i)}}
+            $span=0
+            for($j=0;$j -lt $across;$j++){
+                $base=& $pixel 0 $j
+                $painted=@(for($i=0;$i -lt $along;$i++){$p=& $pixel $i $j;if([Math]::Max([Math]::Max([Math]::Abs($p.R-$base.R),[Math]::Abs($p.G-$base.G)),[Math]::Abs($p.B-$base.B)) -gt 8){$i}})
+                if($painted.Count){$span=[Math]::Max($span,$painted[-1]-$painted[0]+1)}
+            }
+            $expected=$along-18*$scale
+            $records.Add(@{slot=$slot;bounds=@($box.X,$box.Y,$box.Width,$box.Height);painted=$span;expected=$expected})
+            if([Math]::Abs($span-$expected) -gt [Math]::Ceiling($scale)+1){throw "Divider $slot paints $span px across its $along px slot instead of $expected px"}
+        }
+    }finally{$image.Dispose();$records|ConvertTo-Json -Depth 4|Set-Content (Join-Path $run 'toolbar-dividers.json')}
+    if(!@($records|Where-Object {$_.expected -gt 40*$scale}).Count){throw 'No divider in a wrapped toolbar was measured'}
+    $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
+    Write-Output "PASS: $($records.Count) toolbar divider lines fill their slots less the shared end insets"
+}
 try {
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
@@ -206,6 +241,7 @@ try {
     Capture "slider-values-restored-$Theme" -WithModel -Composed
     if($Journey -ne 'full'){Finish-Review 'Slider display preferences, live values, short-track hiding and restoration';return}
 
+    Check-DividerLines
     Switch-Workspace 'Photo' 'builtin:workspace:photographer'
     $options=Tile 'tool_options'
     if(!$options -or !$options.component){throw 'Photo lacks Tool Options'}

@@ -156,9 +156,13 @@ inline PathGeometry roundedRectangle(float width,float height,std::array<float,4
     PathGeometry geometry;geometry.Figures().Append(figure);return geometry;
 }
 constexpr float SurfaceRadius=18;
-constexpr double DividerSlot=8,DividerLength=18,ControlClearance=5;
-inline void orientDivider(FrameworkElement const& line,bool horizontal){
-    line.Width(horizontal?DividerLength:1);line.Height(horizontal?1:DividerLength);
+constexpr double DividerSlot=8,DividerLength=18,DividerInset=9,ControlClearance=5;
+inline void orientDivider(FrameworkElement const& line,bool horizontal,double length=DividerLength){
+    line.Width(horizontal?length:1);line.Height(horizontal?1:length);
+}
+inline void fitDivider(FrameworkElement const& line,J const& slot){
+    bool horizontal=num(slot,L"width")>num(slot,L"height");
+    orientDivider(line,horizontal,std::max(0.,num(slot,horizontal?L"width":L"height")-2*DividerInset));
 }
 inline Border dividerLine(std::shared_ptr<WorkspaceData> const& data,bool horizontal){
     Border line;line.Background(data->brush(L"settings_secondary"));line.Opacity(.3);line.IsHitTestVisible(false);
