@@ -69,8 +69,13 @@ jobs:
               exit 1
             fi
           done
-          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" -q .status)
-          test "$status" = identical || test "$status" = behind
+          branch="v${VERSION%.*}"
+          for base in main "$branch"; do
+            status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$base...$GITHUB_SHA" -q .status 2>/dev/null) || continue
+            if [ "$status" = identical ] || [ "$status" = behind ]; then exit 0; fi
+          done
+          echo "::error::Tag a commit on main or on the $branch release branch."
+          exit 1
 
   web:
     if: ${{ !inputs.windows-packages-only }}

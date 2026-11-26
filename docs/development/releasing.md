@@ -336,11 +336,35 @@ If the editor's source commit is already built, `deploy.yml` makes no new
 commit and redeploys the committed package, so rerunning it retries a failed
 delivery. Recheck the public content afterwards.
 
+## Release branches and patch releases
+
+Fixes for a published or tagged release go on a release branch, so the commits
+other people keep landing on `main` don't enter a patch release.
+
+- **Create the branch from the release tag** the first time the release needs a
+  fix, named after its major and minor version:
+  `git push origin "v1.1.0^{commit}:refs/heads/v1.1"`.
+- **Every fix lands on `main` too.** Land it on `main` with its regression test,
+  then cherry-pick it onto the release branch. A fix that only makes sense on the
+  branch says why in its commit message.
+- **Cut the patch on the branch.** Follow [step 2](#2-prepare-one-version-and-source-commit)
+  on the release branch head: set `Cargo.toml` to the patch version (1.1.1),
+  add its AppStream release entry and generate its
+  [saved-data fixtures](#saved-data-fixtures). Then tag that commit (`v1.1.1`) and
+  continue from [step 3](#3-tag-and-collect-the-signed-candidate).
+- **The release workflow accepts the tag** when its commit is on `main` or on the
+  release branch for its major and minor version. A branch created from a tag
+  older than this rule needs the workflow change cherry-picked first.
+- **Bring the record back to `main`.** After publishing, copy the patch's
+  AppStream release entry and its saved-data fixture directories to `main`, but
+  not its `Cargo.toml` version, so later releases list the patch and keep reading
+  its saved data.
+
 ## Recovering a failed release
 
-If an application check requires a code fix, discard the unpublished draft,
-fix `main` and release the next patch version. Never move a tag or reuse a
-version. A delivery or store-setup failure can be retried with the preserved,
+If an application check requires a code fix, discard the unpublished draft and
+release the next patch version from the [release branch](#release-branches-and-patch-releases).
+Never move a tag or reuse a version. A delivery or store-setup failure can be retried with the preserved,
 unchanged build. Download retained artifacts with `gh run download <run-id>
 --repo capyatelier/capycanvas --dir artifacts/release/<tag>/recovered` and follow
 the [Android recovery steps](#android-apk). Inspect completed store uploads before
