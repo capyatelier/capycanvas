@@ -1,0 +1,320 @@
+{
+  "manifest": {
+    "default_output": {
+      "ref": "7879f7a54454446b8c952647ed8b4823"
+    },
+    "document": "07070707070707070707070707070707",
+    "format": "capy.canvas",
+    "objects": [
+      {
+        "data": {
+          "extent": [
+            5,
+            3
+          ],
+          "interpretation": {
+            "channels": "gray",
+            "depth": "u8",
+            "profile": {
+              "builtin": "srgb"
+            }
+          },
+          "resolution": {
+            "density": [
+              [
+                600,
+                1
+              ],
+              [
+                600,
+                1
+              ]
+            ],
+            "unit": "inch"
+          },
+          "tiles": [
+            {
+              "coordinate": [
+                0,
+                0
+              ],
+              "resource": {
+                "ref": "85c1d52c7a544fa19f82a45c1d03a4b0"
+              }
+            }
+          ]
+        },
+        "id": "09090909090909090909090909090909",
+        "type": "capy.image/1"
+      },
+      {
+        "data": {
+          "builtin": "paper",
+          "spatial": {
+            "extent": [
+              8.128,
+              5.418666666666667
+            ],
+            "mapping": [
+              11.811023622047244,
+              0.0,
+              0.0,
+              11.811023622047244,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ]
+              }
+            },
+            "light": {
+              "kind": "number",
+              "value": 225.0
+            },
+            "relief": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "texture": {
+              "kind": "texture",
+              "value": {
+                "image": {
+                  "ref": "09090909090909090909090909090909"
+                }
+              }
+            },
+            "through_paint": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+            }
+          },
+          "name": "Toned"
+        },
+        "id": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "paper",
+          "spatial": {
+            "extent": [
+              5.418666666666667,
+              3.6124444444444443
+            ],
+            "mapping": [
+              17.716535433070867,
+              0.0,
+              0.0,
+              17.716535433070867,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ]
+              }
+            },
+            "light": {
+              "kind": "number",
+              "value": 300.0
+            },
+            "relief": {
+              "kind": "number",
+              "value": 150.0
+            },
+            "texture": {
+              "kind": "texture",
+              "value": {
+                "builtin": "watercolor",
+                "values": {
+                  "felt": {
+                    "kind": "number",
+                    "value": 3.0
+                  },
+                  "pressing": {
+                    "kind": "number",
+                    "value": 5.0
+                  },
+                  "seed": {
+                    "kind": "number",
+                    "value": 1.0
+                  }
+                },
+                "version": 1
+              }
+            },
+            "through_paint": {
+              "kind": "number",
+              "value": 40.0
+            }
+          },
+          "version": 1
+        },
+        "id": "2512fcc379f045438298260f61e3fe3d",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "2512fcc379f045438298260f61e3fe3d"
+            }
+          },
+          "name": "Paper"
+        },
+        "id": "4e28175601ec4cf9916e3d7b777f8d72",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "source": {
+            "object": {
+              "ref": "99751d0714464153833d2650f24b30ba"
+            },
+            "port": "color"
+          }
+        },
+        "id": "7879f7a54454446b8c952647ed8b4823",
+        "type": "capy.output/2"
+      },
+      {
+        "data": {
+          "resolution": {
+            "density": [
+              [
+                300,
+                1
+              ],
+              [
+                300,
+                1
+              ]
+            ],
+            "unit": "inch"
+          },
+          "result": {
+            "object": {
+              "ref": "d9d826574dbc4d4b8361eac18ea439aa"
+            },
+            "port": "color"
+          },
+          "size": [
+            96,
+            64
+          ]
+        },
+        "id": "99751d0714464153833d2650f24b30ba",
+        "type": "capy.composition/2"
+      },
+      {
+        "data": {
+          "color_mode": "full_color",
+          "domain": {
+            "size": [
+              96,
+              64
+            ]
+          }
+        },
+        "id": "b59d1f9e179f47b29b3cae30287e8eda",
+        "type": "capy.paint-source/2"
+      },
+      {
+        "data": {
+          "entries": [
+            {
+              "ref": "e74563b5941049d99968c056449a8c9f"
+            },
+            {
+              "ref": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"
+            },
+            {
+              "ref": "4e28175601ec4cf9916e3d7b777f8d72"
+            }
+          ]
+        },
+        "id": "d9d826574dbc4d4b8361eac18ea439aa",
+        "type": "capy.stack/1"
+      },
+      {
+        "data": {
+          "content": {
+            "paint": {
+              "ref": "b59d1f9e179f47b29b3cae30287e8eda"
+            }
+          },
+          "name": "Ink"
+        },
+        "id": "e74563b5941049d99968c056449a8c9f",
+        "type": "capy.occurrence/3"
+      }
+    ],
+    "outputs": [
+      {
+        "ref": "7879f7a54454446b8c952647ed8b4823"
+      }
+    ],
+    "resources": [
+      {
+        "bytes": "293",
+        "crc32": "bdc9822e",
+        "data": {
+          "alpha": "none",
+          "channels": "gray",
+          "depth": "u8",
+          "transfer": "profile"
+        },
+        "encoding": "capy.lz4-tile/1",
+        "id": "85c1d52c7a544fa19f82a45c1d03a4b0",
+        "location": {
+          "offset": "0",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.raster-tile/1"
+      }
+    ],
+    "root": {
+      "ref": "99751d0714464153833d2650f24b30ba"
+    },
+    "version": 1
+  },
+  "preview": {
+    "pixels": "77861c1513f628d2dd39787341de13d2bf648034e9fdd82dd7025381be3154bb",
+    "size": [
+      2,
+      1
+    ]
+  },
+  "resources": {
+    "85c1d52c7a544fa19f82a45c1d03a4b0": "21dfe21945da25b82a861c6cd41c5256fea84367623c84e5df1ec27a9b03f281"
+  }
+}

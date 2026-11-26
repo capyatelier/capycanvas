@@ -1,0 +1,50 @@
+[
+  {
+    "background": "Preserve",
+    "depth": "U8",
+    "encoding": {
+      "conversion": {
+        "black_point_compensation": false,
+        "intent": "RelativeColorimetric"
+      },
+      "dither": "None"
+    },
+    "format": "Png",
+    "jpeg_quality": 90,
+    "metadata": {
+      "keep": "All",
+      "remove_location": true
+    },
+    "profile": {
+      "channels": "Rgb",
+      "name": "Display P3",
+      "profile": "b874f75b316cb0f2ff30584b5cbe9badeee79366adc9578aab5e2172657cdb6c"
+    },
+    "resolution": "Master",
+    "size": "Original"
+  },
+  {
+    "background": "Preserve",
+    "depth": "U8",
+    "encoding": {
+      "conversion": {
+        "black_point_compensation": false,
+        "intent": "RelativeColorimetric"
+      },
+      "dither": "None"
+    },
+    "format": "Png",
+    "jpeg_quality": 90,
+    "metadata": {
+      "keep": "All",
+      "remove_location": true
+    },
+    "profile": {
+      "channels": "Rgb",
+      "name": "Display P3",
+      "profile": "b874f75b316cb0f2ff30584b5cbe9badeee79366adc9578aab5e2172657cdb6c"
+    },
+    "resolution": "Master",
+    "size": "Original"
+  }
+]

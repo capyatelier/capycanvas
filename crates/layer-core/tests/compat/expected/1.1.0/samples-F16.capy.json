@@ -1,0 +1,650 @@
+{
+  "manifest": {
+    "default_output": {
+      "ref": "f85af545d5ee443990d4e87e38dc353b"
+    },
+    "document": "dc3fd59c20264417b7c1e6279bc9f782",
+    "format": "capy.canvas",
+    "metadata": {
+      "exif": {
+        "ref": "190d2d55903e4fd9837382549744aee2"
+      },
+      "iptc": {
+        "ref": "ff7d13a003a74f708de7f6f593aa6f8d"
+      },
+      "xmp": {
+        "ref": "b6bc7edf346a4c5fa28ace6b1e438f6f"
+      }
+    },
+    "objects": [
+      {
+        "data": {
+          "base": {
+            "image": {
+              "ref": "00000000000000000000000000000046"
+            }
+          },
+          "color_mode": "full_color",
+          "domain": {
+            "size": [
+              256,
+              256
+            ]
+          },
+          "material": {
+            "watercolor": {
+              "burnt_edge": 0.75,
+              "edge_width": 3.5,
+              "wet_edge": 0.25
+            }
+          },
+          "tiles": [
+            {
+              "coordinate": [
+                0,
+                0
+              ],
+              "plane": "color",
+              "resource": {
+                "ref": "4a60a051e6b24efeaa39dc2fa672dd32"
+              }
+            },
+            {
+              "coordinate": [
+                0,
+                0
+              ],
+              "plane": "watercolor_wetness",
+              "resource": {
+                "ref": "2f2b9299b0f245b4afa678a4101e78c5"
+              }
+            }
+          ]
+        },
+        "id": "0000000000000000000000000000000a",
+        "type": "capy.paint-source/2"
+      },
+      {
+        "data": {
+          "base": {
+            "image": {
+              "ref": "00000000000000000000000000000046"
+            }
+          },
+          "color_mode": "full_color",
+          "domain": {
+            "size": [
+              256,
+              256
+            ]
+          },
+          "material": {
+            "watercolor": {
+              "burnt_edge": 0.75,
+              "edge_width": 3.5,
+              "wet_edge": 0.25
+            }
+          },
+          "tiles": [
+            {
+              "coordinate": [
+                0,
+                0
+              ],
+              "plane": "color",
+              "resource": {
+                "ref": "4a60a051e6b24efeaa39dc2fa672dd32"
+              }
+            },
+            {
+              "coordinate": [
+                0,
+                0
+              ],
+              "plane": "watercolor_wetness",
+              "resource": {
+                "ref": "2f2b9299b0f245b4afa678a4101e78c5"
+              }
+            }
+          ]
+        },
+        "id": "0000000000000000000000000000000b",
+        "type": "capy.paint-source/2"
+      },
+      {
+        "data": {
+          "default_coverage": 0.75,
+          "domain": {
+            "size": [
+              256,
+              256
+            ]
+          },
+          "tiles": [
+            {
+              "coordinate": [
+                0,
+                0
+              ],
+              "plane": "mask",
+              "resource": {
+                "ref": "2f2b9299b0f245b4afa678a4101e78c5"
+              }
+            }
+          ]
+        },
+        "id": "0000000000000000000000000000000c",
+        "type": "capy.coverage-source/2"
+      },
+      {
+        "data": {
+          "shape": {
+            "pixels": {
+              "bounds": [
+                0,
+                0,
+                5,
+                2
+              ],
+              "chunks": [
+                {
+                  "ref": "c05dda6c27a14c0baeceb02bcf74c51d"
+                }
+              ],
+              "depth": "u8",
+              "extent": [
+                5,
+                2
+              ]
+            }
+          }
+        },
+        "id": "0000000000000000000000000000000d",
+        "type": "capy.selection/1"
+      },
+      {
+        "data": {
+          "content": {
+            "paint": {
+              "ref": "0000000000000000000000000000000a"
+            }
+          },
+          "locked": true,
+          "mask": {
+            "inverted": true,
+            "linked": false,
+            "offset": [
+              "2",
+              "3"
+            ],
+            "source": {
+              "ref": "0000000000000000000000000000000c"
+            }
+          },
+          "name": "Original source",
+          "offset": [
+            "-125",
+            "9"
+          ],
+          "opacity": 0.625
+        },
+        "id": "00000000000000000000000000000014",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "paint": {
+              "ref": "0000000000000000000000000000000b"
+            }
+          },
+          "name": "Independent copy"
+        },
+        "id": "00000000000000000000000000000015",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "selection": {
+              "ref": "0000000000000000000000000000000d"
+            }
+          },
+          "name": "Saved coverage"
+        },
+        "id": "00000000000000000000000000000016",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "color_lookup",
+          "values": {
+            "color_space": {
+              "kind": "choice",
+              "value": "srgb"
+            },
+            "intensity": {
+              "kind": "number",
+              "value": 100.0
+            },
+            "resource": {
+              "kind": "lut3d",
+              "value": {
+                "resource": {
+                  "ref": "7c4680ee2e834600a7ef7d437cd96931"
+                },
+                "title": "Exact table"
+              }
+            }
+          },
+          "version": 1
+        },
+        "id": "00000000000000000000000000000028",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "domain_warp",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "animate": {
+              "kind": "toggle",
+              "value": true
+            },
+            "distance": {
+              "kind": "number",
+              "value": 24.0
+            },
+            "scale": {
+              "kind": "number",
+              "value": 96.0
+            },
+            "speed": {
+              "kind": "number",
+              "value": 0.25
+            },
+            "time": {
+              "kind": "number",
+              "value": 0.0
+            }
+          },
+          "version": 2
+        },
+        "id": "00000000000000000000000000000029",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "00000000000000000000000000000028"
+            }
+          },
+          "name": "color_lookup"
+        },
+        "id": "00000000000000000000000000000032",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "00000000000000000000000000000029"
+            }
+          },
+          "name": "domain_warp"
+        },
+        "id": "00000000000000000000000000000033",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "rulers": [
+            {
+              "geometry": {
+                "center": [
+                  12.5,
+                  8.0
+                ],
+                "kind": "radial"
+              },
+              "id": "0000000000000000000000000000003d"
+            }
+          ]
+        },
+        "id": "0000000000000000000000000000003c",
+        "type": "capy.guides/1"
+      },
+      {
+        "data": {
+          "extent": [
+            256,
+            256
+          ],
+          "interpretation": {
+            "channels": "gray",
+            "depth": "u16",
+            "profile": {
+              "resource": {
+                "ref": "ea1b42fbff3440a8a46d12315f51cece"
+              }
+            }
+          },
+          "resolution": {
+            "density": [
+              [
+                300,
+                1
+              ],
+              [
+                300,
+                1
+              ]
+            ],
+            "unit": "inch"
+          },
+          "tiles": [
+            {
+              "coordinate": [
+                0,
+                0
+              ],
+              "resource": {
+                "ref": "3ebaf650f3a2461a97af1f48cbdf5acd"
+              }
+            }
+          ]
+        },
+        "id": "00000000000000000000000000000046",
+        "type": "capy.image/1"
+      },
+      {
+        "data": {
+          "color": {
+            "depth": "f16",
+            "space": "display_p3"
+          },
+          "resolution": {
+            "density": [
+              [
+                601,
+                2
+              ],
+              [
+                300,
+                1
+              ]
+            ],
+            "unit": "inch"
+          },
+          "result": {
+            "object": {
+              "ref": "d9b7a467f03240e4b79a1ae69a285386"
+            },
+            "port": "color"
+          },
+          "size": [
+            256,
+            256
+          ]
+        },
+        "id": "b4663be215bd468b9523e4df80be6cbe",
+        "type": "capy.composition/2"
+      },
+      {
+        "data": {
+          "entries": [
+            {
+              "ref": "00000000000000000000000000000014"
+            },
+            {
+              "ref": "00000000000000000000000000000015"
+            },
+            {
+              "ref": "00000000000000000000000000000016"
+            },
+            {
+              "ref": "00000000000000000000000000000032"
+            },
+            {
+              "ref": "00000000000000000000000000000033"
+            }
+          ]
+        },
+        "id": "d9b7a467f03240e4b79a1ae69a285386",
+        "type": "capy.stack/1"
+      },
+      {
+        "data": {
+          "context": {
+            "effect_phases": [
+              {
+                "effect": {
+                  "ref": "00000000000000000000000000000028"
+                },
+                "phase": 2.125
+              },
+              {
+                "effect": {
+                  "ref": "00000000000000000000000000000029"
+                },
+                "phase": 3.125
+              }
+            ]
+          },
+          "name": "Captured output",
+          "sdr": {
+            "exposure": 0.5
+          },
+          "source": {
+            "object": {
+              "ref": "b4663be215bd468b9523e4df80be6cbe"
+            },
+            "port": "color"
+          }
+        },
+        "id": "f85af545d5ee443990d4e87e38dc353b",
+        "type": "capy.output/2"
+      }
+    ],
+    "outputs": [
+      {
+        "ref": "f85af545d5ee443990d4e87e38dc353b"
+      }
+    ],
+    "resources": [
+      {
+        "bytes": "4",
+        "crc32": "bc6f3c6e",
+        "data": {
+          "kind": "exif"
+        },
+        "encoding": "raw",
+        "id": "190d2d55903e4fd9837382549744aee2",
+        "location": {
+          "offset": "0",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.photo-metadata/1"
+      },
+      {
+        "bytes": "525",
+        "crc32": "533aab81",
+        "data": {
+          "alpha": "none",
+          "channels": "coverage",
+          "depth": "u16",
+          "transfer": "linear"
+        },
+        "encoding": "capy.lz4-tile/1",
+        "id": "2f2b9299b0f245b4afa678a4101e78c5",
+        "location": {
+          "offset": "4",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.raster-tile/1"
+      },
+      {
+        "bytes": "1802",
+        "crc32": "022fdece",
+        "data": {
+          "alpha": "none",
+          "channels": "gray",
+          "depth": "u16",
+          "transfer": "profile"
+        },
+        "encoding": "capy.lz4-tile/1",
+        "id": "3ebaf650f3a2461a97af1f48cbdf5acd",
+        "location": {
+          "offset": "529",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.raster-tile/1"
+      },
+      {
+        "bytes": "2098",
+        "crc32": "2ac09212",
+        "data": {
+          "alpha": "straight",
+          "channels": "rgba",
+          "depth": "f16",
+          "transfer": "linear"
+        },
+        "encoding": "capy.lz4-tile/1",
+        "id": "4a60a051e6b24efeaa39dc2fa672dd32",
+        "location": {
+          "offset": "2331",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.raster-tile/1"
+      },
+      {
+        "bytes": "25",
+        "crc32": "e86ef7cd",
+        "data": {
+          "decoded_bytes": "96",
+          "domain": [
+            [
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              1.0,
+              1.0,
+              1.0
+            ]
+          ],
+          "size": 2
+        },
+        "encoding": "capy.lz4-bytes/1",
+        "id": "7c4680ee2e834600a7ef7d437cd96931",
+        "location": {
+          "offset": "4429",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.lut3d/1"
+      },
+      {
+        "bytes": "16",
+        "crc32": "d2ed2a14",
+        "data": {
+          "kind": "xmp"
+        },
+        "encoding": "raw",
+        "id": "b6bc7edf346a4c5fa28ace6b1e438f6f",
+        "location": {
+          "offset": "4454",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.photo-metadata/1"
+      },
+      {
+        "bytes": "281",
+        "crc32": "4dbbc25d",
+        "data": {
+          "bounds": [
+            0,
+            0,
+            5,
+            2
+          ],
+          "chunk": 0,
+          "depth": "u8",
+          "extent": [
+            5,
+            2
+          ]
+        },
+        "encoding": "capy.lz4-coverage/1",
+        "id": "c05dda6c27a14c0baeceb02bcf74c51d",
+        "location": {
+          "offset": "4470",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.selection-coverage/1"
+      },
+      {
+        "bytes": "256",
+        "crc32": "29058c73",
+        "data": {},
+        "encoding": "raw",
+        "id": "ea1b42fbff3440a8a46d12315f51cece",
+        "location": {
+          "offset": "4751",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.icc/1"
+      },
+      {
+        "bytes": "6",
+        "crc32": "d33d40c7",
+        "data": {
+          "kind": "iptc"
+        },
+        "encoding": "raw",
+        "id": "ff7d13a003a74f708de7f6f593aa6f8d",
+        "location": {
+          "offset": "5007",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.photo-metadata/1"
+      }
+    ],
+    "root": {
+      "ref": "b4663be215bd468b9523e4df80be6cbe"
+    },
+    "version": 1
+  },
+  "preview": {
+    "pixels": "77861c1513f628d2dd39787341de13d2bf648034e9fdd82dd7025381be3154bb",
+    "size": [
+      2,
+      1
+    ]
+  },
+  "resources": {
+    "190d2d55903e4fd9837382549744aee2": "b5fec136bc0d23dea02fe4cf74f61b15a14771c08136ca3cb48d5d827259a719",
+    "2f2b9299b0f245b4afa678a4101e78c5": "fc04c6872d7d5dd9f3f4ff069a3a3e62baddbf0d8656cf6a09164bdeb4d0da9b",
+    "3ebaf650f3a2461a97af1f48cbdf5acd": "82b3cb3e15809961cde85c73c8a674d3714f99187eb874cd6d6d88cc27db7847",
+    "4a60a051e6b24efeaa39dc2fa672dd32": "41f8bcb290a035633e4324b279d22ab98f92cea9be661fc2c2dfaaedcd61bcba",
+    "7c4680ee2e834600a7ef7d437cd96931": "43d69c46c8e32211c95ae6cf6f3e498ef4acdf483fc50ade107738b51bf29ecc",
+    "b6bc7edf346a4c5fa28ace6b1e438f6f": "be361479650b3719d266e835b190ff9bae3fd2ca1c447644bbf8a5af73de590a",
+    "c05dda6c27a14c0baeceb02bcf74c51d": "90b82e3d4cdb4a504d311b2e4652531a5a39823b696f050a9af007dc5bc15584",
+    "ea1b42fbff3440a8a46d12315f51cece": "40aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880",
+    "ff7d13a003a74f708de7f6f593aa6f8d": "b901b8829e1cdd06f2cfc816ca56b9d64eb35b666c55d4cd605a4654541be858"
+  }
+}

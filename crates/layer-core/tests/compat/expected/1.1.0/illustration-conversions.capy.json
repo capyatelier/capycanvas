@@ -1,0 +1,166 @@
+{
+  "manifest": {
+    "default_output": {
+      "ref": "00000000000000000000000000000004"
+    },
+    "document": "00000000000000000000000000000001",
+    "format": "capy.canvas",
+    "objects": [
+      {
+        "data": {
+          "result": {
+            "object": {
+              "ref": "00000000000000000000000000000003"
+            },
+            "port": "color"
+          },
+          "size": [
+            64,
+            64
+          ]
+        },
+        "id": "00000000000000000000000000000002",
+        "type": "capy.composition/2"
+      },
+      {
+        "data": {
+          "entries": [
+            {
+              "ref": "00000000000000000000000000000007"
+            },
+            {
+              "ref": "0000000000000000000000000000000a"
+            },
+            {
+              "ref": "0000000000000000000000000000000d"
+            }
+          ]
+        },
+        "id": "00000000000000000000000000000003",
+        "type": "capy.stack/1"
+      },
+      {
+        "data": {
+          "source": {
+            "object": {
+              "ref": "00000000000000000000000000000002"
+            },
+            "port": "color"
+          }
+        },
+        "id": "00000000000000000000000000000004",
+        "type": "capy.output/2"
+      },
+      {
+        "data": {
+          "builtin": "threshold",
+          "values": {
+            "alpha_threshold": {
+              "kind": "number",
+              "value": 37.0
+            },
+            "colors": {
+              "kind": "choice",
+              "value": "black"
+            },
+            "threshold": {
+              "kind": "number",
+              "value": 0.375
+            },
+            "transparency": {
+              "kind": "choice",
+              "value": "threshold"
+            }
+          },
+          "version": 2
+        },
+        "id": "00000000000000000000000000000006",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "00000000000000000000000000000006"
+            }
+          },
+          "name": "Threshold"
+        },
+        "id": "00000000000000000000000000000007",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "brightness_to_opacity",
+          "values": {},
+          "version": 1
+        },
+        "id": "00000000000000000000000000000009",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "00000000000000000000000000000009"
+            }
+          },
+          "name": "Brightness to Opacity"
+        },
+        "id": "0000000000000000000000000000000a",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "solid_color",
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  0.25,
+                  0.25,
+                  0.25,
+                  0.625
+                ]
+              }
+            }
+          },
+          "version": 1
+        },
+        "id": "0000000000000000000000000000000c",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "0000000000000000000000000000000c"
+            }
+          },
+          "name": "Paper"
+        },
+        "id": "0000000000000000000000000000000d",
+        "type": "capy.occurrence/3"
+      }
+    ],
+    "outputs": [
+      {
+        "ref": "00000000000000000000000000000004"
+      }
+    ],
+    "resources": [],
+    "root": {
+      "ref": "00000000000000000000000000000002"
+    },
+    "version": 1
+  },
+  "preview": {
+    "pixels": "77861c1513f628d2dd39787341de13d2bf648034e9fdd82dd7025381be3154bb",
+    "size": [
+      2,
+      1
+    ]
+  },
+  "resources": {}
+}

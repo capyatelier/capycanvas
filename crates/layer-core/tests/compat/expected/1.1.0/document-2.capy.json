@@ -1,0 +1,93 @@
+{
+  "manifest": {
+    "default_output": {
+      "ref": "a5b8d49fb13d464c836d1eaf4dd5f52e"
+    },
+    "document": "ab2f70b3d3f24da5a1a4c8762af52796",
+    "format": "capy.canvas",
+    "objects": [
+      {
+        "data": {},
+        "id": "004a10c679f54fa39a1da43e704efa02",
+        "type": "capy.stack/1"
+      },
+      {
+        "data": {
+          "color": {
+            "depth": "f16",
+            "space": "adobe_rgb"
+          },
+          "resolution": {
+            "density": [
+              [
+                300,
+                1
+              ],
+              [
+                300,
+                1
+              ]
+            ],
+            "unit": "metre"
+          },
+          "result": {
+            "object": {
+              "ref": "004a10c679f54fa39a1da43e704efa02"
+            },
+            "port": "color"
+          },
+          "size": [
+            16,
+            16
+          ]
+        },
+        "id": "19583ae24bb4403c8d5ca04ca91af4e3",
+        "type": "capy.composition/2"
+      },
+      {
+        "data": {
+          "proof": {
+            "intent": "saturation",
+            "name": "Sweep proof",
+            "profile": {
+              "builtin": "adobe_rgb"
+            }
+          },
+          "sdr": {
+            "balance": 0.25,
+            "contrast": 1.25,
+            "exposure": 0.5,
+            "headroom": 3.0,
+            "highlight_color": 0.5
+          },
+          "source": {
+            "object": {
+              "ref": "19583ae24bb4403c8d5ca04ca91af4e3"
+            },
+            "port": "color"
+          }
+        },
+        "id": "a5b8d49fb13d464c836d1eaf4dd5f52e",
+        "type": "capy.output/2"
+      }
+    ],
+    "outputs": [
+      {
+        "ref": "a5b8d49fb13d464c836d1eaf4dd5f52e"
+      }
+    ],
+    "resources": [],
+    "root": {
+      "ref": "19583ae24bb4403c8d5ca04ca91af4e3"
+    },
+    "version": 1
+  },
+  "preview": {
+    "pixels": "77861c1513f628d2dd39787341de13d2bf648034e9fdd82dd7025381be3154bb",
+    "size": [
+      2,
+      1
+    ]
+  },
+  "resources": {}
+}

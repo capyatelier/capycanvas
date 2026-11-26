@@ -1,0 +1,150 @@
+{
+  "format": "capycanvas-keymap",
+  "version": 1,
+  "keymap": {
+    "id": "krita",
+    "revision": 5
+  },
+  "shortcuts": {
+    "command.Undo": []
+  },
+  "gestures": {
+    "touch.tap.2": "command.Redo"
+  },
+  "modifiers": [
+    {
+      "key": {
+        "key": " ",
+        "command": false,
+        "shift": false,
+        "alt": false
+      },
+      "actions": {
+        "drawing": "command.Hand",
+        "erasing": "command.Hand",
+        "blending": "command.Hand",
+        "warping": "command.Hand",
+        "selection": "command.Hand",
+        "fill_gradient": "command.Hand",
+        "shapes_rulers": "command.Hand",
+        "move_transform": "command.Hand",
+        "color_sampling": "command.Hand",
+        "navigation": "command.Hand",
+        "retouching": "command.Hand"
+      }
+    },
+    {
+      "key": {
+        "key": " ",
+        "command": true,
+        "shift": false,
+        "alt": false
+      },
+      "actions": {
+        "drawing": "command.Zoom",
+        "erasing": "command.Zoom",
+        "blending": "command.Zoom",
+        "warping": "command.Zoom",
+        "selection": "command.Zoom",
+        "fill_gradient": "command.Zoom",
+        "shapes_rulers": "command.Zoom",
+        "move_transform": "command.Zoom",
+        "color_sampling": "command.Zoom",
+        "navigation": "command.Zoom",
+        "retouching": "command.Zoom"
+      }
+    },
+    {
+      "key": {
+        "key": " ",
+        "command": false,
+        "shift": true,
+        "alt": false
+      },
+      "actions": {
+        "drawing": "command.RotateView",
+        "erasing": "command.RotateView",
+        "blending": "command.RotateView",
+        "warping": "command.RotateView",
+        "selection": "command.RotateView",
+        "fill_gradient": "command.RotateView",
+        "shapes_rulers": "command.RotateView",
+        "move_transform": "command.RotateView",
+        "color_sampling": "command.RotateView",
+        "navigation": "command.RotateView",
+        "retouching": "command.RotateView"
+      }
+    },
+    {
+      "key": {
+        "key": "control",
+        "command": false,
+        "shift": false,
+        "alt": false
+      },
+      "actions": {
+        "drawing": "command.Eyedropper",
+        "blending": "command.Eyedropper",
+        "fill_gradient": "command.Eyedropper"
+      }
+    },
+    {
+      "key": {
+        "key": " ",
+        "command": false,
+        "shift": false,
+        "alt": true
+      },
+      "actions": {
+        "drawing": "command.ZoomOut",
+        "erasing": "command.ZoomOut",
+        "blending": "command.ZoomOut",
+        "warping": "command.ZoomOut",
+        "selection": "command.ZoomOut",
+        "fill_gradient": "command.ZoomOut",
+        "shapes_rulers": "command.ZoomOut",
+        "move_transform": "command.ZoomOut",
+        "color_sampling": "command.ZoomOut",
+        "navigation": "command.ZoomOut",
+        "retouching": "command.ZoomOut"
+      }
+    },
+    {
+      "key": {
+        "key": " ",
+        "command": true,
+        "shift": false,
+        "alt": true
+      },
+      "actions": {
+        "drawing": "command.ZoomOut",
+        "erasing": "command.ZoomOut",
+        "blending": "command.ZoomOut",
+        "warping": "command.ZoomOut",
+        "selection": "command.ZoomOut",
+        "fill_gradient": "command.ZoomOut",
+        "shapes_rulers": "command.ZoomOut",
+        "move_transform": "command.ZoomOut",
+        "color_sampling": "command.ZoomOut",
+        "navigation": "command.ZoomOut",
+        "retouching": "command.ZoomOut"
+      }
+    },
+    {
+      "key": {
+        "key": "alt",
+        "command": false,
+        "shift": false,
+        "alt": false
+      },
+      "actions": {
+        "retouching": "command.CloneSourceArm"
+      }
+    }
+  ],
+  "pen_buttons": {
+    "pen.button.primary": {
+      "drawing": "command.Redo"
+    }
+  }
+}

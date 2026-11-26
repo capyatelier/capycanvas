@@ -320,7 +320,7 @@
     </screenshot>
   </screenshots>
   <releases>
-    <release version="1.1.0" date="2026-11-25">
+    <release version="1.1.0" date="2026-11-26">
       <description>
         <p>There's a lot in this release: over 1,600 commits since 1.0.15. Capy Canvas now works on phones, and is a lot faster and more reliable.</p>
         <ul>

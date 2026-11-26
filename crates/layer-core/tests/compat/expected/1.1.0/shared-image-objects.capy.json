@@ -1,0 +1,344 @@
+{
+  "manifest": {
+    "default_output": {
+      "ref": "0000000000000000000000000000000d"
+    },
+    "document": "0000000000000000000000000000000e",
+    "format": "capy.canvas",
+    "objects": [
+      {
+        "data": {
+          "color": {
+            "depth": "f32",
+            "space": "display_p3"
+          },
+          "result": {
+            "object": {
+              "ref": "00000000000000000000000000000002"
+            },
+            "port": "color"
+          },
+          "size": [
+            512,
+            512
+          ]
+        },
+        "id": "00000000000000000000000000000001",
+        "type": "capy.composition/2"
+      },
+      {
+        "data": {
+          "entries": [
+            {
+              "ref": "00000000000000000000000000000003"
+            },
+            {
+              "ref": "00000000000000000000000000000006"
+            },
+            {
+              "ref": "00000000000000000000000000000004"
+            },
+            {
+              "ref": "00000000000000000000000000000005"
+            }
+          ]
+        },
+        "id": "00000000000000000000000000000002",
+        "type": "capy.stack/1"
+      },
+      {
+        "data": {
+          "content": {
+            "object": {
+              "ref": "00000000000000000000000000000009"
+            }
+          },
+          "name": "First",
+          "offset": [
+            "13",
+            "-9"
+          ]
+        },
+        "id": "00000000000000000000000000000003",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "paint": {
+              "ref": "00000000000000000000000000000007"
+            }
+          },
+          "name": "Source base",
+          "offset": [
+            "-3",
+            "8"
+          ]
+        },
+        "id": "00000000000000000000000000000004",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "paint": {
+              "ref": "00000000000000000000000000000008"
+            }
+          },
+          "name": "Working base"
+        },
+        "id": "00000000000000000000000000000005",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "object": {
+              "ref": "0000000000000000000000000000000a"
+            }
+          },
+          "name": "Second",
+          "offset": [
+            "13",
+            "-9"
+          ],
+          "visible": false
+        },
+        "id": "00000000000000000000000000000006",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "base": {
+            "image": {
+              "ref": "0000000000000000000000000000000b"
+            },
+            "offset": [
+              3,
+              5
+            ]
+          },
+          "color_mode": "full_color",
+          "domain": {
+            "size": [
+              512,
+              512
+            ]
+          }
+        },
+        "id": "00000000000000000000000000000007",
+        "type": "capy.paint-source/2"
+      },
+      {
+        "data": {
+          "base": {
+            "image": {
+              "ref": "0000000000000000000000000000000c"
+            },
+            "offset": [
+              7,
+              11
+            ],
+            "policy": "working_pixels"
+          },
+          "color_mode": "full_color",
+          "domain": {
+            "size": [
+              512,
+              512
+            ]
+          }
+        },
+        "id": "00000000000000000000000000000008",
+        "type": "capy.paint-source/2"
+      },
+      {
+        "data": {
+          "affine": [
+            1.0,
+            0.125,
+            0.25,
+            0.875,
+            16777217.125,
+            -8388609.25
+          ],
+          "image": {
+            "ref": "0000000000000000000000000000000b"
+          }
+        },
+        "id": "00000000000000000000000000000009",
+        "type": "capy.image-object/1"
+      },
+      {
+        "data": {
+          "affine": [
+            -1.25,
+            0.5,
+            0.125,
+            2.0,
+            -1234.5678901234567,
+            9876.543210987655
+          ],
+          "image": {
+            "ref": "0000000000000000000000000000000b"
+          },
+          "interpolation": "nearest"
+        },
+        "id": "0000000000000000000000000000000a",
+        "type": "capy.image-object/1"
+      },
+      {
+        "data": {
+          "extent": [
+            256,
+            256
+          ],
+          "interpretation": {
+            "channels": "gray",
+            "depth": "u16",
+            "profile": {
+              "resource": {
+                "ref": "3609a89e23ec4e10b0f72f0f731c5cc7"
+              }
+            }
+          },
+          "resolution": {
+            "density": [
+              [
+                300,
+                1
+              ],
+              [
+                300,
+                1
+              ]
+            ],
+            "unit": "inch"
+          },
+          "tiles": [
+            {
+              "coordinate": [
+                0,
+                0
+              ],
+              "resource": {
+                "ref": "86b9f7f0b74047e7a15a114ec2420539"
+              }
+            }
+          ]
+        },
+        "id": "0000000000000000000000000000000b",
+        "type": "capy.image/1"
+      },
+      {
+        "data": {
+          "extent": [
+            256,
+            256
+          ],
+          "interpretation": {
+            "channels": "rgba",
+            "depth": "f32",
+            "profile": {
+              "builtin": "display_p3"
+            }
+          },
+          "tiles": [
+            {
+              "coordinate": [
+                0,
+                0
+              ],
+              "resource": {
+                "ref": "90c91d5651174ff8af266c94c0b97fb0"
+              }
+            }
+          ]
+        },
+        "id": "0000000000000000000000000000000c",
+        "type": "capy.image/1"
+      },
+      {
+        "data": {
+          "source": {
+            "object": {
+              "ref": "00000000000000000000000000000001"
+            },
+            "port": "color"
+          }
+        },
+        "id": "0000000000000000000000000000000d",
+        "type": "capy.output/2"
+      }
+    ],
+    "outputs": [
+      {
+        "ref": "0000000000000000000000000000000d"
+      }
+    ],
+    "resources": [
+      {
+        "bytes": "256",
+        "crc32": "29058c73",
+        "data": {},
+        "encoding": "raw",
+        "id": "3609a89e23ec4e10b0f72f0f731c5cc7",
+        "location": {
+          "offset": "0",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.icc/1"
+      },
+      {
+        "bytes": "1802",
+        "crc32": "022fdece",
+        "data": {
+          "alpha": "none",
+          "channels": "gray",
+          "depth": "u16",
+          "transfer": "profile"
+        },
+        "encoding": "capy.lz4-tile/1",
+        "id": "86b9f7f0b74047e7a15a114ec2420539",
+        "location": {
+          "offset": "256",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.raster-tile/1"
+      },
+      {
+        "bytes": "4169",
+        "crc32": "606c4d44",
+        "data": {
+          "alpha": "straight",
+          "channels": "rgba",
+          "depth": "f32",
+          "transfer": "linear"
+        },
+        "encoding": "capy.lz4-tile/1",
+        "id": "90c91d5651174ff8af266c94c0b97fb0",
+        "location": {
+          "offset": "2058",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.raster-tile/1"
+      }
+    ],
+    "root": {
+      "ref": "00000000000000000000000000000001"
+    },
+    "version": 1
+  },
+  "preview": {
+    "pixels": "77861c1513f628d2dd39787341de13d2bf648034e9fdd82dd7025381be3154bb",
+    "size": [
+      2,
+      1
+    ]
+  },
+  "resources": {
+    "3609a89e23ec4e10b0f72f0f731c5cc7": "40aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880",
+    "86b9f7f0b74047e7a15a114ec2420539": "82b3cb3e15809961cde85c73c8a674d3714f99187eb874cd6d6d88cc27db7847",
+    "90c91d5651174ff8af266c94c0b97fb0": "9fc0a884a368c5c58f51e907dcb2eba504483528b9851d89a7d36963e2043317"
+  }
+}

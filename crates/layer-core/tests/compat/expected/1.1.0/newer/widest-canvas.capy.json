@@ -1,0 +1,4739 @@
+{
+  "manifest": {
+    "default_output": {
+      "ref": "f11ada6a420f44338c17bf26316231bf"
+    },
+    "document": "2dff4da0490c4f4593b08a7475fd8469",
+    "format": "capy.canvas",
+    "objects": [
+      {
+        "data": {
+          "result": {
+            "object": {
+              "ref": "e5d41ec52b6d4307b81b051b713b73be"
+            },
+            "port": "color"
+          },
+          "size": [
+            131072,
+            256
+          ]
+        },
+        "id": "03e9755d25cc41489466b6c1921bb22c",
+        "type": "capy.composition/2"
+      },
+      {
+        "data": {
+          "content": {
+            "paint": {
+              "ref": "6f5fc23bdd384d65b07ac3e5fb3fdae6"
+            }
+          },
+          "name": "Photo"
+        },
+        "id": "402478a300634d32b2257ac88557dac7",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "extent": [
+            131072,
+            256
+          ],
+          "interpretation": {
+            "channels": "rgba",
+            "depth": "u8",
+            "profile": {
+              "builtin": "srgb"
+            }
+          },
+          "tiles": [
+            {
+              "coordinate": [
+                0,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                1,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                2,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                3,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                4,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                5,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                6,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                7,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                8,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                9,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                10,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                11,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                12,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                13,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                14,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                15,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                16,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                17,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                18,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                19,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                20,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                21,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                22,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                23,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                24,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                25,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                26,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                27,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                28,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                29,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                30,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                31,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                32,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                33,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                34,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                35,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                36,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                37,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                38,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                39,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                40,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                41,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                42,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                43,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                44,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                45,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                46,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                47,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                48,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                49,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                50,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                51,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                52,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                53,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                54,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                55,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                56,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                57,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                58,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                59,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                60,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                61,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                62,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                63,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                64,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                65,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                66,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                67,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                68,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                69,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                70,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                71,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                72,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                73,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                74,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                75,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                76,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                77,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                78,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                79,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                80,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                81,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                82,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                83,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                84,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                85,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                86,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                87,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                88,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                89,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                90,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                91,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                92,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                93,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                94,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                95,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                96,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                97,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                98,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                99,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                100,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                101,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                102,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                103,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                104,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                105,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                106,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                107,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                108,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                109,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                110,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                111,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                112,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                113,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                114,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                115,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                116,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                117,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                118,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                119,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                120,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                121,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                122,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                123,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                124,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                125,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                126,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                127,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                128,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                129,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                130,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                131,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                132,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                133,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                134,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                135,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                136,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                137,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                138,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                139,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                140,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                141,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                142,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                143,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                144,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                145,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                146,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                147,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                148,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                149,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                150,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                151,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                152,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                153,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                154,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                155,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                156,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                157,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                158,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                159,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                160,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                161,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                162,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                163,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                164,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                165,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                166,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                167,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                168,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                169,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                170,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                171,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                172,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                173,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                174,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                175,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                176,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                177,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                178,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                179,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                180,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                181,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                182,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                183,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                184,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                185,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                186,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                187,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                188,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                189,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                190,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                191,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                192,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                193,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                194,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                195,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                196,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                197,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                198,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                199,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                200,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                201,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                202,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                203,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                204,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                205,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                206,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                207,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                208,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                209,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                210,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                211,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                212,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                213,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                214,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                215,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                216,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                217,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                218,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                219,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                220,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                221,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                222,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                223,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                224,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                225,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                226,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                227,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                228,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                229,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                230,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                231,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                232,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                233,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                234,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                235,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                236,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                237,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                238,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                239,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                240,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                241,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                242,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                243,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                244,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                245,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                246,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                247,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                248,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                249,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                250,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                251,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                252,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                253,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                254,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                255,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                256,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                257,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                258,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                259,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                260,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                261,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                262,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                263,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                264,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                265,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                266,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                267,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                268,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                269,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                270,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                271,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                272,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                273,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                274,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                275,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                276,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                277,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                278,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                279,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                280,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                281,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                282,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                283,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                284,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                285,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                286,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                287,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                288,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                289,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                290,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                291,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                292,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                293,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                294,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                295,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                296,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                297,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                298,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                299,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                300,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                301,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                302,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                303,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                304,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                305,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                306,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                307,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                308,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                309,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                310,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                311,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                312,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                313,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                314,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                315,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                316,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                317,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                318,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                319,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                320,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                321,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                322,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                323,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                324,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                325,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                326,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                327,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                328,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                329,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                330,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                331,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                332,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                333,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                334,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                335,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                336,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                337,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                338,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                339,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                340,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                341,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                342,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                343,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                344,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                345,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                346,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                347,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                348,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                349,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                350,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                351,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                352,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                353,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                354,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                355,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                356,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                357,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                358,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                359,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                360,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                361,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                362,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                363,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                364,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                365,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                366,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                367,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                368,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                369,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                370,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                371,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                372,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                373,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                374,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                375,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                376,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                377,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                378,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                379,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                380,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                381,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                382,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                383,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                384,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                385,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                386,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                387,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                388,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                389,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                390,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                391,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                392,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                393,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                394,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                395,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                396,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                397,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                398,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                399,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                400,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                401,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                402,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                403,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                404,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                405,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                406,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                407,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                408,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                409,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                410,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                411,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                412,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                413,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                414,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                415,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                416,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                417,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                418,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                419,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                420,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                421,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                422,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                423,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                424,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                425,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                426,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                427,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                428,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                429,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                430,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                431,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                432,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                433,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                434,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                435,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                436,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                437,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                438,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                439,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                440,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                441,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                442,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                443,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                444,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                445,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                446,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                447,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                448,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                449,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                450,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                451,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                452,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                453,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                454,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                455,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                456,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                457,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                458,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                459,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                460,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                461,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                462,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                463,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                464,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                465,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                466,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                467,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                468,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                469,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                470,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                471,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                472,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                473,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                474,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                475,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                476,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                477,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                478,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                479,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                480,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                481,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                482,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                483,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                484,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                485,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                486,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                487,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                488,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                489,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                490,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                491,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                492,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                493,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                494,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                495,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                496,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                497,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                498,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                499,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                500,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                501,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                502,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                503,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                504,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                505,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                506,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                507,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                508,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                509,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                510,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            },
+            {
+              "coordinate": [
+                511,
+                0
+              ],
+              "resource": {
+                "ref": "67f36a00f04749729b6ca9e4158533a3"
+              }
+            }
+          ]
+        },
+        "id": "6015358cd3964b589c3cf3b8447f9885",
+        "type": "capy.image/1"
+      },
+      {
+        "data": {
+          "base": {
+            "image": {
+              "ref": "6015358cd3964b589c3cf3b8447f9885"
+            }
+          },
+          "color_mode": "full_color",
+          "domain": {
+            "size": [
+              131072,
+              256
+            ]
+          }
+        },
+        "id": "6f5fc23bdd384d65b07ac3e5fb3fdae6",
+        "type": "capy.paint-source/2"
+      },
+      {
+        "data": {
+          "entries": [
+            {
+              "ref": "402478a300634d32b2257ac88557dac7"
+            }
+          ]
+        },
+        "id": "e5d41ec52b6d4307b81b051b713b73be",
+        "type": "capy.stack/1"
+      },
+      {
+        "data": {
+          "source": {
+            "object": {
+              "ref": "03e9755d25cc41489466b6c1921bb22c"
+            },
+            "port": "color"
+          }
+        },
+        "id": "f11ada6a420f44338c17bf26316231bf",
+        "type": "capy.output/2"
+      }
+    ],
+    "outputs": [
+      {
+        "ref": "f11ada6a420f44338c17bf26316231bf"
+      }
+    ],
+    "resources": [
+      {
+        "bytes": "263173",
+        "crc32": "d0ec51be",
+        "data": {
+          "alpha": "straight",
+          "channels": "rgba",
+          "depth": "u8",
+          "transfer": "profile"
+        },
+        "encoding": "capy.lz4-tile/1",
+        "id": "67f36a00f04749729b6ca9e4158533a3",
+        "location": {
+          "offset": "0",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.raster-tile/1"
+      }
+    ],
+    "root": {
+      "ref": "03e9755d25cc41489466b6c1921bb22c"
+    },
+    "version": 1
+  },
+  "preview": null,
+  "resources": {
+    "67f36a00f04749729b6ca9e4158533a3": "4314b6ba645477362c5399bc284bae222f1e50b25872afff7f1756a347e08949"
+  }
+}

@@ -1,0 +1,94 @@
+{
+  "manifest": {
+    "default_output": {
+      "ref": "d624bf282a054f7b8c8c017df900cfd4"
+    },
+    "document": "31b19477f17347daa794a1014bcf092d",
+    "format": "capy.canvas",
+    "objects": [
+      {
+        "data": {
+          "color": {
+            "depth": "u16",
+            "space": "display_p3"
+          },
+          "resolution": {
+            "density": [
+              [
+                300,
+                1
+              ],
+              [
+                300,
+                1
+              ]
+            ],
+            "unit": "centimetre"
+          },
+          "result": {
+            "object": {
+              "ref": "31d2f13c4bad460db08c962eff0c6ded"
+            },
+            "port": "color"
+          },
+          "size": [
+            16,
+            16
+          ]
+        },
+        "id": "24440103ad544169b468ba96ca96ce64",
+        "type": "capy.composition/2"
+      },
+      {
+        "data": {},
+        "id": "31d2f13c4bad460db08c962eff0c6ded",
+        "type": "capy.stack/1"
+      },
+      {
+        "data": {
+          "proof": {
+            "black_point_compensation": false,
+            "name": "Sweep proof",
+            "profile": {
+              "builtin": "display_p3"
+            },
+            "simulate_paper": true
+          },
+          "sdr": {
+            "balance": 0.25,
+            "contrast": 1.25,
+            "exposure": 0.5,
+            "headroom": 3.0,
+            "highlight_color": 0.5
+          },
+          "source": {
+            "object": {
+              "ref": "24440103ad544169b468ba96ca96ce64"
+            },
+            "port": "color"
+          }
+        },
+        "id": "d624bf282a054f7b8c8c017df900cfd4",
+        "type": "capy.output/2"
+      }
+    ],
+    "outputs": [
+      {
+        "ref": "d624bf282a054f7b8c8c017df900cfd4"
+      }
+    ],
+    "resources": [],
+    "root": {
+      "ref": "24440103ad544169b468ba96ca96ce64"
+    },
+    "version": 1
+  },
+  "preview": {
+    "pixels": "77861c1513f628d2dd39787341de13d2bf648034e9fdd82dd7025381be3154bb",
+    "size": [
+      2,
+      1
+    ]
+  },
+  "resources": {}
+}

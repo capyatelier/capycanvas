@@ -1,0 +1,13 @@
+{
+  "generation": 1,
+  "drawings": [
+    {
+      "id": 7,
+      "key": "drawing-a"
+    }
+  ],
+  "active": 7,
+  "clean_exit": false,
+  "restoring": [],
+  "blocked": []
+}

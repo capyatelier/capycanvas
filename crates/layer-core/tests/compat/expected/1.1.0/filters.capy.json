@@ -1,0 +1,5973 @@
+{
+  "manifest": {
+    "default_output": {
+      "ref": "65550b31734644cda3b427b2bae4a674"
+    },
+    "document": "f98b827eaaa14f3987d8d0448cb16f8c",
+    "format": "capy.canvas",
+    "objects": [
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "8f162fe2367d48c7a13e16e91e8754c7"
+            }
+          },
+          "name": "threshold"
+        },
+        "id": "0045cb6654d4412f91ab3ada6692af19",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "32fea7f09ff04afbb1d7fd31815474d8"
+            }
+          },
+          "name": "curves"
+        },
+        "id": "0045d8956d4e474cadf53d5e8f8973cc",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "658f7576f3fa43dca435d6feeff86a71"
+            }
+          },
+          "name": "ripple"
+        },
+        "id": "020dc3dfc97446509e3010c1eeac9c6f",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "solid_color",
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  0.25,
+                  0.5,
+                  0.75,
+                  1.0
+                ]
+              }
+            }
+          },
+          "version": 1
+        },
+        "id": "02cf568917154284b63480807c3c0e87",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "edge_detect",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "invert": {
+              "kind": "toggle",
+              "value": true
+            },
+            "radius": {
+              "kind": "number",
+              "value": 2.4000000953674316
+            },
+            "strength": {
+              "kind": "number",
+              "value": 300.0
+            }
+          },
+          "version": 1
+        },
+        "id": "03ab3c4b620b4289a0d3c423b8071a49",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "dither_spread",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "cell_size": {
+              "kind": "number",
+              "value": 13.0
+            },
+            "density": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "spread": {
+              "kind": "number",
+              "value": 64.0
+            }
+          },
+          "version": 1
+        },
+        "id": "041768280ec5467fa10bddf74cf1df8e",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "36dbab5d947f4e99883d9975f820cf4f"
+            }
+          },
+          "name": "crystallize"
+        },
+        "id": "0417d4025b7a4dbd8dcaf1e01f5ed263",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "b051e968c43f4f4fbfd66d301282f0a0"
+            }
+          },
+          "name": "white_balance"
+        },
+        "id": "047a9155b14f4093958d52ac69c64eea",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "paper",
+          "spatial": {
+            "extent": [
+              5.418666666666667,
+              5.418666666666667
+            ],
+            "mapping": [
+              11.811023622047244,
+              0.0,
+              0.0,
+              11.811023622047244,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ]
+              }
+            },
+            "light": {
+              "kind": "number",
+              "value": 225.0
+            },
+            "relief": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "texture": {
+              "kind": "texture",
+              "value": {
+                "builtin": "crackle",
+                "values": {
+                  "folds": {
+                    "kind": "number",
+                    "value": 25.0
+                  },
+                  "gap": {
+                    "kind": "number",
+                    "value": 0.75
+                  },
+                  "seed": {
+                    "kind": "number",
+                    "value": 4194304.0
+                  },
+                  "size": {
+                    "kind": "number",
+                    "value": 12.199999809265137
+                  }
+                },
+                "version": 1
+              }
+            },
+            "through_paint": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "04ff3239e2db4527b95f573587009e71",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "desaturate",
+          "values": {},
+          "version": 1
+        },
+        "id": "053c474232604dd4990a4129573b18e9",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "paper",
+          "spatial": {
+            "extent": [
+              5.418666666666667,
+              5.418666666666667
+            ],
+            "mapping": [
+              11.811023622047244,
+              0.0,
+              0.0,
+              11.811023622047244,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ]
+              }
+            },
+            "light": {
+              "kind": "number",
+              "value": 225.0
+            },
+            "relief": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "texture": {
+              "kind": "texture",
+              "value": {
+                "builtin": "canvas",
+                "values": {
+                  "irregularity": {
+                    "kind": "number",
+                    "value": 25.0
+                  },
+                  "priming": {
+                    "kind": "number",
+                    "value": 25.0
+                  },
+                  "seed": {
+                    "kind": "number",
+                    "value": 4194304.0
+                  },
+                  "threads": {
+                    "kind": "number",
+                    "value": 13.5
+                  }
+                },
+                "version": 1
+              }
+            },
+            "through_paint": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "053e68205c0e4f2297936b8b9351a0d8",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "f283ec5eb1104103875be36bd538d111"
+            }
+          },
+          "name": "gaussian_blur"
+        },
+        "id": "08b10846f07647d6b04061d93eae2b97",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "invert",
+          "values": {},
+          "version": 1
+        },
+        "id": "0c2a6c1cecb94714967c675ade85e07b",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "levels",
+          "values": {
+            "black": {
+              "kind": "number",
+              "value": 0.2485358715057373
+            },
+            "blue_black": {
+              "kind": "number",
+              "value": 0.2485358715057373
+            },
+            "blue_gamma": {
+              "kind": "number",
+              "value": 2.549999952316284
+            },
+            "blue_output_black": {
+              "kind": "number",
+              "value": 0.2485358715057373
+            },
+            "blue_output_white": {
+              "kind": "number",
+              "value": 0.2485358715057373
+            },
+            "blue_white": {
+              "kind": "number",
+              "value": 0.24953587353229523
+            },
+            "clamp_input": {
+              "kind": "toggle",
+              "value": true
+            },
+            "clamp_output": {
+              "kind": "toggle",
+              "value": true
+            },
+            "gamma": {
+              "kind": "number",
+              "value": 2.549999952316284
+            },
+            "green_black": {
+              "kind": "number",
+              "value": 0.2485358715057373
+            },
+            "green_gamma": {
+              "kind": "number",
+              "value": 2.549999952316284
+            },
+            "green_output_black": {
+              "kind": "number",
+              "value": 0.2485358715057373
+            },
+            "green_output_white": {
+              "kind": "number",
+              "value": 0.2485358715057373
+            },
+            "green_white": {
+              "kind": "number",
+              "value": 0.24953587353229523
+            },
+            "output_black": {
+              "kind": "number",
+              "value": 0.2485358715057373
+            },
+            "output_white": {
+              "kind": "number",
+              "value": 0.2485358715057373
+            },
+            "red_black": {
+              "kind": "number",
+              "value": 0.2485358715057373
+            },
+            "red_gamma": {
+              "kind": "number",
+              "value": 2.549999952316284
+            },
+            "red_output_black": {
+              "kind": "number",
+              "value": 0.2485358715057373
+            },
+            "red_output_white": {
+              "kind": "number",
+              "value": 0.2485358715057373
+            },
+            "red_white": {
+              "kind": "number",
+              "value": 0.24953587353229523
+            },
+            "white": {
+              "kind": "number",
+              "value": 0.24953587353229523
+            }
+          },
+          "version": 1
+        },
+        "id": "0c2a70acc9f5491786258fbc134792d8",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "cea74cae45944c7ba330f3463dd1a019"
+            }
+          },
+          "name": "fabric"
+        },
+        "id": "0eb67a8265634aa5ba588a39b6edac2b",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "3c3aecb3040b4d948174e6528e9edcda"
+            }
+          },
+          "name": "glass"
+        },
+        "id": "1053c695610946d0b8243fa70d638205",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "swirl",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "center_x": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "center_y": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "radius": {
+              "kind": "number",
+              "value": 38.0
+            },
+            "turn": {
+              "kind": "number",
+              "value": -360.0
+            }
+          },
+          "version": 1
+        },
+        "id": "11288bbd288c4b7abf3174b6ac604bdc",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "f3f468a92eae4127834c73a1d2cb775b"
+            }
+          },
+          "name": "newsprint"
+        },
+        "id": "11f4a61de9fd4dd88837548961cd7c2b",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "paper",
+          "spatial": {
+            "extent": [
+              5.418666666666667,
+              5.418666666666667
+            ],
+            "mapping": [
+              11.811023622047244,
+              0.0,
+              0.0,
+              11.811023622047244,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ]
+              }
+            },
+            "light": {
+              "kind": "number",
+              "value": 225.0
+            },
+            "relief": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "texture": {
+              "kind": "texture",
+              "value": {
+                "image": {
+                  "ref": "711878f240e4490b9b04ce160b0a4577"
+                }
+              }
+            },
+            "through_paint": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "124ec735d8d943aca7d956452491b770",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "a4c5b11e224a487d9e95b1ff0cb9a00a"
+            }
+          },
+          "name": "domain_warp"
+        },
+        "id": "18687fcb4a08437fbeb789db3fc2e888",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "4d4565a95b974e5381e7fa8b75ed93cb"
+            }
+          },
+          "name": "papyrus"
+        },
+        "id": "187a14a9ade244bd9672e6dcbfa9fa1a",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "crt",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "animate": {
+              "kind": "toggle",
+              "value": false
+            },
+            "curvature": {
+              "kind": "number",
+              "value": 23.0
+            },
+            "lines": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "mask": {
+              "kind": "number",
+              "value": 75.0
+            },
+            "separation": {
+              "kind": "number",
+              "value": 1.2000000476837158
+            },
+            "time": {
+              "kind": "number",
+              "value": 900.0
+            }
+          },
+          "version": 1
+        },
+        "id": "19adb925a55246abb132d560430432c2",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "c0a3e69b595d4242b2f0dd378ef859e2"
+            }
+          },
+          "name": "hue_saturation"
+        },
+        "id": "1b8be9075c03402e929ad320257e4fdf",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "053c474232604dd4990a4129573b18e9"
+            }
+          },
+          "name": "desaturate"
+        },
+        "id": "1bcd384786bc4c08922504f1af7d9ff2",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "e11a99c8c2f34685bac38b1f11f80708"
+            }
+          },
+          "name": "heat_haze"
+        },
+        "id": "1cc6c483b42b4c54a385b084f2b412be",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "432222ff96474d2a85bfa74d23ec2615"
+            }
+          },
+          "name": "soft_focus"
+        },
+        "id": "1da3bf8dc0614858a9f77d8723a6b476",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "aa20a2ca1cd84f4a8ec0de1b8ec8f515"
+            }
+          },
+          "name": "color_balance"
+        },
+        "id": "1ff3a3c49b9f45db9762f8c83d4a57d2",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "7dce80a1f39e42b5a73e35459e5148d5"
+            }
+          },
+          "name": "black_white"
+        },
+        "id": "20df9e900e594152872ff7fcef33be56",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "041768280ec5467fa10bddf74cf1df8e"
+            }
+          },
+          "name": "dither_spread"
+        },
+        "id": "218d774d226e4b27aa1f065b2298c6d3",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "03ab3c4b620b4289a0d3c423b8071a49"
+            }
+          },
+          "name": "edge_detect"
+        },
+        "id": "23c1441bbb264d9d8146cada9a292973",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "solarize",
+          "values": {
+            "strength": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "threshold": {
+              "kind": "number",
+              "value": 25.0
+            }
+          },
+          "version": 1
+        },
+        "id": "23cf2ce7bbf74dc9a1db8c3bebccd6b4",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "gradient_fill",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "angle": {
+              "kind": "number",
+              "value": 90.0
+            },
+            "center_x": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "center_y": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "gradient": {
+              "kind": "gradient",
+              "value": {
+                "interpolation": "oklab",
+                "stops": [
+                  {
+                    "color": {
+                      "rgba": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0
+                      ]
+                    },
+                    "position": 0.0
+                  },
+                  {
+                    "color": {
+                      "rgba": [
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0
+                      ]
+                    },
+                    "position": 1.0
+                  }
+                ]
+              }
+            },
+            "scale": {
+              "kind": "number",
+              "value": 100.0
+            },
+            "style": {
+              "kind": "choice",
+              "value": "reflected"
+            }
+          },
+          "version": 2
+        },
+        "id": "25e4484e1ccc466d81ab77ec8d53fa1f",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "8c0a4b55f06d40eea96f3616652675dc"
+            }
+          },
+          "name": "color_lookup"
+        },
+        "id": "26f419487dc3482fb0c925ed7c5c08af",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "aeaa9ddac25c4e8994423762dae1e620"
+            }
+          },
+          "name": "threshold"
+        },
+        "id": "2a365bd395204bc6a80e86f588bfb26e",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "d1d8f56f0ed64f089e201a92bae22ddd"
+            }
+          },
+          "name": "iridescence"
+        },
+        "id": "2e52855f105a4ee6b92d32de6a0dc21b",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "curves",
+          "values": {
+            "blue": {
+              "kind": "curve",
+              "value": [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  1.0,
+                  1.0
+                ]
+              ]
+            },
+            "domain": {
+              "kind": "choice",
+              "value": "encoded_rgb"
+            },
+            "green": {
+              "kind": "curve",
+              "value": [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  1.0,
+                  1.0
+                ]
+              ]
+            },
+            "hdr_stops": {
+              "kind": "number",
+              "value": 4.0
+            },
+            "red": {
+              "kind": "curve",
+              "value": [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  1.0,
+                  1.0
+                ]
+              ]
+            },
+            "rgb": {
+              "kind": "curve",
+              "value": [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  1.0,
+                  1.0
+                ]
+              ]
+            }
+          },
+          "version": 1
+        },
+        "id": "32fea7f09ff04afbb1d7fd31815474d8",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "dehaze",
+          "values": {
+            "amount": {
+              "kind": "number",
+              "value": -50.0
+            }
+          },
+          "version": 1
+        },
+        "id": "3583ad37401540e3a9616dba4cd664b9",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "0c2a70acc9f5491786258fbc134792d8"
+            }
+          },
+          "name": "levels"
+        },
+        "id": "35d3e993991941e286dd632917211f77",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "paper",
+          "spatial": {
+            "extent": [
+              5.418666666666667,
+              5.418666666666667
+            ],
+            "mapping": [
+              11.811023622047244,
+              0.0,
+              0.0,
+              11.811023622047244,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ]
+              }
+            },
+            "light": {
+              "kind": "number",
+              "value": 225.0
+            },
+            "relief": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "texture": {
+              "kind": "texture",
+              "value": {
+                "builtin": "concrete",
+                "values": {
+                  "grain": {
+                    "kind": "number",
+                    "value": 0.26999998092651367
+                  },
+                  "pore_size": {
+                    "kind": "number",
+                    "value": 1.649999976158142
+                  },
+                  "pores": {
+                    "kind": "number",
+                    "value": 25.0
+                  },
+                  "scratches": {
+                    "kind": "number",
+                    "value": 25.0
+                  },
+                  "seed": {
+                    "kind": "number",
+                    "value": 4194304.0
+                  }
+                },
+                "version": 1
+              }
+            },
+            "through_paint": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "36193533940b418e94c5e57cfc66a2bb",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "crystallize",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "cell_size": {
+              "kind": "number",
+              "value": 34.0
+            },
+            "stretch": {
+              "kind": "number",
+              "value": -50.0
+            }
+          },
+          "version": 1
+        },
+        "id": "36dbab5d947f4e99883d9975f820cf4f",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "7ae68d808dcf4b65854d8b79c56243ec"
+            }
+          },
+          "name": "brightness_to_opacity"
+        },
+        "id": "37f90dec2caa4af0a024c12d5648322d",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "kaleidoscope",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "angle": {
+              "kind": "number",
+              "value": -90.0
+            },
+            "center_x": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "center_y": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "segments": {
+              "kind": "number",
+              "value": 8.0
+            }
+          },
+          "version": 2
+        },
+        "id": "380cde8b303c41888a6d13dba443a8b1",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "8a505074dfbd4cf68423fd11f4186038"
+            }
+          },
+          "name": "vibrance"
+        },
+        "id": "38e1ecf700d743c1801b3ae29aaa9558",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "split_tone",
+          "values": {
+            "balance": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "highlights": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  0.25,
+                  0.5,
+                  0.75,
+                  1.0
+                ]
+              }
+            },
+            "shadows": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  0.25,
+                  0.5,
+                  0.75,
+                  1.0
+                ]
+              }
+            },
+            "strength": {
+              "kind": "number",
+              "value": 25.0
+            }
+          },
+          "version": 1
+        },
+        "id": "3aeeef70c6ab413ea8730e3d8a9d945c",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "crosshatch",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "angle": {
+              "kind": "number",
+              "value": -90.0
+            },
+            "ink": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  0.25,
+                  0.5,
+                  0.75,
+                  1.0
+                ]
+              }
+            },
+            "paper": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  0.25,
+                  0.5,
+                  0.75,
+                  1.0
+                ]
+              }
+            },
+            "spacing": {
+              "kind": "number",
+              "value": 10.5
+            },
+            "width": {
+              "kind": "number",
+              "value": 1.149999976158142
+            }
+          },
+          "version": 1
+        },
+        "id": "3b2d3af494514a1599bcfba190e0bd8a",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "glass",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "distance": {
+              "kind": "number",
+              "value": 36.0
+            },
+            "roughness": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "scale": {
+              "kind": "number",
+              "value": 43.0
+            }
+          },
+          "version": 1
+        },
+        "id": "3c3aecb3040b4d948174e6528e9edcda",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "fd1dad203f5d47c4a542ed53cdfc3a19"
+            }
+          },
+          "name": "halftone"
+        },
+        "id": "3d085648461d449d8ab19bf657e7487a",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "pixel_mosaic",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "size": {
+              "kind": "number",
+              "value": 25.0
+            }
+          },
+          "version": 1
+        },
+        "id": "3d108c1d11f140be87112d512c036001",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "554723497d894b7ea3cabd89c4170f47"
+            }
+          },
+          "name": "rainy_glass"
+        },
+        "id": "3d4feb76e6b14983a1133a5d72e1e02f",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "3aeeef70c6ab413ea8730e3d8a9d945c"
+            }
+          },
+          "name": "split_tone"
+        },
+        "id": "402223625fcb4487b5399c9bacf64116",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "soft_focus",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "amount": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "sigma": {
+              "kind": "number",
+              "value": 5.200000286102295
+            }
+          },
+          "version": 1
+        },
+        "id": "432222ff96474d2a85bfa74d23ec2615",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "bloom",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "amount": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "sigma": {
+              "kind": "number",
+              "value": 5.200000286102295
+            },
+            "threshold": {
+              "kind": "number",
+              "value": 25.0
+            }
+          },
+          "version": 1
+        },
+        "id": "44d0d02c52434ab3a38e8b144f3aa23a",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "4a11f313fe6943c0a6c228f154bbd70b"
+            }
+          },
+          "name": "honeycomb"
+        },
+        "id": "45513f7a5d1047b1b8e52cc7b2a40e54",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "986fec271cf4419d9844208d943439bc"
+            }
+          },
+          "name": "gradient_fill"
+        },
+        "id": "46a19625c01a4d68b59394e6778fccb0",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "dc4bcc3c87d54c6083f1526a6e3a50af"
+            }
+          },
+          "name": "brightness_contrast"
+        },
+        "id": "473234c1917e47e2af0b865455e4ce8c",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "paper",
+          "spatial": {
+            "extent": [
+              5.418666666666667,
+              5.418666666666667
+            ],
+            "mapping": [
+              11.811023622047244,
+              0.0,
+              0.0,
+              11.811023622047244,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ]
+              }
+            },
+            "light": {
+              "kind": "number",
+              "value": 225.0
+            },
+            "relief": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "texture": {
+              "kind": "texture",
+              "value": {
+                "builtin": "handmade",
+                "values": {
+                  "amount": {
+                    "kind": "number",
+                    "value": 25.0
+                  },
+                  "seed": {
+                    "kind": "number",
+                    "value": 4194304.0
+                  },
+                  "size": {
+                    "kind": "number",
+                    "value": 6.5
+                  }
+                },
+                "version": 1
+              }
+            },
+            "through_paint": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "473ebe4553cb4109adcaa21448e63659",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "paper",
+          "spatial": {
+            "extent": [
+              5.418666666666667,
+              5.418666666666667
+            ],
+            "mapping": [
+              11.811023622047244,
+              0.0,
+              0.0,
+              11.811023622047244,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ]
+              }
+            },
+            "light": {
+              "kind": "number",
+              "value": 225.0
+            },
+            "relief": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "texture": {
+              "kind": "texture",
+              "value": {
+                "builtin": "honeycomb",
+                "values": {
+                  "pitch": {
+                    "kind": "number",
+                    "value": 2.3500001430511475
+                  },
+                  "seed": {
+                    "kind": "number",
+                    "value": 4194304.0
+                  }
+                },
+                "version": 1
+              }
+            },
+            "through_paint": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "4a11f313fe6943c0a6c228f154bbd70b",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "bef55100f33a4e2baf35be1bb898922f"
+            }
+          },
+          "name": "threshold"
+        },
+        "id": "4b82fdab04774e25b5328227b9d5fba4",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "paper",
+          "spatial": {
+            "extent": [
+              5.418666666666667,
+              5.418666666666667
+            ],
+            "mapping": [
+              11.811023622047244,
+              0.0,
+              0.0,
+              11.811023622047244,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ]
+              }
+            },
+            "light": {
+              "kind": "number",
+              "value": 225.0
+            },
+            "relief": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "texture": {
+              "kind": "texture",
+              "value": {
+                "builtin": "papyrus",
+                "values": {
+                  "across": {
+                    "kind": "number",
+                    "value": 25.0
+                  },
+                  "down": {
+                    "kind": "number",
+                    "value": 25.0
+                  },
+                  "seed": {
+                    "kind": "number",
+                    "value": 4194304.0
+                  },
+                  "width": {
+                    "kind": "number",
+                    "value": 19.0
+                  }
+                },
+                "version": 1
+              }
+            },
+            "through_paint": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "4d4565a95b974e5381e7fa8b75ed93cb",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "paper",
+          "spatial": {
+            "extent": [
+              5.418666666666667,
+              5.418666666666667
+            ],
+            "mapping": [
+              11.811023622047244,
+              0.0,
+              0.0,
+              11.811023622047244,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ]
+              }
+            },
+            "light": {
+              "kind": "number",
+              "value": 225.0
+            },
+            "relief": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "texture": {
+              "kind": "texture",
+              "value": {
+                "builtin": "aggregate",
+                "values": {
+                  "embed": {
+                    "kind": "number",
+                    "value": 25.0
+                  },
+                  "grain": {
+                    "kind": "number",
+                    "value": 3.0799999237060547
+                  },
+                  "seed": {
+                    "kind": "number",
+                    "value": 4194304.0
+                  }
+                },
+                "version": 1
+              }
+            },
+            "through_paint": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "4fd47576b01d40d287b542a8205597c9",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "9c2459e7b27f4e2ba7633c6a5fa2f435"
+            }
+          },
+          "name": "vhs"
+        },
+        "id": "510431904a7947dfa4db80c4c77cef52",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "77f7b953f03f4b6aac82e9117c66677c"
+            }
+          },
+          "name": "no texture"
+        },
+        "id": "5292c3418ca54992ab733473f53e7bfc",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "paper",
+          "spatial": {
+            "extent": [
+              5.418666666666667,
+              5.418666666666667
+            ],
+            "mapping": [
+              11.811023622047244,
+              0.0,
+              0.0,
+              11.811023622047244,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ]
+              }
+            },
+            "light": {
+              "kind": "number",
+              "value": 225.0
+            },
+            "relief": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "texture": {
+              "kind": "texture",
+              "value": {
+                "builtin": "quilt",
+                "values": {
+                  "cell": {
+                    "kind": "number",
+                    "value": 20.5
+                  },
+                  "seed": {
+                    "kind": "number",
+                    "value": 4194304.0
+                  }
+                },
+                "version": 1
+              }
+            },
+            "through_paint": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "5431371a0ad54178ae9653769ada3b73",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "25e4484e1ccc466d81ab77ec8d53fa1f"
+            }
+          },
+          "name": "gradient_fill"
+        },
+        "id": "5480d2e419d14108a285adff9ef77489",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "rainy_glass",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "amount": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "animate": {
+              "kind": "toggle",
+              "value": false
+            },
+            "distance": {
+              "kind": "number",
+              "value": 24.0
+            },
+            "scale": {
+              "kind": "number",
+              "value": 39.0
+            },
+            "speed": {
+              "kind": "number",
+              "value": 1.0
+            },
+            "time": {
+              "kind": "number",
+              "value": 900.0
+            }
+          },
+          "version": 1
+        },
+        "id": "554723497d894b7ea3cabd89c4170f47",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "color_lookup",
+          "values": {
+            "color_space": {
+              "kind": "choice",
+              "value": "adobe_rgb"
+            },
+            "intensity": {
+              "kind": "number",
+              "value": 100.0
+            },
+            "resource": {
+              "kind": "lut3d",
+              "value": null
+            }
+          },
+          "version": 1
+        },
+        "id": "559594bfcd374e49a3ba68e0a029bfaa",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "clarity",
+          "values": {
+            "amount": {
+              "kind": "number",
+              "value": -50.0
+            }
+          },
+          "version": 1
+        },
+        "id": "56381c9f394044db922306dcd4aa7129",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "ba13f33842964702bca0a968bb5b8ed5"
+            }
+          },
+          "name": "motion_blur"
+        },
+        "id": "57c0043c2be64142a4d76d5e1a48b4fe",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "pencil",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "contrast": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "ink": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  0.25,
+                  0.5,
+                  0.75,
+                  1.0
+                ]
+              }
+            },
+            "paper": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  0.25,
+                  0.5,
+                  0.75,
+                  1.0
+                ]
+              }
+            },
+            "sigma": {
+              "kind": "number",
+              "value": 5.200000286102295
+            }
+          },
+          "version": 1
+        },
+        "id": "58cc4eaec48546e09830b494ff46b90b",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "a3af0f66d5bb4a20b054d04e723e8a5e"
+            }
+          },
+          "name": "channel_mixer"
+        },
+        "id": "5db48178ae0543b180449ef245fa5f1a",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "paper",
+          "spatial": {
+            "extent": [
+              5.418666666666667,
+              5.418666666666667
+            ],
+            "mapping": [
+              11.811023622047244,
+              0.0,
+              0.0,
+              11.811023622047244,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ]
+              }
+            },
+            "light": {
+              "kind": "number",
+              "value": 225.0
+            },
+            "relief": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "texture": {
+              "kind": "texture",
+              "value": {
+                "builtin": "wood",
+                "values": {
+                  "knots": {
+                    "kind": "number",
+                    "value": 25.0
+                  },
+                  "rings": {
+                    "kind": "number",
+                    "value": 4.5
+                  },
+                  "seed": {
+                    "kind": "number",
+                    "value": 4194304.0
+                  },
+                  "weathering": {
+                    "kind": "number",
+                    "value": 25.0
+                  }
+                },
+                "version": 1
+              }
+            },
+            "through_paint": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "5e15e534ba0d4d83b63d1490f170fe4f",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "0c2a6c1cecb94714967c675ade85e07b"
+            }
+          },
+          "name": "invert"
+        },
+        "id": "5e17e042ddb8417eb89b64169902e5b9",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "23cf2ce7bbf74dc9a1db8c3bebccd6b4"
+            }
+          },
+          "name": "solarize"
+        },
+        "id": "614e39b8c7f74fb79a64db8ce35d35ab",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "11288bbd288c4b7abf3174b6ac604bdc"
+            }
+          },
+          "name": "swirl"
+        },
+        "id": "653d01fa60b6411a84c69ccce065db43",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "source": {
+            "object": {
+              "ref": "cbd601c41aa347e99d470156b93e7141"
+            },
+            "port": "color"
+          }
+        },
+        "id": "65550b31734644cda3b427b2bae4a674",
+        "type": "capy.output/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "975a2ae417fd428ba0b8d96d9469a5a8"
+            }
+          },
+          "name": "leaf"
+        },
+        "id": "6577f0aed838405cbdf91b1f69cbe700",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "ripple",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "animate": {
+              "kind": "toggle",
+              "value": false
+            },
+            "center_x": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "center_y": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "distance": {
+              "kind": "number",
+              "value": 36.0
+            },
+            "speed": {
+              "kind": "number",
+              "value": 1.0
+            },
+            "time": {
+              "kind": "number",
+              "value": 900.0
+            },
+            "wavelength": {
+              "kind": "number",
+              "value": 70.0
+            }
+          },
+          "version": 1
+        },
+        "id": "658f7576f3fa43dca435d6feeff86a71",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "extent": [
+            64,
+            64
+          ],
+          "interpretation": {
+            "channels": "gray",
+            "depth": "u8",
+            "profile": {
+              "builtin": "srgb"
+            }
+          },
+          "resolution": {
+            "density": [
+              [
+                300,
+                1
+              ],
+              [
+                300,
+                1
+              ]
+            ],
+            "unit": "inch"
+          },
+          "tiles": [
+            {
+              "coordinate": [
+                0,
+                0
+              ],
+              "resource": {
+                "ref": "bc29e329f760401b8ec234fa6afeeb1b"
+              }
+            }
+          ]
+        },
+        "id": "711878f240e4490b9b04ce160b0a4577",
+        "type": "capy.image/1"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "7f4830d680694b9494fc484b6acc8efc"
+            }
+          },
+          "name": "vignette"
+        },
+        "id": "72e43dea33f64d12a5ae740f7c648f8c",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "901f493f57504fabb7166765f635b8fd"
+            }
+          },
+          "name": "shadows_highlights"
+        },
+        "id": "765f93fd0aab4e61b5c1b81b4480f326",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "paper",
+          "spatial": {
+            "extent": [
+              5.418666666666667,
+              5.418666666666667
+            ],
+            "mapping": [
+              11.811023622047244,
+              0.0,
+              0.0,
+              11.811023622047244,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ]
+              }
+            },
+            "light": {
+              "kind": "number",
+              "value": 225.0
+            },
+            "relief": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "texture": {
+              "kind": "texture",
+              "value": {
+                "none": {}
+              }
+            },
+            "through_paint": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "77f7b953f03f4b6aac82e9117c66677c",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "gradient_fill",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "angle": {
+              "kind": "number",
+              "value": 90.0
+            },
+            "center_x": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "center_y": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "gradient": {
+              "kind": "gradient",
+              "value": {
+                "interpolation": "classic",
+                "stops": [
+                  {
+                    "color": {
+                      "rgba": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0
+                      ]
+                    },
+                    "position": 0.0
+                  },
+                  {
+                    "color": {
+                      "rgba": [
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0
+                      ]
+                    },
+                    "position": 1.0
+                  }
+                ]
+              }
+            },
+            "scale": {
+              "kind": "number",
+              "value": 100.0
+            },
+            "style": {
+              "kind": "choice",
+              "value": "linear"
+            }
+          },
+          "version": 2
+        },
+        "id": "78d4f06c6a3f4fc4b43cc4b1d8396c1a",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "paper",
+          "spatial": {
+            "extent": [
+              5.418666666666667,
+              5.418666666666667
+            ],
+            "mapping": [
+              11.811023622047244,
+              0.0,
+              0.0,
+              11.811023622047244,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ]
+              }
+            },
+            "light": {
+              "kind": "number",
+              "value": 225.0
+            },
+            "relief": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "texture": {
+              "kind": "texture",
+              "value": {
+                "builtin": "laid",
+                "values": {
+                  "chain": {
+                    "kind": "number",
+                    "value": 20.0
+                  },
+                  "laid": {
+                    "kind": "number",
+                    "value": 0.8500000238418579
+                  },
+                  "seed": {
+                    "kind": "number",
+                    "value": 4194304.0
+                  }
+                },
+                "version": 1
+              }
+            },
+            "through_paint": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "79e35d9a0b11406fb741b8384d608472",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "brightness_to_opacity",
+          "values": {},
+          "version": 1
+        },
+        "id": "7ae68d808dcf4b65854d8b79c56243ec",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "fb24ccee99ce4c6ca8fba50e7549a06b"
+            }
+          },
+          "name": "emboss"
+        },
+        "id": "7c1f10e6ddb94ead8fe2f2063f707409",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "gradient_map",
+          "values": {
+            "amount": {
+              "kind": "number",
+              "value": 100.0
+            },
+            "gradient": {
+              "kind": "gradient",
+              "value": {
+                "interpolation": "oklab",
+                "stops": [
+                  {
+                    "color": {
+                      "rgba": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0
+                      ]
+                    },
+                    "position": 0.0
+                  },
+                  {
+                    "color": {
+                      "rgba": [
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0
+                      ]
+                    },
+                    "position": 1.0
+                  }
+                ]
+              }
+            }
+          },
+          "version": 2
+        },
+        "id": "7d8161b3a8c2410d8099636e19249338",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "black_white",
+          "values": {
+            "blues": {
+              "kind": "number",
+              "value": -25.0
+            },
+            "cyans": {
+              "kind": "number",
+              "value": -25.0
+            },
+            "greens": {
+              "kind": "number",
+              "value": -25.0
+            },
+            "magentas": {
+              "kind": "number",
+              "value": -25.0
+            },
+            "reds": {
+              "kind": "number",
+              "value": -25.0
+            },
+            "tint": {
+              "kind": "toggle",
+              "value": true
+            },
+            "tint_color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  0.25,
+                  0.5,
+                  0.75,
+                  1.0
+                ]
+              }
+            },
+            "yellows": {
+              "kind": "number",
+              "value": -25.0
+            }
+          },
+          "version": 1
+        },
+        "id": "7dce80a1f39e42b5a73e35459e5148d5",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "afb90f2d5a624d15b9c41e806e631fc9"
+            }
+          },
+          "name": "gradient_fill"
+        },
+        "id": "7de53f0d07e447ceafe714e94b59e3a3",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "8ffc83b3acff4d519adee5a4f105f59a"
+            }
+          },
+          "name": "gradient_map"
+        },
+        "id": "7f2dfb18b71949eaa4dc67a142966ed3",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "vignette",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "center_x": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "center_y": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "radius": {
+              "kind": "number",
+              "value": 45.0
+            },
+            "softness": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "strength": {
+              "kind": "number",
+              "value": -50.0
+            }
+          },
+          "version": 1
+        },
+        "id": "7f4830d680694b9494fc484b6acc8efc",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "44d0d02c52434ab3a38e8b144f3aa23a"
+            }
+          },
+          "name": "bloom"
+        },
+        "id": "80cfa1246673401aa7e3d0f33c99a0cf",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "chromatic_aberration",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "angle": {
+              "kind": "number",
+              "value": -90.0
+            },
+            "distance": {
+              "kind": "number",
+              "value": 8.0
+            }
+          },
+          "version": 1
+        },
+        "id": "846f5825c308434d915f527c1797ff93",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "559594bfcd374e49a3ba68e0a029bfaa"
+            }
+          },
+          "name": "color_lookup"
+        },
+        "id": "85b8aacfd60d445d93b76332cc1c086e",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "vibrance",
+          "values": {
+            "protect_skin": {
+              "kind": "toggle",
+              "value": false
+            },
+            "saturation": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "vibrance": {
+              "kind": "number",
+              "value": -50.0
+            }
+          },
+          "version": 1
+        },
+        "id": "8a505074dfbd4cf68423fd11f4186038",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "color_lookup",
+          "values": {
+            "color_space": {
+              "kind": "choice",
+              "value": "pro_photo"
+            },
+            "intensity": {
+              "kind": "number",
+              "value": 100.0
+            },
+            "resource": {
+              "kind": "lut3d",
+              "value": null
+            }
+          },
+          "version": 1
+        },
+        "id": "8c0a4b55f06d40eea96f3616652675dc",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "e6e733b998814df79ffec7e14a4650a6"
+            }
+          },
+          "name": "scatter"
+        },
+        "id": "8e82d60310da4a22b88daf173a20700f",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "threshold",
+          "values": {
+            "alpha_threshold": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "colors": {
+              "kind": "choice",
+              "value": "black_white"
+            },
+            "threshold": {
+              "kind": "number",
+              "value": 0.5
+            },
+            "transparency": {
+              "kind": "choice",
+              "value": "keep"
+            }
+          },
+          "version": 2
+        },
+        "id": "8f162fe2367d48c7a13e16e91e8754c7",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "36193533940b418e94c5e57cfc66a2bb"
+            }
+          },
+          "name": "concrete"
+        },
+        "id": "8ff09b88e6ae4ac19ffb59fdababb38a",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "gradient_map",
+          "values": {
+            "amount": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "gradient": {
+              "kind": "gradient",
+              "value": {
+                "interpolation": "linear_rgb",
+                "stops": [
+                  {
+                    "color": {
+                      "rgba": [
+                        0.25,
+                        0.5,
+                        0.75,
+                        1.0
+                      ]
+                    },
+                    "position": 0.0
+                  },
+                  {
+                    "color": {
+                      "rgba": [
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0
+                      ]
+                    },
+                    "position": 1.0
+                  }
+                ]
+              }
+            }
+          },
+          "version": 2
+        },
+        "id": "8ffc83b3acff4d519adee5a4f105f59a",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "shadows_highlights",
+          "values": {
+            "highlights": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "shadows": {
+              "kind": "number",
+              "value": 25.0
+            }
+          },
+          "version": 1
+        },
+        "id": "901f493f57504fabb7166765f635b8fd",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "exposure",
+          "values": {
+            "exposure": {
+              "kind": "number",
+              "value": -4.999998092651367
+            },
+            "gamma": {
+              "kind": "number",
+              "value": 2.549999952316284
+            },
+            "offset": {
+              "kind": "number",
+              "value": -0.25
+            }
+          },
+          "version": 1
+        },
+        "id": "90f8904f667b42c38e568b85075549eb",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "f6e4d2d46b3f4ee6a4c1f4081db9987b"
+            }
+          },
+          "name": "paper"
+        },
+        "id": "92ef887f993d4290a440ddb7fcedf37d",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "paper",
+          "spatial": {
+            "extent": [
+              5.418666666666667,
+              5.418666666666667
+            ],
+            "mapping": [
+              11.811023622047244,
+              0.0,
+              0.0,
+              11.811023622047244,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ]
+              }
+            },
+            "light": {
+              "kind": "number",
+              "value": 225.0
+            },
+            "relief": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "texture": {
+              "kind": "texture",
+              "value": {
+                "builtin": "leaf",
+                "values": {
+                  "seed": {
+                    "kind": "number",
+                    "value": 4194304.0
+                  },
+                  "size": {
+                    "kind": "number",
+                    "value": 27.5
+                  },
+                  "veins": {
+                    "kind": "number",
+                    "value": 3.200000047683716
+                  }
+                },
+                "version": 1
+              }
+            },
+            "through_paint": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "975a2ae417fd428ba0b8d96d9469a5a8",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "gradient_fill",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "angle": {
+              "kind": "number",
+              "value": 90.0
+            },
+            "center_x": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "center_y": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "gradient": {
+              "kind": "gradient",
+              "value": {
+                "interpolation": "oklab",
+                "stops": [
+                  {
+                    "color": {
+                      "rgba": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0
+                      ]
+                    },
+                    "position": 0.0
+                  },
+                  {
+                    "color": {
+                      "rgba": [
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0
+                      ]
+                    },
+                    "position": 1.0
+                  }
+                ]
+              }
+            },
+            "scale": {
+              "kind": "number",
+              "value": 100.0
+            },
+            "style": {
+              "kind": "choice",
+              "value": "linear"
+            }
+          },
+          "version": 2
+        },
+        "id": "986fec271cf4419d9844208d943439bc",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "c212d1f4c4bc4d3e865c23293981881c"
+            }
+          },
+          "name": "washi"
+        },
+        "id": "9955ae010a794a068010211587052d5f",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "c13e97861c944bf299e382a2af9b659f"
+            }
+          },
+          "name": "threshold"
+        },
+        "id": "998414d7755745178781b5f7988bf12c",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "gradient_fill",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "angle": {
+              "kind": "number",
+              "value": 90.0
+            },
+            "center_x": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "center_y": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "gradient": {
+              "kind": "gradient",
+              "value": {
+                "interpolation": "oklab",
+                "stops": [
+                  {
+                    "color": {
+                      "rgba": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0
+                      ]
+                    },
+                    "position": 0.0
+                  },
+                  {
+                    "color": {
+                      "rgba": [
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0
+                      ]
+                    },
+                    "position": 1.0
+                  }
+                ]
+              }
+            },
+            "scale": {
+              "kind": "number",
+              "value": 100.0
+            },
+            "style": {
+              "kind": "choice",
+              "value": "linear"
+            }
+          },
+          "version": 2
+        },
+        "id": "9a699b2a2b5745499d59cbc172620e70",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "curves",
+          "values": {
+            "blue": {
+              "kind": "curve",
+              "value": [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.25,
+                  0.375
+                ],
+                [
+                  1.0,
+                  1.0
+                ]
+              ]
+            },
+            "domain": {
+              "kind": "choice",
+              "value": "log_hdr"
+            },
+            "green": {
+              "kind": "curve",
+              "value": [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.25,
+                  0.375
+                ],
+                [
+                  1.0,
+                  1.0
+                ]
+              ]
+            },
+            "hdr_stops": {
+              "kind": "number",
+              "value": 11.0
+            },
+            "red": {
+              "kind": "curve",
+              "value": [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.25,
+                  0.375
+                ],
+                [
+                  1.0,
+                  1.0
+                ]
+              ]
+            },
+            "rgb": {
+              "kind": "curve",
+              "value": [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.25,
+                  0.375
+                ],
+                [
+                  1.0,
+                  1.0
+                ]
+              ]
+            }
+          },
+          "version": 1
+        },
+        "id": "9be70b996ba5426b8cd8b9aecfe9bfbf",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "vhs",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "animate": {
+              "kind": "toggle",
+              "value": false
+            },
+            "distance": {
+              "kind": "number",
+              "value": 8.0
+            },
+            "lines": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "noise": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "speed": {
+              "kind": "number",
+              "value": 3.0
+            },
+            "time": {
+              "kind": "number",
+              "value": 900.0
+            }
+          },
+          "version": 1
+        },
+        "id": "9c2459e7b27f4e2ba7633c6a5fa2f435",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "846f5825c308434d915f527c1797ff93"
+            }
+          },
+          "name": "chromatic_aberration"
+        },
+        "id": "9cedf682fa274601800c6b2561085a66",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "paper",
+          "spatial": {
+            "extent": [
+              5.418666666666667,
+              5.418666666666667
+            ],
+            "mapping": [
+              11.811023622047244,
+              0.0,
+              0.0,
+              11.811023622047244,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ]
+              }
+            },
+            "light": {
+              "kind": "number",
+              "value": 225.0
+            },
+            "relief": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "texture": {
+              "kind": "texture",
+              "value": {
+                "builtin": "sanded",
+                "values": {
+                  "grit": {
+                    "kind": "number",
+                    "value": 0.03400000184774399
+                  },
+                  "seed": {
+                    "kind": "number",
+                    "value": 4194304.0
+                  }
+                },
+                "version": 1
+              }
+            },
+            "through_paint": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "9cf041533fd14e68844097b8cdd8af35",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "78d4f06c6a3f4fc4b43cc4b1d8396c1a"
+            }
+          },
+          "name": "gradient_fill"
+        },
+        "id": "9d0ca08eedf74e62a9d98bc3a1400393",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "bef6ece853cb4a56b31631df7ba6546d"
+            }
+          },
+          "name": "posterize"
+        },
+        "id": "9d7fa22006814faebb5823b92dc312be",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "473ebe4553cb4109adcaa21448e63659"
+            }
+          },
+          "name": "handmade"
+        },
+        "id": "9e02cc482b6a4ec1af7d427233f30c10",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "02cf568917154284b63480807c3c0e87"
+            }
+          },
+          "name": "solid_color"
+        },
+        "id": "9f6fb2ff496f47e59582d11ca13993be",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "7d8161b3a8c2410d8099636e19249338"
+            }
+          },
+          "name": "gradient_map"
+        },
+        "id": "9fbc0685b42e4fd2930aaa3f0fe3d73c",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "channel_mixer",
+          "values": {
+            "blue_blue": {
+              "kind": "number",
+              "value": -100.0
+            },
+            "blue_constant": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "blue_green": {
+              "kind": "number",
+              "value": -100.0
+            },
+            "blue_red": {
+              "kind": "number",
+              "value": -100.0
+            },
+            "gray_blue": {
+              "kind": "number",
+              "value": -100.0
+            },
+            "gray_constant": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "gray_green": {
+              "kind": "number",
+              "value": -100.0
+            },
+            "gray_red": {
+              "kind": "number",
+              "value": -100.0
+            },
+            "green_blue": {
+              "kind": "number",
+              "value": -100.0
+            },
+            "green_constant": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "green_green": {
+              "kind": "number",
+              "value": -100.0
+            },
+            "green_red": {
+              "kind": "number",
+              "value": -100.0
+            },
+            "monochrome": {
+              "kind": "toggle",
+              "value": true
+            },
+            "red_blue": {
+              "kind": "number",
+              "value": -100.0
+            },
+            "red_constant": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "red_green": {
+              "kind": "number",
+              "value": -100.0
+            },
+            "red_red": {
+              "kind": "number",
+              "value": -100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "a3af0f66d5bb4a20b054d04e723e8a5e",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "domain_warp",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "animate": {
+              "kind": "toggle",
+              "value": false
+            },
+            "distance": {
+              "kind": "number",
+              "value": 16.0
+            },
+            "scale": {
+              "kind": "number",
+              "value": 70.0
+            },
+            "speed": {
+              "kind": "number",
+              "value": 1.0
+            },
+            "time": {
+              "kind": "number",
+              "value": 900.0
+            }
+          },
+          "version": 2
+        },
+        "id": "a4c5b11e224a487d9e95b1ff0cb9a00a",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "3b2d3af494514a1599bcfba190e0bd8a"
+            }
+          },
+          "name": "crosshatch"
+        },
+        "id": "a5e8d3216a9a459d8b951735547f8d31",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "79e35d9a0b11406fb741b8384d608472"
+            }
+          },
+          "name": "laid"
+        },
+        "id": "a63d47f266434745912d92fe727f6da2",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "053e68205c0e4f2297936b8b9351a0d8"
+            }
+          },
+          "name": "canvas"
+        },
+        "id": "a76d71262a3e4e0e8474d626b62ead02",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "color_balance",
+          "values": {
+            "highlights_blue": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "highlights_green": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "highlights_red": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "midtones_blue": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "midtones_green": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "midtones_red": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "preserve_luminance": {
+              "kind": "toggle",
+              "value": false
+            },
+            "shadows_blue": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "shadows_green": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "shadows_red": {
+              "kind": "number",
+              "value": -50.0
+            }
+          },
+          "version": 1
+        },
+        "id": "aa20a2ca1cd84f4a8ec0de1b8ec8f515",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "f29f5e280ebe44928f3e2ee233f37fb8"
+            }
+          },
+          "name": "unsharp_mask"
+        },
+        "id": "ac515eea69b44310a97a66e67ac269c0",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "3d108c1d11f140be87112d512c036001"
+            }
+          },
+          "name": "pixel_mosaic"
+        },
+        "id": "ada5173ad4764f4583afb46b87567ba7",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "threshold",
+          "values": {
+            "alpha_threshold": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "colors": {
+              "kind": "choice",
+              "value": "white"
+            },
+            "threshold": {
+              "kind": "number",
+              "value": 0.5
+            },
+            "transparency": {
+              "kind": "choice",
+              "value": "keep"
+            }
+          },
+          "version": 2
+        },
+        "id": "aeaa9ddac25c4e8994423762dae1e620",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "19adb925a55246abb132d560430432c2"
+            }
+          },
+          "name": "crt"
+        },
+        "id": "aed98cd46a7e489fbfea962ca58276a0",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "gradient_fill",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "angle": {
+              "kind": "number",
+              "value": -90.0
+            },
+            "center_x": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "center_y": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "gradient": {
+              "kind": "gradient",
+              "value": {
+                "interpolation": "linear_rgb",
+                "stops": [
+                  {
+                    "color": {
+                      "rgba": [
+                        0.25,
+                        0.5,
+                        0.75,
+                        1.0
+                      ]
+                    },
+                    "position": 0.0
+                  },
+                  {
+                    "color": {
+                      "rgba": [
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0
+                      ]
+                    },
+                    "position": 1.0
+                  }
+                ]
+              }
+            },
+            "scale": {
+              "kind": "number",
+              "value": 108.0
+            },
+            "style": {
+              "kind": "choice",
+              "value": "radial"
+            }
+          },
+          "version": 2
+        },
+        "id": "afb90f2d5a624d15b9c41e806e631fc9",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "white_balance",
+          "values": {
+            "preserve_luminance": {
+              "kind": "toggle",
+              "value": false
+            },
+            "temperature": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "tint": {
+              "kind": "number",
+              "value": -50.0
+            }
+          },
+          "version": 1
+        },
+        "id": "b051e968c43f4f4fbfd66d301282f0a0",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "9be70b996ba5426b8cd8b9aecfe9bfbf"
+            }
+          },
+          "name": "curves"
+        },
+        "id": "b276297b9e7b48929ed4cb96e5230b34",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "photo_filter",
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  0.25,
+                  0.5,
+                  0.75,
+                  1.0
+                ]
+              }
+            },
+            "density": {
+              "kind": "number",
+              "value": 75.0
+            },
+            "preserve_luminance": {
+              "kind": "toggle",
+              "value": false
+            }
+          },
+          "version": 1
+        },
+        "id": "b30fb4b6bc9e447d818c06d55ee0d3d8",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "56381c9f394044db922306dcd4aa7129"
+            }
+          },
+          "name": "clarity"
+        },
+        "id": "b3793393506841deb6d5a1462cc155aa",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "gradient_map",
+          "values": {
+            "amount": {
+              "kind": "number",
+              "value": 100.0
+            },
+            "gradient": {
+              "kind": "gradient",
+              "value": {
+                "interpolation": "classic",
+                "stops": [
+                  {
+                    "color": {
+                      "rgba": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0
+                      ]
+                    },
+                    "position": 0.0
+                  },
+                  {
+                    "color": {
+                      "rgba": [
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0
+                      ]
+                    },
+                    "position": 1.0
+                  }
+                ]
+              }
+            }
+          },
+          "version": 2
+        },
+        "id": "b4da55d494374f2b8427540bdd0c4e72",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "b4da55d494374f2b8427540bdd0c4e72"
+            }
+          },
+          "name": "gradient_map"
+        },
+        "id": "b7d5825ffbca474b955be9aecd124307",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "3583ad37401540e3a9616dba4cd664b9"
+            }
+          },
+          "name": "dehaze"
+        },
+        "id": "b8b108e952974e4fb1238d119d15e21c",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "380cde8b303c41888a6d13dba443a8b1"
+            }
+          },
+          "name": "kaleidoscope"
+        },
+        "id": "b99f006a829342ccb89c0daefc669c92",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "motion_blur",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "angle": {
+              "kind": "number",
+              "value": -90.0
+            },
+            "distance": {
+              "kind": "number",
+              "value": 16.0
+            }
+          },
+          "version": 1
+        },
+        "id": "ba13f33842964702bca0a968bb5b8ed5",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "5431371a0ad54178ae9653769ada3b73"
+            }
+          },
+          "name": "quilt"
+        },
+        "id": "bb9cbf8bd4fb47f4a9fbdc66d5f94b3e",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "edb189c4f4ed4a318de58a975f2fdb14"
+            }
+          },
+          "name": "selective_color"
+        },
+        "id": "bc303aab8eb844e0a964f0b913c2f495",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "paper",
+          "spatial": {
+            "extent": [
+              5.418666666666667,
+              5.418666666666667
+            ],
+            "mapping": [
+              11.811023622047244,
+              0.0,
+              0.0,
+              11.811023622047244,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ]
+              }
+            },
+            "light": {
+              "kind": "number",
+              "value": 225.0
+            },
+            "relief": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "texture": {
+              "kind": "texture",
+              "value": {
+                "builtin": "drawing",
+                "values": {
+                  "finish": {
+                    "kind": "number",
+                    "value": 25.0
+                  },
+                  "seed": {
+                    "kind": "number",
+                    "value": 4194304.0
+                  },
+                  "tooth": {
+                    "kind": "number",
+                    "value": 0.32999998331069946
+                  }
+                },
+                "version": 1
+              }
+            },
+            "through_paint": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "bc322e4784664af8aed600c84d33c567",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "9cf041533fd14e68844097b8cdd8af35"
+            }
+          },
+          "name": "sanded"
+        },
+        "id": "bcbf6e067cc34d51913c33b7794b63cb",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "selective_color",
+          "values": {
+            "blacks_black": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "blacks_cyan": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "blacks_magenta": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "blacks_yellow": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "blues_black": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "blues_cyan": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "blues_magenta": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "blues_yellow": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "cyans_black": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "cyans_cyan": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "cyans_magenta": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "cyans_yellow": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "greens_black": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "greens_cyan": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "greens_magenta": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "greens_yellow": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "magentas_black": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "magentas_cyan": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "magentas_magenta": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "magentas_yellow": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "mode": {
+              "kind": "choice",
+              "value": "absolute"
+            },
+            "neutrals_black": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "neutrals_cyan": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "neutrals_magenta": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "neutrals_yellow": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "reds_black": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "reds_cyan": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "reds_magenta": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "reds_yellow": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "whites_black": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "whites_cyan": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "whites_magenta": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "whites_yellow": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "yellows_black": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "yellows_cyan": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "yellows_magenta": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "yellows_yellow": {
+              "kind": "number",
+              "value": -50.0
+            }
+          },
+          "version": 1
+        },
+        "id": "bdaadabd14174f3baad0de287b9d0e41",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "threshold",
+          "values": {
+            "alpha_threshold": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "colors": {
+              "kind": "choice",
+              "value": "black_white"
+            },
+            "threshold": {
+              "kind": "number",
+              "value": 0.5
+            },
+            "transparency": {
+              "kind": "choice",
+              "value": "keep"
+            }
+          },
+          "version": 2
+        },
+        "id": "bef55100f33a4e2baf35be1bb898922f",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "posterize",
+          "values": {
+            "levels": {
+              "kind": "number",
+              "value": 66.0
+            }
+          },
+          "version": 2
+        },
+        "id": "bef6ece853cb4a56b31631df7ba6546d",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "entries": [
+            {
+              "ref": "20df9e900e594152872ff7fcef33be56"
+            },
+            {
+              "ref": "80cfa1246673401aa7e3d0f33c99a0cf"
+            },
+            {
+              "ref": "473234c1917e47e2af0b865455e4ce8c"
+            },
+            {
+              "ref": "37f90dec2caa4af0a024c12d5648322d"
+            },
+            {
+              "ref": "5db48178ae0543b180449ef245fa5f1a"
+            },
+            {
+              "ref": "9cedf682fa274601800c6b2561085a66"
+            },
+            {
+              "ref": "b3793393506841deb6d5a1462cc155aa"
+            },
+            {
+              "ref": "1ff3a3c49b9f45db9762f8c83d4a57d2"
+            },
+            {
+              "ref": "ceae5a38a681435ba05e67a5f19baa31"
+            },
+            {
+              "ref": "a5e8d3216a9a459d8b951735547f8d31"
+            },
+            {
+              "ref": "aed98cd46a7e489fbfea962ca58276a0"
+            },
+            {
+              "ref": "0417d4025b7a4dbd8dcaf1e01f5ed263"
+            },
+            {
+              "ref": "b276297b9e7b48929ed4cb96e5230b34"
+            },
+            {
+              "ref": "b8b108e952974e4fb1238d119d15e21c"
+            },
+            {
+              "ref": "f4cc8beaa92446e7813869694ce90ee6"
+            },
+            {
+              "ref": "1bcd384786bc4c08922504f1af7d9ff2"
+            },
+            {
+              "ref": "218d774d226e4b27aa1f065b2298c6d3"
+            },
+            {
+              "ref": "18687fcb4a08437fbeb789db3fc2e888"
+            },
+            {
+              "ref": "23c1441bbb264d9d8146cada9a292973"
+            },
+            {
+              "ref": "7c1f10e6ddb94ead8fe2f2063f707409"
+            },
+            {
+              "ref": "fbc31cfafaad4d968d40514ec6c75a14"
+            },
+            {
+              "ref": "d2ef4477eae242e49fbd8efe388169da"
+            },
+            {
+              "ref": "08b10846f07647d6b04061d93eae2b97"
+            },
+            {
+              "ref": "1053c695610946d0b8243fa70d638205"
+            },
+            {
+              "ref": "7de53f0d07e447ceafe714e94b59e3a3"
+            },
+            {
+              "ref": "7f2dfb18b71949eaa4dc67a142966ed3"
+            },
+            {
+              "ref": "3d085648461d449d8ab19bf657e7487a"
+            },
+            {
+              "ref": "1cc6c483b42b4c54a385b084f2b412be"
+            },
+            {
+              "ref": "e72cb49e675e46c19ee3f3cb7de622cb"
+            },
+            {
+              "ref": "1b8be9075c03402e929ad320257e4fdf"
+            },
+            {
+              "ref": "5e17e042ddb8417eb89b64169902e5b9"
+            },
+            {
+              "ref": "2e52855f105a4ee6b92d32de6a0dc21b"
+            },
+            {
+              "ref": "b99f006a829342ccb89c0daefc669c92"
+            },
+            {
+              "ref": "35d3e993991941e286dd632917211f77"
+            },
+            {
+              "ref": "57c0043c2be64142a4d76d5e1a48b4fe"
+            },
+            {
+              "ref": "f917c4b20a564fafac5598ff4f434ef4"
+            },
+            {
+              "ref": "92ef887f993d4290a440ddb7fcedf37d"
+            },
+            {
+              "ref": "c19a8e4a4dc044e78a54f7f293631f4c"
+            },
+            {
+              "ref": "e9cdf0f15b0547a38ad3597e6f10c837"
+            },
+            {
+              "ref": "ada5173ad4764f4583afb46b87567ba7"
+            },
+            {
+              "ref": "9d7fa22006814faebb5823b92dc312be"
+            },
+            {
+              "ref": "3d4feb76e6b14983a1133a5d72e1e02f"
+            },
+            {
+              "ref": "020dc3dfc97446509e3010c1eeac9c6f"
+            },
+            {
+              "ref": "8e82d60310da4a22b88daf173a20700f"
+            },
+            {
+              "ref": "d771fa3f6f844918842aa70b56f46a54"
+            },
+            {
+              "ref": "765f93fd0aab4e61b5c1b81b4480f326"
+            },
+            {
+              "ref": "1da3bf8dc0614858a9f77d8723a6b476"
+            },
+            {
+              "ref": "614e39b8c7f74fb79a64db8ce35d35ab"
+            },
+            {
+              "ref": "9f6fb2ff496f47e59582d11ca13993be"
+            },
+            {
+              "ref": "402223625fcb4487b5399c9bacf64116"
+            },
+            {
+              "ref": "653d01fa60b6411a84c69ccce065db43"
+            },
+            {
+              "ref": "998414d7755745178781b5f7988bf12c"
+            },
+            {
+              "ref": "ac515eea69b44310a97a66e67ac269c0"
+            },
+            {
+              "ref": "510431904a7947dfa4db80c4c77cef52"
+            },
+            {
+              "ref": "38e1ecf700d743c1801b3ae29aaa9558"
+            },
+            {
+              "ref": "72e43dea33f64d12a5ae740f7c648f8c"
+            },
+            {
+              "ref": "047a9155b14f4093958d52ac69c64eea"
+            },
+            {
+              "ref": "dd06f77bd4434ebfbe9ce30709ac3589"
+            },
+            {
+              "ref": "85b8aacfd60d445d93b76332cc1c086e"
+            },
+            {
+              "ref": "26f419487dc3482fb0c925ed7c5c08af"
+            },
+            {
+              "ref": "0045d8956d4e474cadf53d5e8f8973cc"
+            },
+            {
+              "ref": "46a19625c01a4d68b59394e6778fccb0"
+            },
+            {
+              "ref": "9d0ca08eedf74e62a9d98bc3a1400393"
+            },
+            {
+              "ref": "c1e0f8f209e441f1889c840393803b30"
+            },
+            {
+              "ref": "5480d2e419d14108a285adff9ef77489"
+            },
+            {
+              "ref": "9fbc0685b42e4fd2930aaa3f0fe3d73c"
+            },
+            {
+              "ref": "b7d5825ffbca474b955be9aecd124307"
+            },
+            {
+              "ref": "bc303aab8eb844e0a964f0b913c2f495"
+            },
+            {
+              "ref": "0045cb6654d4412f91ab3ada6692af19"
+            },
+            {
+              "ref": "2a365bd395204bc6a80e86f588bfb26e"
+            },
+            {
+              "ref": "4b82fdab04774e25b5328227b9d5fba4"
+            },
+            {
+              "ref": "ec79dc75a7664cad9a64a792d960c4dd"
+            },
+            {
+              "ref": "11f4a61de9fd4dd88837548961cd7c2b"
+            },
+            {
+              "ref": "a63d47f266434745912d92fe727f6da2"
+            },
+            {
+              "ref": "45513f7a5d1047b1b8e52cc7b2a40e54"
+            },
+            {
+              "ref": "bcbf6e067cc34d51913c33b7794b63cb"
+            },
+            {
+              "ref": "9955ae010a794a068010211587052d5f"
+            },
+            {
+              "ref": "9e02cc482b6a4ec1af7d427233f30c10"
+            },
+            {
+              "ref": "a76d71262a3e4e0e8474d626b62ead02"
+            },
+            {
+              "ref": "0eb67a8265634aa5ba588a39b6edac2b"
+            },
+            {
+              "ref": "f715c354d0c34b66bd3dcac6c025b9d7"
+            },
+            {
+              "ref": "8ff09b88e6ae4ac19ffb59fdababb38a"
+            },
+            {
+              "ref": "eaccc5ba5e374ea0b642609e585f0507"
+            },
+            {
+              "ref": "d8b3ac8eac1e46cb83208bee2deeeb6c"
+            },
+            {
+              "ref": "eaedcb99cb35463b89eeebc34faa5b5b"
+            },
+            {
+              "ref": "187a14a9ade244bd9672e6dcbfa9fa1a"
+            },
+            {
+              "ref": "6577f0aed838405cbdf91b1f69cbe700"
+            },
+            {
+              "ref": "bb9cbf8bd4fb47f4a9fbdc66d5f94b3e"
+            },
+            {
+              "ref": "d3be3e0944f2401db781e5b01ab5fa01"
+            },
+            {
+              "ref": "5292c3418ca54992ab733473f53e7bfc"
+            }
+          ]
+        },
+        "id": "c0a11ff4ab4e49309514ec620b7255ad",
+        "type": "capy.stack/1"
+      },
+      {
+        "data": {
+          "builtin": "hue_saturation",
+          "values": {
+            "blues_center": {
+              "kind": "number",
+              "value": 90.0
+            },
+            "blues_feather": {
+              "kind": "number",
+              "value": 23.0
+            },
+            "blues_hue": {
+              "kind": "number",
+              "value": -90.0
+            },
+            "blues_lightness": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "blues_saturation": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "blues_width": {
+              "kind": "number",
+              "value": 45.0
+            },
+            "colorize": {
+              "kind": "toggle",
+              "value": true
+            },
+            "colorize_hue": {
+              "kind": "number",
+              "value": 90.0
+            },
+            "colorize_saturation": {
+              "kind": "number",
+              "value": 75.0
+            },
+            "cyans_center": {
+              "kind": "number",
+              "value": 90.0
+            },
+            "cyans_feather": {
+              "kind": "number",
+              "value": 23.0
+            },
+            "cyans_hue": {
+              "kind": "number",
+              "value": -90.0
+            },
+            "cyans_lightness": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "cyans_saturation": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "cyans_width": {
+              "kind": "number",
+              "value": 45.0
+            },
+            "greens_center": {
+              "kind": "number",
+              "value": 90.0
+            },
+            "greens_feather": {
+              "kind": "number",
+              "value": 23.0
+            },
+            "greens_hue": {
+              "kind": "number",
+              "value": -90.0
+            },
+            "greens_lightness": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "greens_saturation": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "greens_width": {
+              "kind": "number",
+              "value": 45.0
+            },
+            "hue": {
+              "kind": "number",
+              "value": -90.0
+            },
+            "lightness": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "magentas_center": {
+              "kind": "number",
+              "value": 90.0
+            },
+            "magentas_feather": {
+              "kind": "number",
+              "value": 23.0
+            },
+            "magentas_hue": {
+              "kind": "number",
+              "value": -90.0
+            },
+            "magentas_lightness": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "magentas_saturation": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "magentas_width": {
+              "kind": "number",
+              "value": 45.0
+            },
+            "reds_center": {
+              "kind": "number",
+              "value": 90.0
+            },
+            "reds_feather": {
+              "kind": "number",
+              "value": 23.0
+            },
+            "reds_hue": {
+              "kind": "number",
+              "value": -90.0
+            },
+            "reds_lightness": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "reds_saturation": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "reds_width": {
+              "kind": "number",
+              "value": 45.0
+            },
+            "saturation": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "yellows_center": {
+              "kind": "number",
+              "value": 90.0
+            },
+            "yellows_feather": {
+              "kind": "number",
+              "value": 23.0
+            },
+            "yellows_hue": {
+              "kind": "number",
+              "value": -90.0
+            },
+            "yellows_lightness": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "yellows_saturation": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "yellows_width": {
+              "kind": "number",
+              "value": 45.0
+            }
+          },
+          "version": 1
+        },
+        "id": "c0a3e69b595d4242b2f0dd378ef859e2",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "threshold",
+          "values": {
+            "alpha_threshold": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "colors": {
+              "kind": "choice",
+              "value": "black"
+            },
+            "threshold": {
+              "kind": "number",
+              "value": 0.2485358715057373
+            },
+            "transparency": {
+              "kind": "choice",
+              "value": "threshold"
+            }
+          },
+          "version": 2
+        },
+        "id": "c13e97861c944bf299e382a2af9b659f",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "painterly",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "radius": {
+              "kind": "number",
+              "value": 12.5
+            },
+            "strength": {
+              "kind": "number",
+              "value": 25.0
+            }
+          },
+          "version": 1
+        },
+        "id": "c17e7e7371c5403db08db3c8626783bd",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "58cc4eaec48546e09830b494ff46b90b"
+            }
+          },
+          "name": "pencil"
+        },
+        "id": "c19a8e4a4dc044e78a54f7f293631f4c",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "9a699b2a2b5745499d59cbc172620e70"
+            }
+          },
+          "name": "gradient_fill"
+        },
+        "id": "c1e0f8f209e441f1889c840393803b30",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "paper",
+          "spatial": {
+            "extent": [
+              5.418666666666667,
+              5.418666666666667
+            ],
+            "mapping": [
+              11.811023622047244,
+              0.0,
+              0.0,
+              11.811023622047244,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ]
+              }
+            },
+            "light": {
+              "kind": "number",
+              "value": 225.0
+            },
+            "relief": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "texture": {
+              "kind": "texture",
+              "value": {
+                "builtin": "washi",
+                "values": {
+                  "density": {
+                    "kind": "number",
+                    "value": 0.5
+                  },
+                  "fiber": {
+                    "kind": "number",
+                    "value": 8.0
+                  },
+                  "seed": {
+                    "kind": "number",
+                    "value": 4194304.0
+                  },
+                  "strands": {
+                    "kind": "number",
+                    "value": 25.0
+                  }
+                },
+                "version": 1
+              }
+            },
+            "through_paint": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "c212d1f4c4bc4d3e865c23293981881c",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "result": {
+            "object": {
+              "ref": "c0a11ff4ab4e49309514ec620b7255ad"
+            },
+            "port": "color"
+          },
+          "size": [
+            64,
+            64
+          ]
+        },
+        "id": "cbd601c41aa347e99d470156b93e7141",
+        "type": "capy.composition/2"
+      },
+      {
+        "data": {
+          "builtin": "paper",
+          "spatial": {
+            "extent": [
+              5.418666666666667,
+              5.418666666666667
+            ],
+            "mapping": [
+              11.811023622047244,
+              0.0,
+              0.0,
+              11.811023622047244,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ]
+              }
+            },
+            "light": {
+              "kind": "number",
+              "value": 225.0
+            },
+            "relief": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "texture": {
+              "kind": "texture",
+              "value": {
+                "builtin": "fabric",
+                "values": {
+                  "irregularity": {
+                    "kind": "number",
+                    "value": 25.0
+                  },
+                  "openness": {
+                    "kind": "number",
+                    "value": 25.0
+                  },
+                  "priming": {
+                    "kind": "number",
+                    "value": 25.0
+                  },
+                  "seed": {
+                    "kind": "number",
+                    "value": 4194304.0
+                  },
+                  "threads": {
+                    "kind": "number",
+                    "value": 9.699999809265137
+                  }
+                },
+                "version": 1
+              }
+            },
+            "through_paint": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "cea74cae45944c7ba330f3463dd1a019",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "e4286b12ccc84ec9b0c4448025360e39"
+            }
+          },
+          "name": "color_lookup"
+        },
+        "id": "ceae5a38a681435ba05e67a5f19baa31",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "iridescence",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "animate": {
+              "kind": "toggle",
+              "value": false
+            },
+            "scale": {
+              "kind": "number",
+              "value": 66.0
+            },
+            "speed": {
+              "kind": "number",
+              "value": 1.0
+            },
+            "strength": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "time": {
+              "kind": "number",
+              "value": 900.0
+            }
+          },
+          "version": 1
+        },
+        "id": "d1d8f56f0ed64f089e201a92bae22ddd",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "paper",
+          "spatial": {
+            "extent": [
+              5.418666666666667,
+              5.418666666666667
+            ],
+            "mapping": [
+              11.811023622047244,
+              0.0,
+              0.0,
+              11.811023622047244,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ]
+              }
+            },
+            "light": {
+              "kind": "number",
+              "value": 225.0
+            },
+            "relief": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "texture": {
+              "kind": "texture",
+              "value": {
+                "builtin": "gesso",
+                "values": {
+                  "brush": {
+                    "kind": "number",
+                    "value": 0.5299999713897705
+                  },
+                  "down": {
+                    "kind": "number",
+                    "value": 25.0
+                  },
+                  "sanding": {
+                    "kind": "number",
+                    "value": 25.0
+                  },
+                  "seed": {
+                    "kind": "number",
+                    "value": 4194304.0
+                  }
+                },
+                "version": 1
+              }
+            },
+            "through_paint": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "d25f54782f14402492b7f455226c0135",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "eaefdd0560cb4de6b73fd252c1642c65"
+            }
+          },
+          "name": "film_grain"
+        },
+        "id": "d2ef4477eae242e49fbd8efe388169da",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "124ec735d8d943aca7d956452491b770"
+            }
+          },
+          "name": "image texture"
+        },
+        "id": "d3be3e0944f2401db781e5b01ab5fa01",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "denoise",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "strength": {
+              "kind": "number",
+              "value": 75.0
+            }
+          },
+          "version": 2
+        },
+        "id": "d444582a343a4359be479d3fa1fd9c5f",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "bdaadabd14174f3baad0de287b9d0e41"
+            }
+          },
+          "name": "selective_color"
+        },
+        "id": "d771fa3f6f844918842aa70b56f46a54",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "5e15e534ba0d4d83b63d1490f170fe4f"
+            }
+          },
+          "name": "wood"
+        },
+        "id": "d8b3ac8eac1e46cb83208bee2deeeb6c",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "brightness_contrast",
+          "values": {
+            "brightness": {
+              "kind": "number",
+              "value": -50.0
+            },
+            "contrast": {
+              "kind": "number",
+              "value": -50.0
+            }
+          },
+          "version": 1
+        },
+        "id": "dc4bcc3c87d54c6083f1526a6e3a50af",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "de6793a704f94c2aab3e6f905a60a4f5"
+            }
+          },
+          "name": "color_lookup"
+        },
+        "id": "dd06f77bd4434ebfbe9ce30709ac3589",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "color_lookup",
+          "values": {
+            "color_space": {
+              "kind": "choice",
+              "value": "srgb"
+            },
+            "intensity": {
+              "kind": "number",
+              "value": 100.0
+            },
+            "resource": {
+              "kind": "lut3d",
+              "value": null
+            }
+          },
+          "version": 1
+        },
+        "id": "de6793a704f94c2aab3e6f905a60a4f5",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "heat_haze",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "animate": {
+              "kind": "toggle",
+              "value": false
+            },
+            "detail": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "distance": {
+              "kind": "number",
+              "value": 12.0
+            },
+            "scale": {
+              "kind": "number",
+              "value": 68.0
+            },
+            "speed": {
+              "kind": "number",
+              "value": 1.0
+            },
+            "time": {
+              "kind": "number",
+              "value": 900.0
+            }
+          },
+          "version": 1
+        },
+        "id": "e11a99c8c2f34685bac38b1f11f80708",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "color_lookup",
+          "values": {
+            "color_space": {
+              "kind": "choice",
+              "value": "display_p3"
+            },
+            "intensity": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "resource": {
+              "kind": "lut3d",
+              "value": {
+                "resource": {
+                  "ref": "ab92b7661bd64ee1bd28b4f815bd3d8d"
+                },
+                "title": "Exact table"
+              }
+            }
+          },
+          "version": 1
+        },
+        "id": "e4286b12ccc84ec9b0c4448025360e39",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "scatter",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "cell_size": {
+              "kind": "number",
+              "value": 13.0
+            },
+            "density": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "seed": {
+              "kind": "number",
+              "value": 16384.0
+            },
+            "spread": {
+              "kind": "number",
+              "value": 64.0
+            }
+          },
+          "version": 1
+        },
+        "id": "e6e733b998814df79ffec7e14a4650a6",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "f6c4f28278334965bdfd388d1d8121d6"
+            }
+          },
+          "name": "high_pass"
+        },
+        "id": "e72cb49e675e46c19ee3f3cb7de622cb",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "b30fb4b6bc9e447d818c06d55ee0d3d8"
+            }
+          },
+          "name": "photo_filter"
+        },
+        "id": "e9cdf0f15b0547a38ad3597e6f10c837",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "4fd47576b01d40d287b542a8205597c9"
+            }
+          },
+          "name": "aggregate"
+        },
+        "id": "eaccc5ba5e374ea0b642609e585f0507",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "04ff3239e2db4527b95f573587009e71"
+            }
+          },
+          "name": "crackle"
+        },
+        "id": "eaedcb99cb35463b89eeebc34faa5b5b",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "film_grain",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "amount": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "animate": {
+              "kind": "toggle",
+              "value": true
+            },
+            "color": {
+              "kind": "toggle",
+              "value": true
+            },
+            "size": {
+              "kind": "number",
+              "value": 2.4000000953674316
+            },
+            "speed": {
+              "kind": "number",
+              "value": 3.0
+            },
+            "time": {
+              "kind": "number",
+              "value": 900.0
+            }
+          },
+          "version": 1
+        },
+        "id": "eaefdd0560cb4de6b73fd252c1642c65",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "bc322e4784664af8aed600c84d33c567"
+            }
+          },
+          "name": "drawing"
+        },
+        "id": "ec79dc75a7664cad9a64a792d960c4dd",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "selective_color",
+          "values": {
+            "blacks_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "blacks_cyan": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "blacks_magenta": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "blacks_yellow": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "blues_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "blues_cyan": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "blues_magenta": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "blues_yellow": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "cyans_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "cyans_cyan": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "cyans_magenta": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "cyans_yellow": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "greens_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "greens_cyan": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "greens_magenta": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "greens_yellow": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "magentas_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "magentas_cyan": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "magentas_magenta": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "magentas_yellow": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "mode": {
+              "kind": "choice",
+              "value": "relative"
+            },
+            "neutrals_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "neutrals_cyan": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "neutrals_magenta": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "neutrals_yellow": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "reds_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "reds_cyan": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "reds_magenta": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "reds_yellow": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "whites_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "whites_cyan": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "whites_magenta": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "whites_yellow": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "yellows_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "yellows_cyan": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "yellows_magenta": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "yellows_yellow": {
+              "kind": "number",
+              "value": 0.0
+            }
+          },
+          "version": 1
+        },
+        "id": "edb189c4f4ed4a318de58a975f2fdb14",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "gaussian_blur",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "sigma": {
+              "kind": "number",
+              "value": 25.0
+            }
+          },
+          "version": 1
+        },
+        "id": "f283ec5eb1104103875be36bd538d111",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "unsharp_mask",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "amount": {
+              "kind": "number",
+              "value": 75.0
+            },
+            "sigma": {
+              "kind": "number",
+              "value": 5.200000286102295
+            },
+            "threshold": {
+              "kind": "number",
+              "value": 25.0
+            }
+          },
+          "version": 1
+        },
+        "id": "f29f5e280ebe44928f3e2ee233f37fb8",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "paper",
+          "spatial": {
+            "extent": [
+              5.418666666666667,
+              5.418666666666667
+            ],
+            "mapping": [
+              11.811023622047244,
+              0.0,
+              0.0,
+              11.811023622047244,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ]
+              }
+            },
+            "light": {
+              "kind": "number",
+              "value": 225.0
+            },
+            "relief": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "texture": {
+              "kind": "texture",
+              "value": {
+                "builtin": "newsprint",
+                "values": {
+                  "flocs": {
+                    "kind": "number",
+                    "value": 1.7000000476837158
+                  },
+                  "fuzz": {
+                    "kind": "number",
+                    "value": 25.0
+                  },
+                  "seed": {
+                    "kind": "number",
+                    "value": 4194304.0
+                  }
+                },
+                "version": 1
+              }
+            },
+            "through_paint": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "f3f468a92eae4127834c73a1d2cb775b",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "d444582a343a4359be479d3fa1fd9c5f"
+            }
+          },
+          "name": "denoise"
+        },
+        "id": "f4cc8beaa92446e7813869694ce90ee6",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "high_pass",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "amount": {
+              "kind": "number",
+              "value": 75.0
+            },
+            "sigma": {
+              "kind": "number",
+              "value": 5.200000286102295
+            }
+          },
+          "version": 1
+        },
+        "id": "f6c4f28278334965bdfd388d1d8121d6",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "paper",
+          "spatial": {
+            "extent": [
+              5.418666666666667,
+              5.418666666666667
+            ],
+            "mapping": [
+              11.811023622047244,
+              0.0,
+              0.0,
+              11.811023622047244,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  0.25,
+                  0.5,
+                  0.75,
+                  1.0
+                ]
+              }
+            },
+            "light": {
+              "kind": "number",
+              "value": 90.0
+            },
+            "relief": {
+              "kind": "number",
+              "value": 75.0
+            },
+            "texture": {
+              "kind": "texture",
+              "value": {
+                "builtin": "watercolor",
+                "values": {
+                  "felt": {
+                    "kind": "number",
+                    "value": 1.5
+                  },
+                  "pressing": {
+                    "kind": "number",
+                    "value": 25.0
+                  },
+                  "seed": {
+                    "kind": "number",
+                    "value": 4194304.0
+                  }
+                },
+                "version": 1
+              }
+            },
+            "through_paint": {
+              "kind": "number",
+              "value": 25.0
+            }
+          },
+          "version": 1
+        },
+        "id": "f6e4d2d46b3f4ee6a4c1f4081db9987b",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "d25f54782f14402492b7f455226c0135"
+            }
+          },
+          "name": "gesso"
+        },
+        "id": "f715c354d0c34b66bd3dcac6c025b9d7",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "c17e7e7371c5403db08db3c8626783bd"
+            }
+          },
+          "name": "painterly"
+        },
+        "id": "f917c4b20a564fafac5598ff4f434ef4",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "emboss",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "angle": {
+              "kind": "number",
+              "value": -90.0
+            },
+            "radius": {
+              "kind": "number",
+              "value": 2.4000000953674316
+            },
+            "strength": {
+              "kind": "number",
+              "value": 300.0
+            }
+          },
+          "version": 1
+        },
+        "id": "fb24ccee99ce4c6ca8fba50e7549a06b",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "90f8904f667b42c38e568b85075549eb"
+            }
+          },
+          "name": "exposure"
+        },
+        "id": "fbc31cfafaad4d968d40514ec6c75a14",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "halftone",
+          "spatial": {
+            "extent": [
+              64.0,
+              64.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "angle": {
+              "kind": "number",
+              "value": -90.0
+            },
+            "contrast": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "ink": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  0.25,
+                  0.5,
+                  0.75,
+                  1.0
+                ]
+              }
+            },
+            "paper": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  0.25,
+                  0.5,
+                  0.75,
+                  1.0
+                ]
+              }
+            },
+            "size": {
+              "kind": "number",
+              "value": 14.5
+            }
+          },
+          "version": 1
+        },
+        "id": "fd1dad203f5d47c4a542ed53cdfc3a19",
+        "type": "capy.effect/2"
+      }
+    ],
+    "outputs": [
+      {
+        "ref": "65550b31734644cda3b427b2bae4a674"
+      }
+    ],
+    "resources": [
+      {
+        "bytes": "25",
+        "crc32": "e86ef7cd",
+        "data": {
+          "decoded_bytes": "96",
+          "domain": [
+            [
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              1.0,
+              1.0,
+              1.0
+            ]
+          ],
+          "size": 2
+        },
+        "encoding": "capy.lz4-bytes/1",
+        "id": "ab92b7661bd64ee1bd28b4f815bd3d8d",
+        "location": {
+          "offset": "0",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.lut3d/1"
+      },
+      {
+        "bytes": "268",
+        "crc32": "8ea6d98e",
+        "data": {
+          "alpha": "none",
+          "channels": "gray",
+          "depth": "u8",
+          "transfer": "profile"
+        },
+        "encoding": "capy.lz4-tile/1",
+        "id": "bc29e329f760401b8ec234fa6afeeb1b",
+        "location": {
+          "offset": "25",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.raster-tile/1"
+      }
+    ],
+    "root": {
+      "ref": "cbd601c41aa347e99d470156b93e7141"
+    },
+    "version": 1
+  },
+  "preview": {
+    "pixels": "77861c1513f628d2dd39787341de13d2bf648034e9fdd82dd7025381be3154bb",
+    "size": [
+      2,
+      1
+    ]
+  },
+  "resources": {
+    "ab92b7661bd64ee1bd28b4f815bd3d8d": "43d69c46c8e32211c95ae6cf6f3e498ef4acdf483fc50ade107738b51bf29ecc",
+    "bc29e329f760401b8ec234fa6afeeb1b": "4802448f2f22ffad28a3e15b815bc3d64a90f18f06754bdc1b810efadb7f01ea"
+  }
+}

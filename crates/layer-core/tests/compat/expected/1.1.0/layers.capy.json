@@ -1,0 +1,442 @@
+{
+  "manifest": {
+    "default_output": {
+      "ref": "dc08138e01214692b10458e54f6845c3"
+    },
+    "document": "fe0c04fd3d1f47c2a365cc38589bb87b",
+    "format": "capy.canvas",
+    "objects": [
+      {
+        "data": {
+          "image": {
+            "ref": "aef95eb7bdb04b7183f3c01887827e98"
+          }
+        },
+        "id": "10734b655c3742459a228ef4511a6950",
+        "type": "capy.image-object/1"
+      },
+      {
+        "data": {
+          "content": {
+            "object": {
+              "ref": "cfb5e08099eb4a2da198e667bab6e877"
+            }
+          },
+          "name": "Source channels"
+        },
+        "id": "3312d66128d84f66a78f4b8f11abb8b1",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "result": {
+            "object": {
+              "ref": "42c3e9c22f1e40339b59bf922c576df6"
+            },
+            "port": "color"
+          },
+          "size": [
+            64,
+            64
+          ]
+        },
+        "id": "4173259aa1b345d3a5c87b5a583a45ef",
+        "type": "capy.composition/2"
+      },
+      {
+        "data": {
+          "entries": [
+            {
+              "ref": "f5eec95e89a14be9965a72eca562bd87"
+            },
+            {
+              "ref": "3312d66128d84f66a78f4b8f11abb8b1"
+            },
+            {
+              "ref": "6a047f37c32440b38d7e145e1b87ed13"
+            },
+            {
+              "ref": "93f6abf6745b446a81f619deb3f2b5ba"
+            },
+            {
+              "ref": "9a5c7b5c32c746f3ac757911f9a93ef9"
+            }
+          ]
+        },
+        "id": "42c3e9c22f1e40339b59bf922c576df6",
+        "type": "capy.stack/1"
+      },
+      {
+        "data": {
+          "image": {
+            "ref": "c02bb69021474fa8a4c9c72124c0af13"
+          }
+        },
+        "id": "4e5f03107e6545849e02e3ad2b76c5a2",
+        "type": "capy.image-object/1"
+      },
+      {
+        "data": {
+          "content": {
+            "object": {
+              "ref": "10734b655c3742459a228ef4511a6950"
+            }
+          },
+          "name": "Source channels"
+        },
+        "id": "6a047f37c32440b38d7e145e1b87ed13",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "items": [
+            {
+              "ref": "26f0a593f2b84e25b72df1466785b91e"
+            }
+          ],
+          "next_item": "2"
+        },
+        "id": "7f929285970d4f54b408b8f907081663",
+        "type": "capy.vector-object/1"
+      },
+      {
+        "data": {
+          "content": {
+            "object": {
+              "ref": "7f929285970d4f54b408b8f907081663"
+            }
+          },
+          "name": "Live shape and miter limit"
+        },
+        "id": "93f6abf6745b446a81f619deb3f2b5ba",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "shape": {
+            "pixels": {
+              "bounds": [
+                0,
+                0,
+                8,
+                1
+              ],
+              "chunks": [
+                {
+                  "ref": "7dc8fa6865664f49b3c3c2ca8b805e96"
+                }
+              ],
+              "depth": "u4",
+              "extent": [
+                8,
+                1
+              ]
+            }
+          }
+        },
+        "id": "9785f763253741b4b9a6cb08f7d93b1a",
+        "type": "capy.selection/1"
+      },
+      {
+        "data": {
+          "content": {
+            "selection": {
+              "ref": "9785f763253741b4b9a6cb08f7d93b1a"
+            }
+          },
+          "name": "Packed coverage"
+        },
+        "id": "9a5c7b5c32c746f3ac757911f9a93ef9",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "extent": [
+            64,
+            64
+          ],
+          "interpretation": {
+            "channels": "cmyk",
+            "depth": "u8",
+            "profile": {
+              "resource": {
+                "ref": "11ebfe3ee0c34460922f55fb5bab1f2b"
+              }
+            }
+          },
+          "resolution": {
+            "density": [
+              [
+                300,
+                1
+              ],
+              [
+                300,
+                1
+              ]
+            ],
+            "unit": "inch"
+          },
+          "tiles": [
+            {
+              "coordinate": [
+                0,
+                0
+              ],
+              "resource": {
+                "ref": "8610ff3472f24292b6f57bd8649f78a1"
+              }
+            }
+          ]
+        },
+        "id": "aef95eb7bdb04b7183f3c01887827e98",
+        "type": "capy.image/1"
+      },
+      {
+        "data": {
+          "extent": [
+            64,
+            64
+          ],
+          "interpretation": {
+            "channels": "gray_alpha",
+            "depth": "u16",
+            "profile": {
+              "builtin": "adobe_rgb"
+            },
+            "profile_assumed": true
+          },
+          "resolution": {
+            "density": [
+              [
+                300,
+                1
+              ],
+              [
+                300,
+                1
+              ]
+            ],
+            "unit": "inch"
+          },
+          "tiles": [
+            {
+              "coordinate": [
+                0,
+                0
+              ],
+              "resource": {
+                "ref": "1298b177c70546af8d6e848d736000cf"
+              }
+            }
+          ]
+        },
+        "id": "c02bb69021474fa8a4c9c72124c0af13",
+        "type": "capy.image/1"
+      },
+      {
+        "data": {
+          "image": {
+            "ref": "db52abc9c988427ea07baf6478601c6d"
+          }
+        },
+        "id": "cfb5e08099eb4a2da198e667bab6e877",
+        "type": "capy.image-object/1"
+      },
+      {
+        "data": {
+          "extent": [
+            64,
+            64
+          ],
+          "interpretation": {
+            "channels": "rgb",
+            "depth": "f16",
+            "profile": {
+              "builtin": "pro_photo"
+            }
+          },
+          "resolution": {
+            "density": [
+              [
+                300,
+                1
+              ],
+              [
+                300,
+                1
+              ]
+            ],
+            "unit": "inch"
+          },
+          "tiles": [
+            {
+              "coordinate": [
+                0,
+                0
+              ],
+              "resource": {
+                "ref": "04df3afd118b4a3da52b37390c57ccec"
+              }
+            }
+          ]
+        },
+        "id": "db52abc9c988427ea07baf6478601c6d",
+        "type": "capy.image/1"
+      },
+      {
+        "data": {
+          "source": {
+            "object": {
+              "ref": "4173259aa1b345d3a5c87b5a583a45ef"
+            },
+            "port": "color"
+          }
+        },
+        "id": "dc08138e01214692b10458e54f6845c3",
+        "type": "capy.output/2"
+      },
+      {
+        "data": {
+          "content": {
+            "object": {
+              "ref": "4e5f03107e6545849e02e3ad2b76c5a2"
+            }
+          },
+          "name": "Source channels"
+        },
+        "id": "f5eec95e89a14be9965a72eca562bd87",
+        "type": "capy.occurrence/3"
+      }
+    ],
+    "outputs": [
+      {
+        "ref": "dc08138e01214692b10458e54f6845c3"
+      }
+    ],
+    "resources": [
+      {
+        "bytes": "1553",
+        "crc32": "89ece823",
+        "data": {
+          "alpha": "none",
+          "channels": "rgb",
+          "depth": "f16",
+          "transfer": "linear"
+        },
+        "encoding": "capy.lz4-tile/1",
+        "id": "04df3afd118b4a3da52b37390c57ccec",
+        "location": {
+          "offset": "0",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.raster-tile/1"
+      },
+      {
+        "bytes": "256",
+        "crc32": "29058c73",
+        "data": {},
+        "encoding": "raw",
+        "id": "11ebfe3ee0c34460922f55fb5bab1f2b",
+        "location": {
+          "offset": "1553",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.icc/1"
+      },
+      {
+        "bytes": "1039",
+        "crc32": "c5ba35ea",
+        "data": {
+          "alpha": "straight",
+          "channels": "gray_alpha",
+          "depth": "u16",
+          "transfer": "profile"
+        },
+        "encoding": "capy.lz4-tile/1",
+        "id": "1298b177c70546af8d6e848d736000cf",
+        "location": {
+          "offset": "1809",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.raster-tile/1"
+      },
+      {
+        "bytes": "138",
+        "crc32": "81e2e47b",
+        "data": {
+          "decoded_bytes": "153",
+          "records": 1
+        },
+        "encoding": "capy.lz4-bytes/1",
+        "id": "26f0a593f2b84e25b72df1466785b91e",
+        "location": {
+          "offset": "2848",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.vector-items/1"
+      },
+      {
+        "bytes": "272",
+        "crc32": "109f2101",
+        "data": {
+          "bounds": [
+            0,
+            0,
+            8,
+            1
+          ],
+          "chunk": 0,
+          "depth": "u4",
+          "extent": [
+            8,
+            1
+          ]
+        },
+        "encoding": "capy.lz4-coverage/1",
+        "id": "7dc8fa6865664f49b3c3c2ca8b805e96",
+        "location": {
+          "offset": "2986",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.selection-coverage/1"
+      },
+      {
+        "bytes": "1039",
+        "crc32": "c5ba35ea",
+        "data": {
+          "alpha": "none",
+          "channels": "cmyk",
+          "depth": "u8",
+          "transfer": "profile"
+        },
+        "encoding": "capy.lz4-tile/1",
+        "id": "8610ff3472f24292b6f57bd8649f78a1",
+        "location": {
+          "offset": "3258",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.raster-tile/1"
+      }
+    ],
+    "root": {
+      "ref": "4173259aa1b345d3a5c87b5a583a45ef"
+    },
+    "version": 1
+  },
+  "preview": {
+    "pixels": "77861c1513f628d2dd39787341de13d2bf648034e9fdd82dd7025381be3154bb",
+    "size": [
+      2,
+      1
+    ]
+  },
+  "resources": {
+    "04df3afd118b4a3da52b37390c57ccec": "3bbd3213a3c9f1d4cc606a7c576b9082cb3d98cbb5cc286814751d5744b9d49f",
+    "11ebfe3ee0c34460922f55fb5bab1f2b": "40aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880",
+    "1298b177c70546af8d6e848d736000cf": "2a62c68610f94f77cf9577967eb372536c7e63f2f6552af3f7a758edf5a7f60d",
+    "26f0a593f2b84e25b72df1466785b91e": "219f2d16a6f8bedac038c2d42d725e9711efe7831d9a0cb1e8ea1df8ad4e8376",
+    "7dc8fa6865664f49b3c3c2ca8b805e96": "96ae69326eb51bd2cad3230239d6d41b90104f81d973ec490a5748c9a608d03c",
+    "8610ff3472f24292b6f57bd8649f78a1": "2a62c68610f94f77cf9577967eb372536c7e63f2f6552af3f7a758edf5a7f60d"
+  }
+}

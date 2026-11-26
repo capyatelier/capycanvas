@@ -1,0 +1,3800 @@
+{
+  "manifest": {
+    "default_output": {
+      "ref": "52a94bca8edd42bd98a64c9227fb5fae"
+    },
+    "document": "c3a1c9ef58c84b33a7cb20813bbbf3e6",
+    "format": "capy.canvas",
+    "metadata": {
+      "exif": {
+        "ref": "80496afdc92c441ea59e5fa2ca975f98"
+      },
+      "iptc": {
+        "ref": "66029ea6a1834200aab99bb75ff80abd"
+      },
+      "xmp": {
+        "ref": "112e461e7eb24846942816e01516095b"
+      }
+    },
+    "objects": [
+      {
+        "data": {
+          "base": {
+            "image": {
+              "ref": "8c540a6d0ab847a5980f489d16b6f32d"
+            }
+          },
+          "color_mode": "full_color",
+          "domain": {
+            "size": [
+              256,
+              256
+            ]
+          },
+          "material": {
+            "watercolor": {
+              "burnt_edge": 0.75,
+              "edge_width": 3.5,
+              "wet_edge": 0.25
+            }
+          },
+          "tiles": [
+            {
+              "coordinate": [
+                0,
+                0
+              ],
+              "plane": "color",
+              "resource": {
+                "ref": "90c91d5651174ff8af266c94c0b97fb0"
+              }
+            },
+            {
+              "coordinate": [
+                0,
+                0
+              ],
+              "plane": "watercolor_wetness",
+              "resource": {
+                "ref": "74ff0a6966ca44bda6ec45cc00abe45e"
+              }
+            }
+          ]
+        },
+        "id": "0000000000000000000000000000000a",
+        "type": "capy.paint-source/2"
+      },
+      {
+        "data": {
+          "base": {
+            "image": {
+              "ref": "8c540a6d0ab847a5980f489d16b6f32d"
+            }
+          },
+          "color_mode": "full_color",
+          "domain": {
+            "size": [
+              256,
+              256
+            ]
+          },
+          "material": {
+            "watercolor": {
+              "burnt_edge": 0.75,
+              "edge_width": 3.5,
+              "wet_edge": 0.25
+            }
+          },
+          "tiles": [
+            {
+              "coordinate": [
+                0,
+                0
+              ],
+              "plane": "color",
+              "resource": {
+                "ref": "90c91d5651174ff8af266c94c0b97fb0"
+              }
+            },
+            {
+              "coordinate": [
+                0,
+                0
+              ],
+              "plane": "watercolor_wetness",
+              "resource": {
+                "ref": "74ff0a6966ca44bda6ec45cc00abe45e"
+              }
+            }
+          ]
+        },
+        "id": "0000000000000000000000000000000b",
+        "type": "capy.paint-source/2"
+      },
+      {
+        "data": {
+          "default_coverage": 0.75,
+          "domain": {
+            "size": [
+              256,
+              256
+            ]
+          },
+          "tiles": [
+            {
+              "coordinate": [
+                0,
+                0
+              ],
+              "plane": "mask",
+              "resource": {
+                "ref": "74ff0a6966ca44bda6ec45cc00abe45e"
+              }
+            }
+          ]
+        },
+        "id": "0000000000000000000000000000000c",
+        "type": "capy.coverage-source/2"
+      },
+      {
+        "data": {
+          "shape": {
+            "pixels": {
+              "bounds": [
+                0,
+                0,
+                5,
+                2
+              ],
+              "chunks": [
+                {
+                  "ref": "9a782250fbe24e0d9bb978e074d0f110"
+                }
+              ],
+              "depth": "u8",
+              "extent": [
+                5,
+                2
+              ]
+            }
+          }
+        },
+        "id": "0000000000000000000000000000000d",
+        "type": "capy.selection/1"
+      },
+      {
+        "data": {
+          "attachment": "clip",
+          "content": {
+            "paint": {
+              "ref": "0000000000000000000000000000000a"
+            }
+          },
+          "locked": true,
+          "mask": {
+            "inverted": true,
+            "linked": false,
+            "offset": [
+              "2",
+              "3"
+            ],
+            "source": {
+              "ref": "0000000000000000000000000000000c"
+            }
+          },
+          "name": "Original source",
+          "offset": [
+            "1",
+            "0"
+          ],
+          "opacity": 0.625
+        },
+        "id": "00000000000000000000000000000014",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "alpha_locked": true,
+          "content": {
+            "paint": {
+              "ref": "0000000000000000000000000000000b"
+            }
+          },
+          "name": "Independent copy",
+          "offset": [
+            "3",
+            "4"
+          ],
+          "reference": true
+        },
+        "id": "00000000000000000000000000000015",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "selection": {
+              "ref": "0000000000000000000000000000000d"
+            }
+          },
+          "name": "Saved coverage"
+        },
+        "id": "00000000000000000000000000000016",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "color_lookup",
+          "values": {
+            "color_space": {
+              "kind": "choice",
+              "value": "srgb"
+            },
+            "intensity": {
+              "kind": "number",
+              "value": 100.0
+            },
+            "resource": {
+              "kind": "lut3d",
+              "value": {
+                "resource": {
+                  "ref": "0d06811c4e81412680218fefd738c50b"
+                },
+                "title": "Exact table"
+              }
+            }
+          },
+          "version": 1
+        },
+        "id": "00000000000000000000000000000028",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "domain_warp",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "animate": {
+              "kind": "toggle",
+              "value": true
+            },
+            "distance": {
+              "kind": "number",
+              "value": 24.0
+            },
+            "scale": {
+              "kind": "number",
+              "value": 96.0
+            },
+            "speed": {
+              "kind": "number",
+              "value": 0.25
+            },
+            "time": {
+              "kind": "number",
+              "value": 0.0
+            }
+          },
+          "version": 2
+        },
+        "id": "00000000000000000000000000000029",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "attachment": "effect",
+          "content": {
+            "effect": {
+              "ref": "00000000000000000000000000000028"
+            }
+          },
+          "name": "color_lookup"
+        },
+        "id": "00000000000000000000000000000032",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "00000000000000000000000000000029"
+            }
+          },
+          "name": "domain_warp"
+        },
+        "id": "00000000000000000000000000000033",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "rulers": [
+            {
+              "geometry": {
+                "center": [
+                  12.5,
+                  8.0
+                ],
+                "kind": "radial"
+              },
+              "id": "0000000000000000000000000000003d"
+            },
+            {
+              "geometry": {
+                "end": [
+                  30.0,
+                  2.0
+                ],
+                "kind": "straight",
+                "start": [
+                  1.0,
+                  2.0
+                ]
+              },
+              "id": "000000000000000000000000000000e5"
+            },
+            {
+              "geometry": {
+                "end": [
+                  4.0,
+                  90.0
+                ],
+                "kind": "parallel",
+                "start": [
+                  4.0,
+                  8.0
+                ]
+              },
+              "id": "000000000000000000000000000000e6"
+            }
+          ]
+        },
+        "id": "0000000000000000000000000000003c",
+        "type": "capy.guides/1"
+      },
+      {
+        "data": {
+          "entries": [
+            {
+              "ref": "00000000000000000000000000000bea"
+            },
+            {
+              "ref": "00000000000000000000000000000beb"
+            }
+          ]
+        },
+        "id": "000000000000000000000000000000e1",
+        "type": "capy.stack/1"
+      },
+      {
+        "data": {
+          "blend": "pass_through",
+          "content": {
+            "stack": {
+              "ref": "000000000000000000000000000000e1"
+            }
+          },
+          "name": "Fills"
+        },
+        "id": "000000000000000000000000000000e2",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "affine": [
+            1.0,
+            0.0,
+            0.0,
+            1.0,
+            2.0,
+            3.0
+          ],
+          "inverted": true,
+          "shape": {
+            "contours": [
+              [
+                [
+                  1.0,
+                  1.0
+                ],
+                [
+                  10.0,
+                  1.0
+                ],
+                [
+                  1.0,
+                  10.0
+                ]
+              ]
+            ]
+          }
+        },
+        "id": "000000000000000000000000000000e3",
+        "type": "capy.selection/1"
+      },
+      {
+        "data": {
+          "content": {
+            "selection": {
+              "ref": "000000000000000000000000000000e3"
+            }
+          },
+          "locked": true,
+          "name": "Contour"
+        },
+        "id": "000000000000000000000000000000e4",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "builtin": "shadows_highlights",
+          "values": {
+            "highlights": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "shadows": {
+              "kind": "number",
+              "value": 50.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007d0",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "clarity",
+          "values": {
+            "amount": {
+              "kind": "number",
+              "value": 50.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007d1",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "dehaze",
+          "values": {
+            "amount": {
+              "kind": "number",
+              "value": 50.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007d2",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "curves",
+          "values": {
+            "blue": {
+              "kind": "curve",
+              "value": [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  1.0,
+                  1.0
+                ]
+              ]
+            },
+            "domain": {
+              "kind": "choice",
+              "value": "log_hdr"
+            },
+            "green": {
+              "kind": "curve",
+              "value": [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  1.0,
+                  1.0
+                ]
+              ]
+            },
+            "hdr_stops": {
+              "kind": "number",
+              "value": 4.0
+            },
+            "red": {
+              "kind": "curve",
+              "value": [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  1.0,
+                  1.0
+                ]
+              ]
+            },
+            "rgb": {
+              "kind": "curve",
+              "value": [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.25,
+                  0.15000000596046448
+                ],
+                [
+                  0.75,
+                  0.8500000238418579
+                ],
+                [
+                  1.0,
+                  1.0
+                ]
+              ]
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007d3",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "levels",
+          "values": {
+            "black": {
+              "kind": "number",
+              "value": 0.10000000149011612
+            },
+            "blue_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "blue_gamma": {
+              "kind": "number",
+              "value": 1.0
+            },
+            "blue_output_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "blue_output_white": {
+              "kind": "number",
+              "value": 1.0
+            },
+            "blue_white": {
+              "kind": "number",
+              "value": 1.0
+            },
+            "clamp_input": {
+              "kind": "toggle",
+              "value": false
+            },
+            "clamp_output": {
+              "kind": "toggle",
+              "value": false
+            },
+            "gamma": {
+              "kind": "number",
+              "value": 1.0
+            },
+            "green_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "green_gamma": {
+              "kind": "number",
+              "value": 1.0
+            },
+            "green_output_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "green_output_white": {
+              "kind": "number",
+              "value": 1.0
+            },
+            "green_white": {
+              "kind": "number",
+              "value": 1.0
+            },
+            "output_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "output_white": {
+              "kind": "number",
+              "value": 1.0
+            },
+            "red_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "red_gamma": {
+              "kind": "number",
+              "value": 1.0
+            },
+            "red_output_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "red_output_white": {
+              "kind": "number",
+              "value": 1.0
+            },
+            "red_white": {
+              "kind": "number",
+              "value": 1.0
+            },
+            "white": {
+              "kind": "number",
+              "value": 0.8999999761581421
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007d4",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "brightness_contrast",
+          "values": {
+            "brightness": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "contrast": {
+              "kind": "number",
+              "value": 25.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007d5",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "hue_saturation",
+          "values": {
+            "blues_center": {
+              "kind": "number",
+              "value": 265.0
+            },
+            "blues_feather": {
+              "kind": "number",
+              "value": 30.0
+            },
+            "blues_hue": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "blues_lightness": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "blues_saturation": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "blues_width": {
+              "kind": "number",
+              "value": 30.0
+            },
+            "colorize": {
+              "kind": "toggle",
+              "value": false
+            },
+            "colorize_hue": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "colorize_saturation": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "cyans_center": {
+              "kind": "number",
+              "value": 195.0
+            },
+            "cyans_feather": {
+              "kind": "number",
+              "value": 30.0
+            },
+            "cyans_hue": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "cyans_lightness": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "cyans_saturation": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "cyans_width": {
+              "kind": "number",
+              "value": 30.0
+            },
+            "greens_center": {
+              "kind": "number",
+              "value": 145.0
+            },
+            "greens_feather": {
+              "kind": "number",
+              "value": 30.0
+            },
+            "greens_hue": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "greens_lightness": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "greens_saturation": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "greens_width": {
+              "kind": "number",
+              "value": 30.0
+            },
+            "hue": {
+              "kind": "number",
+              "value": 35.0
+            },
+            "lightness": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "magentas_center": {
+              "kind": "number",
+              "value": 330.0
+            },
+            "magentas_feather": {
+              "kind": "number",
+              "value": 30.0
+            },
+            "magentas_hue": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "magentas_lightness": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "magentas_saturation": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "magentas_width": {
+              "kind": "number",
+              "value": 30.0
+            },
+            "reds_center": {
+              "kind": "number",
+              "value": 30.0
+            },
+            "reds_feather": {
+              "kind": "number",
+              "value": 30.0
+            },
+            "reds_hue": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "reds_lightness": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "reds_saturation": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "reds_width": {
+              "kind": "number",
+              "value": 30.0
+            },
+            "saturation": {
+              "kind": "number",
+              "value": 18.0
+            },
+            "yellows_center": {
+              "kind": "number",
+              "value": 110.0
+            },
+            "yellows_feather": {
+              "kind": "number",
+              "value": 30.0
+            },
+            "yellows_hue": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "yellows_lightness": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "yellows_saturation": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "yellows_width": {
+              "kind": "number",
+              "value": 30.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007d6",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "invert",
+          "values": {},
+          "version": 1
+        },
+        "id": "000000000000000000000000000007d7",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "threshold",
+          "values": {
+            "alpha_threshold": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "colors": {
+              "kind": "choice",
+              "value": "black_white"
+            },
+            "threshold": {
+              "kind": "number",
+              "value": 0.5
+            },
+            "transparency": {
+              "kind": "choice",
+              "value": "keep"
+            }
+          },
+          "version": 2
+        },
+        "id": "000000000000000000000000000007d8",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "desaturate",
+          "values": {},
+          "version": 1
+        },
+        "id": "000000000000000000000000000007d9",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "photo_filter",
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "linear_rgba": [
+                  0.20000000298023224,
+                  0.10000000149011612,
+                  0.05000000074505806,
+                  1.0
+                ]
+              }
+            },
+            "density": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "preserve_luminance": {
+              "kind": "toggle",
+              "value": true
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007da",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "selective_color",
+          "values": {
+            "blacks_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "blacks_cyan": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "blacks_magenta": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "blacks_yellow": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "blues_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "blues_cyan": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "blues_magenta": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "blues_yellow": {
+              "kind": "number",
+              "value": -25.0
+            },
+            "cyans_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "cyans_cyan": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "cyans_magenta": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "cyans_yellow": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "greens_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "greens_cyan": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "greens_magenta": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "greens_yellow": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "magentas_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "magentas_cyan": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "magentas_magenta": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "magentas_yellow": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "mode": {
+              "kind": "choice",
+              "value": "absolute"
+            },
+            "neutrals_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "neutrals_cyan": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "neutrals_magenta": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "neutrals_yellow": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "reds_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "reds_cyan": {
+              "kind": "number",
+              "value": -30.0
+            },
+            "reds_magenta": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "reds_yellow": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "whites_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "whites_cyan": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "whites_magenta": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "whites_yellow": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "yellows_black": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "yellows_cyan": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "yellows_magenta": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "yellows_yellow": {
+              "kind": "number",
+              "value": 0.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007db",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "channel_mixer",
+          "values": {
+            "blue_blue": {
+              "kind": "number",
+              "value": 85.0
+            },
+            "blue_constant": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "blue_green": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "blue_red": {
+              "kind": "number",
+              "value": 15.0
+            },
+            "gray_blue": {
+              "kind": "number",
+              "value": 7.21999979019165
+            },
+            "gray_constant": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "gray_green": {
+              "kind": "number",
+              "value": 71.5199966430664
+            },
+            "gray_red": {
+              "kind": "number",
+              "value": 21.260000228881836
+            },
+            "green_blue": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "green_constant": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "green_green": {
+              "kind": "number",
+              "value": 100.0
+            },
+            "green_red": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "monochrome": {
+              "kind": "toggle",
+              "value": false
+            },
+            "red_blue": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "red_constant": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "red_green": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "red_red": {
+              "kind": "number",
+              "value": 75.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007dc",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "color_lookup",
+          "values": {
+            "color_space": {
+              "kind": "choice",
+              "value": "srgb"
+            },
+            "intensity": {
+              "kind": "number",
+              "value": 100.0
+            },
+            "resource": {
+              "kind": "lut3d",
+              "value": null
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007dd",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "color_balance",
+          "values": {
+            "highlights_blue": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "highlights_green": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "highlights_red": {
+              "kind": "number",
+              "value": 20.0
+            },
+            "midtones_blue": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "midtones_green": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "midtones_red": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "preserve_luminance": {
+              "kind": "toggle",
+              "value": true
+            },
+            "shadows_blue": {
+              "kind": "number",
+              "value": 20.0
+            },
+            "shadows_green": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "shadows_red": {
+              "kind": "number",
+              "value": 0.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007de",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "exposure",
+          "values": {
+            "exposure": {
+              "kind": "number",
+              "value": 0.800000011920929
+            },
+            "gamma": {
+              "kind": "number",
+              "value": 1.0
+            },
+            "offset": {
+              "kind": "number",
+              "value": 0.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007df",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "vibrance",
+          "values": {
+            "protect_skin": {
+              "kind": "toggle",
+              "value": true
+            },
+            "saturation": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "vibrance": {
+              "kind": "number",
+              "value": 45.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007e0",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "black_white",
+          "values": {
+            "blues": {
+              "kind": "number",
+              "value": 20.0
+            },
+            "cyans": {
+              "kind": "number",
+              "value": 60.0
+            },
+            "greens": {
+              "kind": "number",
+              "value": 40.0
+            },
+            "magentas": {
+              "kind": "number",
+              "value": 80.0
+            },
+            "reds": {
+              "kind": "number",
+              "value": 40.0
+            },
+            "tint": {
+              "kind": "toggle",
+              "value": false
+            },
+            "tint_color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  0.75,
+                  0.5299999713897705,
+                  0.30000001192092896,
+                  1.0
+                ]
+              }
+            },
+            "yellows": {
+              "kind": "number",
+              "value": 60.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007e1",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "gradient_map",
+          "values": {
+            "amount": {
+              "kind": "number",
+              "value": 100.0
+            },
+            "gradient": {
+              "kind": "gradient",
+              "value": {
+                "interpolation": "linear_rgb",
+                "stops": [
+                  {
+                    "color": {
+                      "rgba": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0
+                      ]
+                    },
+                    "position": 0.0
+                  },
+                  {
+                    "color": {
+                      "rgba": [
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0
+                      ]
+                    },
+                    "position": 1.0
+                  }
+                ]
+              }
+            }
+          },
+          "version": 2
+        },
+        "id": "000000000000000000000000000007e2",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "posterize",
+          "values": {
+            "levels": {
+              "kind": "number",
+              "value": 6.0
+            }
+          },
+          "version": 2
+        },
+        "id": "000000000000000000000000000007e3",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "gaussian_blur",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "sigma": {
+              "kind": "number",
+              "value": 3.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007e4",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "unsharp_mask",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "amount": {
+              "kind": "number",
+              "value": 100.0
+            },
+            "sigma": {
+              "kind": "number",
+              "value": 1.5
+            },
+            "threshold": {
+              "kind": "number",
+              "value": 2.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007e5",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "high_pass",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "amount": {
+              "kind": "number",
+              "value": 100.0
+            },
+            "sigma": {
+              "kind": "number",
+              "value": 4.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007e6",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "motion_blur",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "angle": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "distance": {
+              "kind": "number",
+              "value": 12.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007e7",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "denoise",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "strength": {
+              "kind": "number",
+              "value": 25.0
+            }
+          },
+          "version": 2
+        },
+        "id": "000000000000000000000000000007e8",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "edge_detect",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "invert": {
+              "kind": "toggle",
+              "value": false
+            },
+            "radius": {
+              "kind": "number",
+              "value": 1.0
+            },
+            "strength": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007e9",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "white_balance",
+          "values": {
+            "preserve_luminance": {
+              "kind": "toggle",
+              "value": true
+            },
+            "temperature": {
+              "kind": "number",
+              "value": 35.0
+            },
+            "tint": {
+              "kind": "number",
+              "value": 0.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007ea",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "split_tone",
+          "values": {
+            "balance": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "highlights": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  0.9599999785423279,
+                  0.6800000071525574,
+                  0.3400000035762787,
+                  1.0
+                ]
+              }
+            },
+            "shadows": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  0.1599999964237213,
+                  0.33000001311302185,
+                  0.5799999833106995,
+                  1.0
+                ]
+              }
+            },
+            "strength": {
+              "kind": "number",
+              "value": 30.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007eb",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "vignette",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "center_x": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "center_y": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "radius": {
+              "kind": "number",
+              "value": 95.0
+            },
+            "softness": {
+              "kind": "number",
+              "value": 55.0
+            },
+            "strength": {
+              "kind": "number",
+              "value": 40.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007ec",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "film_grain",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "amount": {
+              "kind": "number",
+              "value": 18.0
+            },
+            "animate": {
+              "kind": "toggle",
+              "value": false
+            },
+            "color": {
+              "kind": "toggle",
+              "value": false
+            },
+            "size": {
+              "kind": "number",
+              "value": 1.0
+            },
+            "speed": {
+              "kind": "number",
+              "value": 1.0
+            },
+            "time": {
+              "kind": "number",
+              "value": 1.25
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007ed",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "bloom",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "amount": {
+              "kind": "number",
+              "value": 60.0
+            },
+            "sigma": {
+              "kind": "number",
+              "value": 6.0
+            },
+            "threshold": {
+              "kind": "number",
+              "value": 60.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007ee",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "soft_focus",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "amount": {
+              "kind": "number",
+              "value": 40.0
+            },
+            "sigma": {
+              "kind": "number",
+              "value": 5.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007ef",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "halftone",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "angle": {
+              "kind": "number",
+              "value": 15.0
+            },
+            "contrast": {
+              "kind": "number",
+              "value": 30.0
+            },
+            "ink": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  0.05000000074505806,
+                  0.07000000029802322,
+                  0.09000000357627869,
+                  1.0
+                ]
+              }
+            },
+            "paper": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  0.9599999785423279,
+                  0.9399999976158142,
+                  0.8700000047683716,
+                  1.0
+                ]
+              }
+            },
+            "size": {
+              "kind": "number",
+              "value": 9.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007f0",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "crosshatch",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "angle": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "ink": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  0.07000000029802322,
+                  0.07999999821186066,
+                  0.09000000357627869,
+                  1.0
+                ]
+              }
+            },
+            "paper": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  0.9700000286102295,
+                  0.949999988079071,
+                  0.9100000262260437,
+                  1.0
+                ]
+              }
+            },
+            "spacing": {
+              "kind": "number",
+              "value": 8.0
+            },
+            "width": {
+              "kind": "number",
+              "value": 1.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007f1",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "emboss",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "angle": {
+              "kind": "number",
+              "value": 135.0
+            },
+            "radius": {
+              "kind": "number",
+              "value": 1.5
+            },
+            "strength": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007f2",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "pixel_mosaic",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "size": {
+              "kind": "number",
+              "value": 12.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007f3",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "chromatic_aberration",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "angle": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "distance": {
+              "kind": "number",
+              "value": 3.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007f4",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "painterly",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "radius": {
+              "kind": "number",
+              "value": 5.0
+            },
+            "strength": {
+              "kind": "number",
+              "value": 100.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007f5",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "solarize",
+          "values": {
+            "strength": {
+              "kind": "number",
+              "value": 100.0
+            },
+            "threshold": {
+              "kind": "number",
+              "value": 50.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007f6",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "pencil",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "contrast": {
+              "kind": "number",
+              "value": 40.0
+            },
+            "ink": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  0.07000000029802322,
+                  0.05999999865889549,
+                  0.05000000074505806,
+                  1.0
+                ]
+              }
+            },
+            "paper": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  0.9700000286102295,
+                  0.949999988079071,
+                  0.8999999761581421,
+                  1.0
+                ]
+              }
+            },
+            "sigma": {
+              "kind": "number",
+              "value": 2.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007f7",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "kaleidoscope",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "angle": {
+              "kind": "number",
+              "value": 0.0
+            },
+            "center_x": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "center_y": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "segments": {
+              "kind": "number",
+              "value": 6.0
+            }
+          },
+          "version": 2
+        },
+        "id": "000000000000000000000000000007f8",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "swirl",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "center_x": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "center_y": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "radius": {
+              "kind": "number",
+              "value": 70.0
+            },
+            "turn": {
+              "kind": "number",
+              "value": 120.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007f9",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "ripple",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "animate": {
+              "kind": "toggle",
+              "value": false
+            },
+            "center_x": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "center_y": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "distance": {
+              "kind": "number",
+              "value": 12.0
+            },
+            "speed": {
+              "kind": "number",
+              "value": 0.5
+            },
+            "time": {
+              "kind": "number",
+              "value": 1.25
+            },
+            "wavelength": {
+              "kind": "number",
+              "value": 64.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007fa",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "glass",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "distance": {
+              "kind": "number",
+              "value": 12.0
+            },
+            "roughness": {
+              "kind": "number",
+              "value": 35.0
+            },
+            "scale": {
+              "kind": "number",
+              "value": 24.0
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007fb",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "rainy_glass",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "amount": {
+              "kind": "number",
+              "value": 65.0
+            },
+            "animate": {
+              "kind": "toggle",
+              "value": false
+            },
+            "distance": {
+              "kind": "number",
+              "value": 8.0
+            },
+            "scale": {
+              "kind": "number",
+              "value": 48.0
+            },
+            "speed": {
+              "kind": "number",
+              "value": 0.5
+            },
+            "time": {
+              "kind": "number",
+              "value": 1.25
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007fc",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "vhs",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "animate": {
+              "kind": "toggle",
+              "value": false
+            },
+            "distance": {
+              "kind": "number",
+              "value": 5.0
+            },
+            "lines": {
+              "kind": "number",
+              "value": 20.0
+            },
+            "noise": {
+              "kind": "number",
+              "value": 12.0
+            },
+            "speed": {
+              "kind": "number",
+              "value": 1.0
+            },
+            "time": {
+              "kind": "number",
+              "value": 1.25
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007fd",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "crt",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "animate": {
+              "kind": "toggle",
+              "value": false
+            },
+            "curvature": {
+              "kind": "number",
+              "value": 8.0
+            },
+            "lines": {
+              "kind": "number",
+              "value": 35.0
+            },
+            "mask": {
+              "kind": "number",
+              "value": 25.0
+            },
+            "separation": {
+              "kind": "number",
+              "value": 1.0
+            },
+            "time": {
+              "kind": "number",
+              "value": 1.25
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007fe",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "heat_haze",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "animate": {
+              "kind": "toggle",
+              "value": false
+            },
+            "detail": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "distance": {
+              "kind": "number",
+              "value": 8.0
+            },
+            "scale": {
+              "kind": "number",
+              "value": 90.0
+            },
+            "speed": {
+              "kind": "number",
+              "value": 0.6000000238418579
+            },
+            "time": {
+              "kind": "number",
+              "value": 1.25
+            }
+          },
+          "version": 1
+        },
+        "id": "000000000000000000000000000007ff",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "iridescence",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "animate": {
+              "kind": "toggle",
+              "value": false
+            },
+            "scale": {
+              "kind": "number",
+              "value": 64.0
+            },
+            "speed": {
+              "kind": "number",
+              "value": 0.30000001192092896
+            },
+            "strength": {
+              "kind": "number",
+              "value": 55.0
+            },
+            "time": {
+              "kind": "number",
+              "value": 1.25
+            }
+          },
+          "version": 1
+        },
+        "id": "00000000000000000000000000000800",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "domain_warp",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "animate": {
+              "kind": "toggle",
+              "value": false
+            },
+            "distance": {
+              "kind": "number",
+              "value": 24.0
+            },
+            "scale": {
+              "kind": "number",
+              "value": 96.0
+            },
+            "speed": {
+              "kind": "number",
+              "value": 0.25
+            },
+            "time": {
+              "kind": "number",
+              "value": 1.25
+            }
+          },
+          "version": 2
+        },
+        "id": "00000000000000000000000000000801",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "solid_color",
+          "values": {
+            "color": {
+              "kind": "color",
+              "value": {
+                "rgba": [
+                  0.1599999964237213,
+                  0.33000001311302185,
+                  0.5799999833106995,
+                  1.0
+                ]
+              }
+            }
+          },
+          "version": 1
+        },
+        "id": "00000000000000000000000000000802",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "builtin": "gradient_fill",
+          "spatial": {
+            "extent": [
+              256.0,
+              256.0
+            ],
+            "mapping": [
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ]
+          },
+          "values": {
+            "angle": {
+              "kind": "number",
+              "value": 90.0
+            },
+            "center_x": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "center_y": {
+              "kind": "number",
+              "value": 50.0
+            },
+            "gradient": {
+              "kind": "gradient",
+              "value": {
+                "interpolation": "oklab",
+                "stops": [
+                  {
+                    "color": {
+                      "rgba": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0
+                      ]
+                    },
+                    "position": 0.0
+                  },
+                  {
+                    "color": {
+                      "rgba": [
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0
+                      ]
+                    },
+                    "position": 1.0
+                  }
+                ]
+              }
+            },
+            "scale": {
+              "kind": "number",
+              "value": 100.0
+            },
+            "style": {
+              "kind": "choice",
+              "value": "radial"
+            }
+          },
+          "version": 2
+        },
+        "id": "00000000000000000000000000000803",
+        "type": "capy.effect/2"
+      },
+      {
+        "data": {
+          "blend": "multiply",
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007d0"
+            }
+          },
+          "name": "shadows_highlights"
+        },
+        "id": "00000000000000000000000000000bb8",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "blend": "screen",
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007d1"
+            }
+          },
+          "name": "clarity"
+        },
+        "id": "00000000000000000000000000000bb9",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "blend": "add",
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007d2"
+            }
+          },
+          "name": "dehaze"
+        },
+        "id": "00000000000000000000000000000bba",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "blend": "overlay",
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007d3"
+            }
+          },
+          "name": "curves"
+        },
+        "id": "00000000000000000000000000000bbb",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "blend": "soft_light",
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007d4"
+            }
+          },
+          "name": "levels"
+        },
+        "id": "00000000000000000000000000000bbc",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "blend": "color",
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007d5"
+            }
+          },
+          "name": "brightness_contrast"
+        },
+        "id": "00000000000000000000000000000bbd",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "blend": "darken",
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007d6"
+            }
+          },
+          "name": "hue_saturation"
+        },
+        "id": "00000000000000000000000000000bbe",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "blend": "lighten",
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007d7"
+            }
+          },
+          "name": "invert"
+        },
+        "id": "00000000000000000000000000000bbf",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "blend": "color_burn",
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007d8"
+            }
+          },
+          "name": "threshold"
+        },
+        "id": "00000000000000000000000000000bc0",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "blend": "linear_burn",
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007d9"
+            }
+          },
+          "name": "desaturate"
+        },
+        "id": "00000000000000000000000000000bc1",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "blend": "color_dodge",
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007da"
+            }
+          },
+          "name": "photo_filter"
+        },
+        "id": "00000000000000000000000000000bc2",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "blend": "hard_light",
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007db"
+            }
+          },
+          "name": "selective_color"
+        },
+        "id": "00000000000000000000000000000bc3",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "blend": "vivid_light",
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007dc"
+            }
+          },
+          "name": "channel_mixer"
+        },
+        "id": "00000000000000000000000000000bc4",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "blend": "linear_light",
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007dd"
+            }
+          },
+          "name": "color_lookup"
+        },
+        "id": "00000000000000000000000000000bc5",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "blend": "pin_light",
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007de"
+            }
+          },
+          "name": "color_balance"
+        },
+        "id": "00000000000000000000000000000bc6",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "blend": "hard_mix",
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007df"
+            }
+          },
+          "name": "exposure"
+        },
+        "id": "00000000000000000000000000000bc7",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "blend": "difference",
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007e0"
+            }
+          },
+          "name": "vibrance"
+        },
+        "id": "00000000000000000000000000000bc8",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "blend": "exclusion",
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007e1"
+            }
+          },
+          "name": "black_white"
+        },
+        "id": "00000000000000000000000000000bc9",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "blend": "subtract",
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007e2"
+            }
+          },
+          "name": "gradient_map"
+        },
+        "id": "00000000000000000000000000000bca",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "blend": "divide",
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007e3"
+            }
+          },
+          "name": "posterize"
+        },
+        "id": "00000000000000000000000000000bcb",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "blend": "hue",
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007e4"
+            }
+          },
+          "name": "gaussian_blur"
+        },
+        "id": "00000000000000000000000000000bcc",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "blend": "saturation",
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007e5"
+            }
+          },
+          "name": "unsharp_mask"
+        },
+        "id": "00000000000000000000000000000bcd",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "blend": "luminosity",
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007e6"
+            }
+          },
+          "name": "high_pass"
+        },
+        "id": "00000000000000000000000000000bce",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007e7"
+            }
+          },
+          "name": "motion_blur"
+        },
+        "id": "00000000000000000000000000000bcf",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007e8"
+            }
+          },
+          "name": "denoise"
+        },
+        "id": "00000000000000000000000000000bd0",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007e9"
+            }
+          },
+          "name": "edge_detect"
+        },
+        "id": "00000000000000000000000000000bd1",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007ea"
+            }
+          },
+          "name": "white_balance"
+        },
+        "id": "00000000000000000000000000000bd2",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007eb"
+            }
+          },
+          "name": "split_tone"
+        },
+        "id": "00000000000000000000000000000bd3",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007ec"
+            }
+          },
+          "name": "vignette"
+        },
+        "id": "00000000000000000000000000000bd4",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007ed"
+            }
+          },
+          "name": "film_grain"
+        },
+        "id": "00000000000000000000000000000bd5",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007ee"
+            }
+          },
+          "name": "bloom"
+        },
+        "id": "00000000000000000000000000000bd6",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007ef"
+            }
+          },
+          "name": "soft_focus"
+        },
+        "id": "00000000000000000000000000000bd7",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007f0"
+            }
+          },
+          "name": "halftone"
+        },
+        "id": "00000000000000000000000000000bd8",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007f1"
+            }
+          },
+          "name": "crosshatch"
+        },
+        "id": "00000000000000000000000000000bd9",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007f2"
+            }
+          },
+          "name": "emboss"
+        },
+        "id": "00000000000000000000000000000bda",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007f3"
+            }
+          },
+          "name": "pixel_mosaic"
+        },
+        "id": "00000000000000000000000000000bdb",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007f4"
+            }
+          },
+          "name": "chromatic_aberration"
+        },
+        "id": "00000000000000000000000000000bdc",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007f5"
+            }
+          },
+          "name": "painterly"
+        },
+        "id": "00000000000000000000000000000bdd",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007f6"
+            }
+          },
+          "name": "solarize"
+        },
+        "id": "00000000000000000000000000000bde",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007f7"
+            }
+          },
+          "name": "pencil"
+        },
+        "id": "00000000000000000000000000000bdf",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007f8"
+            }
+          },
+          "name": "kaleidoscope"
+        },
+        "id": "00000000000000000000000000000be0",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007f9"
+            }
+          },
+          "name": "swirl"
+        },
+        "id": "00000000000000000000000000000be1",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007fa"
+            }
+          },
+          "name": "ripple"
+        },
+        "id": "00000000000000000000000000000be2",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007fb"
+            }
+          },
+          "name": "glass"
+        },
+        "id": "00000000000000000000000000000be3",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007fc"
+            }
+          },
+          "name": "rainy_glass"
+        },
+        "id": "00000000000000000000000000000be4",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007fd"
+            }
+          },
+          "name": "vhs"
+        },
+        "id": "00000000000000000000000000000be5",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007fe"
+            }
+          },
+          "name": "crt",
+          "opacity": 0.5
+        },
+        "id": "00000000000000000000000000000be6",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "000000000000000000000000000007ff"
+            }
+          },
+          "name": "heat_haze",
+          "visible": false
+        },
+        "id": "00000000000000000000000000000be7",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "00000000000000000000000000000800"
+            }
+          },
+          "name": "iridescence"
+        },
+        "id": "00000000000000000000000000000be8",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "00000000000000000000000000000801"
+            }
+          },
+          "name": "domain_warp"
+        },
+        "id": "00000000000000000000000000000be9",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "00000000000000000000000000000802"
+            }
+          },
+          "name": "solid_color"
+        },
+        "id": "00000000000000000000000000000bea",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "content": {
+            "effect": {
+              "ref": "00000000000000000000000000000803"
+            }
+          },
+          "name": "gradient_fill"
+        },
+        "id": "00000000000000000000000000000beb",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "color": {
+            "depth": "f32",
+            "space": "display_p3"
+          },
+          "resolution": {
+            "density": [
+              [
+                601,
+                2
+              ],
+              [
+                300,
+                1
+              ]
+            ],
+            "unit": "inch"
+          },
+          "result": {
+            "object": {
+              "ref": "66f2659a0a2a4051b925c1e11a7aaf92"
+            },
+            "port": "color"
+          },
+          "size": [
+            256,
+            256
+          ]
+        },
+        "id": "1462fd9d7fa44ae3b28f892796e2152f",
+        "type": "capy.composition/2"
+      },
+      {
+        "data": {
+          "context": {
+            "effect_phases": [
+              {
+                "effect": {
+                  "ref": "00000000000000000000000000000028"
+                },
+                "phase": 2.125
+              },
+              {
+                "effect": {
+                  "ref": "00000000000000000000000000000029"
+                },
+                "phase": 3.125
+              }
+            ]
+          },
+          "name": "Captured output",
+          "proof": {
+            "black_point_compensation": false,
+            "intent": "perceptual",
+            "name": "Press",
+            "profile": {
+              "builtin": "adobe_rgb"
+            },
+            "simulate_paper": true
+          },
+          "sdr": {
+            "balance": -0.25,
+            "contrast": 1.25,
+            "exposure": 0.5,
+            "headroom": 3.0,
+            "highlight_color": 0.5
+          },
+          "source": {
+            "object": {
+              "ref": "1462fd9d7fa44ae3b28f892796e2152f"
+            },
+            "port": "color"
+          }
+        },
+        "id": "52a94bca8edd42bd98a64c9227fb5fae",
+        "type": "capy.output/2"
+      },
+      {
+        "data": {
+          "entries": [
+            {
+              "ref": "00000000000000000000000000000014"
+            },
+            {
+              "ref": "00000000000000000000000000000032"
+            },
+            {
+              "ref": "00000000000000000000000000000015"
+            },
+            {
+              "ref": "00000000000000000000000000000016"
+            },
+            {
+              "ref": "00000000000000000000000000000033"
+            },
+            {
+              "ref": "00000000000000000000000000000bb8"
+            },
+            {
+              "ref": "00000000000000000000000000000bb9"
+            },
+            {
+              "ref": "00000000000000000000000000000bba"
+            },
+            {
+              "ref": "00000000000000000000000000000bbb"
+            },
+            {
+              "ref": "00000000000000000000000000000bbc"
+            },
+            {
+              "ref": "00000000000000000000000000000bbd"
+            },
+            {
+              "ref": "00000000000000000000000000000bbe"
+            },
+            {
+              "ref": "00000000000000000000000000000bbf"
+            },
+            {
+              "ref": "00000000000000000000000000000bc0"
+            },
+            {
+              "ref": "00000000000000000000000000000bc1"
+            },
+            {
+              "ref": "00000000000000000000000000000bc2"
+            },
+            {
+              "ref": "00000000000000000000000000000bc3"
+            },
+            {
+              "ref": "00000000000000000000000000000bc4"
+            },
+            {
+              "ref": "00000000000000000000000000000bc5"
+            },
+            {
+              "ref": "00000000000000000000000000000bc6"
+            },
+            {
+              "ref": "00000000000000000000000000000bc7"
+            },
+            {
+              "ref": "00000000000000000000000000000bc8"
+            },
+            {
+              "ref": "00000000000000000000000000000bc9"
+            },
+            {
+              "ref": "00000000000000000000000000000bca"
+            },
+            {
+              "ref": "00000000000000000000000000000bcb"
+            },
+            {
+              "ref": "00000000000000000000000000000bcc"
+            },
+            {
+              "ref": "00000000000000000000000000000bcd"
+            },
+            {
+              "ref": "00000000000000000000000000000bce"
+            },
+            {
+              "ref": "00000000000000000000000000000bcf"
+            },
+            {
+              "ref": "00000000000000000000000000000bd0"
+            },
+            {
+              "ref": "00000000000000000000000000000bd1"
+            },
+            {
+              "ref": "00000000000000000000000000000bd2"
+            },
+            {
+              "ref": "00000000000000000000000000000bd3"
+            },
+            {
+              "ref": "00000000000000000000000000000bd4"
+            },
+            {
+              "ref": "00000000000000000000000000000bd5"
+            },
+            {
+              "ref": "00000000000000000000000000000bd6"
+            },
+            {
+              "ref": "00000000000000000000000000000bd7"
+            },
+            {
+              "ref": "00000000000000000000000000000bd8"
+            },
+            {
+              "ref": "00000000000000000000000000000bd9"
+            },
+            {
+              "ref": "00000000000000000000000000000bda"
+            },
+            {
+              "ref": "00000000000000000000000000000bdb"
+            },
+            {
+              "ref": "00000000000000000000000000000bdc"
+            },
+            {
+              "ref": "00000000000000000000000000000bdd"
+            },
+            {
+              "ref": "00000000000000000000000000000bde"
+            },
+            {
+              "ref": "00000000000000000000000000000bdf"
+            },
+            {
+              "ref": "00000000000000000000000000000be0"
+            },
+            {
+              "ref": "00000000000000000000000000000be1"
+            },
+            {
+              "ref": "00000000000000000000000000000be2"
+            },
+            {
+              "ref": "00000000000000000000000000000be3"
+            },
+            {
+              "ref": "00000000000000000000000000000be4"
+            },
+            {
+              "ref": "00000000000000000000000000000be5"
+            },
+            {
+              "ref": "00000000000000000000000000000be6"
+            },
+            {
+              "ref": "00000000000000000000000000000be7"
+            },
+            {
+              "ref": "00000000000000000000000000000be8"
+            },
+            {
+              "ref": "00000000000000000000000000000be9"
+            },
+            {
+              "ref": "000000000000000000000000000000e2"
+            },
+            {
+              "ref": "000000000000000000000000000000e4"
+            }
+          ]
+        },
+        "id": "66f2659a0a2a4051b925c1e11a7aaf92",
+        "type": "capy.stack/1"
+      },
+      {
+        "data": {
+          "extent": [
+            256,
+            256
+          ],
+          "interpretation": {
+            "channels": "gray",
+            "depth": "u16",
+            "profile": {
+              "resource": {
+                "ref": "3609a89e23ec4e10b0f72f0f731c5cc7"
+              }
+            }
+          },
+          "resolution": {
+            "density": [
+              [
+                300,
+                1
+              ],
+              [
+                300,
+                1
+              ]
+            ],
+            "unit": "inch"
+          },
+          "tiles": [
+            {
+              "coordinate": [
+                0,
+                0
+              ],
+              "resource": {
+                "ref": "86b9f7f0b74047e7a15a114ec2420539"
+              }
+            }
+          ]
+        },
+        "id": "8c540a6d0ab847a5980f489d16b6f32d",
+        "type": "capy.image/1"
+      }
+    ],
+    "outputs": [
+      {
+        "ref": "52a94bca8edd42bd98a64c9227fb5fae"
+      }
+    ],
+    "resources": [
+      {
+        "bytes": "25",
+        "crc32": "e86ef7cd",
+        "data": {
+          "decoded_bytes": "96",
+          "domain": [
+            [
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              1.0,
+              1.0,
+              1.0
+            ]
+          ],
+          "size": 2
+        },
+        "encoding": "capy.lz4-bytes/1",
+        "id": "0d06811c4e81412680218fefd738c50b",
+        "location": {
+          "offset": "0",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.lut3d/1"
+      },
+      {
+        "bytes": "16",
+        "crc32": "d2ed2a14",
+        "data": {
+          "kind": "xmp"
+        },
+        "encoding": "raw",
+        "id": "112e461e7eb24846942816e01516095b",
+        "location": {
+          "offset": "25",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.photo-metadata/1"
+      },
+      {
+        "bytes": "256",
+        "crc32": "29058c73",
+        "data": {},
+        "encoding": "raw",
+        "id": "3609a89e23ec4e10b0f72f0f731c5cc7",
+        "location": {
+          "offset": "41",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.icc/1"
+      },
+      {
+        "bytes": "6",
+        "crc32": "d33d40c7",
+        "data": {
+          "kind": "iptc"
+        },
+        "encoding": "raw",
+        "id": "66029ea6a1834200aab99bb75ff80abd",
+        "location": {
+          "offset": "297",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.photo-metadata/1"
+      },
+      {
+        "bytes": "525",
+        "crc32": "533aab81",
+        "data": {
+          "alpha": "none",
+          "channels": "coverage",
+          "depth": "u16",
+          "transfer": "linear"
+        },
+        "encoding": "capy.lz4-tile/1",
+        "id": "74ff0a6966ca44bda6ec45cc00abe45e",
+        "location": {
+          "offset": "303",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.raster-tile/1"
+      },
+      {
+        "bytes": "4",
+        "crc32": "bc6f3c6e",
+        "data": {
+          "kind": "exif"
+        },
+        "encoding": "raw",
+        "id": "80496afdc92c441ea59e5fa2ca975f98",
+        "location": {
+          "offset": "828",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.photo-metadata/1"
+      },
+      {
+        "bytes": "1802",
+        "crc32": "022fdece",
+        "data": {
+          "alpha": "none",
+          "channels": "gray",
+          "depth": "u16",
+          "transfer": "profile"
+        },
+        "encoding": "capy.lz4-tile/1",
+        "id": "86b9f7f0b74047e7a15a114ec2420539",
+        "location": {
+          "offset": "832",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.raster-tile/1"
+      },
+      {
+        "bytes": "4169",
+        "crc32": "606c4d44",
+        "data": {
+          "alpha": "straight",
+          "channels": "rgba",
+          "depth": "f32",
+          "transfer": "linear"
+        },
+        "encoding": "capy.lz4-tile/1",
+        "id": "90c91d5651174ff8af266c94c0b97fb0",
+        "location": {
+          "offset": "2634",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.raster-tile/1"
+      },
+      {
+        "bytes": "281",
+        "crc32": "4dbbc25d",
+        "data": {
+          "bounds": [
+            0,
+            0,
+            5,
+            2
+          ],
+          "chunk": 0,
+          "depth": "u8",
+          "extent": [
+            5,
+            2
+          ]
+        },
+        "encoding": "capy.lz4-coverage/1",
+        "id": "9a782250fbe24e0d9bb978e074d0f110",
+        "location": {
+          "offset": "6803",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.selection-coverage/1"
+      }
+    ],
+    "root": {
+      "ref": "1462fd9d7fa44ae3b28f892796e2152f"
+    },
+    "version": 1
+  },
+  "preview": {
+    "pixels": "77861c1513f628d2dd39787341de13d2bf648034e9fdd82dd7025381be3154bb",
+    "size": [
+      2,
+      1
+    ]
+  },
+  "resources": {
+    "0d06811c4e81412680218fefd738c50b": "43d69c46c8e32211c95ae6cf6f3e498ef4acdf483fc50ade107738b51bf29ecc",
+    "112e461e7eb24846942816e01516095b": "be361479650b3719d266e835b190ff9bae3fd2ca1c447644bbf8a5af73de590a",
+    "3609a89e23ec4e10b0f72f0f731c5cc7": "40aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880",
+    "66029ea6a1834200aab99bb75ff80abd": "b901b8829e1cdd06f2cfc816ca56b9d64eb35b666c55d4cd605a4654541be858",
+    "74ff0a6966ca44bda6ec45cc00abe45e": "fc04c6872d7d5dd9f3f4ff069a3a3e62baddbf0d8656cf6a09164bdeb4d0da9b",
+    "80496afdc92c441ea59e5fa2ca975f98": "b5fec136bc0d23dea02fe4cf74f61b15a14771c08136ca3cb48d5d827259a719",
+    "86b9f7f0b74047e7a15a114ec2420539": "82b3cb3e15809961cde85c73c8a674d3714f99187eb874cd6d6d88cc27db7847",
+    "90c91d5651174ff8af266c94c0b97fb0": "9fc0a884a368c5c58f51e907dcb2eba504483528b9851d89a7d36963e2043317",
+    "9a782250fbe24e0d9bb978e074d0f110": "90b82e3d4cdb4a504d311b2e4652531a5a39823b696f050a9af007dc5bc15584"
+  }
+}

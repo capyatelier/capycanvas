@@ -1,0 +1,289 @@
+{
+  "manifest": {
+    "default_output": {
+      "ref": "90f39fb991644df6a3d73fb8c0b38ad1"
+    },
+    "document": "e0143b3217bd4bb4a99660a50f1fc29f",
+    "format": "capy.canvas",
+    "objects": [
+      {
+        "data": {
+          "content": {
+            "object": {
+              "ref": "8787df12085d4d368496feefd1d38032"
+            }
+          },
+          "name": "Newer"
+        },
+        "id": "020c56ceed2c48a6bdd06b1d7b31c4d3",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "extent": [
+            64,
+            48
+          ],
+          "interpretation": {
+            "channels": "rgba",
+            "depth": "u8",
+            "profile": {
+              "builtin": "srgb"
+            }
+          },
+          "tiles": [
+            {
+              "coordinate": [
+                0,
+                0
+              ],
+              "resource": {
+                "ref": "3423687107ba4d5594a300111abdbf34"
+              }
+            }
+          ]
+        },
+        "id": "1b16b7999e344456a4544df6cddaec7c",
+        "type": "capy.image/1"
+      },
+      {
+        "data": {
+          "items": [
+            {
+              "ref": "1b6184530b7345269d9d83f8f0553f61"
+            }
+          ],
+          "next_item": "2",
+          "slots": [
+            {
+              "ref": "e9e1822b244c4272828197036ea204b1"
+            },
+            {
+              "ref": "87e49e68bc754dbe830c5b7bd02512d8"
+            }
+          ]
+        },
+        "id": "35b5920623c1472294ef9253e8c19a7b",
+        "type": "capy.vector-object/1"
+      },
+      {
+        "data": {
+          "result": {
+            "object": {
+              "ref": "f80584ab9ed14f9787330f3f0676fa5a"
+            },
+            "port": "color"
+          },
+          "size": [
+            256,
+            192
+          ]
+        },
+        "id": "5dfb510228e140d98c78c177b1e02d1e",
+        "type": "capy.composition/2"
+      },
+      {
+        "data": {
+          "fallback": {
+            "affine": [
+              2.0,
+              0.0,
+              0.0,
+              2.0,
+              30.0,
+              20.0
+            ],
+            "image": {
+              "ref": "1b16b7999e344456a4544df6cddaec7c"
+            }
+          },
+          "items": [
+            {
+              "ref": "e7ea179ce37c4e0aa3a2ece927eaf515"
+            }
+          ],
+          "next_item": "3",
+          "slots": [
+            {
+              "ref": "87e49e68bc754dbe830c5b7bd02512d8"
+            },
+            {
+              "ref": "e9e1822b244c4272828197036ea204b1"
+            }
+          ]
+        },
+        "id": "8787df12085d4d368496feefd1d38032",
+        "type": "capy.vector-object/1"
+      },
+      {
+        "data": {
+          "content": {
+            "object": {
+              "ref": "35b5920623c1472294ef9253e8c19a7b"
+            }
+          },
+          "name": "Slots"
+        },
+        "id": "8b081abc6fee4c6e8152167b65d0be45",
+        "type": "capy.occurrence/3"
+      },
+      {
+        "data": {
+          "source": {
+            "object": {
+              "ref": "5dfb510228e140d98c78c177b1e02d1e"
+            },
+            "port": "color"
+          }
+        },
+        "id": "90f39fb991644df6a3d73fb8c0b38ad1",
+        "type": "capy.output/2"
+      },
+      {
+        "data": {
+          "extent": [
+            16,
+            12
+          ],
+          "interpretation": {
+            "channels": "rgba",
+            "depth": "u8",
+            "profile": {
+              "builtin": "srgb"
+            }
+          },
+          "tiles": [
+            {
+              "coordinate": [
+                0,
+                0
+              ],
+              "resource": {
+                "ref": "51e824ef92834a4faa0d1f2646e383b9"
+              }
+            }
+          ]
+        },
+        "id": "e9e1822b244c4272828197036ea204b1",
+        "type": "capy.image/1"
+      },
+      {
+        "data": {
+          "entries": [
+            {
+              "ref": "8b081abc6fee4c6e8152167b65d0be45"
+            },
+            {
+              "ref": "020c56ceed2c48a6bdd06b1d7b31c4d3"
+            }
+          ]
+        },
+        "id": "f80584ab9ed14f9787330f3f0676fa5a",
+        "type": "capy.stack/1"
+      }
+    ],
+    "outputs": [
+      {
+        "ref": "90f39fb991644df6a3d73fb8c0b38ad1"
+      }
+    ],
+    "resources": [
+      {
+        "bytes": "54",
+        "crc32": "f9686d21",
+        "data": {
+          "decoded_bytes": "63",
+          "records": 1
+        },
+        "encoding": "capy.lz4-bytes/1",
+        "id": "1b6184530b7345269d9d83f8f0553f61",
+        "location": {
+          "offset": "0",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.vector-items/1"
+      },
+      {
+        "bytes": "13614",
+        "crc32": "931cf1c7",
+        "data": {
+          "alpha": "straight",
+          "channels": "rgba",
+          "depth": "u8",
+          "transfer": "profile"
+        },
+        "encoding": "capy.lz4-tile/1",
+        "id": "3423687107ba4d5594a300111abdbf34",
+        "location": {
+          "offset": "54",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.raster-tile/1"
+      },
+      {
+        "bytes": "1827",
+        "crc32": "4547708c",
+        "data": {
+          "alpha": "straight",
+          "channels": "rgba",
+          "depth": "u8",
+          "transfer": "profile"
+        },
+        "encoding": "capy.lz4-tile/1",
+        "id": "51e824ef92834a4faa0d1f2646e383b9",
+        "location": {
+          "offset": "13668",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.raster-tile/1"
+      },
+      {
+        "bytes": "54",
+        "crc32": "980aafaf",
+        "data": {
+          "decoded_bytes": "63",
+          "records": 1
+        },
+        "encoding": "capy.lz4-bytes/1",
+        "id": "e7ea179ce37c4e0aa3a2ece927eaf515",
+        "location": {
+          "offset": "15495",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "capy.vector-items/1"
+      },
+      {
+        "bytes": "24",
+        "crc32": "30f826c7",
+        "data": {
+          "family": "Future"
+        },
+        "encoding": "raw",
+        "id": "87e49e68bc754dbe830c5b7bd02512d8",
+        "location": {
+          "offset": "15549",
+          "pack": "data/tiles-1.bin"
+        },
+        "type": "example.font/1"
+      }
+    ],
+    "root": {
+      "ref": "5dfb510228e140d98c78c177b1e02d1e"
+    },
+    "version": 1
+  },
+  "preview": {
+    "pixels": "77861c1513f628d2dd39787341de13d2bf648034e9fdd82dd7025381be3154bb",
+    "size": [
+      2,
+      1
+    ]
+  },
+  "resources": {
+    "1b6184530b7345269d9d83f8f0553f61": "60c21123dc61ec03bc8f7f9d28e1dcfd31bccf0a43c6b456ee67c8e4c488cbd3",
+    "3423687107ba4d5594a300111abdbf34": "4b31bc5fc52efb9f3ecb3b066e41273bf6d99fd1a2c223d732f0d6d910b08a2e",
+    "51e824ef92834a4faa0d1f2646e383b9": "454ebb2294bdc5cb5e644ad40ec26ee85fb89c37121041751bf27d3390a12222",
+    "87e49e68bc754dbe830c5b7bd02512d8": "015c60de5a65c6ea3a0529399a0d0637f660f60964441284f3a0a5c054260939",
+    "e7ea179ce37c4e0aa3a2ece927eaf515": "628ae3a3d17e66dced8819cd5759df3d2387e939909491481a2f2b971d08436d"
+  }
+}

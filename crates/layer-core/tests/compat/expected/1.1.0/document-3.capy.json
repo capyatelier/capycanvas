@@ -1,0 +1,95 @@
+{
+  "manifest": {
+    "default_output": {
+      "ref": "f6c975c9a8954fc1ad0bafd4024dd3d5"
+    },
+    "document": "92a11a3c07174056b2bc504c3f7dc5df",
+    "format": "capy.canvas",
+    "objects": [
+      {
+        "data": {},
+        "id": "2960817832a644ab983e80450dac9618",
+        "type": "capy.stack/1"
+      },
+      {
+        "data": {
+          "color": {
+            "depth": "f32",
+            "space": "pro_photo"
+          },
+          "resolution": {
+            "density": [
+              [
+                300,
+                1
+              ],
+              [
+                300,
+                1
+              ]
+            ],
+            "unit": "inch"
+          },
+          "result": {
+            "object": {
+              "ref": "2960817832a644ab983e80450dac9618"
+            },
+            "port": "color"
+          },
+          "size": [
+            16,
+            16
+          ]
+        },
+        "id": "4aa7f03940564d7c8e0b1f3d2885db2c",
+        "type": "capy.composition/2"
+      },
+      {
+        "data": {
+          "proof": {
+            "black_point_compensation": false,
+            "intent": "absolute_colorimetric",
+            "name": "Sweep proof",
+            "profile": {
+              "builtin": "pro_photo"
+            },
+            "simulate_paper": true
+          },
+          "sdr": {
+            "balance": 0.25,
+            "contrast": 1.25,
+            "exposure": 0.5,
+            "headroom": 3.0,
+            "highlight_color": 0.5
+          },
+          "source": {
+            "object": {
+              "ref": "4aa7f03940564d7c8e0b1f3d2885db2c"
+            },
+            "port": "color"
+          }
+        },
+        "id": "f6c975c9a8954fc1ad0bafd4024dd3d5",
+        "type": "capy.output/2"
+      }
+    ],
+    "outputs": [
+      {
+        "ref": "f6c975c9a8954fc1ad0bafd4024dd3d5"
+      }
+    ],
+    "resources": [],
+    "root": {
+      "ref": "4aa7f03940564d7c8e0b1f3d2885db2c"
+    },
+    "version": 1
+  },
+  "preview": {
+    "pixels": "77861c1513f628d2dd39787341de13d2bf648034e9fdd82dd7025381be3154bb",
+    "size": [
+      2,
+      1
+    ]
+  },
+  "resources": {}
+}

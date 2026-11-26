@@ -1,0 +1,79 @@
+{
+  "camera": {
+    "center": [
+      12.000009536743164,
+      33.99999237060547
+    ],
+    "flipped": [
+      true,
+      true
+    ],
+    "rotation": 0.25,
+    "rotation_locked": true,
+    "zoom": 1.75,
+    "zoom_locked": true
+  },
+  "checkpoint": 1,
+  "export_profile_sha256": "b874f75b316cb0f2ff30584b5cbe9badeee79366adc9578aab5e2172657cdb6c",
+  "metadata": {
+    "camera": {
+      "center": [
+        12.0,
+        34.0
+      ],
+      "flipped": [
+        true,
+        true
+      ],
+      "rotation": 0.25,
+      "rotation_locked": true,
+      "zoom": 1.75,
+      "zoom_locked": true
+    },
+    "destination": {
+      "bytes": 12,
+      "sha256": "79d36a30cdb395df1b91d711edd480cb47a18398b475005754b0d1023944607c"
+    },
+    "last_export": {
+      "location": {
+        "name": "Release.png",
+        "uri": "private:release.png"
+      },
+      "recipe": {
+        "background": "Preserve",
+        "depth": "U8",
+        "encoding": {
+          "conversion": {
+            "black_point_compensation": false,
+            "intent": "RelativeColorimetric"
+          },
+          "dither": "None"
+        },
+        "format": "Png",
+        "jpeg_quality": 90,
+        "metadata": {
+          "keep": "All",
+          "remove_location": true
+        },
+        "profile": {
+          "channels": "Rgb",
+          "name": "Display P3",
+          "profile": {
+            "Embedded": "b79092dceb834edca6c6e0c61b4586ac"
+          }
+        },
+        "resolution": "Master",
+        "size": "Original"
+      }
+    },
+    "location": {
+      "name": "Painting.capy",
+      "uri": "private:painting.capy"
+    },
+    "recovered": true,
+    "saved_checkpoint": 1,
+    "unpublished": true,
+    "unsaved_name": "Coverage drawing"
+  },
+  "saved": 1
+}
