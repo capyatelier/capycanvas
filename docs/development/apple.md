@@ -77,9 +77,10 @@ or removing a Swift file also changes the project, so commit that diff too.
 `scripts/prepare.py` fills the ignored `Generated/` directory with the shared
 icons and brush previews from `apps/layer-web`, the iPad app icons from
 `iOS/AppIcon*.png` and the license files. Edit those sources, never `Generated/`.
-`scripts/release.sh mac|ipad` archives a [release](releasing.md#release-workflow)
+`scripts/release.sh mac|mac-store|ipad` archives a [release](releasing.md#release-workflow)
 with its dependency notices, writing an Xcode result bundle and `archive.log`
-under `dist/apple-<platform>`; only `release.sh ipad publish` uploads.
+under `dist/apple-<platform>`. The `ipad publish` and `mac-store publish` actions
+upload existing archives; review and release are separate.
 
 ### Identity, sandbox and privacy
 

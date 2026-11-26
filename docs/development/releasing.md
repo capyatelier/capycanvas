@@ -8,14 +8,14 @@ provide test and build details; the release sequence lives here.
 
 ## Distribution channels
 
-| Platform | Release channel today | What the agent must finish |
+| Platform | Configured distribution path | What to verify |
 | --- | --- | --- |
 | Linux x86_64 | Signed Flatpak download and project-hosted update repository | Publish the GitHub Release, deploy Flatpak updates, verify installation and updating. Flathub app publication is not configured by these workflows. |
 | Web | Downloadable static/PWA ZIP and `editor.capycanvas.art` | Publish the ZIP and deploy the editor from the same tag; verify the live revision and offline/update journeys. |
 | Android ARM64 | Direct Play-signed APK, Play internal and closed (`alpha`) testing | Verify both installation paths and check the closed track's current review state before promotion. Production Play rollout is outside this procedure. |
-| Windows x64 and ARM64 | Signed installer and portable ZIP for each architecture | Verify both downloads on each architecture. Microsoft Store is not set up; retain the generated MSIX packages and report Store submission as deferred. |
-| macOS Apple silicon | Signed, notarized DMG | Verify download, Gatekeeper, installation and updating. The workflow does not submit a Mac App Store build. |
-| iPadOS | Working TestFlight beta | Verify the exact build and its availability to the intended tester group. Beta review and production App Store submission are separate actions. |
+| Windows x64 and ARM64 | Signed installer and portable ZIP, plus MSIX for Partner Center | Verify both downloads on each architecture. Store package upload, certification and publication are separate from CI. |
+| macOS Apple silicon | Signed, notarized DMG and Mac App Store archive upload | Verify download, Gatekeeper, installation and updating; check Store processing, review and release separately. |
+| iPadOS | App Store Connect archive upload and TestFlight | Verify processing and availability of the exact build to the intended tester group. Beta review and production App Store submission are separate actions. |
 
 Check current account and review states before each release. A public beta link,
 successful upload or previous release does not prove that this build is available
@@ -35,12 +35,13 @@ access and App Store Connect upload/TestFlight access. Check existing reviews
 before changing either testing channel.
 
 **Pushing a release tag has store side effects.** It signs packages, uploads to
-Play, rolls out internal testing, and uploads the iPad build to App Store Connect.
-Validation and every platform package must succeed before Play or TestFlight
-uploads start. Both uploads must succeed before CI creates the draft GitHub Release.
-Missing Play or Apple upload access blocks that draft; missing Microsoft Store
-setup does not. There is no platform-skip input. Restore missing required access
-before tagging; an unsigned build is not a substitute for signed distribution.
+Play, rolls out internal testing, and uploads both iPad and Mac Store builds to
+App Store Connect. Validation and every platform package must succeed before
+Play or Apple uploads start. The Play upload and both Apple uploads must succeed
+before CI creates the draft GitHub Release. Missing Play or Apple upload access
+blocks that draft; Partner Center upload is separate from CI. There is no
+platform-skip input. Restore missing required access before tagging; an unsigned
+build is not a substitute for signed distribution.
 
 Run the [checks for the changes](testing.md), the
 [publication checks](publication.md#separate-binary-release-gate) and affected
@@ -207,11 +208,10 @@ the
 with closed testing reported as awaiting review or setup; never cancel a review
 to force the release through.
 
-Complete the [TestFlight procedure](#store-submission-is-separate-from-upload)
-for the intended tester group. Keep Microsoft Store deferred until its setup and
-submission are requested; its unsigned MSIX is for Partner Center, not a signed
-direct download. Report beta review as submitted, awaiting review or available,
-according to the actual state. Do not claim store production availability.
+Complete the [store procedures](#store-submission-is-separate-from-upload)
+for the intended tester group and any authorized production submissions. Report
+processing, review and release state separately for each store. A successful
+upload does not establish production availability.
 
 ### 6. Publish and deploy all public surfaces
 
@@ -247,14 +247,15 @@ update source, Play internal installation and TestFlight tester availability.
 Report the version/tag and evidence, each delivered channel, pending reviews,
 deferred stores, failures and unverified journeys. Distinguish successful delivery
 from verified use of each package. Required checks or deployments still failing
-make the release incomplete; explicitly deferred device checks, Microsoft Store
-awaiting setup, and Play or TestFlight awaiting review must stay visible in the
-report.
+make the release incomplete; explicitly deferred device checks, pending Store
+uploads, and Play, TestFlight or production submissions awaiting review must stay
+visible in the report.
 
 ## Store submission is separate from upload
 
-For iPad, wait for App Store Connect processing, select the exact version/build
-in TestFlight, complete test information and export-compliance questions, and
+For iPad and Mac, wait for App Store Connect processing, select the exact
+version/build in TestFlight, complete test information and export-compliance
+questions, and
 add it to the intended external group. Follow Apple's
 [external-testing steps](https://developer.apple.com/help/app-store-connect/test-a-beta-version/invite-external-testers/)
 to submit for beta review or start testing when eligible. Verify the beta review
@@ -273,13 +274,18 @@ its state and group membership. `WAITING_FOR_BETA_REVIEW` means review is pendin
 `IN_BETA_TESTING` means beta distribution is enabled. Preserve existing groups
 and testers.
 
-For Windows, CI produces the MSIX but does not submit it to Microsoft Store.
-The Store is currently awaiting setup; retain the package without submitting it.
-When Store submission is requested and the account is ready, upload it through
-an authorized Partner Center session and verify submission status there.
-Azure signing access alone does not establish Partner Center
-access. If access is unavailable, report Store submission as incomplete; the
-published signed installer is a separate delivery channel.
+For production on either Apple platform, select the processed build in its App
+Store version, complete the current listing and compliance requirements, and
+submit for App Review when authorized. Verify approval and release state
+separately from TestFlight availability.
+
+For Windows, CI produces both architectures' MSIX packages but does not upload
+or submit them to Microsoft Store. When authorized, upload the exact packages
+through Partner Center or its supported submission API, complete the current
+submission requirements, and submit for certification. Verify package validation,
+certification and publication separately. Azure signing access alone does not
+establish Partner Center access. The unsigned MSIX is for the Store to sign;
+the signed installer is a separate delivery channel.
 
 ## Website and online editor
 
