@@ -172,7 +172,9 @@ suites and isn't retested here. On each
 supported host, install the final signed package from the tag build the way a
 user would, including updating from the previous release, then launch the
 installed app and do a few basic operations: draw a few strokes, pan, zoom and
-rotate the canvas, and open a panel and a menu. Use private profiles and test
+rotate the canvas, and open a panel and a menu. Where it's set up, also check
+that the previous release's saved workspaces and settings still load after the
+update; this check is useful but not required. Use private profiles and test
 identities under [testing](testing.md) and [devices](devices.md); never replace a
 user's installation or use their drawings. Record any limitation in verifying
 the production identity rather than treating a rebuilt test package as the
