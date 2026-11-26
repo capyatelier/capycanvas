@@ -3274,6 +3274,38 @@ class AndroidInteractionTest {
             File(directory, "$name.png").outputStream().use { image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }; image.recycle()
         }
     }
+    private fun assertDividerLines(label: String) {
+        val tags = state().getJSONObject("workspace").getJSONObject("layout").array("panels").objects().flatMap { panel ->
+            panel.getJSONObject("content").optJSONArray("tiles")?.objects().orEmpty()
+                .filter { it.getJSONObject("control").getString("kind") == "divider" }.map { "tile-${panel.getString("id")}-${it.getInt("id")}" }
+        }.filter(::shown).map { it to bounds(it) }.filter { (_, box) -> box.width >= 1f && box.height >= 1f }
+        val base = IntArray(2); onMain { owner.view.getLocationOnScreen(base) }
+        val image = checkNotNull(instrumentation.uiAutomation.takeScreenshot())
+        val inset = toolbarUi(host.languageTag, obj("type" to "metrics")).getJSONObject("divider").number("inset")
+        val expected = try {
+            tags.map { (tag, box) ->
+                val wide = box.width > box.height
+                val left = kotlin.math.ceil(box.left + base[0]).toInt(); val top = kotlin.math.ceil(box.top + base[1]).toInt()
+                val along = kotlin.math.floor(if (wide) box.width else box.height).toInt(); val across = kotlin.math.floor(if (wide) box.height else box.width).toInt()
+                fun pixel(i: Int, j: Int) = if (wide) image.getPixel(left + i, top + j) else image.getPixel(left + j, top + i)
+                fun differs(a: Int, b: Int) = maxOf(kotlin.math.abs(android.graphics.Color.red(a) - android.graphics.Color.red(b)),
+                    kotlin.math.abs(android.graphics.Color.green(a) - android.graphics.Color.green(b)), kotlin.math.abs(android.graphics.Color.blue(a) - android.graphics.Color.blue(b))) > 8
+                val painted = (0 until across).maxOf { j ->
+                    val basePixel = pixel(0, j)
+                    var run = 0; var longest = 0
+                    for (i in 0 until along) {
+                        run = if (differs(pixel(i, j), basePixel)) run + 1 else 0
+                        longest = maxOf(longest, run)
+                    }
+                    longest
+                }
+                val length = along - 2 * inset * density
+                assertEquals("$label $tag paints its line across the slot less the end insets", length, painted.toFloat(), kotlin.math.ceil(density) + 1f)
+                length
+            }
+        } finally { image.recycle() }
+        assertTrue("$label measures a divider in a toolbar wider than one tile", expected.any { it > 40f * density })
+    }
     @Test fun toolbarSliderReadoutsAndTabletPaint() {
         switchToolbarWorkspace("illustrator")
         action(obj("type" to "invoke", "command" to "brush"))
@@ -3290,6 +3322,7 @@ class AndroidInteractionTest {
             action(obj("type" to "set_theme", "theme" to theme))
             action(obj("type" to "restore_workspace", "workspace" to JSONObject(initial)))
             captureToolbar("paint-tablet-$theme")
+            assertDividerLines("paint-tablet-$theme")
             for (vertical in listOf(true, false)) for (style in listOf("small", "medium", "large", "medium_labeled", "labeled")) {
                 val workspace = JSONObject(initial)
                 val layout = workspace.getJSONObject("layout")

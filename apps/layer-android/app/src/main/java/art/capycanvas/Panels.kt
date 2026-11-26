@@ -48,7 +48,8 @@ import kotlin.math.roundToInt
                 val modifier = placement.dragSource(dock,
                     obj("kind" to "tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id")), holdToDrag = true)
                 if (kind == "divider") {
-                    ToolbarDivider(modifier, horizontal = vertical)
+                    ToolbarDivider(modifier.padding(if (vertical) PaddingValues(horizontal = DividerInset) else PaddingValues(vertical = DividerInset)),
+                        horizontal = vertical, length = null)
                     return@forEachIndexed
                 }
                 val colors = LocalPalette.current
@@ -102,6 +103,7 @@ import kotlin.math.roundToInt
 
 internal val DividerSlot = 8.dp
 internal val DividerLength = 18.dp
+internal val DividerInset = 9.dp
 
 @Composable internal fun ToolbarDivider(modifier: Modifier, horizontal: Boolean, length: Dp? = DividerLength) {
     Box(modifier, contentAlignment = Alignment.Center) {

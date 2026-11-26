@@ -269,22 +269,24 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
       assert.equal(await evaluate('document.querySelectorAll(".collapsed-column .column-divider").length'),1,'Only the divider between groups is painted');
       assert.ok(Math.abs(b.top-a.bottom-12)<.01,'Collapsed groups use the toolbar divider plus its two gaps');
       const metrics=await evaluate('layerApp.app.divider_metrics()');
-      const line=async(selector,horizontal,name)=>{
-        const r=await rect(selector),across=Math.floor(metrics.size/2-.5)+.5,half=metrics.length/2;
+      const line=async(selector,horizontal,name,toolbar=true)=>{
+        const r=await rect(selector),across=Math.floor(metrics.size/2-.5)+.5;
+        const length=toolbar?(horizontal?r.width:r.height)-2*metrics.inset:metrics.length,half=length/2;
         assert.ok(Math.abs((horizontal?r.height:r.width)-metrics.size)<.01,'Dividers retain their standard slot');
         const at=(along,off=0)=>horizontal?[r.x+r.width/2+along,r.y+across+off]:[r.x+across+off,r.y+r.height/2+along];
         const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${dir}/${theme}-${name}.png`,Buffer.from(shot.data,'base64'));
         const [middle,beside,end,beyond]=await sample(shot.data,[at(0),at(0,2),at(half-1),at(half+1)]);
         assert.notDeepEqual(middle,beside,`${theme} ${name}: separator line is visible`);
-        assert.deepEqual(end,middle,`${theme} ${name}: the line runs ${metrics.length} pixels`);
+        assert.deepEqual(end,middle,`${theme} ${name}: the line runs ${length} pixels`);
         assert.deepEqual(beyond,beside,`${theme} ${name}: the line stops short of the lane`);
       };
-      await line('.column-divider',true,'column-divider');
+      await line('.column-divider',true,'column-divider',false);
       await line('.toolbar-controls .tile-divider',false,'toolbar-divider-horizontal');
       await send({type:'move_panel',panel:'toolbar',target:{kind:'edge',edge:'right',outer:true}});
       await line('.toolbar-controls .tile-divider',true,'toolbar-divider-vertical');
       await send({type:'move_panel',panel:'toolbar',target:{kind:'tab',group:41,index:null}});
       await click('.column-tab[data-panel="toolbar"]');
+      assert.ok((await rect('.content-drawer .tile-divider')).width>metrics.length+2*metrics.inset,'The drawer toolbar is wider than one tile');
       await line('.content-drawer .tile-divider',true,'toolbar-divider-in-drawer');
     }
     console.log('PASS: drawer corners, closed/hover/open colors, shadow-free source/connector pixels, and visible dividers with matching spacing in both themes and drawer/toolbar orientations');

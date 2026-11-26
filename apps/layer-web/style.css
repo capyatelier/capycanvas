@@ -962,7 +962,9 @@ body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
 .panel .navigator-buttons button { display:grid; place-items:center; flex:1; min-width:0; min-height:var(--panel-control-height); padding:0; }
 .tile-divider { pointer-events:auto; }
 .tile-divider::after { content:""; position:absolute; left:round(down, 50% - .5px, 1px); top:round(50% - var(--divider-length) / 2, 1px); width:1px; height:var(--divider-length); background:var(--divider-line); }
-:is(.toolbar-controls[data-axis="vertical"] .tile-divider, .column-divider)::after { left:round(50% - var(--divider-length) / 2, 1px); top:round(down, 50% - .5px, 1px); width:var(--divider-length); height:1px; }
+.toolbar-controls .tile-divider::after { top:var(--divider-inset); height:calc(100% - 2 * var(--divider-inset)); }
+.toolbar-controls[data-axis="vertical"] .tile-divider::after { left:var(--divider-inset); top:round(down, 50% - .5px, 1px); width:calc(100% - 2 * var(--divider-inset)); height:1px; }
+.column-divider::after { left:round(50% - var(--divider-length) / 2, 1px); top:round(down, 50% - .5px, 1px); width:var(--divider-length); height:1px; }
 .collapsed-column { position:absolute; z-index:1; background:var(--glass-panel); border-radius:var(--surface-radius); overflow:hidden; }
 .collapsed-column > *, .collapsed-content > * { position:absolute; }
 .collapsed-content { overflow:hidden; touch-action:pan-y; }

@@ -190,13 +190,11 @@ row and packs its compact controls in the same order. Drawer height measurement
 uses these same rows. Short allocations clip trailing content and keep
 visible insertion targets attached to their original tile IDs.
 
-A divider is an 8-pixel slot (`TOOLBAR_DIVIDER_SIZE`). On GTK, Apple and Windows
-the toolbar line fills the slot across the strip with a 9-pixel inset at each end
+A divider is an 8-pixel slot (`TOOLBAR_DIVIDER_SIZE`). On every host the toolbar
+line fills the slot across the strip with a 9-pixel inset at each end
 (`TOOLBAR_DIVIDER_INSET`), so it grows with wider toolbars and returns to 18 pixels
 in a Small single-column toolbar. Horizontal toolbars apply the same inset
-vertically. Web and Android use a centred line half a Small tile long
-(`DIVIDER_LENGTH`) in every tile size. Column
-groups and the canvas action bar use the same divider; GTK builds all three with
+vertically. Column groups and the canvas action bar use the same divider; GTK builds all three with
 `tiles::divider_slot` and `divider_line`, Apple and Android with `ToolbarDivider`, Web
 draws `.tile-divider` from `divider_metrics`, and Windows uses `dividerLine` in
 `apps/layer-windows/WorkspaceGeometry.h`.
@@ -338,7 +336,9 @@ styles, both orientations and both themes. Apple runs the `toolbar_component` te
 `cargo test --locked -p layer-apple --target aarch64-apple-darwin --lib` and the
 `testToolbarComponents` journey on macOS and iPad.
 On Windows, the `toolbar-components` fixture measures each painted divider line
-against its slot in a wrapped Paint Tools toolbar, in both themes.
+against its slot in a wrapped Paint Tools toolbar, in both themes; Android's
+`toolbarSliderReadoutsAndTabletPaint` does the same for tablet Paint, and Web's
+`--drawer-style` for a toolbar in a drawer.
 
 Windows exposes the preview frame with the shared tile label, so accessibility
 clients can identify its bounds and bookmark button.
