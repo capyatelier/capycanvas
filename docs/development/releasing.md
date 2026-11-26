@@ -420,6 +420,12 @@ its own numbers from it at build time:
 - Versions are plain `MAJOR.MINOR.PATCH`, with a nonzero major part for the
   Microsoft Store and minor and patch parts below 1,000. Test status belongs to
   a distribution channel, never to the version.
+- Text people read drops a zero patch part: the website's release headings and
+  download buttons (`displayVersion` in capycanvas-web), GitHub release titles,
+  store "What's New" text and release-note prose say "1.1" for `1.1.0`. Tags,
+  `Cargo.toml`, the AppStream release version, package file names, store version
+  fields, the About page and the website's file names, asset paths and anchors
+  keep the full version.
 - About shows the plain version when `CAPY_PUBLIC_RELEASE=true`, which the
   release workflow sets for tag pushes. Other builds add the commit, `*` when
   tracked files differ from it and `dbg` when unoptimized:
