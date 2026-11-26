@@ -185,9 +185,9 @@ impl WgpuRasterizer {
             ("floor", crate::scene::scale::Floor::demand(self)),
             ("canonical names", (self.navigator.waiting_for_name()
                 || self.scale_display.as_ref().is_some_and(|cache| cache.waiting_for_name(self))).then_some(Blocked(Input::Name))),
-            ("transform sources", gated(self.transform_sources_pending && self.transform_preview.is_some())),
-            ("transform standby", (self.transform_sources_pending && self.moving_pixels.is_some() && self.transform_preview.is_none())
-                .then_some(Blocked(Input::Compile))),
+            ("transform sources", self.transform_preview.as_ref().and(self.transform_sources.as_ref()).and_then(|wait| wait.demand(self))),
+            ("transform standby", self.moving_pixels.as_ref().filter(|_| self.transform_preview.is_none())
+                .and(self.transform_sources.as_ref()).and_then(|wait| wait.demand(self))),
             ("moving images", self.moving_images_outstanding()),
             ("decodes", gated(self.moving_decode.as_ref().is_some_and(|(_, queue)| queue.pending()))),
             ("objects", objects.filter(|_| self.moving_layer.is_none())),

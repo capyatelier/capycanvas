@@ -450,17 +450,20 @@ impl PaintTransforms {
     }
     pub fn prepare_standby(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
         scene: SceneView<'_>, id: SourceTarget, selection: &layer_core::Selection, level: u32,
-    ) -> Result<bool, GpuRasterError> {
-        if !matches!(id, SourceTarget::Paint(_)) || scene.raster(id).is_none() { return Ok(true); }
+    ) -> Result<Option<frame_demand::UnitWait>, GpuRasterError> {
+        use frame_demand::{Input, Producer, UnitWait};
+        if !matches!(id, SourceTarget::Paint(_)) || scene.raster(id).is_none() { return Ok(None); }
         let state = &mut self.0[0];
-        if state.preview.is_some() { return Ok(true); }
+        if state.preview.is_some() { return Ok(None); }
         {
             let mip = r.display_pipelines.get_or_insert_with(|| r.recipes.display.clone());
-            let ready = r.compilation.require([&r.scene_pipelines.source.pipeline], startup::OTHER)
-                & r.compilation.require([&state.color.display_pipeline()], startup::OTHER)
-                & r.compilation.require([&mip.reduce, &mip.fused_reduce], startup::OTHER)
-                & r.compilation.require(r.selection_clip.pipelines(), startup::OTHER);
-            if !ready { return Ok(false); }
+            let display = state.color.display_pipeline();
+            let render = [&r.scene_pipelines.source.pipeline];
+            let compute = [&display, &mip.reduce, &mip.fused_reduce].into_iter().chain(r.selection_clip.pipelines());
+            if !(r.compilation.require(render, startup::OTHER) & r.compilation.require(compute.clone(), startup::OTHER)) {
+                let pipelines = compile::Needs { render: render.into_iter().cloned().collect(), compute: compute.cloned().collect(), styles: Vec::new() };
+                return Ok(Some(UnitWait::input(Producer::Compile(Arc::new(pipelines)))));
+            }
         }
         let local = sampling::selection_level(level, Some(selection), r.target_extent(id));
         let standby = Standby::of(scene, id, selection);
@@ -469,7 +472,7 @@ impl PaintTransforms {
                 .try_fold(0u64, |bytes, plan| bytes.checked_add(plan.pixel_bytes_through(display_mips::MAX_LEVEL))).ok_or(GpuRasterError::SizeOverflow)?;
             let preparation = [r.projected_restore_bytes(), r.bake_preflight.as_ref().map_or(0, |bake| bake.projected_bytes())].into_iter()
                 .try_fold(projected, u64::checked_add).ok_or(GpuRasterError::SizeOverflow)?;
-            if !r.preparation_fits(preparation, Some(self))? { return Ok(true); }
+            if !r.preparation_fits(preparation, Some(self))? { return Ok(None); }
         }
         let state = &mut self.0[0];
         let result=(|| {
@@ -480,7 +483,7 @@ impl PaintTransforms {
             }
             state.prepare_reduced(r, encoder, Some(selection), Some((scene, id)), extent, local)
         })();
-        match result {Err(error) if error.is_preparation_pending()=>Ok(false),result=>result.map(|()|true)}
+        match result {Err(error) if error.is_preparation_pending()=>Ok(Some(UnitWait::pending(&error, Producer::Class(Input::Decode)))),result=>result.map(|()|None)}
     }
     pub fn release_standby(&mut self) {
         for state in &mut self.0 {

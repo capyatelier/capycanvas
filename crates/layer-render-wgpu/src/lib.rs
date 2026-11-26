@@ -1185,7 +1185,7 @@ pub struct WgpuRasterizer {
     fill_preview_shown: Option<((u64,u64,SourceTarget),submission::Submission)>,
     fill_reveal: Option<layer_render::FillReveal>,
     refused_transform: Option<layer_render::TransformPreview>,
-    transform_sources_pending: bool,
+    transform_sources: Option<frame_demand::UnitWait>,
     transform_damage: Vec<(SourceTarget, PixelRect)>,
     /// Document regions to recompose whose layers' own pixels are unchanged.
     document_damage: Vec<PixelRect>,
@@ -1626,7 +1626,7 @@ impl WgpuRasterizer {
             fill_preview_shown: None,
             fill_reveal: None,
             refused_transform: None,
-            transform_sources_pending: false,
+            transform_sources: None,
             transform_damage: Vec::with_capacity(2),
             document_damage: Vec::new(),
             background_ready: Arc::new(std::sync::atomic::AtomicBool::new(true)),
@@ -4883,7 +4883,7 @@ impl WgpuRasterizer {
             && !motion_changed
             && !prepared_changed
             && same_frame
-            && !(self.transform_sources_pending && self.transform_preview.is_some());
+            && !(self.transform_sources.is_some() && self.transform_preview.is_some());
         let resized = self.ensure_document_metadata(packet.document_extent, packet.scene)?;
         let display_rebuilt = if packet.commit_rasters {
             let previous = self.scale_display.take();
@@ -5484,13 +5484,14 @@ impl WgpuRasterizer {
                 .filter(|batch| batch.kind == DabBatchKind::Preview)
                 .all(|batch| dry_material::dry_flow(&batch.style) && pointwise(&batch.style));
 
-        self.transform_sources_pending = false;
+        self.transform_sources = None;
         if let Some(preview) = self.transform_preview.clone().filter(|preview| self.refused_transform.as_ref() != Some(preview)) {
             let level = self.scale_display.as_ref().filter(|cache| cache.evaluation != scene::scale::Evaluation::Native).map(|cache| cache.plan.level).filter(|level| *level > 0);
             let mut transforms = self.transforms.take().expect("retained transform renderer");
             let result = transforms.update_preview(self, &mut encoder, &preview, packet.scene, level);
             self.transforms = Some(transforms);
-            self.transform_sources_pending = matches!(&result, Err(error) if error.is_preparation_pending());
+            self.transform_sources = matches!(&result, Err(error) if error.is_preparation_pending())
+                .then(|| frame_demand::UnitWait::input(frame_demand::Producer::Class(frame_demand::Input::Decode)));
             match result {
                 Err(GpuRasterError::TransformReach) => {
                     self.metrics.transform_reach_refusals += 1;
@@ -5619,11 +5620,7 @@ impl WgpuRasterizer {
             let mut transforms = self.transforms.take().unwrap();
             let result = transforms.prepare_standby(self, &mut encoder, packet.scene, layer, &selection, level);
             self.transforms = Some(transforms);
-            self.transform_sources_pending = match result {
-                Ok(ready) => !ready,
-                Err(error) if error.is_preparation_pending() => true,
-                Err(error) => return Err(error),
-            };
+            self.transform_sources = result?;
         }
         let frame = Arc::new(artwork::Frame::new(packet, context.clone()));
         let moving = !original_batches.is_empty()

@@ -536,8 +536,9 @@ fn optional_transform_inputs_park_until_the_compiler_wakes_the_owner() {
     r.shader_idle(true,true);
     let deadline=std::time::Instant::now()+READBACK_TIMEOUT;
     while r.test.source_captures.get()==captures {
-        wake.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).unwrap();
-        crate::test_support::submit_ready(&mut r,frame).unwrap();
+        if r.next_frame()==layer_render::FrameDemand::Work {crate::test_support::submit_ready(&mut r,frame).unwrap();continue;}
+        wake.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            .unwrap_or_else(|_|panic!("compiled standby inputs never asked for the frame that captures them: {:?}",r.outstanding_terms()));
     }
     crate::test_support::submit_settled(&mut r,frame);
     assert_eq!(r.test.source_captures.get(),captures+1);
@@ -706,7 +707,7 @@ fn native_previews_larger_than_the_decoded_floor_draw_from_resumed_original_capt
         crate::test_support::submit_settled(&mut r,frame);
         r
     });
-    assert!(!floor.transform_sources_pending && floor.transforms.as_ref().unwrap().has_preview());
+    assert!(floor.transform_sources.is_none() && floor.transforms.as_ref().unwrap().has_preview());
     assert_eq!(pixels(&floor,crate::test_support::document_texture(&floor)),pixels(&reference,crate::test_support::document_texture(&reference)),
         "a preview reading more originals than the decoded slots hold must match one whose originals all fit");
 }

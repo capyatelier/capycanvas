@@ -134,7 +134,7 @@ fn a_standby_beyond_the_preparation_grant_is_skipped_without_allocating() {
     r.shader_idle(true, false);
     let bytes = transforms.storage_bytes();
     crate::test_support::wait_until("Standby compilation timed out", || {
-        if transforms.prepare_standby(&mut r, &mut encoder, document.scene(), target(&document), &selection, 1).unwrap() { return Ok(()); }
+        if transforms.prepare_standby(&mut r, &mut encoder, document.scene(), target(&document), &selection, 1).unwrap().is_none() { return Ok(()); }
         r.poll_startup().unwrap();
         Err(())
     });

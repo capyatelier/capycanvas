@@ -1882,6 +1882,61 @@ mod tests {
     }
 
     #[test]
+    fn a_tablet_photo_selection_move_at_fit_settles_from_wakes_and_still_drags() {
+        use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey, TILE_SIZE};
+        let _shutdown = GpuReference(None);
+        let budget = layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts { total_bytes: Some(5648 << 20), available_bytes: Some(2183 << 20), tablet: true, ..Default::default() });
+        let photo = [4248u32, 2832];
+        let mut document = layer_ui::new_drawing(photo[0], photo[1], &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+        let [columns, rows] = photo.map(|extent| extent.div_ceil(TILE_SIZE));
+        let descriptor = document.composition().color.paint_descriptor();
+        let tile = RasterTile::backed(TileBlob::encode(descriptor, &vec![96; descriptor.byte_len([TILE_SIZE; 2]).unwrap()]).unwrap());
+        let target = document.active_target().unwrap();
+        *document.target_raster_mut(target).unwrap() = RasterRevision::backed(RasterData { watercolor: None,
+            tiles: (0..columns * rows).map(|index| (TileKey { plane: RasterPlane::Color, coordinate: [index % columns, index / columns] }, tile.clone())).collect() });
+        let gpu = layer_render_wgpu::WgpuRasterizer::new_native_headless_in(document.composition().color, layer_core::DeviceMemoryFacts { unified: true, ..Default::default() }, budget).unwrap();
+        let mut native = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        *native.session = UiSession::from_project(Renderer(Some(gpu)), document, None, [1590, 1060], layer_ui::Platform::Android).unwrap();
+        native.startup = Default::default();
+        native.resize(1590, 1060, 1.).unwrap();
+        let mut host = crate::test_storage::StoredHost::new(native);
+        host.set_device_class(layer_ui::DeviceClass::Tablet);
+        let (woke, woken) = std::sync::mpsc::channel();
+        host.set_wake(std::sync::Arc::new(move || { let _ = woke.send(()); }));
+        host.session.renderer_mut().0.as_mut().unwrap().finish_startup_catalog();
+        let clock = std::cell::Cell::new(0);
+        let within = |seconds| std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+        let idle = |host: &NativeHost| host.startup.complete && host.frame_demand() == layer_render::FrameDemand::Wait
+            && !host.session.engine().has_pending_document_edits() && host.session.engine().backend().0.as_ref().unwrap().settled();
+        let submissions = |host: &NativeHost| host.session.engine().backend().0.as_ref().unwrap().metrics().submissions;
+        let contact = |host: &mut NativeHost, deadline: std::time::Instant, path: &dyn Fn(f64) -> [f64; 2]| {
+            let [x, y, width, height] = host.session.state().camera.work_area.map(f64::from);
+            for sample in 0..=48 {
+                let [u, v] = path(f64::from(sample) / 48.);
+                let phase = match sample { 0 => 1., 48 => 3., _ => 2. };
+                pointer(host, 7, 0, 0, &[x + u * width, y + v * height, 1., 0., 0., 0., 0., clock.get() as f64, phase], false).unwrap();
+                frame_step(host, &clock, deadline);
+            }
+        };
+        let deadline = within(120);
+        frame_step(&mut host, &clock, deadline);
+        serve_on_wakes(&mut host, &woken, &clock, deadline, idle);
+        host.dispatch(UiAction::Invoke { command: layer_ui::CommandId::FitCanvas }).unwrap();
+        host.dispatch(UiAction::Invoke { command: layer_ui::CommandId::Lasso }).unwrap();
+        contact(&mut host, deadline, &|p| { let turn = std::f64::consts::TAU * p; [0.5 + 0.25 * turn.sin(), 0.5 - 0.25 * turn.cos()] });
+        serve_on_wakes(&mut host, &woken, &clock, deadline, idle);
+        assert!(host.session.engine().document().working.selection.is_some(), "the lasso selects pixels");
+        host.dispatch(UiAction::Invoke { command: layer_ui::CommandId::Move }).unwrap();
+        serve_on_wakes(&mut host, &woken, &clock, within(30), idle);
+        let (revision, before) = (host.session.engine().document().revision, submissions(&host));
+        contact(&mut host, deadline, &|p| [0.5 + 0.1 * p, 0.5]);
+        assert!(submissions(&host) > before, "the Move drag presents its frames");
+        serve_on_wakes(&mut host, &woken, &clock, deadline, idle);
+        assert!(host.session.engine().document().revision > revision, "the Move drag commits");
+        host.close_wake();
+    }
+
+    #[test]
     fn host_thumbnail_service_leaves_gpu_callbacks_to_the_poll_owner() {
         use std::time::Duration;
         let (_reference, mut host) = gpu_host(layer_ui::Platform::Windows, [64; 2]);
