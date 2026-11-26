@@ -294,6 +294,8 @@ extension XCTestCase {
         XCTAssertTrue(entry.waitForExistence(timeout: 5))
         #if os(iOS)
         XCTAssertTrue(entry.isHittable)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.keys["1"].exists, "Number entries open the keyboard on its numbers page")
         #endif
         entry.typeText("20 + 20\n")
         expectation(for: NSPredicate(format: "value BEGINSWITH %@", "40"), evaluatedWith: value)

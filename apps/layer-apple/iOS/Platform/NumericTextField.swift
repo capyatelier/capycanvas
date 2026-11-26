@@ -24,6 +24,7 @@ struct NumericTextField: UIViewRepresentable {
     var rounded = false
     var softSubmit: (() -> Void)? = nil
     @Environment(\.isEnabled) private var enabled
+    func numericKeyboard() -> Self { var field = self; field.keyboardType = .numbersAndPunctuation; return field }
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIView(context: Context) -> Field {
         let field = Field()
