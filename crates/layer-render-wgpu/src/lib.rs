@@ -5618,10 +5618,10 @@ impl WgpuRasterizer {
         if self.transform_preview.is_none() && !reset && packet.dabs.is_empty()
             && packet.dab_batches.is_empty() && packet.restore_rasters.is_empty()
             && let Some((layer, selection)) = self.moving_pixels.clone()
-            && let Some(level) = self.scale_display.as_ref().filter(|cache| cache.evaluation != scene::scale::Evaluation::Native).map(|cache| cache.plan.level).filter(|level| *level > 0)
+            && let Ok(Some(display)) = self.reduced_transform_request(packet)
         {
             let mut transforms = self.transforms.take().unwrap();
-            let result = transforms.prepare_standby(self, &mut encoder, packet.scene, layer, &selection, level);
+            let result = transforms.prepare_standby(self, &mut encoder, packet, layer, &selection, display);
             self.transforms = Some(transforms);
             self.transform_sources = result?;
         }

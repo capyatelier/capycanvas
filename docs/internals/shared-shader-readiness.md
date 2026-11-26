@@ -114,7 +114,8 @@ existing condition variable; browsers use a host timer. An in-flight driver call
 cannot be interrupted; admission happens between jobs.
 
 Selected-pixel standby uses the same optional admission. It requests source
-decoding, selection and reduction pipelines before capturing pixels; a frame
+decoding, selection and reduction pipelines, and the transform and display
+resample pipelines the Move drag draws with, before capturing pixels; a frame
 skips standby until those handles are ready. Selecting pixels on a reduced view
 does not compile pipelines on the render owner or block the current canvas.
 

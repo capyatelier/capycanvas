@@ -93,19 +93,19 @@ fn reduced_selection_standby_prepares_its_pipelines_without_encoding_on_the_fram
     assert!(!transforms.display_pipelines()[0].ready());
     let bytes = transforms.storage_bytes();
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    transforms.prepare_standby(&mut r, &mut encoder, document.scene(), target(&document), &selection, 1).unwrap();
+    let display = crate::scene::scale::Request { plan: crate::display_mips::Plan::at(extent, 1), evaluation: crate::scene::scale::Evaluation::Display };
+    transforms.prepare_standby(&mut r, &mut encoder, packet(document.scene(), extent), target(&document), &selection, display).unwrap();
     assert_eq!(transforms.storage_bytes(), bytes, "Cold standby dependencies must finish before capture or reduction");
     assert_eq!(encoder.pass_count(),0,"cold standby declares dependencies without encoding");
     r.shader_idle(true, false);
     crate::test_support::wait_until("Standby compilation timed out", || {
-        if r.scene_pipelines.source.pipeline.ready() && transforms.display_pipelines()[0].ready() { return Ok(()); }
+        transforms.prepare_standby(&mut r, &mut encoder, packet(document.scene(), extent), target(&document), &selection, display).unwrap();
+        if transforms.storage_bytes() > bytes { return Ok(()); }
         r.poll_startup().unwrap();
         Err(())
     });
     assert!(r.scene_pipelines.source.pipeline.ready());
     assert!(transforms.display_pipelines()[0].ready());
-    transforms.prepare_standby(&mut r, &mut encoder, document.scene(), target(&document), &selection, 1).unwrap();
-    assert!(transforms.storage_bytes() > bytes);
     r.transforms = Some(transforms);
     r.uploads.finish(&encoder);
     encoder.submit(&r.queue);
@@ -133,8 +133,9 @@ fn a_standby_beyond_the_preparation_grant_is_skipped_without_allocating() {
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     r.shader_idle(true, false);
     let bytes = transforms.storage_bytes();
+    let display = crate::scene::scale::Request { plan: crate::display_mips::Plan::at(extent, 1), evaluation: crate::scene::scale::Evaluation::Display };
     crate::test_support::wait_until("Standby compilation timed out", || {
-        if transforms.prepare_standby(&mut r, &mut encoder, document.scene(), target(&document), &selection, 1).unwrap().is_none() { return Ok(()); }
+        if transforms.prepare_standby(&mut r, &mut encoder, packet(document.scene(), extent), target(&document), &selection, display).unwrap().is_none() { return Ok(()); }
         r.poll_startup().unwrap();
         Err(())
     });

@@ -449,25 +449,29 @@ impl PaintTransforms {
         Ok(damage)
     }
     pub fn prepare_standby(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
-        scene: SceneView<'_>, id: SourceTarget, selection: &layer_core::Selection, level: u32,
+        packet: FramePacket<'_>, id: SourceTarget, selection: &layer_core::Selection, display: scene::scale::Request,
     ) -> Result<Option<frame_demand::UnitWait>, GpuRasterError> {
         use frame_demand::{Input, Producer, UnitWait};
+        let scene = packet.scene;
         if !matches!(id, SourceTarget::Paint(_)) || scene.raster(id).is_none() { return Ok(None); }
-        let state = &mut self.0[0];
-        if state.preview.is_some() { return Ok(None); }
+        if self.0[0].preview.is_some() { return Ok(None); }
         {
             let mip = r.display_pipelines.get_or_insert_with(|| r.recipes.display.clone());
-            let display = state.color.display_pipeline();
-            let render = [&r.scene_pipelines.source.pipeline];
-            let compute = [&display, &mip.reduce, &mip.fused_reduce].into_iter().chain(r.selection_clip.pipelines());
-            if !(r.compilation.require(render, startup::OTHER) & r.compilation.require(compute.clone(), startup::OTHER)) {
-                let pipelines = compile::Needs { render: render.into_iter().cloned().collect(), compute: compute.cloned().collect(), styles: Vec::new() };
+            let compute = [self.0[0].color.display_pipeline(), mip.reduce.clone(), mip.fused_reduce.clone()].into_iter()
+                .chain(r.selection_clip.pipelines().into_iter().cloned()).collect();
+            let mut pipelines = compile::Needs { render: vec![r.scene_pipelines.source.pipeline.clone()], compute, styles: Vec::new() };
+            let drag = layer_render::TransformPreview { transaction: 0, moving: true, target: id, selection: Some(selection.clone()),
+                transform: layer_core::ImageTransform { placement: layer_core::LayerPlacement { interpolation: layer_core::Interpolation::Nearest,
+                    ..layer_core::LayerPlacement::from_affine(layer_core::Affine::translation(layer_core::Point { x: 1., y: 0. })) }, ..Default::default() } };
+            self.require_frame(r, packet, Some(&drag), &mut pipelines);
+            pipelines.render.extend(r.transform_preview_pipelines(packet, &drag, display).cloned());
+            if !pipelines.require(&r.compilation, startup::OTHER) {
                 return Ok(Some(UnitWait::input(Producer::Compile(Arc::new(pipelines)))));
             }
         }
-        let local = sampling::selection_level(level, Some(selection), r.target_extent(id));
+        let local = sampling::selection_level(display.plan.level, Some(selection), r.target_extent(id));
         let standby = Standby::of(scene, id, selection);
-        if state.standby.as_ref() != Some(&standby) {
+        if self.0[0].standby.as_ref() != Some(&standby) {
             let projected = display_plans(scene, id, local, scene_windows(scene, id, Some(selection)))
                 .try_fold(0u64, |bytes, plan| bytes.checked_add(plan.pixel_bytes_through(display_mips::MAX_LEVEL))).ok_or(GpuRasterError::SizeOverflow)?;
             let preparation = [r.projected_restore_bytes(), r.bake_preflight.as_ref().map_or(0, |bake| bake.projected_bytes())].into_iter()

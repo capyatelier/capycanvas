@@ -545,6 +545,33 @@ fn optional_transform_inputs_park_until_the_compiler_wakes_the_owner() {
 }
 
 #[test]
+fn choosing_move_compiles_every_pipeline_its_first_drag_frame_draws_with() {
+    let doc=document_at([769,513]);
+    let extent=doc.composition().size;
+    let id=source_at(&doc,0);
+    let selection=Selection::polygon([[64.,64.],[640.,64.],[640.,448.],[64.,448.]]
+        .map(|[x,y]|Point {x,y}).to_vec()).unwrap();
+    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut frame=packet(doc.scene(),extent);
+    frame.composite_all=false;frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
+    crate::test_support::submit_settled(&mut r,frame);
+    r.prepare_moving_pixels(Some((id,selection.clone())));
+    frame.time_seconds+=0.1;
+    crate::test_support::submit_settled(&mut r,frame);
+    let _paused=r.compilation.batch();
+    let drag=layer_render::TransformPreview {transaction:1,target:id,moving:true,selection:Some(selection),
+        transform:ImageTransform {placement:LayerPlacement {interpolation:Interpolation::Nearest,
+            ..LayerPlacement::from_affine(Affine::translation(Point {x:24.,y:0.}))},..Default::default()}};
+    r.set_transform_preview(Some(&drag)).unwrap();
+    let mut required=crate::compile::Needs::default();
+    r.transforms.as_ref().unwrap().require_frame(&r,frame,Some(&drag),&mut required);
+    let request=r.reduced_transform_request(frame).unwrap().expect("the drag draws at a reduced view");
+    required.render.extend(r.transform_preview_pipelines(frame,&drag,request).cloned());
+    let cold=required.render.iter().filter(|p|!p.ready()).count()+required.compute.iter().filter(|p|!p.ready()).count();
+    assert_eq!(cold,0,"the first Move drag frame waits on pipelines that choosing Move left cold");
+}
+
+#[test]
 fn move_transactions_adopt_prepared_inputs_and_invalidate_them_on_restore() {
     let mut doc = document_at([769,513]);
     let extent = doc.composition().size; let id = source_at(&doc,0);
