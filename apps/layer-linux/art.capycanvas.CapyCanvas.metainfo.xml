@@ -320,6 +320,20 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="1.0.16" date="2026-11-25">
+      <description>
+        <p>There's a lot in this release: over 1,600 commits since 1.0.15. Capy Canvas now works on phones, and is a lot faster and more reliable.</p>
+        <ul>
+          <li>New phone UI tailored for small screens</li>
+          <li>Startup and opening photos up to 5x faster</li>
+          <li>New display stack using disk instead of RAM for large images</li>
+          <li>Support for 1 gigapixel images</li>
+          <li>Windows UI is faster and handles multi-GPU systems better</li>
+          <li>New smoothing and taper algorithms for pens</li>
+        </ul>
+        <p>As usual, please back up your artwork before upgrading.</p>
+      </description>
+    </release>
     <release version="1.0.15" date="2026-10-30">
       <description>
         <p>More painting and editing tools on Windows.</p>
