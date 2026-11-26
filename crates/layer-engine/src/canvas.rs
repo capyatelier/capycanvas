@@ -7937,7 +7937,7 @@ mod tests {
             }
             offsets.push(tips.last().unwrap().x - 298.);
         }
-        assert!(offsets[0] > 0. && offsets[1] < 0. && offsets[2] < offsets[1], "{offsets:?}");
+        assert!(offsets[0] > offsets[1] && offsets[1] > offsets[2] && offsets[2] < 0., "{offsets:?}");
     }
 
     #[test]

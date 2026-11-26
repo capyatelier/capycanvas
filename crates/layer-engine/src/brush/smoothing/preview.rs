@@ -60,6 +60,7 @@ struct Landing { begin: u32, endpoint: f64 }
 pub(crate) struct CurvePreview { current: Option<Display>, landing: Option<Landing>, now: u32 }
 
 const REMAINING_STEPS: u32 = 16;
+const UNTRIMMED_STRENGTH: f64 = 0.1;
 
 pub(crate) fn pen_up_settlement_micros(settings: &BrushStabilization) -> u32 {
     if settings.strength > 0. { 32_000 } else { 0 }
@@ -81,7 +82,7 @@ impl CurvePreview {
     pub(crate) fn observe(&mut self, now: u32, model: CurveModel, settings: &BrushStabilization, forecast: &[StrokePoint]) {
         self.now = now.max(self.now);
         let strength = f64::from(settings.strength);
-        let delay = reference_delay(strength);
+        let delay = (reference_delay(strength) - reference_delay(UNTRIMMED_STRENGTH)).max(0.);
         let lead = (1. - delay / 0.008).clamp(0., 1.);
         let support = model.curve.support();
         let latest = model.curve.latest();
@@ -161,6 +162,19 @@ mod tests {
             preview.land(448000,416000,model);
             assert!(preview.remaining() < 1e-4);
             assert_eq!(preview.endpoint(*real.last().unwrap()).unwrap().position,real.last().unwrap().position);
+        }
+    }
+    #[test]
+    fn smoothing_up_to_ten_keeps_the_whole_forecast_and_stronger_smoothing_trims_it() {
+        let real:Vec<_>=(0..=100).map(|i| point(i as f32*2., 0., 1., i*4000)).collect();
+        let forecast=point(216., 0., 1., 416000);
+        for (strength, whole) in [(0.06, true), (0.1, true), (0.12, false)] {
+            let settings=BrushStabilization { strength,..Default::default() };
+            let model=CurveModel::from_smoother(PositionSmoother::default(),&settings,&real,false).unwrap();
+            let mut preview=CurvePreview::default();
+            preview.observe(400000,model,&settings,&[forecast]);
+            let tip=preview.endpoint(*real.last().unwrap()).unwrap().position.x;
+            assert_eq!((tip-216.).abs()<1e-3, whole, "{strength}: tip at {tip}");
         }
     }
     #[test]

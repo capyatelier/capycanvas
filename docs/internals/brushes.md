@@ -84,8 +84,8 @@ The selected smoothing strength applies at every pen speed. The captured view
 scale keeps curve evaluation tolerance in surface pixels.
 
 Committed geometry depends on real samples, regardless of whether stroke preview
-is enabled. Preview continues that same curve with reduced prediction lead at
-high strengths, and ends with a contact at the curve's endpoint, as it does
+is enabled. Preview continues that same curve with the full prediction lead up to
+strength 10 and less lead above it, and ends with a contact at the curve's endpoint, as it does
 without smoothing, so widely spaced brushes such as Liquify and Smudge follow
 the pen every frame. On pen-up, the curve completes through its held endpoint, pressure included.
 The up event's own pressure is not used: the lift continues the last measured
