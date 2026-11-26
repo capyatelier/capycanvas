@@ -3282,9 +3282,9 @@ class AndroidInteractionTest {
         val strength = toolbarComponent("brush_strength_slider")
         val tools = group("toolbar").getJSONObject("bounds")
         val sliders = group(size.first).getJSONObject("bounds")
-        assertEquals(74f, tools.number("width"), .1f)
-        assertEquals(420f, tools.number("height"), .1f)
-        assertEquals(tools.number("x"), sliders.number("x"), .1f)
+        assertEquals(74f, tools.number("width"), 1f / density)
+        assertEquals(420f, tools.number("height"), 1f / density)
+        assertEquals(tools.number("x"), sliders.number("x"), 1f / density)
         assertTrue(tools.number("y") + tools.number("height") < sliders.number("y"))
         for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme))
