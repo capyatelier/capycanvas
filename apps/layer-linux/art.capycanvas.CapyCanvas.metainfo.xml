@@ -328,7 +328,7 @@
           <li>Startup and opening photos up to 5x faster</li>
           <li>New display stack using disk instead of RAM for large images</li>
           <li>Support for 1 gigapixel images</li>
-          <li>Windows UI is faster and handles multi-GPU systems better</li>
+          <li>Better multi-GPU and graphics tablet support on Windows</li>
           <li>New smoothing and taper algorithms for pens</li>
         </ul>
         <p>As usual, please back up your artwork before upgrading.</p>
