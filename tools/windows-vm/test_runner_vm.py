@@ -245,7 +245,7 @@ class RunnerVmTests(unittest.TestCase):
                 patch.object(vm, "fixture_build", return_value=(vm.SOFTWARE_BUILD + "-dev-perf", record)) as build, \
                 patch.object(vm, "planned_fixtures", return_value={"runs": ["popup", "header:pen"], "controls": ["Popup"],
                         "requirements": {"popup": {"hardware_gpu": False, "controls": ["Popup"]}, "header:pen": {"hardware_gpu": False, "controls": []}}}), \
-                patch.object(vm, "running", return_value=False), \
+                patch.object(vm, "running", return_value=False), patch.object(vm, "fixture_memory_admission") as memory, \
                 patch.object(vm.cpu_pool, "describe", return_value=({"per_owner_limit": 2, "runner_memory_gib": 8}, [{"status": "free", "owner": None}] * 2)), \
                 patch.object(vm, "export_fixture_build", return_value=self.root / "archive"), \
                 patch.object(vm, "import_fixture_build") as ship, patch.object(vm, "fixture_durations", return_value={}), \
@@ -263,6 +263,7 @@ class RunnerVmTests(unittest.TestCase):
             cleanup_failed = True
             with self.assertRaisesRegex(RuntimeError, "queue config cleanup failed"):
                 vm.sharded_fixtures(args)
+        self.assertEqual([call.args[1] for call in memory.call_args_list], ["build-primary", "cpu-batch"] * 3)
         self.assertEqual(build.call_count, 3)
         build.assert_called_with(self.primary, record["inputs"], True, False, "dev-perf", controls=["Popup"])
         self.assertEqual(ship.call_count, 3)
