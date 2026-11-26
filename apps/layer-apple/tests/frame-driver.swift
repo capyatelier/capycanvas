@@ -166,14 +166,21 @@ import Foundation
             let store = EditorStore(), native = store.native!
             let frames = CanvasFrameDriver(store: store)
             var paused = true
-            frames.setPaused = { paused = $0 }
+            var pausedAt: ContinuousClock.Instant?
+            var wokeAt: ContinuousClock.Instant?
+            frames.setPaused = {
+                paused = $0
+                if $0 { pausedAt = .now } else if pausedAt != nil { wokeAt = .now }
+            }
             frames.activate()
             frames.tick(target: 20)
             native.complete(delay: 120)
             await drainMainQueue()
             assert(paused && native.completions.isEmpty, "A future deadline must pause the display link instead of polling every refresh")
+            let earliestWake = pausedAt!.advanced(by: .milliseconds(120))
             try? await Task.sleep(nanoseconds: 60_000_000)
-            assert(paused && native.admissions == [true], "No frame may be admitted before the deadline")
+            assert(native.admissions == [true] && (wokeAt.map { $0 >= earliestWake } ?? paused),
+                "No frame may be admitted before the deadline")
             try? await Task.sleep(nanoseconds: 120_000_000)
             assert(!paused, "The deadline must wake the display link")
             frames.tick(target: 21)
