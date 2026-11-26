@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Vision
 
 @MainActor private final class EscapeReceiver: NSResponder {
     var count = 0
@@ -25,19 +26,31 @@ import SwiftUI
     @MainActor static func inputs(_ view: NSView) -> [ControlInput.InputView] {
         (view as? ControlInput.InputView).map { [$0] } ?? view.subviews.flatMap(inputs)
     }
-    @MainActor static func accessibilityFrames(_ node: NSObject, depth: Int = 0) -> [(String, CGRect)] {
-        guard depth < 32 else { return [] }
-        let identifier = NSSelectorFromString("accessibilityIdentifier")
-        let frame = NSSelectorFromString("accessibilityFrame")
-        let children = NSSelectorFromString("accessibilityChildren")
-        var result: [(String, CGRect)] = []
-        if node.responds(to: identifier), node.responds(to: frame) {
-            let bounds = unsafeBitCast(node.method(for: frame),
-                to: (@convention(c) (AnyObject, Selector) -> CGRect).self)(node, frame)
-            result.append((node.perform(identifier)?.takeUnretainedValue() as? String ?? "", bounds))
+    @MainActor static func renderedTextBounds(_ view: NSView, labels: [String]) async throws -> [String: CGRect] {
+        guard let window = view.window, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+            throw HostFailure(message: "Cannot capture the native color form")
         }
-        let values = node.responds(to: children) ? node.perform(children)?.takeUnretainedValue() as? [NSObject] ?? [] : []
-        return result + values.flatMap { accessibilityFrames($0, depth: depth + 1) }
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        guard let image = bitmap.cgImage else { throw HostFailure(message: "Missing native color pixels") }
+        let bounds = window.convertToScreen(view.convert(view.bounds, to: nil))
+        return try await Task.detached {
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate; request.usesLanguageCorrection = false
+            try VNImageRequestHandler(cgImage: image).perform([request])
+            let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first }
+            var result: [String: CGRect] = [:]
+            for label in labels where !label.isEmpty {
+                for line in lines {
+                    guard let range = line.string.range(of: label) else { continue }
+                    let remainder = line.string.replacingCharacters(in: range, with: "").trimmingCharacters(in: .whitespaces)
+                    guard remainder.isEmpty || labels.contains(remainder), let box = try line.boundingBox(for: range)?.boundingBox else { continue }
+                    result[label] = CGRect(x: bounds.minX + box.minX * bounds.width, y: bounds.minY + box.minY * bounds.height,
+                        width: box.width * bounds.width, height: box.height * bounds.height)
+                    break
+                }
+            }
+            return result
+        }.value
     }
     @MainActor static func canceledScrub(_ host: NSView, session: ColorEditorSession, window: NSWindow) throws {
         guard let input = inputs(host).first(where: { $0.identity == "0-0" }) else { throw HostFailure(message: "Missing native color readout") }
@@ -65,7 +78,9 @@ import SwiftUI
         try unownedEscape()
         let store = EditorStore(platform: 1, persistence: EditorPersistence(root: nil))
         try await wait("Color editor catalog", failure: { store.failure }) { !store.catalog["native_copy"].isNull }
-        for space in ["Srgb", "DisplayP3", "AdobeRgb", "ProPhoto"] {
+        for (space, nativeAppearance) in ["Srgb", "DisplayP3", "AdobeRgb", "ProPhoto"].flatMap({ space in
+            [NSAppearance.Name.aqua, .darkAqua].map { (space, $0) }
+        }) {
             let original = JSON(["space": space, "rgba": [0.12345678, 0.23456789, 0.34567891, 213.0 / 65535]])
             for mode in ["unchanged", "rgb", "invalid"] {
                 var received: JSON?
@@ -75,14 +90,16 @@ import SwiftUI
                     try require(session.blocked, "Invalid draft must block Use Color")
                     session.close(apply: true)
                     try require(received == nil, "Invalid draft must not publish")
-                    print("PASS: \(space) rejected color draft cannot publish")
+                    print("PASS: \(space)/\(nativeAppearance.rawValue) rejected color draft cannot publish")
                     continue
                 }
                 let window = NSWindow(contentRect: CGRect(x: 80, y: 80, width: 720, height: 520),
                     styleMask: [.titled, .closable], backing: .buffered, defer: false)
                 window.isReleasedWhenClosed = false
+                window.appearance = NSAppearance(named: nativeAppearance)
                 let host = NSHostingView(rootView: ColorEditor(session: session)
-                    .environment(\.capyNativeCopy, store.catalog["native_copy"]))
+                    .environment(\.capyNativeCopy, store.catalog["native_copy"])
+                    .background(Color(nsColor: window.backgroundColor)))
                 host.sizingOptions.insert(.maxSize)
                 window.contentView = host; window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
                 defer { window.contentView = nil; window.close() }
@@ -102,14 +119,16 @@ import SwiftUI
                             return bounds.minX >= 0 && bounds.maxX <= host.bounds.width
                         }
                     }
-                    try await wait("Compact captions reserve space before the hex readout") {
+                    let labels = ["current", "new"].map { store.catalog["native_copy"]["color"][$0].string }
+                    var captions: [String: CGRect] = [:]
+                    try await wait("Compact captions reserve space before the hex readout", step: {
+                        captions = try await renderedTextBounds(host, labels: labels)
+                    }) {
                         host.layoutSubtreeIfNeeded()
-                        let frames = accessibilityFrames(host)
-                        guard let hex = frames.first(where: { $0.0 == "color-value-hex" })?.1,
-                            hex.width > 0, hex.height > 0 else { return false }
-                        let captions = frames.filter { ["color-current-caption", "color-new-caption"].contains($0.0) }
-                        return captions.count == 2 && captions.allSatisfy { caption in
-                            caption.1.width > 0 && caption.1.height > 0 && caption.1.minY >= hex.maxY
+                        guard let input = inputs(host).first(where: { $0.identity == "hex" }) else { return false }
+                        let hex = window.convertToScreen(input.convert(input.bounds, to: nil))
+                        return hex.width > 0 && hex.height > 0 && captions.count == 2 && captions.values.allSatisfy {
+                            $0.width > 0 && $0.height > 0 && $0.minY >= hex.maxY
                         }
                     }
                     window.setContentSize(CGSize(width: 720, height: 520))
@@ -129,7 +148,7 @@ import SwiftUI
                 guard let received else { throw HostFailure(message: "Color was not published") }
                 if mode == "rgb" { try require(abs(received["rgba"][0].number - 32.0 / 255) < 1e-6, "Typed RGB must publish") }
                 else { for i in 0..<3 { try require(Float(received["rgba"][i].number) == Float(original["rgba"][i].number), "Untouched RGB precision must survive the native form") } }
-                print("PASS: \(space) native color \(mode)")
+                print("PASS: \(space)/\(nativeAppearance.rawValue) native color \(mode)")
             }
         }
     }
