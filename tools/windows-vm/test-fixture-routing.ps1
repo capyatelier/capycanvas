@@ -40,13 +40,16 @@ foreach($name in 'Get-FixtureGraphicsFailure','Write-FixtureSessionRecord','Writ
         $result=@{name='first';exit='evidence';message='Owned review exited with code -2003304307: Review did not start';infrastructure_cause='MILERR_NO_HARDWARE_DEVICE'}
         $identity=Get-CapySessionIdentity
         Write-FixtureGraphicsWithdrawal $directory $result $identity
-        $request=[IO.File]::ReadAllText((Join-Path $directory 'graphics-withdrawal.json'))|ConvertFrom-Json
+        $bootField='"boot_utc"\s*:\s*'+[regex]::Escape(($identity.boot_utc|ConvertTo-Json -Compress))
+        $requestJson=[IO.File]::ReadAllText((Join-Path $directory 'graphics-withdrawal.json'))
+        $request=$requestJson|ConvertFrom-Json
         if($request.name -cne $result.name -or $request.exit -cne $result.exit -or $request.error -cne $result.message -or $request.cause -cne $result.infrastructure_cause){throw 'Atomic graphics withdrawal lost the original fixture result'}
-        if($request.account -cne 'HOST\capy04' -or $request.session_id -ne 42 -or $request.logon_sid -cne 'S-1-5-5-2-3' -or $request.boot_utc -cne '2026-11-11T09:00:00.0000000Z' -or !$request.time_utc){throw 'Graphics withdrawal lost its worker boot/account/logon identity'}
+        if($request.account -cne 'HOST\capy04' -or $request.session_id -ne 42 -or $request.logon_sid -cne 'S-1-5-5-2-3' -or $requestJson -cnotmatch $bootField -or !$request.time_utc){throw 'Graphics withdrawal lost its worker boot/account/logon identity'}
         if(Test-Path -LiteralPath (Join-Path $directory 'graphics-withdrawal.json.tmp')){throw 'Graphics withdrawal left an unpublished temporary request'}
         Write-FixtureSessionRecord $directory 'graphics-identity.json' $identity
-        $header=[IO.File]::ReadAllText((Join-Path $directory 'graphics-identity.json'))|ConvertFrom-Json
-        if($header.account -cne $identity.account -or $header.session_id -ne $identity.session_id -or $header.logon_sid -cne $identity.logon_sid -or $header.boot_utc -cne $identity.boot_utc){throw 'Shared worker header lost the identity reused for withdrawal'}
+        $headerJson=[IO.File]::ReadAllText((Join-Path $directory 'graphics-identity.json'))
+        $header=$headerJson|ConvertFrom-Json
+        if($header.account -cne $identity.account -or $header.session_id -ne $identity.session_id -or $header.logon_sid -cne $identity.logon_sid -or $headerJson -cnotmatch $bootField){throw 'Shared worker header lost the identity reused for withdrawal'}
         foreach($entry in $identity.GetEnumerator()){if($entry.Key -in 'name','exit','cause','error','time_utc'){throw 'Withdrawal mutated the cached worker identity'}}
         $startup=@($ast.EndBlock.Statements|Where-Object {$_.Extent.Text.StartsWith('$fixtureSessionIdentity=') -or $_.Extent.Text.StartsWith('if($fixtureSessionIdentity)')})
         if($startup.Count -ne 2 -or @($startup|Where-Object {$_.Extent.Text.Contains('Get-CapySessionIdentity')}).Count -ne 1){throw 'Shared identity is not captured and published once outside the fixture loop'}
@@ -1504,9 +1507,9 @@ public static class CapyReviewOwnershipTest {
         }
         Exit-CapyEnvironment
         $context=Read-CapyFixtureContext
-        if($context.process_id -ne 72 -or $context.process_start_utc -cne $expectedBirth){throw 'Final reopened review lost its recorded start time'}
+        if($context.process_id -ne 72 -or ([DateTimeOffset]$context.process_start_utc).UtcDateTime.ToString('o') -cne $expectedBirth){throw 'Final reopened review lost its recorded start time'}
         $actual=@($context.windows|Where-Object process_id -eq 72)
-        if($actual.Count -ne 1 -or $actual[0].hwnd -ne 721 -or $actual[0].process_start_utc -cne $expectedBirth -or @($context.windows|Where-Object process_id -eq 71).Count -ne 2 -or @($context.windows|Where-Object process_id -eq 31).Count -ne 1){throw 'Reopened census lost an actual window or an earlier review identity'}
+        if($actual.Count -ne 1 -or $actual[0].hwnd -ne 721 -or ([DateTimeOffset]$actual[0].process_start_utc).UtcDateTime.ToString('o') -cne $expectedBirth -or @($context.windows|Where-Object process_id -eq 71).Count -ne 2 -or @($context.windows|Where-Object process_id -eq 31).Count -ne 1){throw 'Reopened census lost an actual window or an earlier review identity'}
     }finally{if($null -eq $prior){Remove-Item Env:CAPY_FIXTURE_CONTEXT -ErrorAction SilentlyContinue}else{$env:CAPY_FIXTURE_CONTEXT=$prior};$script:CapyEnvironment=$priorEnvironment;Remove-Item -LiteralPath $directory -Recurse -Force}
     'Every reopened review records its live window identity before the final clean exit'
 }
