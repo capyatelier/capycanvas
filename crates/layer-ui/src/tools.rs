@@ -508,6 +508,7 @@ pub struct ToolSetPresentation<'a> {
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct ToolSetPresentationMetrics {
     pub groups_are_rows: bool,
+    pub groups_visible: bool,
     pub subtools_visible: bool,
     pub group_height: f32,
     pub group_min_width: f32,
@@ -521,19 +522,18 @@ impl std::ops::Deref for ToolSetPresentation<'_> {
 }
 impl ToolSetView {
     pub fn presentation(&self, panel: Panel, sets_column: bool) -> ToolSetPresentation<'_> {
-        let groups_are_rows = matches!(panel, Panel::BrushSets | Panel::SculptSets);
-        let groups = if panel == Panel::Tools && sets_column { &[][..] } else { &self.groups };
-        let subtools = if groups_are_rows { &[][..] } else { &self.subtools };
-        ToolSetPresentation { groups, subtools,
-            metrics: ToolSetPresentationMetrics::new(panel, subtools.iter().map(|item| &item.action)) }
+        let metrics = ToolSetPresentationMetrics::new(panel, sets_column, self.subtools.iter().map(|item| &item.action));
+        ToolSetPresentation { metrics,
+            groups: if metrics.groups_visible { &self.groups } else { &[] },
+            subtools: if metrics.subtools_visible { &self.subtools } else { &[] } }
     }
 }
 impl ToolSetPresentationMetrics {
-    pub fn new<'a>(panel: Panel, actions: impl Iterator<Item = &'a UiAction>) -> Self {
+    pub fn new<'a>(panel: Panel, sets_column: bool, actions: impl Iterator<Item = &'a UiAction>) -> Self {
         let groups_are_rows = matches!(panel, Panel::BrushSets | Panel::SculptSets);
         let selection = !groups_are_rows && actions.into_iter().any(|action| matches!(action, UiAction::Invoke { command: CommandId::TonalSelect }));
         Self {
-            groups_are_rows, subtools_visible: !groups_are_rows,
+            groups_are_rows, groups_visible: !(panel == Panel::Tools && sets_column), subtools_visible: !groups_are_rows,
             group_height: if groups_are_rows { 44. } else { PANEL_CONTROL_METRICS.control_height },
             group_min_width: if groups_are_rows { BRUSH_SETS_MIN_WIDTH - 2. * PANEL_CONTENT_INSET } else { -1. },
             plain_height: if selection { 32. } else { 44. }, gap: PANEL_GROUP_SPACING, spacing: TILE_GAP,

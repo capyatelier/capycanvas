@@ -4,22 +4,16 @@ struct ToolSetControls: View {
     @ObservedObject var store: EditorStore
     var panel = "brushes"
     var drawerAnchor = JSON()
-    @State private var projection: (key: String, model: JSON)?
-    private var phone: Bool { drawerAnchor["kind"].string == "phone" }
     private var model: JSON {
-        if phone, let projection, projection.key == requestKey { return projection.model }
         let published = store.state["tool_panels"][panel]
         let customization = store.state["customization"]
         let drawer = ([customization["drawer"]] + customization["column_drawers"].array)
-            .first { !drawerAnchor.isNull && $0["anchor"].stableKey == drawerAnchor.stableKey }?["tool_set"] ?? JSON()
-        let view = !drawer.isNull ? drawer : published.isNull ? store.state["tool_set"] : published
-        let metrics = ToolbarUI.cached(["type": "tool_set_presentation", "panel": panel,
+            .first { !drawerAnchor.isNull && $0["anchor"].stableKey == drawerAnchor.stableKey } ?? JSON()
+        let view = !drawer["tool_set"].isNull ? drawer["tool_set"] : published.isNull ? store.state["tool_set"] : published
+        let metrics = ToolbarUI.cached(["type": "tool_set_presentation", "panel": panel, "sets_column": drawer["sets_column"].bool,
             "actions": view["subtools"].array.map { $0["action"].raw }])
-        return JSON(view.object.merging(metrics.object) { _, next in next })
-    }
-    private var requestKey: String {
-        JSON([panel, drawerAnchor.raw, store.state["tool_set"].raw,
-            store.state["tool_panels"].raw, store.state["customization"]["drawer"].raw, store.languageGeneration]).stableKey
+        let shown = metrics["groups_visible"].bool ? view : view.replacing("groups", with: JSON([Any]()))
+        return JSON(shown.object.merging(metrics.object) { _, next in next })
     }
     var body: some View {
         let model = model
@@ -34,15 +28,6 @@ struct ToolSetControls: View {
                 }
                 VStack(spacing: model["spacing"].number) { items(model["subtools"], group: false, model: model) }
             }
-        }.task(id: phone ? requestKey : "") {
-            guard phone else { return }
-            let key = requestKey
-            let next: JSON = await withCheckedContinuation { continuation in
-                store.query(["type": "tool_panel", "panel": panel, "anchor": drawerAnchor.raw]) {
-                    continuation.resume(returning: $0)
-                }
-            }
-            if !Task.isCancelled { projection = (key, next) }
         }
     }
     private func caption(_ item: JSON, group: Bool, model: JSON) -> some View {

@@ -93,7 +93,7 @@ import Darwin
         for panel in ["brush_sets", "sculpt_sets", "tools"] {
             let controls = NSHostingView(rootView: ToolSetControls(store: store, panel: panel).frame(width: 240))
             precondition(controls.fittingSize.height >= 26,
-                "Published tool panels must have content before asynchronous projection tasks run")
+                "Published tool panels have content on their first layout")
         }
         do {
             let bar = store.barMetrics, textSize: CGFloat = 16

@@ -7,7 +7,7 @@ use serde::Deserialize;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolbarUiRequest {
     Metrics,
-    ToolSetPresentation { panel: Panel, actions: Vec<UiAction> },
+    ToolSetPresentation { panel: Panel, sets_column: bool, actions: Vec<UiAction> },
     ToolSetColumns { width: f32, natural: Vec<f32>, rows: bool },
     ToolPreview { width: f32, caption: f32 },
     BrushSizeTile { label: [f32; 2] },
@@ -112,7 +112,7 @@ pub fn toolbar_ui(request: ToolbarUiRequest, localizer: &Localizer) -> Result<se
     use serde_json::json;
     Ok(match request {
         ToolbarUiRequest::Metrics => toolbar_metrics(),
-        ToolbarUiRequest::ToolSetPresentation { panel, actions } => json!(crate::tools::ToolSetPresentationMetrics::new(panel, actions.iter())),
+        ToolbarUiRequest::ToolSetPresentation { panel, sets_column, actions } => json!(crate::tools::ToolSetPresentationMetrics::new(panel, sets_column, actions.iter())),
         ToolbarUiRequest::ToolSetColumns { width, natural, rows } => json!(tool_set_columns(width, &natural, rows)),
         ToolbarUiRequest::ToolPreview { width, caption } => json!({
             "heights": TOOL_PREVIEW_METRICS.heights(caption), "bounds": TOOL_PREVIEW_METRICS.layout(width, TOOL_PREVIEW_METRICS.heights(caption)[1], caption),
@@ -306,16 +306,22 @@ fn brush_size_tile_queries_round_trip_native_label_measurements() {
 #[test]
 fn published_tool_set_metrics_match_typed_panel_presentations() {
     let localizer = Localizer::shared(UiLanguage::English);
+    let item = |action: &UiAction| ToolSetItem {
+        enabled: true, disabled_reason: None, label: "Select".into(), icon: "select",
+        action: action.clone(), selected: false, preview: None,
+    };
     for panel in [Panel::Brushes, Panel::BrushSets, Panel::SculptSets, Panel::Tools] {
-        for actions in [vec![], vec![UiAction::Invoke { command: CommandId::TonalSelect }]] {
-            let view = ToolSetView { groups: vec![], subtools: actions.iter().map(|action| ToolSetItem {
-                enabled: true, disabled_reason: None, label: "Select".into(), icon: "select",
-                action: action.clone(), selected: false, preview: None,
-            }).collect() };
-            let projected = toolbar_ui(ToolbarUiRequest::ToolSetPresentation { panel, actions }, &localizer).unwrap();
-            let typed = serde_json::to_value(view.presentation(panel, false)).unwrap();
-            for (key, value) in projected.as_object().unwrap() { assert_eq!(&typed[key], value, "{panel:?}: {key}"); }
-            assert!(projected.get("groups").is_none() && projected.get("subtools").is_none());
+        for sets_column in [false, true] {
+            for actions in [vec![], vec![UiAction::Invoke { command: CommandId::TonalSelect }]] {
+                let view = ToolSetView { groups: vec![item(&UiAction::Invoke { command: CommandId::Undo })], subtools: actions.iter().map(item).collect() };
+                let projected = toolbar_ui(ToolbarUiRequest::ToolSetPresentation { panel, sets_column, actions }, &localizer).unwrap();
+                let typed = serde_json::to_value(view.presentation(panel, sets_column)).unwrap();
+                for (key, value) in projected.as_object().unwrap() { assert_eq!(&typed[key], value, "{panel:?}/{sets_column}: {key}"); }
+                assert!(projected.get("groups").is_none() && projected.get("subtools").is_none());
+                let hidden = panel == Panel::Tools && sets_column;
+                assert_eq!(projected["groups_visible"], !hidden, "{panel:?}/{sets_column}");
+                assert_eq!(typed["groups"].as_array().unwrap().is_empty(), hidden, "{panel:?}/{sets_column}");
+            }
         }
     }
 }
