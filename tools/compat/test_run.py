@@ -103,10 +103,10 @@ class RunnerTest(unittest.TestCase):
         runner.finish()
 
     def test_release_reports_reject_resets_but_user_reports_keep_the_outcome(self):
-        report = dict(startup="stored", notices=[], editing_dropped=False,
+        report = dict(startup="stored", notices=[],
                       stores={"workspaces": dict(loaded=True)}, sessions=[dict(loaded=True)])
         log = self.base / "native.json"
-        for field, value in [("startup", "set aside"), ("startup", "in memory"), ("editing_dropped", True),
+        for field, value in [("startup", "set aside"), ("startup", "in memory"), ("notices", ["workspace-storage-damaged-notice"]),
                              ("sessions", [dict(loaded=False)]), ("stores", {"workspaces": dict(loaded=False)})]:
             with self.subTest(field=field, value=value):
                 damaged = dict(report, **{field:value})

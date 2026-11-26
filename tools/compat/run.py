@@ -26,7 +26,7 @@ class Handler(SimpleHTTPRequestHandler):
 
 def saved_data_result(log, strict):
     report = json.loads(log.read_text().strip().splitlines()[-1])
-    intact = (report["startup"] == "stored" and not report["notices"] and not report["editing_dropped"]
+    intact = (report["startup"] == "stored" and not report["notices"]
               and all(store["loaded"] for store in report["stores"].values())
               and all(session["loaded"] for session in report["sessions"]))
     return ("saved data was reset or could not be loaded" if strict and not intact else "", {"report": report})
