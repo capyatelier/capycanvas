@@ -26,10 +26,10 @@ async-channel = { version = "2", optional = true }
 pollster = { version = "0.4", optional = true }
 
 [target.'cfg(not(target_vendor = "apple"))'.dependencies]
-rusqlite = { version = "0.41.1", features = ["bundled", "backup", "limits"], optional = true }
+rusqlite = { version = "0.40.2", features = ["bundled", "backup", "limits"], optional = true }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
-rusqlite = { version = "0.41.1", features = ["backup", "limits"], optional = true }
+rusqlite = { version = "0.40.2", features = ["backup", "limits"], optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 libc = { version = "0.2", optional = true }

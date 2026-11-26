@@ -55,4 +55,4 @@ serde = { version = "1", features = ["derive"] }
 layer-core = { path = "../../crates/layer-core", features = ["test-support"] }
 layer-render-wgpu = { path = "../../crates/layer-render-wgpu", features = ["test-support"] }
 png = "0.17.16"
-rusqlite = "0.41.1"
+rusqlite = "0.40.2"

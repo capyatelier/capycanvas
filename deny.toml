@@ -2,6 +2,12 @@
 ignore = [
     { id = "RUSTSEC-2025-0141", reason = "Unmaintained stroke-recording serializer; replay decoding has length framing and a 64 KiB per-record limit. Serializer replacement remains separate work." },
     { id = "RUSTSEC-2024-0436", reason = "Unmaintained build-time proc macro used by pinned rav1d/rav1e; no runtime parser. Replace through maintained upstream dependencies." },
+    { id = "RUSTSEC-2026-0459", reason = "Bundled SQLite before 3.54 can leak memory when it opens a crafted database with a -wal file written by another party; the workspace store opens only its own files in the app's data directory. The fix needs rusqlite 0.41, which Apple builds cannot link yet (see the rusqlite ban)." },
+]
+
+[bans]
+deny = [
+    { crate = "rusqlite@>=0.41", reason = "rusqlite 0.41 calls sqlite3_set_clientdata (SQLite 3.44). Apple builds link the system SQLite, which lacks it on iOS 17.5 to 18 and macOS 15, so the app fails to launch there. Bundle SQLite on Apple without its fstatfs calls before upgrading." },
 ]
 
 # Source-repository policy: only explicitly reviewed permissive Rust licenses.
