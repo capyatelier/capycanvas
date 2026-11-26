@@ -63,7 +63,8 @@ fn transport_startup_collection_preserves_writers_locations_and_unclaimed_heads(
     let directory=Directory::new();let cancel=AtomicBool::new(false);
     let io=Arc::new(NativeTransport::new(directory.0.clone()));let lease=Arc::new(());
     let tile=blob(29);let encoded=tile.compressed_on_worker().unwrap().into_arc();let retained=tiles(tile.clone());
-    let mut store=SessionStore::open_transport(directory.0.clone(),io.clone(),lease.clone(),crate::tile_io::ReadCache::new(crate::MemoryBudget::default())).wait().unwrap();
+    let reads=crate::tile_io::ReadCache::new(crate::MemoryBudget::default());reads.set_scheduler(Arc::new(|_|{}));
+    let mut store=SessionStore::open_transport(directory.0.clone(),io.clone(),lease.clone(),reads.clone()).wait().unwrap();
     store.make_durable(&retained,&cancel).wait().unwrap();let packs=pack_lengths(&store);
     let location=tile.compressed.location().unwrap().unwrap();drop((tile,retained));
     assert!(!directory.0.join(".lock").exists());
@@ -71,7 +72,13 @@ fn transport_startup_collection_preserves_writers_locations_and_unclaimed_heads(
     assert_eq!(pack_lengths(&store),packs);assert!(!directory.0.join(".retired").exists());drop(store);
     assert!(SessionStore::collect_unreferenced_transport(directory.0.clone(),io.clone(),lease.clone()).wait());
     for path in packs.keys() {assert!(path.is_file());}
-    assert_eq!(&*location.read().wait().unwrap(),&*encoded);drop(location);
+    let read=location.read_interest().unwrap();drop(location);
+    assert!(read.poll_bytes(std::task::Waker::noop()).is_pending());
+    assert!(SessionStore::collect_unreferenced_transport(directory.0.clone(),io.clone(),lease.clone()).wait());
+    for path in packs.keys() {assert!(path.is_file());}
+    std::thread::spawn(move ||reads.drive()).join().unwrap();
+    let std::task::Poll::Ready(Ok(bytes))=read.poll_bytes(std::task::Waker::noop()) else {panic!("completed worker range")};
+    assert_eq!(&*bytes,&*encoded);drop((bytes,read));
     assert!(SessionStore::collect_unreferenced_transport(directory.0.clone(),io.clone(),lease.clone()).wait());
     for path in packs.keys() {assert!(!path.exists());}
     assert_eq!(fs::read(directory.0.join(".retired")).unwrap(),b"");
