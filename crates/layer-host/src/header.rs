@@ -122,7 +122,7 @@ mod tests {
                 width: 36.,
             })
             .collect();
-        let geometry = model.resolve(1400., [0., 0.], &metrics, true);
+        let geometry = model.resolve_documents(1400., [0., 0.], &metrics, true, 1);
         let grab = geometry.items.iter().find(|m| m.id == id).unwrap().bounds;
         let press = [grab.x + 10., grab.y + 10.];
         let begin = || HeaderRequest::Begin {
