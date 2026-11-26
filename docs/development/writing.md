@@ -40,6 +40,32 @@
 - Commands, paths, flags and test names must exist. Check them when you write
   them and when you change what they refer to.
 
+## User-facing copy
+
+Everything an artist reads must follow the website's
+[writing guide](https://github.com/capyatelier/capycanvas-web/blob/main/site/WRITING.md):
+UI text, this README, the AppStream release notes, store listings, the website
+and the manual. Its section 6 lists the patterns that make text read as machine
+written, with examples, and its section 12 sets the voice and structure of
+release notes. Check every draft against both before you show it to anyone or
+commit it.
+
+Check these first; they are the ones drafts fall into most often:
+
+| Pattern | Fix |
+| --- | --- |
+| A sentence names features and the next sentences repeat them with details | Attach each detail to the thing it describes and say it once |
+| Two unrelated facts balanced in one sentence, or an "it … it's also … and it" chain | One fact per subject; drop "too", "also" and "even if" |
+| A feature as the subject of a vague verb: covers, gives, handles … better | Say what we did or what the artist gets |
+| A true detail picked because it was easy to describe | Read the change and lead with what an artist notices |
+| A verb or condition chosen to keep an unverified claim technically true | Verify the plain claim or leave it out |
+| Device models, megapixels or "X instead of Y" in prose | One multiplier in prose; measurements in a chart |
+| Words from the code, or words with two meanings ("the format is stable") | Say what the artist sees or can rely on |
+
+Rewrite a failing passage's structure; trimming words doesn't fix it. Release
+notes are written in the owner's voice: first person plural, plain, personable
+and to the point, keeping the owner's own phrasing where it is accurate.
+
 ## README voice
 
 The README explains why the people making Capy Canvas care about it. Its

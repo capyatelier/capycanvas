@@ -132,6 +132,10 @@ These rules cover tests, benchmark harnesses and tools as much as production cod
   or `*.local.md` ([writing](docs/development/writing.md)).
 - UI text uses plain words a painter knows. Don't add settings, menu items or
   explanatory text where better behaviour would do.
+- All user-facing text (UI text, README, release notes, store listings, the
+  website and the manual) must follow the
+  [user-facing copy rules](docs/development/writing.md#user-facing-copy). Check
+  every draft against them before you show it or commit it.
 - Update every registered Fluent catalog when adding UI text; run the
   [localization checks](docs/ui/localization.md#adding-ui-text).
 
