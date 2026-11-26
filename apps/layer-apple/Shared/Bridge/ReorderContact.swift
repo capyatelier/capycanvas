@@ -32,12 +32,6 @@ enum ReorderSurface: Equatable {
     var movesWindow: ((CGPoint) -> Bool)?
 }
 
-func titleBarTabDragMovesWindow(_ translation: CGPoint) -> Bool {
-    guard let request = try? JSON(["op": "tab_drag", "delta": [Double(translation.x), Double(translation.y)]]).encoded(),
-          let reply = request.withCString({ takeNativeText(capy_apple_header_frame($0)) }) else { return false }
-    return (try? JSON.decode(reply))?.bool == true
-}
-
 /// One retained contact shared by the native pan and press recognizers. Native
 /// recognizers supply hold timing/slop; a hold alone never creates a transaction.
 @MainActor final class ReorderContact {

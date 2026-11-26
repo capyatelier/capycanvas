@@ -1,6 +1,12 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+private func titleBarTabDragMovesWindow(_ translation: CGPoint) -> Bool {
+    guard let request = try? JSON(["op": "tab_drag", "delta": [Double(translation.x), Double(translation.y)]]).encoded(),
+          let reply = request.withCString({ takeNativeText(capy_apple_header_frame($0)) }) else { return false }
+    return (try? JSON.decode(reply))?.bool == true
+}
+
 @MainActor final class DrawingTabsController: ObservableObject {
     @Published private(set) var view = JSON()
     @Published private(set) var busy = false
