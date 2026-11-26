@@ -37,6 +37,13 @@ test("stores and the GitHub Release wait for every package, not the test suites"
   assert.match(job(release, "release"), /^    needs: \[version, summary\]$/m);
 });
 
+test("a release tag may sit on main or on its release branch", () => {
+  const gate = job(release, "version");
+  assert.match(gate, /branch="v\$\{VERSION%\.\*\}"/);
+  assert.match(gate, /for base in main "\$branch"; do/);
+  assert.match(gate, /compare\/\$base\.\.\.\$GITHUB_SHA/);
+});
+
 test("private archives and reports never enter GitHub Release assets", () => {
   assert.match(job(release, "release"), /pattern: '\*-package'/);
   assert.match(job(release, "apple"), /platform: \[ipad, mac, mac-store\]/);
