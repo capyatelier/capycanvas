@@ -39,7 +39,7 @@ struct EditorView<Canvas: View>: View {
             // Controls need both the live values and their shared specifications.
             if !store.state.isNull && !store.catalog.isNull && (store.workspaces == nil || store.state["workspace_ready"].bool) {
                 if store.snapshot["layout"]["phone"].isNull { EditorHeader(store: store) }
-                else { PhoneFrame(store: store, input: store.workspace.input.phone) }
+                else { PhoneFrame(store: store, input: store.workspace.input.phone).zIndex(1) }
                 if store.state["workspace"]["layout"]["canvas_info"]["visible"].bool {
                     HStack(alignment: .bottom, spacing: 12) {
                         Spacer()

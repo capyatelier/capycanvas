@@ -2,6 +2,42 @@ import XCTest
 import UIKit
 
 extension EditorLaunchTests {
+    @MainActor func testPhoneDrawerSwitchLandscapeLight() throws {
+        requestedPhoneOrientation = .landscapeLeft
+        let app = editorCaptureApplication()
+        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleInterfaceStyle", "Light"]
+        app.launchEnvironment["CAPY_PERSISTENCE_PROBE"] = "1"
+        try phoneRelaunch(app, theme: "light", actions: [["type": "set_theme", "theme": "light"],
+            ["type": "workspace_manager", "command": ["type": "switch", "id": "builtin:workspace:illustrator"]],
+            ["type": "invoke", "command": "sculpt"], ["type": "select_brush_set", "group": "blend"],
+            ["type": "select_brush", "id": 2],
+            ["type": "phone", "action": ["kind": "insert_tools", "before": NSNull()]],
+            ["type": "customize", "action": ["type": "picker_select",
+                "control": ["kind": "command", "command": "fit_canvas"], "selected": true]],
+            ["type": "customize", "action": ["type": "confirm_tools"]]])
+        defer { app.terminate() }
+        let drawer = phoneDrawer(in: app), tools = try XCTUnwrap(phoneObservedTools(in: app))
+        func tile(_ key: String, _ value: String) throws -> XCUIElement {
+            let item = try XCTUnwrap(tools.first { ($0["control"] as? [String: Any])?[key] as? String == value })
+            return app.buttons["phone-tool-\(try XCTUnwrap(item["id"] as? Int))"]
+        }
+        func shows(_ panels: [String]) -> Bool {
+            drawer.exists && Set(drawer.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "drawer-panel-"))
+                .allElementsBoundByIndex.map(\.identifier)) == Set(panels.map { "drawer-panel-" + $0 })
+        }
+        let sketch = try tile("command", "drawing_brush")
+        for (target, panels) in [(try tile("slot", "bucket"), ["tools"]), (try tile("kind", "color"), ["color", "palettes"]),
+            (try tile("command", "sculpt"), ["sculpt_sets", "tools"])] {
+            if drawer.exists { phoneDrawerOutsideContact(in: app) }
+            phoneDrawerOpen(sketch, in: app)
+            expectation(for: NSPredicate { _, _ in shows(["brush_sets", "tools"]) }, evaluatedWith: app)
+            waitForExpectations(timeout: 10)
+            target.tap()
+            let transferred = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in shows(panels) }, object: app)
+            XCTAssertEqual(XCTWaiter.wait(for: [transferred], timeout: 5), .completed, "The first tap must open \(panels) next to the bar")
+        }
+    }
+
     @MainActor func testPhoneToolDrawersLight() throws { try checkPhoneToolDrawers(theme: "light") }
     @MainActor func testPhoneToolDrawersDark() throws { try checkPhoneToolDrawers(theme: "dark") }
     @MainActor func testPhoneCommandSettingsLight() throws { try checkPhoneCommandSettings(theme: "light") }
