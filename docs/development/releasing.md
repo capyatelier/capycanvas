@@ -362,6 +362,10 @@ other people keep landing on `main` don't enter a patch release.
   not its `Cargo.toml` version, so later releases list the patch and keep reading
   its saved data.
 
+GitHub rulesets keep `main` and release branches (`v<major>.<minor>`) from being
+deleted or force-pushed, and keep release tags (`v<major>.<minor>.<patch>`) from
+being moved or deleted. The `release` environment deploys only from `v*` tags.
+
 ## Recovering a failed release
 
 If an application check requires a code fix, discard the unpublished draft and
