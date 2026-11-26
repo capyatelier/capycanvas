@@ -95,12 +95,13 @@ Measured against v1.0.15 in November 2026 benchmark rounds; rerun before startin
 6. **Smaller native drifts against main.**
    - On the TCL, a cold Fit open of the 12 MP photo reaches its complete picture about 0.6 s later than main: 5.49 against 4.88 s; v1.0.15 took 27.6 s.
    - On the Pro 14 at 61 MP, native Paintbrush is about 4% below main, and pen-down is one or two frames later.
-7. **Web memory budget.** The Web budget is `navigator.deviceMemory / 4` (at most 2 GiB) and is shared by GPU and RAM as one unified device. This undercounts discrete-GPU machines and overcounts phones; model the browser's real limits.
-8. **Web strokes at Fit over a cold view, what is left.** The contact series 51204171f–00df4d341 owns a stroke from its first dab. On Pro 14 Chrome it took ink at the pen-down point from 12–13 s to 1.1 s after a cold 61 MP open.
+7. **Web strokes against v1.0.15 at Fit on 61 MP**, on main 8c32db045 in the same session: Surface Pro Edge G-Pen 81% and Paintbrush 70%; Pro 14 Chrome G-Pen 57% and Paintbrush 121%, both noisy. Main renders 1.2–7 frames per publication against v1.0.15's 1.0, and pen-down is slower in most passes.
+8. **Web memory budget.** The Web budget is `navigator.deviceMemory / 4` (at most 2 GiB) and is shared by GPU and RAM as one unified device. This undercounts discrete-GPU machines and overcounts phones; model the browser's real limits.
+9. **Web strokes at Fit over a cold view, what is left.** The contact series 51204171f–00df4d341 owns a stroke from its first dab. On Pro 14 Chrome it took ink at the pen-down point from 12–13 s to 1.1 s after a cold 61 MP open.
    - A page the contact claims whole is reduced into but never gets Store written coverage (`contact.written`, `end_contact`, `Store::materialize_source` in `scene/scale/pages.rs`). After pen up the view reduces 14 of its tiles again and decodes 12 again on that row. Record the contact's accepted writes as Store coverage when it ends.
    - Immediate strokes on that row still make only 3–4 updates/s in Chrome while the photo decodes.
    - Inking owed cells over a coarser resident photo level is parked as `artifacts/renderer-plan/parked/provisional-contact-over-coarser-photo-f9ee502ea.patch`. No measured row has reached its case, a coarser level under the pen.
-9. **Settling a finished capture without its tip.** A settlement whose only wait is its predicted tip could publish the capture without the tip; a written version is commit 27a385a98 on the `p2-release-web` branch. On Pro 14 Chrome it raised Paintbrush from 21.6 to 28.0 updates/s, but lowered G-Pen from 20.0 to 12.4. Understand the trade-off before landing it.
+10. **Settling a finished capture without its tip.** A settlement whose only wait is its predicted tip could publish the capture without the tip; a written version is commit 27a385a98 on the `p2-release-web` branch. On Pro 14 Chrome it raised Paintbrush from 21.6 to 28.0 updates/s, but lowered G-Pen from 20.0 to 12.4. Understand the trade-off before landing it.
 
 ## Open after the release candidate
 
@@ -116,6 +117,20 @@ These failed in the release candidate's test round and were judged not visible i
 6. **Work bounds.** An unchanged revisit recomposes. A cached pan resets the changed-cell flag buffer, because `changed_cells.rs` keys its admission on `working_bytes`; key it on the plan and the wanted set.
 7. **A failed pipeline compile keeps a held frame Runnable.** Return a per-recipe failure instead.
 8. **After `stopGpu` on the Web, the engine's pending edits keep demand at Work forever** (`canvas.rs` rebuild and composite flags, `canvas_work_pending`). Treat a GPU failure as terminal so catch-up and idle end.
+9. **The 12.9-inch iPad Pro (A10X, 4 GB) aborts in the Metal driver, sometimes.**
+   - The sequence: a 61 MP photo at Fit, G-Pen, Paintbrush and wet strokes, then Liquify Push.
+   - The abort: `Failed to allocate IOGPUDeviceShmem` in `IOGPUMetalCommandBufferStorageCreateExt`, on the render thread.
+   - At one abort, 1,243 command buffers were submitted but not complete, while GPU memory was 1.67 GB of a recommended 2.8 GB.
+   - It aborted in 3 of 6 runs on main and 0 of 2 on ec3b77811, but did not reproduce with a shorter prefix.
+   - A cap of two frames in flight is parked as `artifacts/renderer-plan/parked/gpu-frames-in-flight-cap-d85e17f48.patch`. It did not lower the sampled peak, because one Liquify frame can be hundreds of command buffers.
+   - Find what lets submitted buffers outrun completion during that sequence before choosing a bound.
+10. **Liquify on iPad at Fit over 61 MP takes about 1–3 updates/s, with input gaps of 2.1–2.4 s.** This holds on the A10X and the M4, and on ec3b77811 as well as main. Frames keep presenting during a gap, but none carries newer input.
+11. **Windows command draining.** The Windows render loop waits on a pacing receipt without ending on queued commands (`CanvasQueryQueue.h`, `CanvasAcquisitionWaitEnds`), so a command can wait one frame's GPU time.
+    - On WARP, where reduce-then-compose frames take seconds, this fails the effects and image-rows fixtures. On a real GPU they pass.
+    - A fix and two fixture corrections are parked in `artifacts/renderer-plan/parked/windows-command-drain-d4b188bd4/`. They made two canvas-bar fixtures time out on WARP, where a contact waits 16–18 s behind one frame.
+    - Fix the WARP frame cost, or bound GPU work per frame, before landing them.
+12. **A quick drag right after choosing Move on a 12 MP photo stalls once** on the TCL: 41 fps, a p99 of about 490 ms, and a first present 780 ms after contact. A drag started 3.5 s later runs at 60 fps.
+13. **A reopened 1 GP drawing shows nothing for about 25 s at Fit,** then the whole picture, on the Note 10 and the Surface Pro 11. On the Surface Pro the renderer still reports work 60 s after the picture is complete; check whether it is still submitting.
 
 ## Renderer tests failing on the release that pass on main
 
