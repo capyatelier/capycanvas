@@ -22,9 +22,9 @@ hardware are in [devices](devices.md).
   `CARGO_TARGET_DIR` and the Gradle build directory under `/home`. When
   `/mnt/localssd` exists, prefer it for build directories and other heavy
   scratch files; anything there is temporary and safe to clean up.
-- Delete scratch worktrees and build copies you created when you finish; keep
-  the user's assigned worktree. Never delete, reset or clean another session's
-  worktree, branch, build or files.
+- Keep the user's assigned worktree and follow the
+  [cleanup rule](../../AGENTS.md#working-alongside-other-sessions). Never delete,
+  reset or clean another session's worktree, branch, build or files.
 - Set `CARGO_TERM_COLOR=never` when output goes to a log or an agent.
 
 ## Build profiles

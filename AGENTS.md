@@ -95,8 +95,9 @@ These rules cover tests, benchmark harnesses and tools as much as production cod
   Create another only when none is assigned or the user asks, under `/home`,
   never `/tmp` ([environment](docs/development/environment.md)).
 - `/tmp` may be RAM-backed: keep builds, captures, recordings and downloads out
-  of it, and prefer `/mnt/localssd`, which is scratch space safe to clean. Delete
-  the artifacts, worktrees, builds and runs you create once you no longer need them.
+  of it, and prefer `/mnt/localssd`, which is scratch space safe to clean.
+- Reuse build directories. Delete your scratch builds, worktrees and temporary
+  files as soon as you no longer need them. Keep test evidence, not build outputs.
 - Delegate routine, context-heavy verification such as test suites, scripted
   journeys and performance runs to Sonnet or Sol subagents when supported. Give
   them the worktree and commands, and ask for concise results with verbatim
