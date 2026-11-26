@@ -82,7 +82,7 @@ gh run list --repo capyatelier/capycanvas --workflow ci.yml \
   --commit "$CAPY_RELEASE_COMMIT" --json databaseId,status,conclusion,url
 ```
 
-Wait for CI on that commit to pass. Before tagging, run the Compatibility
+CI results don't gate the release. Before tagging, run the Compatibility
 workflow on the release commit, or run `python3 tools/compat/run.py all` locally
 on that commit. Use `releases=all` and `modes=all`, verify the workflow's `headSha`
 and require every compatibility job to pass; inspect its report artifacts.
@@ -164,9 +164,15 @@ done
 
 ### 4. Verify the exact packages and beta build
 
-On each supported host, test first launch, painting, import, save/reopen, export,
-restart, installation and updating from the previous release with fixture
-drawings. Exercise UI in light and dark themes. Use private profiles and test
+This step checks that packaging, installation and the installed environment broke
+nothing. That covers what development builds never exercise: installers, signing
+and entitlements, sandbox permissions, file associations, install locations and
+default configuration. App behaviour is covered before the release by the test
+suites and isn't retested here. On each
+supported host, install the final signed package from the tag build the way a
+user would, including updating from the previous release, then launch the
+installed app and do a few basic operations: draw a few strokes, pan, zoom and
+rotate the canvas, and open a panel and a menu. Use private profiles and test
 identities under [testing](testing.md) and [devices](devices.md); never replace a
 user's installation or use their drawings. Record any limitation in verifying
 the production identity rather than treating a rebuilt test package as the
@@ -454,15 +460,18 @@ workflow instead. Release validation calls the same CI workflow, and
 
 ### Release validation
 
-`.github/workflows/release-checks.yml` supports reusable calls and manual dispatch.
-Manual dispatch defaults to Windows-only checks; set `windows-only=false` for full
-validation. A release dry run calls it alongside packaging; tag pushes don't. The
-release gate is whether each package builds, installs and runs: store uploads and
-GitHub Release creation require every platform package job, including its own
-package checks such as signing, notarization and the MSIX install test, followed by
-the install and launch checks below. The full suites catch app regressions before
-the tag; a failure there is fixed on `main`, but it doesn't hold a release whose
-packages install and run.
+A release is gated only on its packages. `release.yml` builds every platform
+package with its own package checks, such as signing, notarization, disk image
+verification and the MSIX install test, and store uploads and GitHub Release
+creation require all of them. The release driver then runs the install and smoke
+check in [step 4](#4-verify-the-exact-packages-and-beta-build) on the final
+binaries.
+
+`.github/workflows/release-checks.yml` holds the full test suites. It runs on its
+own by manual dispatch, not as part of a release. Manual dispatch defaults to
+Windows-only checks; set `windows-only=false` for all of them. A failure there is
+an app regression to fix on `main`; it doesn't hold a release whose packages
+install and run.
 
 | Job | Checks without a hardware GPU |
 | --- | --- |

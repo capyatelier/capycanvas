@@ -27,11 +27,12 @@ test("only a tag push enables signing, publication and the public About version"
     }
 });
 
-test("packages build alongside checks and stores wait for every result", () => {
+test("stores and the GitHub Release wait for every package, not the test suites", () => {
   for (const name of platforms) assert.match(job(release, name), /^    needs: version$/m);
   for (const name of ["android-publish", "apple-publish"]) {
     const needs = job(release, name).match(/^    needs: \[(.+)\]$/m)[1].split(", ");
-    for (const prerequisite of ["checks", ...platforms]) assert.ok(needs.includes(prerequisite), `${name}: ${prerequisite}`);
+    for (const prerequisite of platforms) assert.ok(needs.includes(prerequisite), `${name}: ${prerequisite}`);
+    assert.ok(!needs.includes("checks"), `${name}: checks`);
   }
   assert.match(job(release, "release"), /^    needs: \[version, summary\]$/m);
 });
@@ -45,12 +46,12 @@ test("private archives and reports never enter GitHub Release assets", () => {
   assert.doesNotMatch(job(release, "release"), /name: (ipad-archive|mac-store-archive|release-report)/);
 });
 
-test("heavy validation is called only by the release workflow", () => {
+test("the test suites run on their own, outside the release workflow", () => {
   assert.match(checks, /^on:\n  workflow_call:/m);
   assert.doesNotMatch(checks, /^  (push|pull_request|schedule):/m);
   assert.doesNotMatch(ci, /^  arch:/m);
   assert.doesNotMatch(ci, /^  windows:/m);
-  assert.match(job(release, "checks"), /uses: \.\/.github\/workflows\/release-checks.yml/);
+  assert.doesNotMatch(release, /uses: \.\/.github\/workflows\/release-checks.yml/);
   assert.doesNotMatch(ci, /uses: \.\/.github\/workflows\/release-checks.yml/);
   assert.match(ci, /group: ci-\$\{\{ github.workflow \}\}-\$\{\{ github.event_name \}\}-/);
 });
@@ -92,19 +93,20 @@ test("hosted CPU checks keep model tests while excluding native GPU cases", () =
 });
 
 test("release success permits only the jobs skipped by the selected mode", () => {
-  const gate = job(release, "summary").split("      - name: Require successful checks and packages")[1]
+  const gate = job(release, "summary").split("      - name: Require successful packages")[1]
     .match(/python3 - <<'PYCODE'\n([\s\S]*?)\n          PYCODE/)[1].replace(/^          /gm, "");
-  const results = Object.fromEntries(["version", "checks", ...platforms, "android-publish", "apple-publish"].map(name => [name, { result: "success" }]));
+  const results = Object.fromEntries(["version", ...platforms, "android-publish", "apple-publish"].map(name => [name, { result: "success" }]));
   const run = (signed, windowsOnly = false) => spawnSync(process.env.PYTHON ?? "python3", ["-c", gate], { env: { ...process.env, SIGNED: String(signed), WINDOWS_PACKAGES_ONLY: String(windowsOnly), RESULTS: JSON.stringify(results) }, encoding: "utf8" });
   assert.equal(run(true).status, 0);
   results["android-publish"].result = results["apple-publish"].result = "skipped";
   assert.equal(run(false).status, 0);
   assert.equal(run(true).status, 1);
   for (const result of ["failure", "cancelled", "skipped"]) {
-    results.checks.result = result;
+    results.android.result = result;
     assert.equal(run(false).status, 1, result);
+    results.android.result = "success";
   }
-  for (const name of ["checks", ...platforms.filter(name => name !== "windows")]) results[name].result = "skipped";
+  for (const name of platforms.filter(name => name !== "windows")) results[name].result = "skipped";
   assert.equal(run(false, true).status, 0);
   assert.equal(run(false).status, 1);
   for (const name of ["version", "windows"])
