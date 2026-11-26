@@ -117,13 +117,10 @@ These failed in the release candidate's test round and were judged not visible i
 6. **Work bounds.** An unchanged revisit recomposes. A cached pan resets the changed-cell flag buffer, because `changed_cells.rs` keys its admission on `working_bytes`; key it on the plan and the wanted set.
 7. **A failed pipeline compile keeps a held frame Runnable.** Return a per-recipe failure instead.
 8. **After `stopGpu` on the Web, the engine's pending edits keep demand at Work forever** (`canvas.rs` rebuild and composite flags, `canvas_work_pending`). Treat a GPU failure as terminal so catch-up and idle end.
-9. **The 12.9-inch iPad Pro (A10X, 4 GB) aborts in the Metal driver, sometimes.**
-   - The sequence: a 61 MP photo at Fit, G-Pen, Paintbrush and wet strokes, then Liquify Push.
-   - The abort: `Failed to allocate IOGPUDeviceShmem` in `IOGPUMetalCommandBufferStorageCreateExt`, on the render thread.
-   - At one abort, 1,243 command buffers were submitted but not complete, while GPU memory was 1.67 GB of a recommended 2.8 GB.
-   - It aborted in 3 of 6 runs on main and 0 of 2 on ec3b77811, but did not reproduce with a shorter prefix.
-   - A cap of two frames in flight is parked as `artifacts/renderer-plan/parked/gpu-frames-in-flight-cap-d85e17f48.patch`. It did not lower the sampled peak, because one Liquify frame can be hundreds of command buffers.
-   - Find what lets submitted buffers outrun completion during that sequence before choosing a bound.
+9. **Metal has no command-buffer back-pressure.** The A10X Liquify abort (`Failed to allocate IOGPUDeviceShmem`) came from one pen-up frame with one compute pass per reconstruction dispatch, fixed in 24c15b1c8. Two causes remain for any other path that emits many passes in one frame:
+   - The vendored Metal queue allows 4,096 outstanding command buffers (`vendor/wgpu-hal/src/metal/adapter.rs`), far above what a 4 GB device's driver can hold, so Metal never pushes back.
+   - wgpu-core opens a `(wgpu internal) Pre Pass` command buffer before every compute pass, and on Metal it is empty because transitions are no-ops. About half of all Metal command buffers are these.
+   - A cap of two frames in flight is parked as `artifacts/renderer-plan/parked/gpu-frames-in-flight-cap-d85e17f48.patch`. It does not bound command buffers within one frame.
 10. **Liquify on iPad at Fit over 61 MP takes about 1–3 updates/s, with input gaps of 2.1–2.4 s.** This holds on the A10X and the M4, and on ec3b77811 as well as main. Frames keep presenting during a gap, but none carries newer input.
 11. **Windows command draining.** The Windows render loop waits on a pacing receipt without ending on queued commands (`CanvasQueryQueue.h`, `CanvasAcquisitionWaitEnds`), so a command can wait one frame's GPU time.
     - On WARP, where reduce-then-compose frames take seconds, this fails the effects and image-rows fixtures. On a real GPU they pass.
