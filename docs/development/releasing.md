@@ -84,11 +84,13 @@ gh run list --repo capyatelier/capycanvas --workflow ci.yml \
   --commit "$CAPY_RELEASE_COMMIT" --json databaseId,status,conclusion,url
 ```
 
-CI results don't gate the release. Before tagging, run the Compatibility
-workflow on the release commit, or run `python3 tools/compat/run.py all` locally
-on that commit. Use `releases=all` and `modes=all`, verify the workflow's `headSha`
-and require every compatibility job to pass; inspect its report artifacts.
-Then run the full release dry run:
+CI results don't gate the release. When the release changes saved-data code,
+run the Compatibility workflow on the release commit before tagging, or
+`python3 tools/compat/run.py all` locally on that commit, with `releases=all` and
+`modes=all`; verify the workflow's `headSha`, require every compatibility job to
+pass and inspect its report artifacts. A release dry run is optional: the tag run
+builds and checks the same packages, and a tag whose build fails for a code
+reason is left behind for the next patch number. To dry-run anyway:
 
 ```bash
 gh workflow run release.yml --repo capyatelier/capycanvas --ref main
