@@ -3264,7 +3264,7 @@ pub(super) mod query_tests {
         let cache=renderer.scale_display.as_ref().unwrap();
         assert!(cache.stand_in().is_none(),"an overview whose record is not whole is no stand-in");
         assert!(cache.presentable().is_some());
-        let page=renderer.presentation_page().unwrap();
+        let page=renderer.presentation_page(None).unwrap();
         let views=page.views(&renderer.empty_view);
         assert_eq!(views[0],cache.view());
         assert_eq!((views[1],page.stand_in_scale()),(cache.view(),0.),"the page carries no stand-in");
@@ -3688,7 +3688,7 @@ pub(super) mod query_tests {
     }
 
     #[test]
-    fn a_replaced_window_with_holes_stays_presented_until_the_new_window_commits() {
+    fn a_replaced_window_stays_presented_with_its_surround_left_to_the_floor_until_the_new_window_commits() {
         use crate::submission::ColorPass;
         let extent=[4096,2048];
         let document=layer_core::Document::new(layer_core::PortableId::random(),extent[0],extent[1],
@@ -3699,30 +3699,34 @@ pub(super) mod query_tests {
         scene.scale_sources.prepare(&renderer,frame,&[]);
         let mut commands=RegionRecords::new(&renderer);
         let mut encoder=submission::CommandEncoder::new(&renderer.device,&Default::default());
-        let write_first_cell=|cache:&mut Cache,renderer:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,commands:&mut RegionRecords| {
+        let write_cells=|cache:&mut Cache,renderer:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,commands:&mut RegionRecords,cells:usize| {
             crate::scene::scale::tests::prepare_fixture_frame(renderer,frame,&scene);
             cache.prepare_graph(renderer,frame,&scene).unwrap();
-            let region=bounds([cache.plan.bounds.min_x()/PAGE_SIZE,cache.plan.bounds.min_y()/PAGE_SIZE],0,extent);
-            let key=cache.page_key(cache.graph.root.clone().unwrap(),region);
-            let image=cache.pages.lock().unwrap().claim(renderer,key.clone(),u64::MAX,WindowId::default(),crate::residency::Class::Visible).unwrap();
-            let write=cache.pages.lock().unwrap().prepare_write(key,image.plan.bounds,Accuracy::Display,0).unwrap();
-            drop(encoder.color_pass("one written cell",&image.view,wgpu::LoadOp::Clear(wgpu::Color::WHITE)));
-            cache.pages.lock().unwrap().commit(write,0,encoder);
+            for coordinate in coordinates(cache.plan.bounds,cache.plan.level).take(cells).collect::<Vec<_>>() {
+                let key=cache.page_key(cache.graph.root.clone().unwrap(),bounds(coordinate,0,extent));
+                let image=cache.pages.lock().unwrap().claim(renderer,key.clone(),u64::MAX,WindowId::default(),crate::residency::Class::Visible).unwrap();
+                let write=cache.pages.lock().unwrap().prepare_write(key,image.plan.bounds,Accuracy::Display,0).unwrap();
+                drop(encoder.color_pass("written cell",&image.view,wgpu::LoadOp::Clear(wgpu::Color::WHITE)));
+                cache.pages.lock().unwrap().commit(write,0,encoder);
+            }
             cache.copy_level(&scene,renderer,encoder,commands).unwrap();
         };
         let shown=PixelRect::new(0,0,512,256);
-        let mut cache=Cache::new(&renderer,Request {plan:display_mips::Plan::window(extent,0,shown),evaluation:Evaluation::Display},document.scene().order().len());
-        pollster::block_on(renderer.compilation.prepare_all([&renderer.scene_pipelines.scale.output(cache.precision.format()).reduce_pair])).unwrap();
-        write_first_cell(&mut cache,&mut renderer,&mut encoder,&mut commands);
-        assert!(cache.picture().is_none() && cache.pixels.committed_root().is_some_and(|root|!root.complete()),"the shown window has one written cell and a hole");
-        let plan=display_mips::Plan::window(extent,0,PixelRect::new(1024,512,1536,768));
-        let (mut next,replaced)=Cache::select(Some(cache),&renderer,frame,Request {plan,evaluation:Evaluation::Display});
-        assert!(replaced && next.pixels.committed_root().is_none(),"the new window has committed nothing");
-        assert_eq!(next.presentable().map(|cache|cache.plan.bounds),Some(shown),"the replaced window stays presented until the new window commits");
-        write_first_cell(&mut next,&mut renderer,&mut encoder,&mut commands);
-        next.release_previous(&renderer);
-        assert!(next.previous.is_none(),"a replaced window with holes is released once the new window commits");
-        assert_eq!(next.presentable().map(|cache|cache.plan.bounds),Some(plan.bounds),"the new window presents once it commits");
+        for complete in [false,true] {
+            let mut cache=Cache::new(&renderer,Request {plan:display_mips::Plan::window(extent,0,shown),evaluation:Evaluation::Display},document.scene().order().len());
+            pollster::block_on(renderer.compilation.prepare_all([&renderer.scene_pipelines.scale.output(cache.precision.format()).reduce_pair])).unwrap();
+            write_cells(&mut cache,&mut renderer,&mut encoder,&mut commands,if complete {usize::MAX} else {1});
+            assert!(cache.picture().is_none() && cache.pixels.committed_root().is_some_and(|root|root.complete()==complete),"complete {complete}: the shown window is no whole picture");
+            let plan=display_mips::Plan::window(extent,0,PixelRect::new(1024,512,1536,768));
+            let (mut next,replaced)=Cache::select(Some(cache),&renderer,frame,Request {plan,evaluation:Evaluation::Display});
+            assert!(replaced && next.pixels.committed_root().is_none(),"complete {complete}: the new window has committed nothing");
+            assert_eq!(next.presentable().map(|cache|cache.plan.bounds),Some(shown),"complete {complete}: the replaced window stays presented until the new window commits");
+            assert!(next.presented_page(plan.bounds).is_some_and(|page|page.holes),"complete {complete}: the replaced window leaves the new window's area to the stand-in and the floor");
+            write_cells(&mut next,&mut renderer,&mut encoder,&mut commands,1);
+            next.release_previous(&renderer);
+            assert!(next.previous.is_none(),"complete {complete}: the replaced window is released once the new window commits");
+            assert_eq!(next.presentable().map(|cache|cache.plan.bounds),Some(plan.bounds),"complete {complete}: the new window presents once it commits");
+        }
         renderer.uploads.finish(&encoder);encoder.submit(&renderer.queue);crate::test_support::complete(&renderer);
     }
 

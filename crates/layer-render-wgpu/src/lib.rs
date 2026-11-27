@@ -1843,7 +1843,7 @@ impl WgpuRasterizer {
             encoder.retire(charge);
         }
     }
-    pub fn has_presentable_frame(&self) -> bool { self.presentation_views().is_some() }
+    pub fn has_presentable_frame(&self) -> bool { self.presentation_page(None).is_some() }
     fn activate_presentation(&mut self, scene: layer_core::SceneView<'_>) {
         let document = (scene.owner(), scene.artwork().id);
         if self.presentation.document != Some(document) {
@@ -1853,15 +1853,18 @@ impl WgpuRasterizer {
             self.floor = None;
         }
     }
-    pub(crate) fn presentation_page(&self)->Option<scene::scale::PresentedPage<'_>> {
-        let page=self.selected_display_cache().and_then(scene::scale::Cache::presentation);
+    pub(crate) fn presentation_page(&self,view:Option<layer_render::ViewState>)->Option<scene::scale::PresentedPage<'_>> {
+        let document=PixelRect::full(self.document_extent);
+        let visible=view.map_or(document,|view|display_mips::view_bounds(view,self.document_extent,0).unwrap_or(document));
+        let page=self.scale_display.as_ref().and_then(|cache|cache.presented_page(visible));
         match self.floor.as_ref().filter(|floor|Some(floor.document())==self.presentation.document) {
             Some(floor)=>floor.page(page),
             None=>page,
         }
     }
+    #[cfg(test)]
     pub(crate) fn presentation_views(&self)->Option<[&wgpu::TextureView;3]> {
-        self.presentation_page().map(|page|page.views(&self.empty_view))
+        self.presentation_page(None).map(|page|page.views(&self.empty_view))
     }
     pub(crate) fn composed_vector_motion(&self) -> Option<&(layer_render::VectorMotion, DocRect)> {
         self.vector_motion_drawn.as_ref().filter(|_| self.vector_motion_split.is_none())

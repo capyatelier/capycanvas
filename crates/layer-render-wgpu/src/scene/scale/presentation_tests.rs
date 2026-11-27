@@ -1185,7 +1185,7 @@ fn assert_crossing_shows_no_surround_until_it_completes(kind: Crossed) {
             let shown = surround_inside_document(&r, &mut presenter, crossing_view(to), extent);
             assert_eq!(shown, 0, "{kind:?} {space:?} {from}->{to} frame {step} shows the surround at {shown} document pixels");
             assert_eq!(cache.previous.is_some(), !cache.complete, "{kind:?} {space:?} {from}->{to} frame {step} keeps the previous level exactly until the window completes");
-            if cache.complete { assert_eq!(presenter.bound_viewport(&r).0, 0, "{kind:?} {space:?} {from}->{to} frame {step} presents a complete window through fs_main"); }
+            if cache.complete { assert_eq!(presenter.bound_viewport(&r, crossing_view(to)).0, 0, "{kind:?} {space:?} {from}->{to} frame {step} presents a complete window through fs_main"); }
             if cache.complete && r.next_frame() == layer_render::FrameDemand::Wait { break; }
             assert!(std::time::Instant::now() < deadline, "{kind:?} {space:?} {from}->{to} settles");
             if r.next_frame() != layer_render::FrameDemand::Work { std::thread::sleep(std::time::Duration::from_millis(1)); }
@@ -1210,36 +1210,42 @@ pub(crate) fn crossing_with_stand_in() -> (WgpuRasterizer, ViewState) {
     loop {
         r.submit(FramePacket { composite_all: false, ..frame(crossing_view(0.6)) }).unwrap();
         r.wait_idle().unwrap();
-        if r.presentation_page().is_some_and(|page| page.stand_in_scale() != 0.) { return (r, crossing_view(0.6)); }
+        if r.presentation_page(Some(crossing_view(0.6))).is_some_and(|page| page.stand_in_scale() != 0.) { return (r, crossing_view(0.6)); }
         assert!(!r.scale_display.as_ref().unwrap().complete && std::time::Instant::now() < deadline, "the crossing presents an incomplete window with a stand-in");
     }
 }
 
 #[test]
-fn the_storm_observer_counts_a_crossing_stand_in_in_the_holes_only_when_the_presenter_draws_it() {
+fn a_cold_presenter_is_ready_only_with_its_stand_in_entry_and_then_fills_every_hole_of_a_crossing() {
     let (r, view) = crossing_with_stand_in();
-    let mut cold = crate::test_support::float_presenter(&r);
-    let surround = surround_inside_document(&r, &mut cold, view, CROSSING_EXTENT);
-    let coverage = crate::test_support::storm_coverage(&r, &cold, view, CROSSING_EXTENT);
+    let mut presenter = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba32Float, crate::SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+    while !presenter.pipelines_ready(&r) {
+        assert!(std::time::Instant::now() < deadline, "the presenter's required entries compile");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(presenter.bound_viewport(&r, view).0, 1, "a ready presenter has its stand-in entry, so a crossing with holes presents through it");
+    let surround = surround_inside_document(&r, &mut presenter, view, CROSSING_EXTENT);
+    let coverage = crate::test_support::storm_coverage(&r, &presenter, view, CROSSING_EXTENT);
     assert!(coverage.known && coverage.root > 0. && coverage.root < coverage.total, "the crossing's window shows written cells and holes: {coverage:?}");
-    assert!(surround > 0 && coverage.presented == coverage.root,
-        "a cold stand-in entry shows the surround at {surround} document pixels, so the holes stay uncovered: {coverage:?}");
-    r.shader_idle(true, true);
-    crate::test_support::warm_presentation(&r, wgpu::TextureFormat::Rgba32Float, crate::SdrSurfaceColor::ExtendedLinearSrgb, view);
-    let mut warm = crate::test_support::float_presenter(&r);
-    let surround = surround_inside_document(&r, &mut warm, view, CROSSING_EXTENT);
-    let coverage = crate::test_support::storm_coverage(&r, &warm, view, CROSSING_EXTENT);
-    assert!(surround == 0 && coverage.presented == coverage.total,
-        "a compiled stand-in fills every hole of the camera once, leaving {surround} surround pixels: {coverage:?}");
+    assert!(surround == 0 && coverage.presented == coverage.total, "the stand-in fills every hole, leaving {surround} surround pixels: {coverage:?}");
 }
 
 #[test]
-fn a_crossing_presents_the_surround_through_fs_main_until_the_stand_in_entry_compiles() {
-    let (r, view) = crossing_with_stand_in();
+fn a_wider_camera_presented_before_the_renderer_replans_shows_the_floor_beyond_a_complete_window() {
+    let (extent, doc) = (CROSSING_EXTENT, crossing_document(Crossed::Raster));
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    settle_at(&mut r, FramePacket { view: crossing_view(0.4), ..packet(doc.scene(), extent) });
+    settle_at(&mut r, FramePacket { view: crossing_view(2.), ..packet(doc.scene(), extent) });
+    let cache = r.scale_display.as_ref().unwrap();
+    assert!(cache.complete && cache.plan.bounds != PixelRect::full(extent), "the zoomed-in window is complete and does not cover the drawing");
+    assert!(r.floor.as_ref().and_then(|floor| floor.image()).is_some(), "the drawing has published its floor");
+    crate::test_support::warm_presentation(&r, wgpu::TextureFormat::Rgba32Float, crate::SdrSurfaceColor::ExtendedLinearSrgb, crossing_view(2.));
     let mut presenter = crate::test_support::float_presenter(&r);
-    let shown = surround_inside_document(&r, &mut presenter, view, CROSSING_EXTENT);
-    assert_eq!(presenter.bound_viewport(&r).0, 0, "a cold stand-in entry leaves the frame on fs_main");
-    assert!(shown > 0, "fs_main draws the surround, not the stand-in, where the window is unwritten");
+    let wider = crossing_view(0.4);
+    assert_eq!(surround_inside_document(&r, &mut presenter, wider, extent), 0, "a camera the window does not cover shows the floor, not the surround");
+    assert_eq!(presenter.presented_camera(), Some(wider), "the wider camera was drawn");
+    assert_eq!(presenter.bound_viewport(&r, wider).0, 1, "the uncovered camera presents through the stand-in entry");
 }
 
 #[test]
@@ -1252,8 +1258,8 @@ fn a_complete_window_presents_through_fs_main_beside_a_complete_overview() {
     crate::test_support::warm_presentation(&r, wgpu::TextureFormat::Rgba32Float, crate::SdrSurfaceColor::ExtendedLinearSrgb, crossing_view(2.));
     let mut presenter = crate::test_support::float_presenter(&r);
     assert_eq!(surround_inside_document(&r, &mut presenter, crossing_view(2.), extent), 0);
-    assert_eq!(r.presentation_page().unwrap().stand_in_scale(), 0.);
-    assert_eq!(presenter.bound_viewport(&r).0, 0, "a complete window presents through fs_main");
+    assert_eq!(r.presentation_page(Some(crossing_view(2.))).unwrap().stand_in_scale(), 0.);
+    assert_eq!(presenter.bound_viewport(&r, crossing_view(2.)).0, 0, "a complete window presents through fs_main");
 }
 
 #[test]
@@ -1355,7 +1361,7 @@ fn a_level_change_without_a_committed_root_presents_the_floor() {
     assert!(!r.test.discard_frame, "the level change's encoder is dropped");
     assert_ne!(r.scale_display.as_ref().unwrap().plan.level, 1, "the view changes level");
     assert!(r.selected_display_cache().is_none(), "the new level has no committed root and keeps no previous level");
-    assert!(r.has_presentable_frame() && r.presentation_page().is_some_and(|page| page.stand_in_scale() > 1.), "the floor presents alone");
+    assert!(r.has_presentable_frame() && r.presentation_page(None).is_some_and(|page| page.stand_in_scale() > 1.), "the floor presents alone");
     assert_eq!(surround_inside_document(&r, &mut presenter, crossing_view(0.6), extent), 0);
     let shown = present(&r, &mut presenter, crossing_view(0.6));
     let error = quality(&shown, &expected, display_mips::Plan::at([600, 450], 0), wgpu::TextureFormat::Rgba32Float);

@@ -10,7 +10,7 @@ pub(crate) struct Drawn { pub shown: Vec<u8>, pub full: Vec<u8>, pub plain: Vec<
 pub(crate) fn plain_ready(renderer: &WgpuRasterizer, format: wgpu::TextureFormat) -> ViewportPresenter {
     let mut presenter = ViewportPresenter::for_surface(renderer, format, SdrSurfaceColor::Srgb).unwrap();
     pollster::block_on(presenter.prepare(renderer)).unwrap();
-    let lit = presenter.bound_viewport(renderer).1;
+    let lit = presenter.viewport_pipelines(renderer).0;
     pollster::block_on(renderer.compilation.prepare_all([presenter.plain_pipeline(renderer, lit)])).unwrap();
     presenter
 }
@@ -37,7 +37,7 @@ pub(crate) fn present(presenter: &mut ViewportPresenter, renderer: &WgpuRasteriz
     let (texture, target) = crate::create_target(renderer.device(), extent, presenter.format, "plain viewport");
     pollster::block_on(presenter.prepare(renderer)).unwrap();
     presenter.present(renderer, &target, view, SURROUND).unwrap();
-    let (_, lit, full) = presenter.bound_viewport(renderer);
+    let (_, lit, full) = presenter.bound_viewport(renderer, view);
     let plain = presenter.plain_pipeline(renderer, lit);
     Drawn {
         shown: page_bytes(renderer, &texture),
@@ -91,7 +91,7 @@ fn plain_frames_present_the_full_viewport_pixels_bit_for_bit() {
                 let case = format!("{depth:?} document, paper {paper}, {format:?} target");
                 let mut presenter = plain_ready(&renderer, format);
                 presenter.set_gpu_local_tone_guide(&renderer, (depth == SampleDepth::F32).then(|| local_tone(&renderer, extent))).unwrap();
-                assert_eq!(presenter.bound_viewport(&renderer).1, paper, "{case}: paper lighting selects the lit variants");
+                assert_eq!(presenter.viewport_pipelines(&renderer).0, paper, "{case}: paper lighting selects the lit variants");
                 let drawn = present(&mut presenter, &renderer, crate::test_support::view(extent));
                 let colors: std::collections::HashSet<&[u8]> = drawn.shown.chunks(4).collect();
                 assert!(colors.len() > 64, "{case}: the stroke, its soft edges and the canvas behind it show: {} colors", colors.len());

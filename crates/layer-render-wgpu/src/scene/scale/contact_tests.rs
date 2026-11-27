@@ -555,7 +555,7 @@ fn a_frame_whose_commit_is_discarded_keeps_presenting_the_last_committed_root() 
     let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
     let mut r=renderer(&doc);
     crate::test_support::submit_settled(&mut r,frame);crate::test_support::complete(&r);
-    let coverage=|r:&WgpuRasterizer|{let coverage=r.presentation_page().unwrap().storm_coverage(frame.view,false);(coverage.root,coverage.known)};
+    let coverage=|r:&WgpuRasterizer|{let coverage=r.presentation_page(Some(frame.view)).unwrap().storm_coverage(frame.view,false);(coverage.root,coverage.known)};
     let (settled,known)=coverage(&r);
     assert!(settled>0. && known,"the settled view presents a committed root");
     for (step,x) in [300.,1500.].into_iter().enumerate() {
