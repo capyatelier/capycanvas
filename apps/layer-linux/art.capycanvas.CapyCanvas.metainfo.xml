@@ -21,46 +21,46 @@
   <name xml:lang="vi">Capy Canvas</name>
   <name xml:lang="tr">Capy Canvas</name>
   <name xml:lang="it">Capy Canvas</name>
-  <summary>Draw and paint with a GPU-accelerated canvas</summary>
-  <summary xml:lang="ja">GPUで高速に描画するキャンバスで絵を描く</summary>
-  <summary xml:lang="zh_CN">在 GPU 加速的画布上绘画</summary>
-  <summary xml:lang="zh-CN">在 GPU 加速的画布上绘画</summary>
-  <summary xml:lang="zh_TW">在 GPU 加速的畫布上繪畫</summary>
-  <summary xml:lang="zh-TW">在 GPU 加速的畫布上繪畫</summary>
-  <summary xml:lang="ko">GPU 가속 캔버스에서 그림 그리기</summary>
-  <summary xml:lang="es">Dibuja y pinta en un lienzo acelerado por GPU</summary>
-  <summary xml:lang="pt_BR">Desenhe e pinte em uma tela acelerada por GPU</summary>
-  <summary xml:lang="pt-BR">Desenhe e pinte em uma tela acelerada por GPU</summary>
-  <summary xml:lang="id">Gambar dan lukis di kanvas berakselerasi GPU</summary>
-  <summary xml:lang="fr">Dessinez et peignez sur une toile accélérée par GPU</summary>
-  <summary xml:lang="de">Zeichne und male auf einer GPU-beschleunigten Leinwand</summary>
-  <summary xml:lang="ru">Рисуйте на холсте с ускорением на GPU</summary>
-  <summary xml:lang="th">วาดและระบายสีบนผืนผ้าใบที่เร่งด้วย GPU</summary>
-  <summary xml:lang="vi">Vẽ trên khung vẽ được tăng tốc bằng GPU</summary>
-  <summary xml:lang="tr">GPU hızlandırmalı tuvalde çizim ve boyama yapın</summary>
-  <summary xml:lang="it">Disegna e dipingi su una tela accelerata dalla GPU</summary>
+  <summary>Sketch, paint and edit photos</summary>
+  <summary xml:lang="ja">スケッチ・ペイント・写真編集</summary>
+  <summary xml:lang="zh_CN">速写、绘画与照片编辑</summary>
+  <summary xml:lang="zh-CN">速写、绘画与照片编辑</summary>
+  <summary xml:lang="zh_TW">速寫、繪畫與照片編輯</summary>
+  <summary xml:lang="zh-TW">速寫、繪畫與照片編輯</summary>
+  <summary xml:lang="ko">스케치, 페인팅, 사진 편집</summary>
+  <summary xml:lang="es">Dibuja, pinta y edita fotos</summary>
+  <summary xml:lang="pt_BR">Desenhe, pinte e edite fotos</summary>
+  <summary xml:lang="pt-BR">Desenhe, pinte e edite fotos</summary>
+  <summary xml:lang="id">Sketsa, lukis, dan edit foto</summary>
+  <summary xml:lang="fr">Dessinez, peignez, retouchez</summary>
+  <summary xml:lang="de">Zeichnen, Malen, Fotoretusche</summary>
+  <summary xml:lang="ru">Рисование и обработка фото</summary>
+  <summary xml:lang="th">สเก็ตช์ ระบายสี และแต่งรูป</summary>
+  <summary xml:lang="vi">Phác thảo, vẽ và chỉnh ảnh</summary>
+  <summary xml:lang="tr">Çiz, boya, fotoğraf düzenle</summary>
+  <summary xml:lang="it">Disegna, dipingi, ritocca foto</summary>
   <developer id="art.capycanvas">
     <name>Capy Atelier</name>
   </developer>
   <description>
-    <p>Sketch, illustrate and edit photos with GPU-accelerated brushes and compositing, layers and photo adjustments.</p>
-    <p xml:lang="ja">GPUで高速に描画するブラシや合成、レイヤー、写真の色調補正を使って、スケッチやイラストの制作、写真の編集ができます。</p>
-    <p xml:lang="zh_CN">使用 GPU 加速的笔刷与合成、图层和照片调整功能，绘制素描、创作插画和编辑照片。</p>
-    <p xml:lang="zh-CN">使用 GPU 加速的笔刷与合成、图层和照片调整功能，绘制素描、创作插画和编辑照片。</p>
-    <p xml:lang="zh_TW">使用 GPU 加速的筆刷與合成、圖層和相片調整功能，繪製素描、創作插畫和編輯相片。</p>
-    <p xml:lang="zh-TW">使用 GPU 加速的筆刷與合成、圖層和相片調整功能，繪製素描、創作插畫和編輯相片。</p>
-    <p xml:lang="ko">GPU 가속 브러시와 합성, 레이어, 사진 보정 기능으로 스케치와 일러스트를 그리고 사진을 편집하세요.</p>
-    <p xml:lang="es">Crea bocetos e ilustraciones y edita fotos con pinceles y composición acelerados por GPU, capas y ajustes fotográficos.</p>
-    <p xml:lang="pt_BR">Crie esboços e ilustrações e edite fotos com pincéis e composição acelerados por GPU, camadas e ajustes fotográficos.</p>
-    <p xml:lang="pt-BR">Crie esboços e ilustrações e edite fotos com pincéis e composição acelerados por GPU, camadas e ajustes fotográficos.</p>
-    <p xml:lang="id">Buat sketsa dan ilustrasi serta edit foto dengan kuas dan komposisi berakselerasi GPU, lapisan, dan penyesuaian foto.</p>
-    <p xml:lang="fr">Réalisez des croquis et des illustrations et retouchez des photos avec des pinceaux et une composition accélérés par GPU, des calques et des réglages photo.</p>
-    <p xml:lang="de">Erstelle Skizzen und Illustrationen und bearbeite Fotos mit GPU-beschleunigten Pinseln und Bildkomposition, Ebenen und Fotoanpassungen.</p>
-    <p xml:lang="ru">Создавайте эскизы и иллюстрации и редактируйте фотографии с помощью кистей и композитинга с ускорением на GPU, слоёв и настроек изображения.</p>
-    <p xml:lang="th">สเก็ตช์ วาดภาพประกอบ และแก้ไขภาพถ่ายด้วยแปรงและการผสานภาพที่เร่งด้วย GPU พร้อมเลเยอร์และเครื่องมือปรับแต่งภาพถ่าย</p>
-    <p xml:lang="vi">Phác thảo, vẽ minh họa và chỉnh sửa ảnh với cọ và khả năng tổng hợp hình ảnh được tăng tốc bằng GPU, các lớp và công cụ điều chỉnh ảnh.</p>
-    <p xml:lang="tr">GPU hızlandırmalı fırçalar ve birleştirme, katmanlar ve fotoğraf ayarlarıyla eskiz ve illüstrasyon oluşturun, fotoğrafları düzenleyin.</p>
-    <p xml:lang="it">Crea schizzi e illustrazioni e modifica foto con pennelli e composizione accelerati dalla GPU, livelli e regolazioni fotografiche.</p>
+    <p>Capy Canvas is a cross-platform app for sketching, illustration and photography, with a powerful GPU-accelerated painting engine. Its brushes simulate real pencil, ink and paint, and it comes with the tools you need for professional line art and comics. Best of all, it's 100% free and all of the code is open source.</p>
+    <p xml:lang="ja">カピカンは、強力なGPU加速ペイントエンジンを備えた、スケッチ・イラスト・写真編集のためのクロスプラットフォームアプリです。ブラシは本物の鉛筆やインク、絵の具を再現し、本格的な線画や漫画制作に必要なツールもそろっています。しかも完全無料で、コードはすべてオープンソースです。</p>
+    <p xml:lang="zh_CN">水豚画布是一款跨平台应用，配备强大的 GPU 加速绘画引擎，适用于速写、插画和照片编辑。画笔能模拟真实的铅笔、墨水和颜料，也提供专业线稿与漫画创作所需的工具。最棒的是，它完全免费，所有代码都已开源。</p>
+    <p xml:lang="zh-CN">水豚画布是一款跨平台应用，配备强大的 GPU 加速绘画引擎，适用于速写、插画和照片编辑。画笔能模拟真实的铅笔、墨水和颜料，也提供专业线稿与漫画创作所需的工具。最棒的是，它完全免费，所有代码都已开源。</p>
+    <p xml:lang="zh_TW">水豚畫布是一款跨平台應用程式，配備強大的 GPU 加速繪畫引擎，適用於速寫、插畫和照片編輯。筆刷能模擬真實的鉛筆、墨水和顏料，也提供專業線稿與漫畫創作所需的工具。最棒的是，它完全免費，所有程式碼都是開源的。</p>
+    <p xml:lang="zh-TW">水豚畫布是一款跨平台應用程式，配備強大的 GPU 加速繪畫引擎，適用於速寫、插畫和照片編輯。筆刷能模擬真實的鉛筆、墨水和顏料，也提供專業線稿與漫畫創作所需的工具。最棒的是，它完全免費，所有程式碼都是開源的。</p>
+    <p xml:lang="ko">카피 캔버스는 강력한 GPU 가속 페인팅 엔진을 갖춘, 스케치·일러스트·사진 편집용 크로스 플랫폼 앱입니다. 브러시가 실제 연필과 잉크, 물감을 재현하고, 전문적인 선화와 만화 작업에 필요한 도구도 모두 갖췄습니다. 무엇보다 100% 무료이고 모든 코드가 오픈 소스입니다.</p>
+    <p xml:lang="es">Capy Canvas es una aplicación multiplataforma para bocetos, ilustración y edición de fotos, con un potente motor de pintura acelerado por GPU. Sus pinceles simulan lápiz, tinta y pintura reales, e incluye las herramientas que necesitas para entintado profesional y cómics. Y lo mejor: es 100 % gratis y todo el código es abierto.</p>
+    <p xml:lang="pt_BR">O Capy Canvas é um aplicativo multiplataforma para esboços, ilustração e edição de fotos, com um poderoso motor de pintura acelerado por GPU. Os pincéis simulam lápis, nanquim e tinta de verdade, e ele traz as ferramentas de que você precisa para line art profissional e quadrinhos. E o melhor: é 100% gratuito e todo o código é aberto.</p>
+    <p xml:lang="pt-BR">O Capy Canvas é um aplicativo multiplataforma para esboços, ilustração e edição de fotos, com um poderoso motor de pintura acelerado por GPU. Os pincéis simulam lápis, nanquim e tinta de verdade, e ele traz as ferramentas de que você precisa para line art profissional e quadrinhos. E o melhor: é 100% gratuito e todo o código é aberto.</p>
+    <p xml:lang="id">Capy Canvas adalah aplikasi lintas platform untuk sketsa, ilustrasi, dan edit foto, dengan mesin lukis canggih yang dipercepat GPU. Kuasnya meniru pensil, tinta, dan cat sungguhan, dan dilengkapi alat yang Anda butuhkan untuk line art profesional dan komik. Yang terbaik, aplikasi ini 100% gratis dan seluruh kodenya open source.</p>
+    <p xml:lang="fr">Capy Canvas est une application multiplateforme de croquis, d'illustration et de retouche photo, dotée d'un puissant moteur de peinture accéléré par GPU. Ses pinceaux reproduisent le crayon, l'encre et la peinture réels, et elle offre tous les outils nécessaires pour l'encrage professionnel et la BD. Le meilleur ? Elle est 100 % gratuite et tout son code est open source.</p>
+    <p xml:lang="de">Capy Canvas ist eine plattformübergreifende App zum Skizzieren, Illustrieren und Bearbeiten von Fotos, mit einer leistungsstarken GPU-beschleunigten Mal-Engine. Die Pinsel simulieren echten Bleistift, Tinte und Farbe, und für professionelle Lineart und Comics sind alle nötigen Werkzeuge dabei. Das Beste daran: Capy Canvas ist zu 100 % kostenlos, und der gesamte Code ist Open Source.</p>
+    <p xml:lang="ru">Капи Канвас — кроссплатформенное приложение для скетчей, иллюстрации и обработки фото с мощным движком рисования с ускорением на GPU. Кисти имитируют настоящий карандаш, тушь и краски, а для профессионального лайнарта и комиксов есть все нужные инструменты. А главное — оно на 100% бесплатное, и весь его код открыт.</p>
+    <p xml:lang="th">คาปิ แคนวาส เป็นแอปข้ามแพลตฟอร์มสำหรับสเก็ตช์ วาดภาพประกอบ และแต่งรูป พร้อมกลไกการลงสีอันทรงพลังที่เร่งความเร็วด้วย GPU แปรงจำลองดินสอ หมึก และสีจริง และมีเครื่องมือครบสำหรับงานลายเส้นและการ์ตูนระดับมืออาชีพ ที่ดีที่สุดคือใช้ฟรี 100% และโค้ดทั้งหมดเป็นโอเพนซอร์ส</p>
+    <p xml:lang="vi">Capy Canvas là ứng dụng đa nền tảng để phác thảo, minh họa và chỉnh sửa ảnh, với công cụ vẽ tăng tốc GPU mạnh mẽ. Cọ vẽ mô phỏng bút chì, mực và màu vẽ thật, kèm đủ công cụ cho line art chuyên nghiệp và truyện tranh. Tuyệt nhất là ứng dụng miễn phí 100% và toàn bộ mã nguồn đều mở.</p>
+    <p xml:lang="tr">Capy Canvas, güçlü bir GPU hızlandırmalı boyama motoruna sahip, eskiz, illüstrasyon ve fotoğraf düzenleme için çapraz platformlu bir uygulamadır. Fırçaları gerçek kurşun kalem, mürekkep ve boyayı taklit eder; profesyonel çizgi çalışması ve çizgi roman için gereken tüm araçlar da içinde. En güzeli de %100 ücretsiz olması ve tüm kodunun açık kaynak olması.</p>
+    <p xml:lang="it">Capy Canvas è un'app multipiattaforma per schizzi, illustrazione e fotoritocco, con un potente motore di pittura accelerato dalla GPU. I suoi pennelli simulano matita, inchiostro e colori veri, e include tutti gli strumenti che servono per l'inchiostrazione professionale e i fumetti. E la cosa migliore: è gratis al 100% e tutto il codice è open source.</p>
   </description>
   <launchable type="desktop-id">art.capycanvas.CapyCanvas.desktop</launchable>
   <url type="homepage">https://capycanvas.art/</url>
