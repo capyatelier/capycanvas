@@ -99,15 +99,17 @@ test("hosted CPU checks keep model tests while excluding native GPU cases", () =
   assert.equal(gtk, "--skip render_thread::tests::gpu_worker_first_preview_stroke");
 });
 
-test("release success permits only the jobs skipped by the selected mode", () => {
+test("the GitHub Release waits for every package and never for store uploads", () => {
   const gate = job(release, "summary").split("      - name: Require successful packages")[1]
     .match(/python3 - <<'PYCODE'\n([\s\S]*?)\n          PYCODE/)[1].replace(/^          /gm, "");
   const results = Object.fromEntries(["version", ...platforms, "android-publish", "apple-publish"].map(name => [name, { result: "success" }]));
   const run = (signed, windowsOnly = false) => spawnSync(process.env.PYTHON ?? "python3", ["-c", gate], { env: { ...process.env, SIGNED: String(signed), WINDOWS_PACKAGES_ONLY: String(windowsOnly), RESULTS: JSON.stringify(results) }, encoding: "utf8" });
   assert.equal(run(true).status, 0);
-  results["android-publish"].result = results["apple-publish"].result = "skipped";
-  assert.equal(run(false).status, 0);
-  assert.equal(run(true).status, 1);
+  for (const result of ["failure", "cancelled", "skipped"]) {
+    results["android-publish"].result = results["apple-publish"].result = result;
+    assert.equal(run(true).status, 0, `store uploads ${result}`);
+    assert.equal(run(false).status, 0, `dry run with store uploads ${result}`);
+  }
   for (const result of ["failure", "cancelled", "skipped"]) {
     results.android.result = result;
     assert.equal(run(false).status, 1, result);
