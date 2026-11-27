@@ -7,7 +7,7 @@ use layer_render::{
     BackendError, BrushSource, CanvasRenderer, CursorSegment, Dab, DabBatch, FrameDemand, FramePacket, HostImage,
     ReadbackImage, TipOutline, ViewState,
 };
-use layer_render_wgpu::{ViewportPresenter, WgpuRasterizer};
+use layer_render_wgpu::{TargetRetention, ViewportPresenter, WgpuRasterizer};
 use std::{
     collections::{HashMap, VecDeque},
     sync::{
@@ -2471,6 +2471,7 @@ impl Worker {
         config.alpha_mode = wgpu::CompositeAlphaMode::PreMultiplied;
         config.present_mode = wgpu::PresentMode::Mailbox;
         config.desired_maximum_frame_latency = 2;
+        config.usage |= caps.usages & wgpu::TextureUsages::COPY_DST;
         eprintln!(
             "Wayland canvas GPU: {:?}, {:?}, {:?}; compositor GPU {compositor_gpu:?}, launcher choice {launcher_chose_gpu}",
             adapter.get_info(),
@@ -2754,7 +2755,7 @@ impl Worker {
     fn configure_surface(&mut self) {
         self.surface.configure(self.renderer.device(), &self.config);
         self.surface_configured = true;
-        self.presenter.set_target_retention(false);
+        self.presenter.set_target_retention(TargetRetention::for_surface(&self.config));
     }
 
     fn acquire(&mut self) -> Result<Option<wgpu::SurfaceTexture>, String> {

@@ -223,12 +223,12 @@ fn glass_follows_a_new_surround() {
         crate::layer_tests::page_bytes(&r, &surface)
     };
     let mut live = ViewportPresenter::for_renderer(&r, FORMAT);
-    live.set_target_retention(false);
+    live.set_target_retention(crate::TargetRetention::Discarded);
     live.set_backdrop(&r, &glass, Default::default(), false);
     show(&mut live, [0.05, 0.05, 0.05, 1.]);
     let restyled = show(&mut live, [0.8, 0.8, 0.8, 1.]);
     let mut fresh = ViewportPresenter::for_renderer(&r, FORMAT);
-    fresh.set_target_retention(false);
+    fresh.set_target_retention(crate::TargetRetention::Discarded);
     fresh.set_backdrop(&r, &glass, Default::default(), false);
     assert!(restyled == show(&mut fresh, [0.8, 0.8, 0.8, 1.]), "glass over a new surround matches glass placed fresh");
 }
@@ -281,7 +281,7 @@ fn held_artwork_damage_refreshes_the_glass_on_release() {
     let mut r = document(size);
     let surface = texture(&r, size);
     let mut presenter = ViewportPresenter::for_renderer(&r, FORMAT);
-    presenter.set_target_retention(true);
+    presenter.set_target_retention(crate::TargetRetention::Kept);
     presenter.set_backdrop(&r, &glass, Default::default(), false);
     let before = present(&r, &mut presenter, &surface, 0.);
     presenter.set_backdrop(&r, &glass, Default::default(), true);
@@ -437,7 +437,7 @@ fn backdrop_blur_cost() {
             let bar = region([extent[0] as f32 * 0.4, extent[1] as f32 * 0.8, 360. * scale, 44. * scale], [14. * scale; 4]);
             let with_bar: Vec<_> = regions.iter().copied().chain([bar]).collect();
             let mut retained = ViewportPresenter::for_renderer(&r, FORMAT);
-            retained.set_target_retention(true);
+            retained.set_target_retention(crate::TargetRetention::Kept);
             retained.set_backdrop(&r, &regions, style, false);
             let toggled = measure(&r, iterations, |encoder, i| {
                 retained.set_backdrop(&r, if i % 2 == 0 { &with_bar } else { &regions }, style, false);

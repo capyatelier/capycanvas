@@ -533,7 +533,7 @@ fn gpu_panel_surface_scene_replacement_clears_old_sources_and_anchor_attachments
         presenter.present(&renderer, &target.create_view(&Default::default()), camera(size), [0., 0., 0., 1.]).unwrap();
         crate::layer_tests::page_bytes(&renderer, target)
     };
-    for retained in [false, true] {
+    for retained in [crate::TargetRetention::Discarded, crate::TargetRetention::Kept, crate::TargetRetention::Copied] {
         let target = crate::create_target(renderer.device(), size, format, "replaced panel scenes").0;
         let mut presenter = ViewportPresenter::for_renderer(&renderer, format);
         presenter.set_target_retention(retained);
@@ -541,7 +541,7 @@ fn gpu_panel_surface_scene_replacement_clears_old_sources_and_anchor_attachments
         assert_eq!(rgb(&a, scale, 72.25, 12.25), [255; 3]);
         assert_eq!(rgb(&a, scale, 92.25, 88.25), [255; 3]);
         let empty = render(&mut presenter, &[], &target);
-        assert!(empty.chunks_exact(4).all(|p| p == [0, 0, 0, 255]), "retention={retained}: clearing the scene must erase every former panel pixel");
+        assert!(empty.chunks_exact(4).all(|p| p == [0, 0, 0, 255]), "retention={retained:?}: clearing the scene must erase every former panel pixel");
 
         let mut receiver = group([16., 80., 80., 104.]);
         receiver.color = [0., 0., 1., 1.];
@@ -601,7 +601,7 @@ fn gpu_panel_shape_cache_recovers_a_discarded_presentation() {
     let format=wgpu::TextureFormat::Rgba8Unorm;
     let target=crate::create_target(renderer.device(),SIZE,format,"discarded panel mask").0;
     let mut presenter=ViewportPresenter::for_renderer(&renderer,format);
-    presenter.set_target_retention(true);
+    presenter.set_target_retention(crate::TargetRetention::Kept);
     presenter.set_panel_surfaces(&renderer,&[surface(104.)]);
     pollster::block_on(presenter.prepare(&renderer)).unwrap();
     presenter.present(&renderer,&target.create_view(&Default::default()),camera(SIZE),[0.,0.,0.,1.]).unwrap();

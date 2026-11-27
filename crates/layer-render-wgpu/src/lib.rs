@@ -173,7 +173,7 @@ mod telemetry;
 pub use frame_timing::{GpuFrameSample, GpuFrameTimer, GpuFrameTimingStats};
 mod thumbnails;
 mod source_thumbnails;
-pub use present::{OverviewPlacement, ViewportPresenter};
+pub use present::{OverviewPlacement, TargetRetention, ViewportPresenter};
 pub use present_screen::ScreenCheck;
 
 // RGB stores encode(linear RGB * alpha); sampling/blending uses Float32 linear

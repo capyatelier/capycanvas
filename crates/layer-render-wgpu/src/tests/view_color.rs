@@ -195,7 +195,7 @@ fn presentation_wakes_for_visible_changes_and_skips_unchanged_frames() {
     draw(&mut p, &r, v);
     p.set_corner_radius(12.);
     draw(&mut p, &r, v);
-    p.set_target_retention(false);
+    p.set_target_retention(crate::TargetRetention::Discarded);
     draw(&mut p, &r, v);
     frame(&mut r, &mut source(RgbSpace::Srgb, [5000, 17000, 45000, 33000]));
     draw(&mut p, &r, v);
@@ -253,7 +253,7 @@ fn navigator_shows_transparency_without_a_paper_or_fill_layer() {
                 "alpha={alpha:?} x={x}: {pixel:?} != {expected:?}");
         }
     }
-    p.set_target_retention(false);
+    p.set_target_retention(crate::TargetRetention::Discarded);
     assert!(p.needs_overview_present(&r,[256;2]));
 }
 
@@ -305,7 +305,7 @@ fn retained_navigator_invalidates_changed_placements_and_targets() {
     pollster::block_on(p.prepare(&r)).unwrap();
     p.present_overviews(&r,&resized,[128,256]).unwrap();
     assert!(!p.needs_overview_present(&r,[128,256]));
-    p.set_target_retention(false);
+    p.set_target_retention(crate::TargetRetention::Discarded);
     assert!(p.needs_overview_present(&r,[128,256]));
     pollster::block_on(p.prepare(&r)).unwrap();
     p.present_overviews(&r,&resized,[128,256]).unwrap();

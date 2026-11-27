@@ -1721,7 +1721,7 @@ fn fit_strokes_update_a_held_presenter_after_an_exact_preview() {
     let cache=r.scale_display.as_ref().unwrap();
     assert!(cache.evaluation==super::super::scale::Evaluation::Display);
     assert_eq!(cache.plan.bounds,PixelRect::full(extent));
-    let mut presenter=crate::test_support::float_presenter(&r);presenter.set_target_retention(true);
+    let mut presenter=crate::test_support::float_presenter(&r);presenter.set_target_retention(crate::TargetRetention::Kept);
     let texture=create_color_target(&r.device,[384;2],"held Fit stroke");
     presenter.present(&mut r,&texture.1,view,[0.;4]).unwrap();
     assert!(float_pixels(&r,&texture.0)[192*384+192][1]<0.01);
@@ -1827,7 +1827,7 @@ fn photo_navigation_presents_current_camera_within_two_submissions() {
     assert_eq!(r.moving_images.completed_images, 28);
     layer_render::CanvasRenderer::prepare_moving_layer(&mut r, None);
     let mut presenter = crate::test_support::float_presenter(&r);
-    presenter.set_target_retention(true);
+    presenter.set_target_retention(crate::TargetRetention::Kept);
     let target = create_color_target(&r.device, [384; 2], "current camera preview");
     for exact in [false, true] {
         r.test.exact_display = exact;

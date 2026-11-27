@@ -218,7 +218,7 @@ fn optional_picker_completion_repaints_without_parking_the_canvas() {
     let deadline = Instant::now() + Duration::from_secs(30);
     let batch = r.compilation.batch();
     let mut presenter = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba8Unorm, SdrSurfaceColor::Srgb).unwrap();
-    presenter.set_target_retention(true);
+    presenter.set_target_retention(crate::TargetRetention::Kept);
     presenter.set_color_picker(Some(picker()));
     pollster::block_on(r.compilation.prepare_all(presenter.pipeline.iter()
         .chain([&presenter.surround_pipeline, &presenter.cursor_pipeline, &presenter.recipes.transition.pipeline]))).unwrap();

@@ -49,8 +49,7 @@ pub(super) fn damage(rect: PixelRect, view: ViewState, turns: u32) -> PixelRect 
     )
 }
 
-/// State for an explicitly retained destination (not an acquired FIFO image).
-/// No extra full-screen texture is allocated for this mode.
+/// State for a retained destination: a kept target or the presenter's own image.
 pub(super) struct Retained {
     valid: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub revision: u64,

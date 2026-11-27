@@ -254,7 +254,7 @@ mod windows_surface {
                     surface.config.width = surface.sizing.capacity[0]; surface.config.height = surface.sizing.capacity[1];
                     surface.surface.configure(gpu.device(), &surface.config);
                     unsafe { surface.surface.as_hal::<wgpu::hal::api::Dx12>() }.unwrap().set_nonblocking().map_err(|error| error.to_string())?;
-                    surface.presenter.set_target_retention(false);
+                    surface.presenter.set_target_retention(layer_render_wgpu::TargetRetention::Discarded);
                 }
                 if output_changed || surface.space != gpu.document_color() {
                     surface.presenter = ViewportPresenter::for_overview_surface(gpu, config.format, encoding).map_err(|error| error.to_string())?;

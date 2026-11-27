@@ -210,7 +210,11 @@ Presentations that initialize a target clear its entire capacity to the shared
 surround, including space outside the current viewport. Enlarging the source
 rectangle therefore exposes defined background pixels while the next frame is
 prepared. Retained targets preserve their previous pixels until drawing replaces
-them.
+them. Swapchain images that lose their pixels use copied retention: the presenter
+repaints partial damage in its own image and copies it into the target in the same
+submission. A frame that repaints everything draws straight into the target, and
+the next partial frame repaints the presenter's image in full
+(`copied_retention_draws_full_frames_straight_into_the_target`).
 `SdrSurfaceColor::clear_color` applies the attachment's transfer, primaries and
 reference white; a raw linear clear is incorrect for an encoded UNORM target.
 Standalone transparent overview targets retain their transparent clear.
@@ -1434,8 +1438,8 @@ owners' bytes to the device, so free space kept in allocator blocks counts as
 the renderer's. Decoded GPU tiles hold only the working set of the frame's units:
 a recorded tile that no unit used in the current or previous frame is retired at
 the end of the frame, and an idle renderer keeps its last two frames' tiles until
-it runs again. A surface presenter charges three images of its presented size as
-pinned device memory.
+it runs again. A surface presenter charges three images of its presented size, and its
+copied-retention image, as pinned device memory.
 `memory::memory_tests` checks pressure, working floors and retention ceilings.
 
 Stats copies timestamped OS and driver readings from the factory's memory worker,

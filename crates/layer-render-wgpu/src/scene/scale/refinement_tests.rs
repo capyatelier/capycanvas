@@ -207,7 +207,7 @@ fn idle_refinement_presents_completion_and_never_holds_new_input() {
             SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
         let (_, target) = create_target(&r.device, [frame.view.width_px, frame.view.height_px],
             wgpu::TextureFormat::Rgba32Float, "refinement presentation");
-        presenter.set_target_retention(true);
+        presenter.set_target_retention(crate::TargetRetention::Kept);
         pollster::block_on(presenter.prepare(&r)).unwrap();
         presenter.present(&r, &target, frame.view, [0.; 4]).unwrap();
         let mut moved = frame.view;
@@ -241,7 +241,7 @@ fn idle_refinement_presents_completion_and_never_holds_new_input() {
         presenter.present(&r, &target, frame.view, [0.; 4]).unwrap();
         assert!(!presenter.needs_present(&r, frame.view, [0.; 4]));
         let retained = crate::layer_tests::page_bytes(&r, target.texture());
-        presenter.set_target_retention(false);
+        presenter.set_target_retention(crate::TargetRetention::Discarded);
         presenter.present(&r, &target, frame.view, [0.; 4]).unwrap();
         assert_eq!(retained, crate::layer_tests::page_bytes(&r, target.texture()));
         assert!(r.can_submit());
