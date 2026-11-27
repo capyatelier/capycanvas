@@ -14,7 +14,7 @@ provide test and build details; the release sequence lives here.
 | Web | Downloadable static/PWA ZIP and `editor.capycanvas.art` | Publish the ZIP and deploy the editor from the same tag; verify the live revision and offline/update journeys. |
 | Android ARM64 | Direct Play-signed APK, Play internal and closed (`alpha`) testing | Verify both installation paths and check the closed track's current review state before promotion. Production Play rollout is outside this procedure. |
 | Windows x64 and ARM64 | Signed installer and portable ZIP, plus MSIX for Partner Center | Verify both downloads on each architecture. Store package upload, certification and publication are separate from CI. |
-| macOS Apple silicon | Signed, notarized DMG and Mac App Store archive upload | Verify download, Gatekeeper, installation and updating; check Store processing, review and release separately. |
+| macOS Apple silicon | Signed, notarized DMG; 1.1.x builds the Mac App Store archive but doesn't upload it (the Mac App Store comes with 1.2) | Verify download, Gatekeeper, installation and updating. |
 | iPadOS | App Store Connect archive upload and TestFlight | Verify processing and availability of the exact build to the intended tester group. Beta review and production App Store submission are separate actions. |
 
 Check current account and review states before each release. A public beta link,
@@ -35,9 +35,9 @@ access and App Store Connect upload/TestFlight access. Check existing reviews
 before changing either testing channel.
 
 **Pushing a release tag has store side effects.** It signs packages, uploads to
-Play, rolls out internal testing, and uploads both iPad and Mac Store builds to
-App Store Connect. Validation and every platform package must succeed before
-Play or Apple uploads start. The Play upload and both Apple uploads must succeed
+Play, rolls out internal testing, and uploads the iPad build to App Store
+Connect. Validation and every platform package must succeed before
+Play or Apple uploads start. The Play upload and the iPad upload must succeed
 before CI creates the draft GitHub Release. Missing Play or Apple upload access
 blocks that draft; Partner Center upload is separate from CI. There is no
 platform-skip input. Restore missing required access before tagging; an unsigned
@@ -134,7 +134,7 @@ capyatelier/capycanvas` to inspect results. If a job fails, follow
 CI creates a draft with the [package outputs](#release-workflow), `SHA256SUMS`
 and provenance attestations. Expect fourteen assets: the thirteen output files in the
 table, including the Flatpak reference and repository archive, plus `SHA256SUMS`.
-The iPad and Mac Store builds are uploaded to App Store Connect; their archives
+The iPad build is uploaded to App Store Connect; the iPad and Mac Store archives
 are retained privately and are not attached to the release.
 The macOS DMG uses HFS+ with capacity calculated from logical payload sizes and
 filesystem headroom; allocated source blocks and automatic image-size estimates
