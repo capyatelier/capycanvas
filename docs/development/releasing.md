@@ -12,7 +12,7 @@ provide test and build details; the release sequence lives here.
 | --- | --- | --- |
 | Linux x86_64 | Signed Flatpak download and project-hosted update repository | Publish the GitHub Release, deploy Flatpak updates, verify installation and updating. Flathub app publication is not configured by these workflows. |
 | Web | Downloadable static/PWA ZIP and `editor.capycanvas.art` | Publish the ZIP and deploy the editor from the same tag; verify the live revision and offline/update journeys. |
-| Android ARM64 | Direct Play-signed APK, Play internal and closed (`alpha`) testing | Verify both installation paths and check the closed track's current review state before promotion. Production Play rollout is outside this procedure. |
+| Android ARM64 | Direct Play-signed APK; Play internal, closed (`alpha`) and open (`beta`) testing, and production | Verify both installation paths and check the tracks' current review state before promotion. |
 | Windows x64 and ARM64 | Signed installer and portable ZIP, plus MSIX for Partner Center | Verify both downloads on each architecture. Store package upload, certification and publication are separate from CI. |
 | macOS Apple silicon | Signed, notarized DMG and Mac App Store archive upload | Verify download, Gatekeeper, installation and updating; check Store processing, review and release separately. |
 | iPadOS | App Store Connect archive upload and TestFlight | Verify processing and availability of the exact build to the intended tester group. Beta review and production App Store submission are separate actions. |
@@ -640,16 +640,19 @@ same artifact name. Keep successful Apple uploads out of the retry.
 
 After testing the final internal build, check closed-track setup and review state.
 When promotion is needed and no changes are in review, run **Promote Android
-testing release** from its release tag with `track=alpha`. This promotes the
-existing bundle to the `alpha` closed track, preserving release notes, and submits
-the edit for review:
+testing release** from its release tag with the tracks to promote: `alpha`
+(closed testing), `beta` (open testing) and `production`. All the named tracks
+get the existing bundle, with its release notes, in one edit, so Google reviews
+them together:
 
 ```bash
 gh workflow run android-promote.yml --repo capyatelier/capycanvas \
-  --ref "$CAPY_RELEASE_TAG" -f track=alpha
+  --ref "$CAPY_RELEASE_TAG" -f tracks="alpha beta production"
 ```
 
-The workflow also accepts `track=internal` to retry internal rollout without
+A pre-release build goes to `alpha beta` only. A track needs its countries set in
+Play Console before Google accepts a release there; the API can't set them. The
+workflow also accepts `tracks=internal` to retry internal rollout without
 uploading again. It uses the protected `release` environment, refuses to replace
 a newer testing build and fails if Google already has changes in review. It
 does not silently cancel a review or fall back to a draft. An API commit does
