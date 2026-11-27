@@ -5,6 +5,7 @@ import struct
 import tempfile
 import zlib
 import unittest
+from unittest import mock
 import xml.etree.ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -26,6 +27,15 @@ class IconAssetTests(unittest.TestCase):
                          {("mac", f"{size}x{size}", f"{scale}x")
                           for size in (16, 32, 128, 256, 512) for scale in (1, 2)})
         self.assertEqual(len({entry["filename"] for entry in entries}), 10)
+
+    def test_mac_app_icon_renders_with_the_mac_sdk_inside_an_ios_build(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.dict("os.environ", {"SDKROOT": "/Applications/Xcode.app/iPhoneOS.sdk"}), \
+                mock.patch("icon_assets.subprocess.run") as run:
+            write_mac_app_icon(Path("AppIcon.png"), Path(directory))
+        command, options = run.call_args.args[0], run.call_args.kwargs
+        self.assertEqual(command[:4], ["xcrun", "--sdk", "macosx", "swift"])
+        self.assertNotIn("SDKROOT", options["env"])
 
     @unittest.skipUnless(sys.platform == "darwin", "Native icon renderer needs Xcode")
     def test_mac_app_icon_renders_transparent_rounded_art(self):
