@@ -59,6 +59,7 @@ test("the test suites run on their own, outside the release workflow", () => {
   assert.doesNotMatch(ci, /^  arch:/m);
   assert.doesNotMatch(ci, /^  windows:/m);
   assert.doesNotMatch(release, /uses: \.\/.github\/workflows\/release-checks.yml/);
+  for (const name of platforms) assert.doesNotMatch(job(release, name), /\b(?:lint\w*|assembleDebug\w*|cargo (?:test|nextest|clippy)|xcodebuild test|npm test|node --test)\b/, name);
   assert.doesNotMatch(ci, /uses: \.\/.github\/workflows\/release-checks.yml/);
   assert.match(ci, /group: ci-\$\{\{ github.workflow \}\}-\$\{\{ github.event_name \}\}-/);
 });

@@ -144,9 +144,6 @@ jobs:
           cargo install --locked cargo-ndk --version 4.1.2
           cargo install --locked cargo-about --version 0.9.2 --features cli
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.14206865" "platforms;android-37.0" "build-tools;37.0.0"
-      - name: Android debug and instrumentation builds and lint
-        run: ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug :app:lintRelease -PcapyAbi=arm64-v8a
-        working-directory: apps/layer-android
       - if: env.SIGNED == 'true'
         env:
           KEYSTORE: ${{ secrets.ANDROID_UPLOAD_KEYSTORE }}
@@ -166,14 +163,6 @@ jobs:
           name: android-bundle-package
           path: dist/*.aab
           if-no-files-found: error
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: ${{ !cancelled() }}
-        with:
-          name: android-test-reports
-          path: |
-            apps/layer-android/app/build/reports
-            apps/layer-android/app/build/outputs/apk/androidTest
-          if-no-files-found: warn
 
   windows:
     needs: version
