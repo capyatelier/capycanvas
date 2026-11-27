@@ -5,6 +5,8 @@ split at root children and ordinary fill-before-stroke paints. Reject complex
 group mixing instead of silently changing overlap/compositing semantics.
 """
 import copy
+from pathlib import Path
+import subprocess
 import xml.etree.ElementTree as ET
 
 ET.register_namespace("", "http://www.w3.org/2000/svg")
@@ -56,3 +58,23 @@ def icon_layers(svg):
             runs[-1][1].append(copy.deepcopy(paint))
     return [(mode, ET.tostring(layer, encoding="unicode").replace("currentColor", "#ffffff"))
             for mode, layer in runs]
+
+
+def mac_app_icon_entries():
+    return [
+        {"idiom": "mac", "size": f"{size}x{size}", "scale": f"{scale}x",
+         "filename": f"AppIcon-Mac-{size}@{scale}x.png"}
+        for size in (16, 32, 128, 256, 512) for scale in (1, 2)
+    ]
+
+
+def write_mac_app_icon(source, destination):
+    destination.mkdir(parents=True, exist_ok=True)
+    entries = mac_app_icon_entries()
+    arguments = []
+    for entry in entries:
+        size = int(entry["size"].split("x")[0]) * int(entry["scale"][0])
+        arguments.extend([str(destination / entry["filename"]), str(size)])
+    subprocess.run(["xcrun", "swift", str(Path(__file__).with_name("mac-app-icon.swift")),
+                    str(source), *arguments], check=True)
+    return {"images": entries, "info": {"version": 1, "author": "xcode"}}

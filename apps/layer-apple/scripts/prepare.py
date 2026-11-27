@@ -4,7 +4,7 @@ import json
 import shutil
 import sys
 from pathlib import Path
-from icon_assets import icon_layers
+from icon_assets import icon_layers, write_mac_app_icon
 
 APP = Path(__file__).resolve().parents[1]
 ROOT = APP.parents[1]
@@ -70,7 +70,7 @@ for prefix, folder in (("preview", "brush-previews"), ("filter", "filter-preview
             "info": {"version": 1, "author": "xcode"}})
 app_icons = sorted((APP / "iOS").glob("AppIcon*.png"))
 for stale in CATALOG.glob("AppIcon*.appiconset"):
-    if stale.stem not in {source.stem for source in app_icons}:
+    if stale.stem not in {source.stem for source in app_icons} | {"AppIcon-Mac"}:
         shutil.rmtree(stale)
 for source in app_icons:
     app_icon = CATALOG / f"{source.stem}.appiconset"
@@ -78,6 +78,8 @@ for source in app_icons:
     shutil.copy2(source, app_icon / source.name)
     write_json(app_icon / "Contents.json", {"images": [{"filename": source.name, "idiom": "universal", "platform": "ios", "size": "1024x1024"}],
         "info": {"version": 1, "author": "xcode"}})
+mac_icon = CATALOG / "AppIcon-Mac.appiconset"
+write_json(mac_icon / "Contents.json", write_mac_app_icon(APP / "iOS/AppIcon.png", mac_icon))
 notices = GENERATED / "licenses"
 notices.mkdir(exist_ok=True)
 for name in ["LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "BRANDING.md", "THIRD_PARTY_NOTICES.md"]:

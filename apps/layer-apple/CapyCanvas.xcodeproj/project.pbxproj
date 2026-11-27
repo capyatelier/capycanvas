@@ -4066,6 +4066,7 @@
 				"INFOPLIST_FILE" = "macOS/App/Info.plist";
 				"CODE_SIGN_ENTITLEMENTS" = "macOS/App/CapyCanvas.entitlements";
 				"ENABLE_HARDENED_RUNTIME" = "YES";
+				"ASSETCATALOG_COMPILER_APPICON_NAME" = "AppIcon-Mac";
 				"CAPY_RUST_PROFILE" = "debug";
 				"SWIFT_OPTIMIZATION_LEVEL" = "-Onone";
 				"SWIFT_ACTIVE_COMPILATION_CONDITIONS" = "DEBUG";
@@ -4111,6 +4112,7 @@
 				"INFOPLIST_FILE" = "macOS/App/Info.plist";
 				"CODE_SIGN_ENTITLEMENTS" = "macOS/App/CapyCanvas.entitlements";
 				"ENABLE_HARDENED_RUNTIME" = "YES";
+				"ASSETCATALOG_COMPILER_APPICON_NAME" = "AppIcon-Mac";
 				"CAPY_RUST_PROFILE" = "release";
 				"SWIFT_OPTIMIZATION_LEVEL" = "-O";
 				"SWIFT_ACTIVE_COMPILATION_CONDITIONS" = "";

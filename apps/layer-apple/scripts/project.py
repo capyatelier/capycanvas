@@ -102,7 +102,8 @@ for platform, scheme in [("iOS", "CapyCanvas-iPad"), ("macOS", "CapyCanvas-Mac")
             "ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES": " ".join(sorted(icon.stem for icon in (APP / "iOS").glob("AppIcon-*.png")))})
     else:
         settings.update({"SDKROOT": "macosx", "SUPPORTED_PLATFORMS": "macosx", "MACOSX_DEPLOYMENT_TARGET": "15.0", "INFOPLIST_FILE": "macOS/App/Info.plist",
-            "CODE_SIGN_ENTITLEMENTS": "macOS/App/CapyCanvas.entitlements", "ENABLE_HARDENED_RUNTIME": "YES"})
+            "CODE_SIGN_ENTITLEMENTS": "macOS/App/CapyCanvas.entitlements", "ENABLE_HARDENED_RUNTIME": "YES",
+            "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon-Mac"})
     target = obj(scheme, "PBXNativeTarget", buildConfigurationList=configs(scheme, settings),
         buildPhases=phases, buildRules=[], dependencies=[], name=scheme, productName=scheme,
         productReference=product, productType="com.apple.product-type.application")

@@ -1,11 +1,14 @@
 """Protect SVG compositing semantics at the generated-asset boundary."""
 from pathlib import Path
 import sys
+import struct
+import tempfile
+import zlib
 import unittest
 import xml.etree.ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from icon_assets import icon_layers
+from icon_assets import icon_layers, mac_app_icon_entries, write_mac_app_icon
 
 
 def svg(body, attributes=""):
@@ -13,6 +16,38 @@ def svg(body, attributes=""):
 
 
 class IconAssetTests(unittest.TestCase):
+    def test_mac_target_has_app_icon(self):
+        project = Path(__file__).resolve().parents[1] / "CapyCanvas.xcodeproj/project.pbxproj"
+        self.assertEqual(project.read_text().count('"ASSETCATALOG_COMPILER_APPICON_NAME" = "AppIcon-Mac";'), 2)
+
+    def test_mac_app_icon_has_all_point_sizes_and_scales(self):
+        entries = mac_app_icon_entries()
+        self.assertEqual({(entry["idiom"], entry["size"], entry["scale"]) for entry in entries},
+                         {("mac", f"{size}x{size}", f"{scale}x")
+                          for size in (16, 32, 128, 256, 512) for scale in (1, 2)})
+        self.assertEqual(len({entry["filename"] for entry in entries}), 10)
+
+    @unittest.skipUnless(sys.platform == "darwin", "Native icon renderer needs Xcode")
+    def test_mac_app_icon_renders_transparent_rounded_art(self):
+        source = Path(__file__).resolve().parents[1] / "iOS/AppIcon.png"
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)
+            entries = write_mac_app_icon(source, destination)["images"]
+            for entry in entries:
+                with self.subTest(entry=entry):
+                    size = int(entry["size"].split("x")[0]) * int(entry["scale"][0])
+                    data = (destination / entry["filename"]).read_bytes()
+                    self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+                    self.assertEqual(struct.unpack(">II", data[16:24]), (size, size))
+                    self.assertEqual(data[24:26], bytes((8, 6)))
+                    chunks, offset = [], 8
+                    while offset < len(data):
+                        length = struct.unpack(">I", data[offset:offset + 4])[0]
+                        if data[offset + 4:offset + 8] == b"IDAT":
+                            chunks.append(data[offset + 8:offset + 8 + length])
+                        offset += length + 12
+                    self.assertEqual(zlib.decompress(b"".join(chunks))[4], 0)
+
     def test_symbolic_groups_retain_opacity_as_one_vector(self):
         source = svg('<g opacity=".5"><circle cx="6" cy="6" r="4"/><circle cx="8" cy="8" r="4"/></g>', 'fill="currentColor"')
         self.assertEqual(icon_layers(source), [("template", source.replace("currentColor", "#ffffff"))])
