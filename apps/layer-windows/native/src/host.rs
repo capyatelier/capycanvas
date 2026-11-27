@@ -7,7 +7,7 @@ use layer_host::{
     scene::SceneDisplay,
 };
 use layer_render::{CanvasRenderer, FrameDemand};
-use layer_render_wgpu::{HeldCanvas, ViewportPresenter, WgpuRasterizer};
+use layer_render_wgpu::{HeldCanvas, TargetRetention, ViewportPresenter, WgpuRasterizer};
 use layer_ui::{CanvasCursor, PointerButton};
 use std::{
     cell::RefCell,
@@ -511,17 +511,19 @@ impl CapyHost {
             .surface
             .get_default_config(adapter, width, height)
             .ok_or("D3D12 surface unsupported")?;
-        config.present_mode = if self.surface.get_capabilities(adapter).present_modes
-            .contains(&wgpu::PresentMode::Immediate) {
+        let caps = self.surface.get_capabilities(adapter);
+        config.present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Immediate) {
             wgpu::PresentMode::Immediate
         } else { wgpu::PresentMode::Fifo };
         config.desired_maximum_frame_latency = crate::frame_pacing::FramePacing::IN_FLIGHT as u32;
         config.alpha_mode = wgpu::CompositeAlphaMode::Opaque;
-        let config = self.display.surface_config(config, &self.surface.get_capabilities(adapter));
+        config.usage |= caps.usages & wgpu::TextureUsages::COPY_DST;
+        let config = self.display.surface_config(config, &caps);
         let renderer = layer_host::GpuContext::from_factory(gpu.factory).rasterizer(
             self.native.session.engine().document().composition().color, &self.native.renderer_options(), false)?;
         let encoding = self.display.encoding(config.format);
         let mut presenter = ViewportPresenter::for_surface(&renderer, config.format, encoding).map_err(err)?;
+        presenter.set_target_retention(TargetRetention::for_surface(&config));
         presenter.adopt_held(self.held_canvas.take());
         self.presenter_key = Some((renderer.document_color(), encoding));
         presenter.pipelines_ready(&renderer);
@@ -596,6 +598,7 @@ impl CapyHost {
                 None => self.held_canvas.take(),
             };
             let mut presenter = ViewportPresenter::for_surface(gpu, config.format, encoding).map_err(err)?;
+            presenter.set_target_retention(TargetRetention::for_surface(config));
             presenter.adopt_held(held);
             presenter.pipelines_ready(gpu);
             self.presenter = Some(presenter);

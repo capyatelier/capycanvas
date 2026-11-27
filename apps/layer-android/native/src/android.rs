@@ -8,7 +8,7 @@ use jni::{
 };
 use layer_host::scene::SceneDisplay;
 use layer_render::FrameDemand;
-use layer_render_wgpu::{ViewportPresenter, WgpuRasterizer, SdrSurfaceColor};
+use layer_render_wgpu::{TargetRetention, ViewportPresenter, WgpuRasterizer, SdrSurfaceColor};
 use raw_window_handle::{
     AndroidDisplayHandle, AndroidNdkWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
@@ -98,6 +98,7 @@ pub(crate) struct Surface {
     last_presentation_switch_ns: u64,
     navigation_latency: u32,
     ink_present_mode: wgpu::PresentMode,
+    copy_destination: bool,
     ink: bool,
     _instance: wgpu::Instance,
     _window: Window,
@@ -128,12 +129,13 @@ impl Surface {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(gpu.device(), &self.config);
-        self.presenter.set_target_retention(self.config.present_mode == wgpu::PresentMode::SharedDemandRefresh);
+        self.presenter.set_target_retention(TargetRetention::for_surface(&self.config));
         Ok(())
     }
     fn present_with(&mut self, ink: bool) {
         self.ink = ink;
         self.config.present_mode = if ink { self.ink_present_mode } else { wgpu::PresentMode::Fifo };
+        self.config.usage.set(wgpu::TextureUsages::COPY_DST, self.copy_destination && self.config.present_mode == wgpu::PresentMode::Fifo);
         self.config.desired_maximum_frame_latency = if ink { 1 } else { self.navigation_latency };
     }
 }
@@ -431,7 +433,7 @@ impl App {
             ).expect("The negotiated surface encoding remains valid");
             presenter.adopt_held(held);
             surface.presenter = presenter;
-            surface.presenter.set_target_retention(surface.config.present_mode == wgpu::PresentMode::SharedDemandRefresh);
+            surface.presenter.set_target_retention(TargetRetention::for_surface(&surface.config));
             surface.last_view = None;
             surface.last_paint_start = self.host.paint_start_sequence();
         }
@@ -558,6 +560,7 @@ impl App {
             last_presentation_switch_ns: 0,
             navigation_latency,
             ink_present_mode,
+            copy_destination: caps.usages.contains(wgpu::TextureUsages::COPY_DST),
             ink: true,
             _instance: instance,
             _window: window,

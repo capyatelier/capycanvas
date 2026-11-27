@@ -6,7 +6,7 @@ use layer_host::{
 use layer_render::{CanvasRenderer, FrameDemand};
 use layer_render_wgpu::SdrSurfaceColor;
 use layer_render_wgpu::{
-    GpuFrameSample, GpuFrameTimer, GpuFrameTimingStats, ViewportPresenter, WgpuRasterizer,
+    GpuFrameSample, GpuFrameTimer, GpuFrameTimingStats, TargetRetention, ViewportPresenter, WgpuRasterizer,
 };
 use layer_ui::CanvasCursor;
 use std::{ffi::c_void, time::Instant};
@@ -243,6 +243,7 @@ impl MetalHost {
         let caps = surface.get_capabilities(gpu.adapter());
         config.present_mode = wgpu::PresentMode::Fifo;
         config.desired_maximum_frame_latency = 2;
+        config.usage |= caps.usages & wgpu::TextureUsages::COPY_DST;
         if let Some(format) = caps
             .formats
             .iter()
@@ -259,6 +260,7 @@ impl MetalHost {
         surface.configure(gpu.device(), &config);
         let mut presenter = ViewportPresenter::for_surface(gpu, config.format, encoding)
             .map_err(|e| format!("Metal viewport creation: {e}"))?;
+        presenter.set_target_retention(TargetRetention::for_surface(&config));
         presenter.prepare_chrome(gpu);
         self.surface = Some(Surface {
             surface,
@@ -371,6 +373,7 @@ impl MetalHost {
             surface.config.color_space=encoding.surface_color_space();
             surface.surface.configure(gpu.device(),&surface.config);
             surface.presenter = ViewportPresenter::for_surface(gpu, surface.config.format, encoding).map_err(error)?;
+            surface.presenter.set_target_retention(TargetRetention::for_surface(&surface.config));
             surface.presenter.adopt_held(held);
             surface.presenter.prepare_chrome(gpu);
             self.presented_panel_revision = None;

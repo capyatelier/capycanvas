@@ -686,7 +686,7 @@ mod tests {
         let (view,format)=(crate::test_support::view(extent),wgpu::TextureFormat::Rgba8Unorm);
         let (shown,surface)=crate::create_target(r.device(),extent,format,"retained publication");
         let mut retained=ViewportPresenter::for_renderer(&r,format);
-        retained.set_target_retention(true);
+        retained.set_target_retention(crate::TargetRetention::Kept);
         pollster::block_on(retained.prepare(&r)).unwrap();
         retained.present(&r,&surface,view,[0.;4]).unwrap();
         let before=crate::layer_tests::page_bytes(&r,&shown);

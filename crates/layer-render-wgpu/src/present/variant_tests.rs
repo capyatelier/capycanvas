@@ -205,7 +205,7 @@ fn a_stand_in_entry_that_compiles_after_a_retained_present_repaints_the_holes() 
     let pixels = |texture: &wgpu::Texture| crate::test_support::float_pixels(&r, texture);
     let render = |presenter: &mut ViewportPresenter, target: &wgpu::TextureView| { presenter.present(&r, target, view, red).unwrap(); };
     let mut presenter = crate::test_support::float_presenter(&r);
-    presenter.set_target_retention(true);
+    presenter.set_target_retention(crate::TargetRetention::Kept);
     let (texture, target) = crate::create_target(&r.device, [view.width_px, view.height_px], wgpu::TextureFormat::Rgba32Float, "retained stand-in viewport");
     render(&mut presenter, &target);
     assert_eq!(presenter.bound_viewport(&r).0, 0, "a cold stand-in entry leaves the frame on fs_main");
@@ -216,7 +216,7 @@ fn a_stand_in_entry_that_compiles_after_a_retained_present_repaints_the_holes() 
     presenter.set_cursor(&r.device, &[layer_render::CursorSegment { from: [4., 4.], to: [12., 12.], distance: 0., marker: 2., scale: 1. }], 1.);
     render(&mut presenter, &target);
     let retained = pixels(&texture);
-    presenter.set_target_retention(false);
+    presenter.set_target_retention(crate::TargetRetention::Discarded);
     let (full_texture, full_target) = crate::create_target(&r.device, [view.width_px, view.height_px], wgpu::TextureFormat::Rgba32Float, "full stand-in viewport");
     render(&mut presenter, &full_target);
     let full = pixels(&full_texture);

@@ -34,7 +34,7 @@ fn fill_reveal_presents_before_after_and_circles_without_raster_work() {
     submit_settled(engine.backend_mut(),packet(snapshot.scene(),extent));
     let authored=engine.document().artwork.clone();
     let mut presenter=ViewportPresenter::for_renderer(engine.backend(),wgpu::TextureFormat::Rgba8UnormSrgb);
-    presenter.set_target_retention(true);
+    presenter.set_target_retention(crate::TargetRetention::Kept);
     pollster::block_on(presenter.prepare(engine.backend())).unwrap();
     let (texture,surface)=crate::create_target(engine.backend().device(),extent,wgpu::TextureFormat::Rgba8UnormSrgb,"fill reveal viewport");
     let capture=|presenter:&mut ViewportPresenter,engine:&CanvasEngine<WgpuRasterizer>| {

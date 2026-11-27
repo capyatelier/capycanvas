@@ -346,7 +346,7 @@ impl WebApp {
                 slot.canvas.set_width(width);
                 slot.canvas.set_height(height);
                 surface.configure(gpu.device(), config);
-                presenter.set_target_retention(false);
+                presenter.set_target_retention(layer_render_wgpu::TargetRetention::Discarded);
             }
             presenter.set_overviews(
                 gpu,
@@ -376,7 +376,7 @@ impl WebApp {
                 }
                 wgpu::CurrentSurfaceTexture::Outdated => {
                     surface.configure(gpu.device(), config);
-                    presenter.set_target_retention(false);
+                    presenter.set_target_retention(layer_render_wgpu::TargetRetention::Discarded);
                     retry = true;
                     continue;
                 }

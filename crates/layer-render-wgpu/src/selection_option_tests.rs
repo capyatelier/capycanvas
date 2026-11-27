@@ -600,7 +600,7 @@ fn replacing_a_displayed_preview_repaints_only_around_either_outline() {
     let (retained, fresh) = (texture("retained outline"), texture("fresh outline"));
     let presenter = |r: &WgpuRasterizer| crate::ViewportPresenter::for_surface(r, wgpu::TextureFormat::Rgba8UnormSrgb, crate::SdrSurfaceColor::Srgb).unwrap();
     let mut kept = presenter(&r);
-    kept.set_target_retention(true);
+    kept.set_target_retention(crate::TargetRetention::Kept);
     r.set_selection_outline(Some(&cells(2, 6))).unwrap();
     pollster::block_on(kept.prepare(&r)).unwrap();
     kept.present(&r, &retained.create_view(&Default::default()), view(), [1.; 4]).unwrap();

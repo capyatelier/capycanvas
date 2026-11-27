@@ -75,6 +75,31 @@ impl OverviewPlacement {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TargetRetention {
+    #[default]
+    Discarded,
+    Kept,
+    Copied,
+}
+
+impl TargetRetention {
+    pub fn for_surface(config: &wgpu::SurfaceConfiguration) -> Self {
+        if config.present_mode == wgpu::PresentMode::SharedDemandRefresh {
+            Self::Kept
+        } else if config.usage.contains(wgpu::TextureUsages::COPY_DST) {
+            Self::Copied
+        } else {
+            Self::Discarded
+        }
+    }
+}
+
+struct RetainedImage {
+    texture: wgpu::Texture,
+    current: bool,
+}
+
 pub(super) struct Recipes {
     pipeline: [crate::Deferred<wgpu::RenderPipeline>; 2],
     surround: crate::Deferred<wgpu::RenderPipeline>,
@@ -138,7 +163,8 @@ pub struct ViewportPresenter {
     uploads: Uploads,
     camera_data: Option<[f32; 160]>,
     quarter_turns: u32,
-    retained: bool,
+    retention: TargetRetention,
+    retained_image: Option<RetainedImage>,
     history: crate::present_damage::Retained,
     presented_view: Option<(ViewState, [f32; 4], u32, f32)>,
     presented_drawing: Option<crate::DrawingPresentation>,
@@ -824,7 +850,8 @@ impl ViewportPresenter {
             uploads: Uploads::new(device, 16 * 1024),
             camera_data: None,
             quarter_turns: 0,
-            retained: false,
+            retention: TargetRetention::Discarded,
+            retained_image: None,
             history: Default::default(),
             presented_drawing: None,
             last_artwork_pipeline: None,
@@ -924,7 +951,7 @@ impl ViewportPresenter {
         self.corner_radius = physical_pixels.max(0.0);
     }
 
-    pub fn retains_target(&self) -> bool { self.retained }
+    pub fn retains_target(&self) -> bool { self.retention == TargetRetention::Kept }
 
     pub fn set_backdrop(&mut self, renderer: &WgpuRasterizer, regions: &[BackdropRegion], style: BackdropBlurStyle, hold: bool) {
         if regions.is_empty() && self.backdrop.is_none() {
@@ -989,11 +1016,31 @@ impl ViewportPresenter {
     /// Pixels of the last presentation that ran the artwork shader.
     pub fn shaded_area_pixels(&self) -> u64 { self.shaded_area }
 
-    /// Reset destination history on every swapchain reconfiguration. Retention
-    /// requires the same image to survive presentations; buffered images redraw fully.
-    pub fn set_target_retention(&mut self, retained: bool) {
-        self.retained = retained;
+    /// Reset destination history on every swapchain reconfiguration.
+    pub fn set_target_retention(&mut self, retention: TargetRetention) {
+        self.retention = retention;
         self.history = Default::default();
+        self.retained_image = self.retained_image.take().filter(|_| retention == TargetRetention::Copied);
+    }
+
+    fn retained_image(&mut self, device: &wgpu::Device, size: wgpu::Extent3d) -> (wgpu::Texture, bool) {
+        if self.retained_image.as_ref().is_none_or(|image| image.texture.size() != size) {
+            self.retained_image = Some(RetainedImage {
+                texture: device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("retained viewport"),
+                    size,
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: self.format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                    view_formats: &[],
+                }),
+                current: false,
+            });
+        }
+        let image = self.retained_image.as_ref().unwrap();
+        (image.texture.clone(), image.current)
     }
 
     pub fn set_color_picker(&mut self, overlay: Option<layer_render::ColorPickerOverlay>) {
@@ -1225,18 +1272,19 @@ impl ViewportPresenter {
         surround_linear: [f32; 4],
         overview_only: bool,
     ) -> Result<(), GpuRasterError> {
+        let result=self.encode_content_frame(renderer,encoder,target,view,surround_linear,overview_only);
+        self.uploads.finish_raw(encoder);
+        if result.is_err() {self.history.invalidate();}
         if let Some((memory, charged)) = &mut self.surface_memory {
             let images = target.texture();
             let bytes = u64::from(images.width()) * u64::from(images.height())
-                * u64::from(images.format().block_copy_size(None).unwrap_or(8)) * SURFACE_IMAGES;
+                * u64::from(images.format().block_copy_size(None).unwrap_or(8)) * SURFACE_IMAGES
+                + self.retained_image.as_ref().map_or(0, |image| crate::texture_bytes(&image.texture));
             if bytes != *charged {
                 memory.report(layer_core::MemoryReport { gpu_bytes: bytes, pinned_gpu_bytes: bytes, ..Default::default() });
                 *charged = bytes;
             }
         }
-        let result=self.encode_content_frame(renderer,encoder,target,view,surround_linear,overview_only);
-        self.uploads.finish_raw(encoder);
-        if result.is_err() {self.history.invalidate();}
         result
     }
 
@@ -1478,7 +1526,7 @@ impl ViewportPresenter {
         // A retained target may be scanned out while this pass runs. Even a
         // full camera redraw must preserve its old pixels until the fullscreen
         // shader replaces them; a fast clear can otherwise flash on screen.
-        let preserve_target = !overview_only && self.retained && self.history.valid();
+        let preserve_target = !overview_only && self.retention == TargetRetention::Kept && self.history.valid();
         let (mut regions, full, content_damage, moved) = if !overview_only {
             let previous = &self.history;
             // A displayed selection replaced once since the last present
@@ -1577,7 +1625,13 @@ impl ViewportPresenter {
         } else {
             (vec![crate::pixel_rect::PixelRect::full(extent)], true, None, false)
         };
-        let timestamp_writes = if regions.is_empty() && self.retained {
+        let image = (!full && self.retention == TargetRetention::Copied).then(|| self.retained_image(&renderer.device, target.texture().size()));
+        let retained_regions = overview_only || match self.retention {
+            TargetRetention::Kept => true,
+            TargetRetention::Copied => image.as_ref().is_some_and(|(_, current)| *current),
+            TargetRetention::Discarded => false,
+        };
+        let timestamp_writes = if regions.is_empty() && retained_regions {
             None
         } else {
             self.timing.as_mut().and_then(|timer| {
@@ -1631,11 +1685,13 @@ impl ViewportPresenter {
         if !overview_only && let Some(panels)=self.panels.as_mut() {
             panels.prepare(&renderer.device,&mut self.uploads,encoder,self.backdrop.as_ref().and_then(|b|b.cached()),[view.width_px,view.height_px],self.quarter_turns)?;
         }
-        let (regions, full) = if self.retained || overview_only {
+        let (regions, full) = if retained_regions {
             (regions, full)
         } else {
             (vec![crate::pixel_rect::PixelRect::full(extent)], true)
         };
+        let image_view = image.as_ref().map(|(texture, _)| texture.create_view(&Default::default()));
+        let destination = image_view.as_ref().unwrap_or(target);
         let size = target.texture().size();
         let bounds = crate::pixel_rect::PixelRect::full([size.width, size.height]);
         let regions: Vec<_> = regions.into_iter().map(|r| r.intersect(bounds)).filter(|r| !r.is_empty()).collect();
@@ -1646,8 +1702,8 @@ impl ViewportPresenter {
         for (index, repaint) in regions.iter().enumerate() {
             // Each pass needs its own view: wgpu can defer encoding until
             // finish(), so mutating one view would reuse the last area.
-            let region_view = (!full).then(|| target.texture().create_view(&Default::default()));
-            let pass_target = region_view.as_ref().unwrap_or(target);
+            let region_view = (!full).then(|| destination.texture().create_view(&Default::default()));
+            let pass_target = region_view.as_ref().unwrap_or(destination);
             // Scissoring alone does not limit attachment loads/stores on a
             // tile renderer. Narrow the native render area as well.
             #[cfg(any(target_os = "android", target_os = "linux"))]
@@ -1669,7 +1725,7 @@ impl ViewportPresenter {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: if preserve_target {
+                        load: if preserve_target || image.is_some() && !full {
                             wgpu::LoadOp::Load
                         } else {
                             wgpu::LoadOp::Clear(if overview_only { wgpu::Color::TRANSPARENT } else { self.color.clear_color(self.format,surround_linear)? })
@@ -1759,6 +1815,12 @@ impl ViewportPresenter {
                 }
             }
         }
+        if let Some((texture, _)) = &image {
+            encoder.copy_texture_to_texture(texture.as_image_copy(), target.texture().as_image_copy(), texture.size());
+        }
+        if let Some(retained) = &mut self.retained_image {
+            retained.current = image.is_some();
+        }
         self.presented_view = Some((view, surround_linear, self.quarter_turns, self.corner_radius));
         if showing {self.last_artwork_pipeline=Some((**pipeline).clone());}
         self.held_alpha=fade;
@@ -1842,6 +1904,7 @@ mod tests {
     use super::*;
     impl ViewportPresenter {
         pub(crate) fn presented_camera(&self)->Option<ViewState> {self.presented_view.map(|(view,..)|view)}
+        pub(crate) fn retained_texture(&self)->Option<&wgpu::Texture> {self.retained_image.as_ref().map(|image|&image.texture)}
     }
     #[test]
     fn waiting_drawing_shows_surround_until_full_composition_and_keeps_transparency_after_edits() {
@@ -1853,7 +1916,7 @@ mod tests {
             if x < 32 { [0, 255, 0, 255] } else { [0; 4] }));
         let mut renderer = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
         let mut presenter = ViewportPresenter::for_renderer(&renderer, wgpu::TextureFormat::Rgba8UnormSrgb);
-        presenter.set_target_retention(true);
+        presenter.set_target_retention(TargetRetention::Kept);
         let (texture, surface) = crate::create_target(renderer.device(), extent, wgpu::TextureFormat::Rgba8UnormSrgb, "waiting drawing");
         let surround = [0.04, 0.12, 0.22, 1.];
         let view = crate::test_support::view(extent);
@@ -1938,7 +2001,7 @@ mod tests {
         let (view,surround,format)=(crate::test_support::view(extent),[0.;4],wgpu::TextureFormat::Rgba8Unorm);
         let (shown,surface)=crate::create_target(renderer.device(),extent,format,"retained destination");
         let mut presenter=ViewportPresenter::for_renderer(&renderer,format);
-        presenter.set_target_retention(true);
+        presenter.set_target_retention(TargetRetention::Kept);
         pollster::block_on(presenter.prepare(&renderer)).unwrap();
         presenter.present(&renderer,&surface,view,surround).unwrap();
         let before=crate::layer_tests::page_bytes(&renderer,&shown);
@@ -1959,6 +2022,56 @@ mod tests {
         let expected=crate::layer_tests::page_bytes(&renderer,&fresh);
         assert_ne!(expected,before,"the fixture's edit must change the picture");
         assert_eq!(crate::layer_tests::page_bytes(&renderer,&shown),expected,"the retained target kept the picture before the edit");
+    }
+
+    #[test]
+    fn copied_retention_draws_full_frames_straight_into_the_target() {
+        use crate::layer_tests::{page_bytes,placement::{paint_document,set_source}};
+        let extent=[64;2];
+        let mut document=paint_document(extent,"Copied presentation");
+        set_source(&mut document,layer_core::color::source::rgba8_source(extent,|x,_|if x<32 {[255,0,0,255]} else {[0,0,255,255]}));
+        let mut renderer=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        crate::test_support::submit_settled(&mut renderer,crate::test_support::packet(document.scene(),extent));
+        let format=wgpu::TextureFormat::Rgba8Unorm;
+        let surround=[0.,1.,0.,1.];
+        let view=crate::test_support::view(extent);
+        let moved=ViewState {document_to_surface:[1.,0.,0.,1.,8.,0.],..view};
+        let cursor=|x:f32| [CursorSegment {from:[x,16.],to:[x,48.],distance:0.,marker:2.,scale:1.}];
+        let present=|presenter:&mut ViewportPresenter,view:ViewState,cursor:&[CursorSegment]| {
+            presenter.set_cursor(renderer.device(),cursor,1.);
+            pollster::block_on(presenter.prepare(&renderer)).unwrap();
+            let (texture,target)=crate::create_target(renderer.device(),extent,format,"copied swapchain image");
+            presenter.present(&renderer,&target,view,surround).unwrap();
+            page_bytes(&renderer,&texture)
+        };
+        let surface=||ViewportPresenter::for_surface(&renderer,format,SdrSurfaceColor::Srgb).unwrap();
+        let reference=|view:ViewState,cursor:&[CursorSegment]| present(&mut surface(),view,cursor);
+        let mut presenter=surface();
+        presenter.set_target_retention(TargetRetention::Copied);
+        present(&mut presenter,view,&[]);
+        assert!(presenter.retained_texture().is_none(),"the first frame is full and needs no retained image");
+        let image_bytes=64*64*4;
+        assert_eq!(presenter.surface_memory.as_ref().map(|(_,bytes)|*bytes),Some(SURFACE_IMAGES*image_bytes));
+        present(&mut presenter,view,&cursor(16.));
+        assert_eq!(presenter.surface_memory.as_ref().map(|(_,bytes)|*bytes),Some((SURFACE_IMAGES+1)*image_bytes),"the retained image is charged with the surface");
+        let shown=present(&mut presenter,view,&cursor(20.));
+        assert!(presenter.damage_area_pixels()<64*64);
+        assert_eq!(shown,reference(view,&cursor(20.)));
+        let image=presenter.retained_texture().unwrap().clone();
+        assert_eq!(page_bytes(&renderer,&image),shown);
+        let direct=renderer.device().create_texture(&wgpu::TextureDescriptor {label:Some("target without copies"),
+            size:wgpu::Extent3d {width:extent[0],height:extent[1],depth_or_array_layers:1},mip_level_count:1,sample_count:1,
+            dimension:wgpu::TextureDimension::D2,format,usage:wgpu::TextureUsages::RENDER_ATTACHMENT|wgpu::TextureUsages::COPY_SRC,view_formats:&[]});
+        let scope=renderer.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        presenter.present(&renderer,&direct.create_view(&Default::default()),moved,surround).unwrap();
+        assert!(pollster::block_on(scope.pop()).is_none(),"a full frame copies nothing into its target");
+        assert_eq!(presenter.damage_area_pixels(),64*64);
+        assert_eq!(page_bytes(&renderer,&direct),reference(moved,&cursor(20.)));
+        assert_eq!(page_bytes(&renderer,&image),shown,"a full frame leaves the retained image unchanged");
+        assert_eq!(present(&mut presenter,moved,&cursor(24.)),reference(moved,&cursor(24.)));
+        assert_eq!(presenter.damage_area_pixels(),64*64,"the next partial frame repaints the stale retained image");
+        assert_eq!(present(&mut presenter,moved,&cursor(28.)),reference(moved,&cursor(28.)));
+        assert!(presenter.damage_area_pixels()<64*64);
     }
 
     #[test]
@@ -1989,7 +2102,7 @@ mod tests {
         crate::test_support::submit_settled(&mut renderer,crate::test_support::packet(a.scene(),extent));
         let mut presenter=ViewportPresenter::for_renderer(&renderer,wgpu::TextureFormat::Rgba8Unorm);
         pollster::block_on(presenter.prepare(&renderer)).unwrap();
-        presenter.set_target_retention(true);
+        presenter.set_target_retention(TargetRetention::Kept);
         let (texture,target)=crate::create_target(renderer.device(),extent,wgpu::TextureFormat::Rgba8Unorm,"transition target");
         let view=crate::test_support::view(extent);
         pollster::block_on(presenter.prepare(&renderer)).unwrap();
@@ -2039,7 +2152,7 @@ mod tests {
         crate::test_support::submit_settled(&mut renderer,crate::test_support::packet(document.scene(),extent));
         let mut presenter=ViewportPresenter::for_renderer(&renderer,wgpu::TextureFormat::Rgba8Unorm);
         pollster::block_on(presenter.prepare(&renderer)).unwrap();
-        presenter.set_target_retention(true);
+        presenter.set_target_retention(TargetRetention::Kept);
         let (texture,target)=crate::create_target(renderer.device(),extent,wgpu::TextureFormat::Rgba8Unorm,"missing presentation views");
         let view=crate::test_support::view(extent);
         pollster::block_on(presenter.prepare(&renderer)).unwrap();
@@ -2284,7 +2397,7 @@ mod tests {
         crate::test_support::submit_settled(&mut renderer, layer_render::FramePacket {reset_layers:false, composite_all:false, ..packet});
         let (texture, target) = crate::create_target(renderer.device(), [128; 2], wgpu::TextureFormat::Rgba8UnormSrgb, "selection overlay presentation");
         let mut presenter = ViewportPresenter::for_surface(&renderer, wgpu::TextureFormat::Rgba8UnormSrgb, SdrSurfaceColor::Srgb).unwrap();
-        presenter.set_target_retention(true);
+        presenter.set_target_retention(TargetRetention::Kept);
         let revisions = (renderer.artwork_revision, renderer.composite_revision, renderer.display_selection_revision, renderer.selection_paint_revision);
         for overlay in [
             overlay,

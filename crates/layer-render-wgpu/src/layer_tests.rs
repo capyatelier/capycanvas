@@ -98,7 +98,7 @@ fn retained_scene_viewport_preserves_pixels_outside_local_paint_and_preview_dama
     let camera = ViewState { width_px: 512, height_px: 512,
         ..view() };
     let mut retained = crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb).unwrap();
-    retained.set_target_retention(true);
+    retained.set_target_retention(crate::TargetRetention::Kept);
     pollster::block_on(retained.prepare(&r)).unwrap();
     for (i, (x, y, preview)) in [(85., 90., false), (365., 330., true),
         (95., 370., true), (360., 100., false)].into_iter().enumerate() {
@@ -133,12 +133,60 @@ fn retained_scene_viewport_preserves_pixels_outside_local_paint_and_preview_dama
     }
     // A swapchain mode change replaces the image even when the scene and view
     // are unchanged. Neither transition may inherit old image damage/history.
-    retained.set_target_retention(false);
+    retained.set_target_retention(crate::TargetRetention::Discarded);
     retained.present(&r, &buffered.create_view(&Default::default()), camera, [0.2; 4]).unwrap();
     assert_eq!(page_bytes(&r, &buffered), page_bytes(&r, &reference), "new buffered image");
-    retained.set_target_retention(true);
+    retained.set_target_retention(crate::TargetRetention::Kept);
     retained.present(&r, &shared_again.create_view(&Default::default()), camera, [0.2; 4]).unwrap();
     assert_eq!(page_bytes(&r, &shared_again), page_bytes(&r, &reference), "new shared image");
+}
+
+#[test]
+fn copied_retention_matches_full_repaints_and_shades_only_damage_into_fresh_targets() {
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let mut document = paint_document([1024; 2], "copied viewport");
+    set_mask(&mut document, reveal_all([1024; 2], [0, 0]));
+    let mut copied = crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb).unwrap();
+    copied.set_target_retention(crate::TargetRetention::Copied);
+    pollster::block_on(copied.prepare(&r)).unwrap();
+    let square = ViewState { width_px: 512, height_px: 512, ..view() };
+    let panned = ViewState { document_to_surface: [1., 0., 0., 1., -96., -64.], ..square };
+    let resized = ViewState { width_px: 384, height_px: 448, ..panned };
+    for (i, (camera, ink, partial)) in [
+        (square, Some((85., 90.)), false),
+        (square, Some((365., 330.)), false),
+        (square, Some((95., 370.)), true),
+        (panned, None, false),
+        (panned, Some((360., 200.)), false),
+        (panned, Some((200., 360.)), true),
+        (resized, None, false),
+        (resized, Some((250., 150.)), false),
+        (resized, Some((150., 300.)), true),
+    ].into_iter().enumerate() {
+        let dabs: Vec<_> = ink.map(|(x, y)| Dab { center: Point { x, y }, radii: [24.; 2], previous: [24., 24., 1., 0.],
+            contact: [1., 0., 0., 0.], ..dab([0.8, 0.1, 0.2, 0.7]) }).into_iter().collect();
+        let batches: Vec<_> = dabs.iter().map(|ink| DabBatch { style: preset_style(layer_core::DefaultBrushPreset::Pencil),
+            damage: ink.bounds(), ..batch(placement::target(&document)) }).collect();
+        let frame = FramePacket { view: camera, dabs: &dabs, dab_batches: &batches, reset_layers: i == 0, composite_all: i == 0,
+            ..packet(document.scene(), [1024; 2]) };
+        if ink.is_some() { crate::test_support::submit_ready(&mut r, frame).unwrap(); } else { crate::test_support::submit_settled(&mut r, frame); }
+        let extent = [camera.width_px, camera.height_px];
+        let target = crate::create_target(&r.device, extent, format, "copied swapchain image").0;
+        copied.present(&r, &target.create_view(&Default::default()), camera, [0.2; 4]).unwrap();
+        let reference = crate::create_target(&r.device, extent, format, "full repaint").0;
+        let mut full = crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb).unwrap();
+        pollster::block_on(full.prepare(&r)).unwrap();
+        full.present(&r, &reference.create_view(&Default::default()), camera, [0.2; 4]).unwrap();
+        assert_eq!(page_bytes(&r, &target), page_bytes(&r, &reference), "frame {i}");
+        let area = u64::from(extent[0]) * u64::from(extent[1]);
+        if partial {
+            assert!(copied.damage_area_pixels() < area / 4 && copied.shaded_area_pixels() < area / 4,
+                "frame {i} shades only its damage: {} presented, {} shaded", copied.damage_area_pixels(), copied.shaded_area_pixels());
+        } else {
+            assert_eq!(copied.damage_area_pixels(), area, "frame {i} repaints fully");
+        }
+    }
 }
 
 #[test]

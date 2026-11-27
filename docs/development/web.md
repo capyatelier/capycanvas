@@ -7,11 +7,13 @@ runs the same canvas renderer as the native clients. The finished app is static
 files and can be packaged as an installable, offline PWA
 ([Web packaging](web-packaging.md)).
 
-Canvas presentation uses a persistent GPU target with the shared renderer's damage
-tracking. After rendering, a GPU texture copy publishes that target to the browser's
-transient canvas texture, so a pen update doesn't repaint the whole viewport and
-nothing depends on browser swapchain retention. Reconfiguration invalidates
-presentation history; a change in size or format replaces the retained target.
+Canvas presentation uses the shared presenter's copied retention
+(`TargetRetention::Copied`). The presenter repaints a pen update's damage in its own
+retained image and copies that image to the browser's transient canvas texture in
+the same submission, so a pen update doesn't repaint the whole viewport and nothing
+depends on browser swapchain retention. A frame that repaints everything, such as a
+camera change, draws straight into the canvas texture. Reconfiguration invalidates
+presentation history; a change in size or format replaces the retained image.
 `GPUCanvasConfiguration.usage` includes render attachment and copy destination,
 following the [WebGPU canvas contract](https://gpuweb.github.io/types/interfaces/GPUCanvasConfiguration.html).
 No canvas pixels are read or copied through JavaScript.

@@ -31,7 +31,7 @@ mod panel_vectors;
 use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
 use layer_render::{CanvasRenderer, FrameRate, FrameRateSource, PresentationRate};
-use layer_render_wgpu::{AttachedRenderer, GpuRasterError, RendererFactory, SdrSurfaceColor, StartupProgress, ViewportPresenter, WgpuRasterizer};
+use layer_render_wgpu::{AttachedRenderer, GpuRasterError, RendererFactory, SdrSurfaceColor, StartupProgress, TargetRetention, ViewportPresenter, WgpuRasterizer};
 use layer_ui::{UiAction, UiSession, ui_catalog_localized};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -109,7 +109,6 @@ struct WebSurface {
     presenter: ViewportPresenter,
     presenter_color: layer_core::color::DocumentColor,
     blank_presented: bool,
-    retained_frame: Option<wgpu::Texture>,
     lost: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     submitted_frames: PresentationRate,
     submission_epoch: web_time::Instant,
@@ -514,7 +513,7 @@ impl WebApp {
             .resize_surface(surface.config.width, surface.config.height)
             .map_err(js)?;
         surface.surface.configure(renderer.device(), &surface.config);
-        surface.presenter.set_target_retention(true);
+        surface.presenter.set_target_retention(TargetRetention::for_surface(&surface.config));
         self.session
             .replace_renderer(AttachedRenderer(Some(Box::new(renderer))))
             .map_err(js)?;
@@ -561,7 +560,8 @@ impl WebGpu {
         let hdr_capable = surface.get_capabilities(renderer.adapter())
             .color_spaces(wgpu::TextureFormat::Rgba16Float)
             .contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB);
-        let presenter = ViewportPresenter::for_renderer(&renderer, config.format);
+        let presenter = ViewportPresenter::for_surface(&renderer, config.format, SdrSurfaceColor::Srgb)
+            .map_err(|error| gpu_error("renderer", error))?;
         let presenter_color = renderer.document_color();
         raster_worker::install(&mut renderer);
         let gpu = Self {
@@ -576,7 +576,6 @@ impl WebGpu {
                 presenter,
                 presenter_color,
                 blank_presented: false,
-                retained_frame: None,
                 lost,
                 submitted_frames: PresentationRate::default(),
                 submission_epoch: web_time::Instant::now(),
@@ -1097,7 +1096,7 @@ impl WebApp {
             surface.surface.configure(gpu.device(), &surface.config);
             self.surface_generation = self.surface_generation.wrapping_add(1);
             self.launch_frame = None;
-            surface.presenter.set_target_retention(true);
+            surface.presenter.set_target_retention(TargetRetention::for_surface(&surface.config));
         }
         serialize(&change)
     }
@@ -1231,13 +1230,13 @@ impl WebApp {
                 surface.surface.configure(gpu.device(), &surface.config);
                 self.surface_generation = self.surface_generation.wrapping_add(1);
                 self.launch_frame = None;
-                surface.presenter.set_target_retention(true);
+                surface.presenter.set_target_retention(TargetRetention::for_surface(&surface.config));
             } else if surface.presenter_color != gpu.document_color() {
                 let held = surface.presenter.capture_held(gpu.device(), gpu.queue());
                 surface.presenter = ViewportPresenter::for_surface(gpu, surface.config.format, color).map_err(js)?;
                 surface.presenter.adopt_held(held);
                 surface.presenter_color = gpu.document_color();
-                surface.presenter.set_target_retention(true);
+                surface.presenter.set_target_retention(TargetRetention::for_surface(&surface.config));
             }
             surface.presenter.set_proof(gpu, lut, enabled, gamut).map_err(js)?;
             surface.presenter.set_screen_check(gpu, screen_check);
@@ -1298,7 +1297,7 @@ impl WebApp {
                 surface.surface.configure(gpu.device(), &surface.config);
                 self.surface_generation = self.surface_generation.wrapping_add(1);
                 self.launch_frame = None;
-                surface.presenter.set_target_retention(true);
+                surface.presenter.set_target_retention(TargetRetention::for_surface(&surface.config));
                 return serialize(&layer_ui::UiChange {
                     canvas_wake: true,
                     ..change
@@ -1308,7 +1307,7 @@ impl WebApp {
                 surface.surface.configure(gpu.device(), &surface.config);
                 self.surface_generation = self.surface_generation.wrapping_add(1);
                 self.launch_frame = None;
-                surface.presenter.set_target_retention(true);
+                surface.presenter.set_target_retention(TargetRetention::for_surface(&surface.config));
                 return serialize(&layer_ui::UiChange {
                     canvas_wake: true,
                     ..change
@@ -1325,27 +1324,7 @@ impl WebApp {
                 return Err(js("WebGPU surface validation failed"));
             }
         };
-        if surface.retained_frame.as_ref().is_none_or(|texture|
-            texture.width()!=surface.config.width || texture.height()!=surface.config.height
-                || texture.format()!=surface.config.format)
-        {
-            surface.retained_frame = Some(gpu.device().create_texture(&wgpu::TextureDescriptor {
-                label: Some("retained Web canvas"),
-                size: wgpu::Extent3d { width: surface.config.width, height: surface.config.height, depth_or_array_layers: 1 },
-                mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
-                format: surface.config.format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            }));
-            surface.presenter.set_target_retention(true);
-        }
-        let retained = surface.retained_frame.as_ref().unwrap();
-        surface.presenter.present(gpu, &retained.create_view(&Default::default()), view, surround).map_err(js)?;
-        let mut encoder = gpu.device().create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("publish retained Web canvas"),
-        });
-        encoder.copy_texture_to_texture(retained.as_image_copy(), target.texture.as_image_copy(), retained.size());
-        gpu.submit_commands([encoder.finish()]);
+        surface.presenter.present(gpu, &target.texture.create_view(&Default::default()), view, surround).map_err(js)?;
         gpu.queue().present(target);
         surface.submitted_frames.observe(surface.submission_time_ns());
         surface.blank_presented = true;

@@ -824,7 +824,7 @@ fn replacement_previews_present_only_the_moving_images_bounds() {
     submit_ready(&mut r, frame);
     let (texture, target) = crate::create_target(r.device(), [view.width_px, view.height_px], wgpu::TextureFormat::Rgba8UnormSrgb, "replacement presentation");
     let mut presenter = crate::present::ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba8UnormSrgb, crate::SdrSurfaceColor::Srgb).unwrap();
-    presenter.set_target_retention(true);
+    presenter.set_target_retention(crate::TargetRetention::Kept);
     pollster::block_on(presenter.prepare(&r)).unwrap();
     presenter.present(&r, &target, view, [1.; 4]).unwrap();
     let object = editor.document().scene().vector_layer(layer).unwrap().clone();
@@ -951,7 +951,7 @@ fn crowded_vector_layer_edit_frames() {
     let ids: Vec<ItemId> = nearest.into_iter().map(|(_, id)| id).collect();
     let (_texture, target) = crate::create_target(r.device(), [view.width_px, view.height_px], wgpu::TextureFormat::Rgba8UnormSrgb, "vector motion presentation");
     let mut presenter = crate::present::ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba8UnormSrgb, crate::SdrSurfaceColor::Srgb).unwrap();
-    presenter.set_target_retention(true);
+    presenter.set_target_retention(crate::TargetRetention::Kept);
     {
         let points: Vec<_> = (0..400).map(|i| Anchor::corner([1200. + (i % 40) as f64 * 70., 1300. + (i / 40) as f64 * 170. + (i % 2) as f64 * 60.])).collect();
         let mut stroke = Stroke::new(paint([0.1, 0.2, 0.9, 1.]), 3.);
@@ -1407,7 +1407,7 @@ fn crowded_vector_layer_zoom_frames() {
         if selection { r.set_vector_selection(Some(&layer_core::authored::VectorItemSelection { layer, items: selected.clone() })); }
         let (_texture, target) = crate::create_target(r.device(), [1920, 1200], wgpu::TextureFormat::Rgba8UnormSrgb, "vector zoom presentation");
         let mut presenter = crate::present::ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba8UnormSrgb, crate::SdrSurfaceColor::Srgb).unwrap();
-        presenter.set_target_retention(true);
+        presenter.set_target_retention(crate::TargetRetention::Kept);
         submit_ready(&mut r, FramePacket { view: at(from), ..packet(editor.document().scene(), extent) });
         pollster::block_on(presenter.prepare(&r)).unwrap();
         presenter.present(&r, &target, at(from), [1.; 4]).unwrap();
@@ -1566,7 +1566,7 @@ fn crowded_vector_layer_width_scrub_frames() {
     submit_ready(&mut r, FramePacket { view, ..packet(editor.document().scene(), extent) });
     let (_texture, target) = crate::create_target(r.device(), [view.width_px, view.height_px], wgpu::TextureFormat::Rgba8UnormSrgb, "width scrub presentation");
     let mut presenter = crate::present::ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba8UnormSrgb, crate::SdrSurfaceColor::Srgb).unwrap();
-    presenter.set_target_retention(true);
+    presenter.set_target_retention(crate::TargetRetention::Kept);
     let object = editor.document().scene().vector_layer(layer).unwrap().clone();
     for count in [100usize, 5000] {
         let selected: std::collections::BTreeSet<ItemId> = nearest.iter().take(count).copied().collect();
@@ -1614,7 +1614,7 @@ fn crowded_vector_layer_press_frames() {
     submit_ready(&mut r, FramePacket { view, ..packet(editor.document().scene(), extent) });
     let (_texture, target) = crate::create_target(r.device(), [view.width_px, view.height_px], wgpu::TextureFormat::Rgba8UnormSrgb, "press presentation");
     let mut presenter = crate::present::ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba8UnormSrgb, crate::SdrSurfaceColor::Srgb).unwrap();
-    presenter.set_target_retention(true);
+    presenter.set_target_retention(crate::TargetRetention::Kept);
     let ids: Vec<ItemId> = editor.document().scene().vector_layer(layer).unwrap().paths().map(|(_, path)| path.id).collect();
     for (press, id) in ids.iter().step_by(997).take(4).enumerate() {
         let items = Arc::new(std::collections::BTreeSet::from([*id]));

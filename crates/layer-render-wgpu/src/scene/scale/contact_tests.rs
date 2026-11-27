@@ -2961,7 +2961,7 @@ fn predicted_pencil_strokes_on_a_photo_at_full_size_publish_only_what_their_dabs
     let (shown,shown_view)=crate::create_target(r.device(),surface,format,"retained stroke");
     let (whole,whole_view)=crate::create_target(r.device(),surface,format,"repainted stroke");
     let mut retained=crate::ViewportPresenter::for_surface(&r,format,crate::SdrSurfaceColor::Srgb).unwrap();
-    retained.set_target_retention(true);
+    retained.set_target_retention(crate::TargetRetention::Kept);
     let mut presents_whole=|r:&WgpuRasterizer| {
         pollster::block_on(retained.prepare(r)).unwrap();
         retained.present(r,&shown_view,frame.view,[0.2;4]).unwrap();
@@ -3015,7 +3015,7 @@ fn refinement_after_a_pencil_stroke_on_a_complete_photo_view_publishes_only_the_
     let (shown,shown_view)=crate::create_target(r.device(),surface,format,"retained refinement");
     let (whole,whole_view)=crate::create_target(r.device(),surface,format,"repainted refinement");
     let mut retained=crate::ViewportPresenter::for_surface(&r,format,crate::SdrSurfaceColor::Srgb).unwrap();
-    retained.set_target_retention(true);
+    retained.set_target_retention(crate::TargetRetention::Kept);
     let mut presents_whole=|r:&WgpuRasterizer| {
         pollster::block_on(retained.prepare(r)).unwrap();
         retained.present(r,&shown_view,frame.view,[0.2;4]).unwrap();
@@ -3063,7 +3063,7 @@ fn a_presenter_that_misses_refinement_pictures_repaints_only_what_they_changed()
     let (shown,shown_view)=crate::create_target(r.device(),surface,format,"retained refinement");
     let (whole,whole_view)=crate::create_target(r.device(),surface,format,"repainted refinement");
     let retained=std::cell::RefCell::new(crate::ViewportPresenter::for_surface(&r,format,crate::SdrSurfaceColor::Srgb).unwrap());
-    retained.borrow_mut().set_target_retention(true);
+    retained.borrow_mut().set_target_retention(crate::TargetRetention::Kept);
     let marker=[255u8,0,255,255].repeat(64);
     let present=|r:&WgpuRasterizer| {
         pollster::block_on(retained.borrow_mut().prepare(r)).unwrap();
