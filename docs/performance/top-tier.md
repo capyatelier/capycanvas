@@ -3618,7 +3618,10 @@ measurements remain required.
 | --- | --- | --- | --- |
 | M2 Pro Mac mini, 90 Hz: other drawing profiles | Not measured | Not measured | Unqualified; current optimized comparison required |
 | M2 Pro Mac mini, 90 Hz: reference-photo G-Pen, 2048 px, default Low glass, light / dark | 89.507 / 89.507 → 89.395 / 89.340 completed-update lower bounds/s; `38c6fb836` → same base with scene-operation split, 2026-11-01 | 11.111 ms in both themes and builds | **Unqualified for 120:** display limited to 90 Hz; three six-second contacts per theme/build; Dark longest contact gap 33.334 → 44.445 ms; `artifacts/apple/a10x-hardening/round2/mac-shaderperf/runs/results.local.md` |
-| M4 iPad Pro, 120 Hz: drawing profiles | Not measured | Not measured | Unqualified; current optimized comparison required |
+| A10X iPad Pro 12.9-inch, 120 Hz: Pencil 14 px at Fit, blank 2732 × 2048 | 66.33 → 118.33 displayed frames/s; viewport GPU p50 14.54 → 2.34 ms plus a 1.44 ms copy; [retained viewport](#retained-viewport-and-plain-viewport-shader), 2026-11-26 | Not recorded | Unqualified: not a reference device; one 3 s contact per build |
+| A10X iPad Pro 12.9-inch, 120 Hz: Pen at Fit / two-finger pan at Fit | Retained viewport alone: 71.67 → 115.67 completed updates/s / 79.00 → 84.00 displayed frames/s; combined build unmeasured | Not recorded | Unqualified: not a reference device |
+| M4 iPad Pro, 120 Hz: Pencil 14 px / pan at Fit, blank 2752 × 2064 | 118.33 → 117.67 / 118.33 → 117.67 displayed frames/s; viewport GPU p50 5.16 → 0.44 ms plus a 0.75 ms copy / 4.87 → 3.31 ms; [retained viewport](#retained-viewport-and-plain-viewport-shader) | Not recorded | Display-limited in both builds; one 3 s contact per build |
+| M4 iPad Pro, 120 Hz: other drawing profiles | Not measured | Not measured | Unqualified; current optimized comparison required |
 | M4 iPad Pro, 120 Hz: reference-photo G-Pen, 2048 px, light / dark | 117.915 / 118.138 → 117.748 / 118.249 completed updates/s; latest input-update lower bounds 117.693 / 118.193 | Latest completion gaps 16.667 / 8.334 ms | **Not met:** below 120 completed updates/s; `artifacts/apple-panel-coverage-performance-20261026/gpen-{light,dark}/report.json` |
 | M4 iPad Pro, 120 Hz: reference-photo Wet Watercolor, 512 px, light / dark | 119.472 / 119.305 → 119.249 / 119.416 completed updates/s; latest input-update lower bounds 119.083 / 119.416 | Latest completion gaps 8.334 / 8.334 ms | **Not met:** below 120 completed updates/s; `artifacts/apple-panel-coverage-performance-20261026/watercolor-{light,dark}/report.json` |
 | Mac: Palette resize, light and dark | Not measured | Not measured | Unqualified; current optimized measurement required |
@@ -4149,6 +4152,47 @@ Release executable SHA-256 is
 This identifies the measured build, not a later rebased HEAD. Raw traces,
 `setup.json`, timestamps, screenshots, per-window reports, source/binary manifests
 and `motion-summary.json` remain in `artifacts/apple/hdr-tool-bubbles/`.
+
+## Retained viewport and plain viewport shader
+
+Measured 2026-11-26: base `fa0fe0774` (rendering identical to `60536a909`) →
+`9579e1289` (copied retention) plus `ac7f1a0df` (plain viewport variant), with
+the retained commit alone on the same base where noted. The Apple and Windows
+hosts are not tier reference devices; their rows are regression comparisons.
+Raw runs, traces and per-pass values are in `artifacts/viewport-speed/`.
+
+Apple rows use one 3 s contact per build, traced in Metal System Trace; they are
+in [Apple native measurements](#apple-native-measurements). The A10X lacks
+`FLOAT32_FILTERABLE`; its remaining full-frame cost is the manual bilinear page
+sampling.
+
+Windows rows run the bench chain on the 4248 × 2832 tier photo and fixtures,
+base and candidate each cold then warm in A B B A order; rates are medians of
+the two passes. All three report a 60 Hz panel with Immediate presentation, so
+rates above 60 are completed updates rather than displayed frames.
+
+The P43s ran the chain twice; its cells give both runs. Its heavy-drawing and
+Clone passes vary by more than the change between builds, and the first run's
+cold candidate pass skipped the heavy steps after its open timed out.
+
+| Row | Surface Pro, Adreno X1-85 | Surface Laptop 5, Iris Xe | P43s, UHD 620 |
+| --- | ---: | ---: | ---: |
+| Pencil, updates/s | 110.3 → 176.2 | 146.1 → 168.9 | 67.2 → 153.4 / 72.1 → 151.4 |
+| G-Pen, updates/s | 111.0 → 145.4 | 129.2 → 152.8 | 30.3 → 42.8 / 41.9 → 35.5 |
+| Paintbrush, updates/s | 92.4 → 96.5 | 66.8 → 81.2 | 15.0 → 18.7 / 14.6 → 16.7 |
+| Clone, updates/s | 114.8 → 142.6 | 125.4 → 152.8 | 75.1 → 54.2 / 86.4 → 83.9 |
+| Heavy drawing, updates/s | 78.3 → 101.8 | 81.5 → 102.1 | 65.8 → 30.3 / 39.3 → 90.2 |
+| Pan, fps | 180.6 → 209.2 | 206.9 → 203.1 | 97.5 → 115.1 / 116.1 → 108.8 |
+
+Android rows use the same chain. The TCL and MovinkPad Pro 14 ran A B B A; the
+Pro 14 timed out undo and later steps in both builds. Inking on both already
+presents through a retained shared buffer, so only the shader variant applies
+there.
+
+| Device | Before → after |
+| --- | --- |
+| TCL | Pencil 113.2 → 111.8, G-Pen 29.2 → 30.4 updates/s; slider 15.0 → 60.0 fps |
+| MovinkPad Pro 14 | Paintbrush 72.7 → 85.4, Wet 15.3 → 26.2, Liquify 11.5 → 16.7 updates/s; isolated Clone 89.3 → 97.4 over two mirrored three-build blocks |
 
 ## Windows Domain Warp comparison
 
