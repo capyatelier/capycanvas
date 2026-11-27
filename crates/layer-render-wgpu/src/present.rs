@@ -6,15 +6,22 @@ use layer_render::{CanvasRenderer, CursorSegment, ViewState};
 pub(super) const CAMERA_SIZE: u64 = 640;
 const SOURCE_CAMERA: u32 = 768;
 
-/// The viewport shader for `format` and `color`; `paper` keeps the paper
-/// lighting code, which the plain variant leaves out.
-pub(super) fn viewport_shader(device: &crate::PipelineDevice, format: wgpu::TextureFormat, color: SdrSurfaceColor, paper: bool) -> wgpu::ShaderModule {
+/// The viewport shader for `format` and `color`. `paper` keeps the paper
+/// lighting code; `plain` leaves out selections, crop, proof, screen marks,
+/// clipping stripes, fill reveal and the moving split.
+pub(super) fn viewport_shader(device: &crate::PipelineDevice, format: wgpu::TextureFormat, color: SdrSurfaceColor, paper: bool, plain: bool) -> wgpu::ShaderModule {
     device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some(if paper { "viewport shader with paper lighting" } else { "viewport shader" }),
+        label: Some(match (paper, plain) {
+            (false, false) => "viewport shader",
+            (true, false) => "viewport shader with paper lighting",
+            (false, true) => "plain viewport shader",
+            (true, true) => "plain viewport shader with paper lighting",
+        }),
         source: wgpu::ShaderSource::Wgsl(
             format!(
-                "const PAPER:bool={};\nconst VIEW_8BIT:bool={};\nconst VIEW_SRGB_ATTACHMENT:bool={};\nconst VIEW_FLOAT16:bool={};\nconst VIEW_WHITE_SCALE:f32={};\nconst VIEW_PQ:bool={};\nconst VIEW_EXTENDED_SRGB:bool={};\nconst SCREEN_SAMPLE_STRIDE:u32={}u;\nconst CANVAS_SPACE:u32={}u;\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+                "const PAPER:bool={};\nconst PLAIN:bool={};\nconst VIEW_8BIT:bool={};\nconst VIEW_SRGB_ATTACHMENT:bool={};\nconst VIEW_FLOAT16:bool={};\nconst VIEW_WHITE_SCALE:f32={};\nconst VIEW_PQ:bool={};\nconst VIEW_EXTENDED_SRGB:bool={};\nconst SCREEN_SAMPLE_STRIDE:u32={}u;\nconst CANVAS_SPACE:u32={}u;\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
                 paper,
+                plain,
                 matches!(format,wgpu::TextureFormat::Rgba8Unorm|wgpu::TextureFormat::Bgra8Unorm|wgpu::TextureFormat::Rgba8UnormSrgb|wgpu::TextureFormat::Bgra8UnormSrgb),
                 format.is_srgb(),
                 format == wgpu::TextureFormat::Rgba16Float,
@@ -114,6 +121,7 @@ pub(super) struct Recipes {
     backdrop: std::sync::OnceLock<crate::backdrop_blur::Recipes>,
     panels: std::sync::OnceLock<crate::panel_surface::Recipes>,
     paper: std::sync::OnceLock<[crate::Deferred<wgpu::RenderPipeline>; 2]>,
+    plain: [std::sync::OnceLock<crate::Deferred<wgpu::RenderPipeline>>; 2],
     overviews: [std::sync::OnceLock<crate::Deferred<wgpu::RenderPipeline>>; 2],
 }
 
@@ -328,7 +336,7 @@ impl Recipes {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let shader = viewport_shader(device, format, color, false);
+        let shader = viewport_shader(device, format, color, false, false);
         let pipeline = ["fs_main", "fs_stand_in"].map(|entry|
             surface_pipeline(device, "viewport presentation", &pipeline_layout, &shader, ["vs_main", entry], None, format, None));
         let surround_pipeline = surface_pipeline(device, "viewport surround", &pipeline_layout, &shader, ["vs_main", "fs_surround"], None, format, None);
@@ -364,7 +372,7 @@ impl Recipes {
             }),
             format, Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING));
         Self { transition: crate::present_transition::TransitionRecipes::new(device,format), pipeline, surround: surround_pipeline, cursor: cursor_pipeline, layout, shader, pipeline_layout, cursor_icons,
-            paper: Default::default(), overviews: Default::default(), backdrop: Default::default(), panels: Default::default(), picker: Default::default(), screen: Default::default() }
+            paper: Default::default(), plain: Default::default(), overviews: Default::default(), backdrop: Default::default(), panels: Default::default(), picker: Default::default(), screen: Default::default() }
     }
 }
 
@@ -680,9 +688,28 @@ impl ViewportPresenter {
         let (device, format, color) = (&renderer.device, self.format, self.color);
         let layout = &self.pipeline_layout;
         self.recipes.paper.get_or_init(|| {
-            let shader = viewport_shader(device, format, color, true);
+            let shader = viewport_shader(device, format, color, true, false);
             ["fs_main", "fs_stand_in"].map(|entry| surface_pipeline(device, "viewport presentation with paper lighting", layout, &shader, ["vs_main", entry], None, format, None))
         })
+    }
+
+    fn plain_pipeline(&self, renderer: &WgpuRasterizer, lit: bool) -> &crate::Deferred<wgpu::RenderPipeline> {
+        let (device, format, color) = (&renderer.device, self.format, self.color);
+        self.recipes.plain[usize::from(lit)].get_or_init(|| {
+            let label = if lit { "plain viewport presentation with paper lighting" } else { "plain viewport presentation" };
+            let recipe = device.for_recipe();
+            let shader = crate::Deferred::new(move || viewport_shader(&recipe, format, color, lit, true));
+            surface_pipeline(device, label, &self.pipeline_layout, shader, ["vs_main", "fs_main"], None, format, None)
+        })
+    }
+
+    fn frame_pipeline(&self, renderer: &WgpuRasterizer, (source, lit): (usize, bool), camera: &[f32; 160]) -> Option<crate::Deferred<wgpu::RenderPipeline>> {
+        let showing = renderer.presentation.showing && !self.standalone_overview;
+        if !showing || source != 0 || !plain_frame(camera, self.proof_options, &self.screen_options) { return None; }
+        let plain = self.plain_pipeline(renderer, lit);
+        if plain.ready() { return Some(plain.clone()); }
+        renderer.compilation.warm(plain, crate::startup::ANTICIPATED, renderer.compilation.generation());
+        None
     }
 
     pub(crate) fn bound_viewport(&self, renderer: &WgpuRasterizer) -> (usize, bool, &crate::Deferred<wgpu::RenderPipeline>) {
@@ -1459,6 +1486,7 @@ impl ViewportPresenter {
         if let Some(reveal)=renderer.fill_reveal.filter(|reveal|reveal.radius>=0. && self.fill_before.as_ref().is_some_and(|(id,_)|*id==reveal.transaction)) {
             data[156..160].copy_from_slice(&[reveal.center[0],reveal.center[1],reveal.radius,1.]);
         }
+        let pipeline = self.frame_pipeline(renderer, (source, lit), &data).unwrap_or(pipeline);
         // A fixed f32 array has no padding or uninitialized bytes.
         let bytes = unsafe {
             std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), std::mem::size_of_val(&data))
@@ -1854,18 +1882,27 @@ impl ViewportPresenter {
     }
 }
 
+fn plain_frame(camera: &[f32; 160], proof: [u32; 4], screen: &[f32; 16]) -> bool {
+    let [selection, saved_selection, crop] = [camera[18], camera[26], camera[39]];
+    let [shadows, highlights, split, fill_reveal] = [camera[62], camera[63], camera[139], camera[159]];
+    let proofing = proof[0] >= 2 && (proof[2] != 0 || proof[3] != 0);
+    let screen_marks = screen[14];
+    selection <= 0.5 && saved_selection <= 0.5 && crop <= 0.5 && screen_marks < 0.5
+        && [shadows, highlights, split, fill_reveal] == [0.; 4] && !proofing
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn surface_pipeline(
     device: &crate::PipelineDevice,
     label: &'static str,
     layout: &wgpu::PipelineLayout,
-    shader: &wgpu::ShaderModule,
+    shader: impl Into<crate::Deferred<wgpu::ShaderModule>>,
     entries: [&'static str; 2],
     instance: Option<wgpu::VertexBufferLayout<'_>>,
     format: wgpu::TextureFormat,
     blend: Option<wgpu::BlendState>,
 ) -> crate::Deferred<wgpu::RenderPipeline> {
-    let (device, layout, shader) = (device.for_recipe(), layout.clone(), shader.clone());
+    let (device, layout, shader) = (device.for_recipe(), layout.clone(), shader.into());
     let instance = instance.map(|v| (v.array_stride, v.step_mode, v.attributes.to_vec()));
     crate::Deferred::pipeline(move |mode| {
         let instance = instance.as_ref().map(|(array_stride, step_mode, attributes)| wgpu::VertexBufferLayout {
@@ -1898,6 +1935,9 @@ mod readiness_tests;
 
 #[cfg(test)]
 mod variant_tests;
+
+#[cfg(test)]
+pub(crate) mod plain_tests;
 
 #[cfg(test)]
 mod tests {

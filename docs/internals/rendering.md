@@ -239,6 +239,15 @@ Validation after the first lit frame. Unlit canvases and standalone Navigators
 do not require lit viewport pipelines. Paper bake steps resume when the compiler
 wakes the host.
 
+A canvas frame without a selection, saved selection overlay, crop shield, proof,
+screen marks, clipping stripes, fill reveal, moving split or stand-in source draws
+with a plain viewport variant whose shader leaves that code out. `plain_frame`
+decides this from the frame's uniforms. Such frames request the plain variant at
+Anticipated priority and draw with the full one until it is ready; any other frame
+draws with the full variant. A new overlay or preview in `present.wgsl` needs a
+`PLAIN` guard and a term in `plain_frame`
+(`every_overlay_and_preview_presents_through_the_full_viewport`).
+
 Viewport and backdrop uniforms are encoded into the frame that consumes them.
 An unchanged layer-style table reuses its uploaded bytes; buffer replacement or
 discarded commands invalidate that reuse. Camera changes preserve changed-cell

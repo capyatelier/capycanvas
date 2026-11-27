@@ -846,6 +846,26 @@ fn replacement_previews_present_only_the_moving_images_bounds() {
 }
 
 #[test]
+fn a_split_drag_presents_through_the_full_viewport() {
+    let extent = [1200u32, 900u32];
+    let view = layer_render::ViewState { width_px: 600, height_px: 450, document_to_surface: [0.5, 0., 0., 0.5, 0., 0.] };
+    let (editor, layer, items) = motion_fixture(layer_core::LayerBlend::Normal, 1.);
+    let mut r = WgpuRasterizer::new_native_headless(editor.document().composition().color).unwrap();
+    let frame = FramePacket { view, composite_all: false, ..packet(editor.document().scene(), extent) };
+    submit_ready(&mut r, FramePacket { view, ..packet(editor.document().scene(), extent) });
+    let mut presenter = crate::present::plain_tests::plain_ready(&r, wgpu::TextureFormat::Rgba8UnormSrgb);
+    assert!(crate::present::plain_tests::present(&mut presenter, &r, view).used_plain, "a still drawing presents through the plain viewport");
+    r.set_vector_selection(Some(&layer_core::authored::VectorItemSelection { layer, items: items.clone() }));
+    submit_ready(&mut r, frame);
+    r.set_vector_motion(Some(layer_render::VectorMotion { owner: layer, items, transform: translation([24., -12.]) }));
+    submit_ready(&mut r, frame);
+    assert!(r.display_motion().is_some(), "the drag presents through the split");
+    let drawn = crate::present::plain_tests::present(&mut presenter, &r, view);
+    let failure = crate::present::plain_tests::full_viewport_failure(&drawn, "a split drag");
+    assert!(failure.is_none(), "{failure:?}");
+}
+
+#[test]
 fn a_vector_drawing_opened_zoomed_out_presents_what_it_composed() {
     let extent = [1200u32, 900u32];
     let view = layer_render::ViewState { width_px: 600, height_px: 450, document_to_surface: [0.5, 0., 0., 0.5, 0., 0.] };

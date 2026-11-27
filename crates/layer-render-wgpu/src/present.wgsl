@@ -183,7 +183,7 @@ fn artwork_at(p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
     return grid_artwork_at(p,dx,dy,camera.levels.y!=0.);
 }
 fn moving_between(p: vec2<f32>, composite: vec4<f32>) -> vec4<f32> {
-    if camera.split.w == 0. || any(p < camera.split_region.xy) || any(p >= camera.split_region.zw) { return composite; }
+    if PLAIN || camera.split.w == 0. || any(p < camera.split_region.xy) || any(p >= camera.split_region.zw) { return composite; }
     let q = (camera.motion_inverse.xy * p.x + camera.motion_inverse.zw * p.y + camera.motion_offset.xy - camera.motion.xy) / camera.motion.z;
     let size = camera.motion_offset.zw;
     if any(q < vec2<f32>(-1.)) || any(q > size + 1.) { return composite; }
@@ -342,7 +342,7 @@ fn window_coverage(surface: vec2<f32>) -> f32 {
 }
 fn surround_color(surface: vec2<f32>, p: vec2<f32>) -> vec4<f32> {
     var rgb = view_ui_rgb(camera.surround.rgb);
-    if camera.crop_offset.w > .5 && inside_crop(p) {
+    if !PLAIN && camera.crop_offset.w > .5 && inside_crop(p) {
         rgb = vec3<f32>(transparency_checker(p, 16.));
     }
     if camera.viewport.z > .5 { rgb = display_color(rgb); }
@@ -352,12 +352,12 @@ fn surround_color(surface: vec2<f32>, p: vec2<f32>) -> vec4<f32> {
 fn surface_color(vertex:Vertex,stand_in:bool)->vec4<f32> {
     let footprint = camera.rotation.w;
     let surface = logical_surface(vertex.position.xy * footprint);
-    if camera.fill_reveal.w!=0. && distance(surface,camera.fill_reveal.xy)>=camera.fill_reveal.z {
+    if !PLAIN && camera.fill_reveal.w!=0. && distance(surface,camera.fill_reveal.xy)>=camera.fill_reveal.z {
         return textureLoad(fill_before,clamp(vec2<i32>(vertex.position.xy*footprint),vec2<i32>(0),vec2<i32>(textureDimensions(fill_before))-vec2<i32>(1)),0);
     }
     let p = vec2<f32>(dot(camera.inverse.xz, surface), dot(camera.inverse.yw, surface)) + camera.offset_document.xy;
     let extent = camera.offset_document.zw;
-    let cropping = camera.crop_offset.w > .5;
+    let cropping = !PLAIN && camera.crop_offset.w > .5;
     if any(p < vec2<f32>(0.)) || any(p >= extent) { return surround_color(surface, p); }
     let written = grid_written(p);
     if !written && (!stand_in || camera.levels.y == 0.) {return surround_color(surface,p);}
@@ -372,7 +372,7 @@ fn surface_color(vertex:Vertex,stand_in:bool)->vec4<f32> {
     let checker = transparency_checker(p, 16.);
     var rgb = screen_marked(paint, view_working_rgb(paint.rgb) + vec3<f32>(checker) * (1.0 - paint.a), checker);
     if PAPER && paper_shade.state.z != 0. { rgb = paper_lit(vec4<f32>(rgb, 1.), paper_slope_shade(p, dx, dy), 1.).rgb; }
-    if (!stand_in || written) && (bitcast<u32>(artwork.a)&0x7fffffffu)!=0u {
+    if !PLAIN && (!stand_in || written) && (bitcast<u32>(artwork.a)&0x7fffffffu)!=0u {
         let bits=bitcast<vec3<u32>>(artwork.rgb);
         let shadows=camera.composite.z!=0. && (any((bits&vec3(0x7fffffffu))==vec3(0u)) || any((bits>>vec3(31u))!=vec3(0u)));
         let highlights=camera.composite.w!=0. && any(select(vec3(false), bits>=vec3(bitcast<u32>(artwork.a)), bits<vec3(0x80000000u)));
@@ -385,17 +385,17 @@ fn surface_color(vertex:Vertex,stand_in:bool)->vec4<f32> {
     // Raster-selection outlines are sampled at display resolution, never
     // traced/tessellated on the CPU or baked into the document composition.
     var tint = 0.;
-    if camera.rotation.z > .5 {
+    if !PLAIN && camera.rotation.z > .5 {
         let q=vec2<u32>(p);
         let saved=unpack4x8unorm(textureLoad(saved_selection,vec2<i32>(q),0).r);
         if saved.a > 0. { rgb=mix(rgb,view_ui_rgb(saved.rgb/saved.a),saved.a); }
     }
-    if camera.selection.z > .5 && camera.rotation.y > .5 {
+    if !PLAIN && camera.selection.z > .5 && camera.rotation.y > .5 {
         let coverage = selection_coverage(p);
         tint = max(tint,select(coverage,1.-coverage,camera.rotation.y > 1.5));
     }
-    rgb = mix(rgb,view_ui_rgb(camera.overlay.rgb),clamp(tint*camera.overlay.a,0.,1.));
-    if camera.selection.z > .5 && camera.rotation.y < .5 {
+    if !PLAIN { rgb = mix(rgb,view_ui_rgb(camera.overlay.rgb),clamp(tint*camera.overlay.a,0.,1.)); }
+    if !PLAIN && camera.selection.z > .5 && camera.rotation.y < .5 {
         let dx = camera.inverse.xy * .6;
         let dy = camera.inverse.zw * .6;
         if outlined(p, dx, dy) {

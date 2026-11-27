@@ -203,11 +203,16 @@ impl Deferred<wgpu::ShaderModule> {
         Self::new(move || device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(source) }))
     }
 }
+impl From<&wgpu::ShaderModule> for Deferred<wgpu::ShaderModule> {
+    fn from(module: &wgpu::ShaderModule) -> Self {
+        let module = module.clone();
+        Self::new(move || module)
+    }
+}
 impl Deferred<wgpu::ComputePipeline> {
     pub fn compute_module(device: &super::PipelineDevice, label: &'static str, layout: &wgpu::PipelineLayout,
         module: &wgpu::ShaderModule, entry: &'static str) -> Self {
-        let module = module.clone();
-        Self::compute(device, label, layout, &Deferred::new(move || module), entry)
+        Self::compute(device, label, layout, &module.into(), entry)
     }
     pub fn compute(
         device: &super::PipelineDevice,
