@@ -37,9 +37,10 @@ before changing either testing channel.
 **Pushing a release tag has store side effects.** It signs packages, uploads to
 Play, rolls out internal testing, and uploads the iPad build to App Store
 Connect. Validation and every platform package must succeed before
-Play or Apple uploads start. The Play upload and the iPad upload must succeed
-before CI creates the draft GitHub Release. Missing Play or Apple upload access
-blocks that draft; Partner Center upload is separate from CI. There is no
+Play or Apple uploads start. CI creates the draft GitHub Release once every
+package succeeds; a failed Play or Apple upload fails its own job and shows in
+the run summary without holding back the draft. Finish that store channel
+separately; Partner Center upload is separate from CI. There is no
 platform-skip input. Restore missing required access before tagging; an unsigned
 build is not a substitute for signed distribution.
 
