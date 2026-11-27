@@ -35,6 +35,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.windows-packages-only && inputs.source_ref || github.sha }}
+          fetch-depth: 0
       - id: version
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)
@@ -63,18 +64,33 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           test "$GITHUB_REF_NAME" = "v$VERSION"
-          for crate in layer-workspace layer-core layer-ui layer-host; do
-            if [ ! -d "crates/$crate/tests/compat/$VERSION" ] || [ ! -d "crates/$crate/tests/compat/expected/$VERSION" ]; then
-              echo "::error::Generate the saved-data fixtures for $VERSION before tagging (docs/development/releasing.md#saved-data-fixtures)."
-              exit 1
-            fi
-          done
           branch="v${VERSION%.*}"
           for base in main "$branch"; do
             status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$base...$GITHUB_SHA" -q .status 2>/dev/null) || continue
             if [ "$status" = identical ] || [ "$status" = behind ]; then exit 0; fi
           done
           echo "::error::Tag a commit on main or on the $branch release branch."
+          exit 1
+      - name: Require saved-data fixtures
+        if: env.SIGNED == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          crates="layer-workspace layer-core layer-ui layer-host"
+          has_fixtures() {
+            for crate in $crates; do
+              [ -d "crates/$crate/tests/compat/$1" ] && [ -d "crates/$crate/tests/compat/expected/$1" ] || return 1
+            done
+          }
+          has_fixtures "$VERSION" && exit 0
+          series=${VERSION%.*}
+          for ((patch = ${VERSION##*.} - 1; patch >= 0; patch--)); do
+            has_fixtures "$series.$patch" || continue
+            if git diff --quiet "v$series.$patch" HEAD -- $(printf 'crates/%s ' $crates); then exit 0; fi
+            echo "::error::$VERSION changes saved-data code since $series.$patch. Generate its saved-data fixtures before tagging (docs/development/releasing.md#saved-data-fixtures)."
+            exit 1
+          done
+          echo "::error::Generate the saved-data fixtures for $VERSION before tagging (docs/development/releasing.md#saved-data-fixtures)."
           exit 1
 
   web:

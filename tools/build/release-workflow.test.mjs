@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -42,6 +44,29 @@ test("a release tag may sit on main or on its release branch", () => {
   assert.match(gate, /branch="v\$\{VERSION%\.\*\}"/);
   assert.match(gate, /for base in main "\$branch"; do/);
   assert.match(gate, /compare\/\$base\.\.\.\$GITHUB_SHA/);
+});
+
+test("a patch release that leaves saved-data code alone reuses the series' fixtures", () => {
+  const step = job(release, "version").split("      - name: Require saved-data fixtures\n")[1];
+  const script = step.split("        run: |\n")[1].split("\n").filter(line => line.startsWith("          ") || !line.trim()).map(line => line.slice(10)).join("\n");
+  const repo = mkdtempSync(join(tmpdir(), "capy-fixtures-"));
+  const git = (...args) => assert.equal(spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: repo }).status, 0, args.join(" "));
+  const fixtures = version => { for (const crate of ["layer-workspace", "layer-core", "layer-ui", "layer-host"]) for (const dir of [version, `expected/${version}`]) { mkdirSync(join(repo, `crates/${crate}/tests/compat/${dir}`), { recursive: true }); writeFileSync(join(repo, `crates/${crate}/tests/compat/${dir}/data`), version); } };
+  const change = (path, text) => { mkdirSync(dirname(join(repo, path)), { recursive: true }); writeFileSync(join(repo, path), text); git("add", "-A"); git("commit", "-qm", path); };
+  const run = version => spawnSync("bash", ["-c", script], { cwd: repo, env: { ...process.env, VERSION: version }, encoding: "utf8" }).status;
+  try {
+    git("init", "-q");
+    fixtures("1.1.0"); change("crates/layer-render-wgpu/src/lib.rs", "a"); git("tag", "v1.1.0");
+    change("crates/layer-render-wgpu/src/lib.rs", "b");
+    assert.equal(run("1.1.1"), 0, "renderer-only patch");
+    git("tag", "v1.1.1");
+    assert.equal(run("1.1.2"), 0, "second renderer-only patch");
+    change("crates/layer-ui/src/settings.rs", "c");
+    assert.equal(run("1.1.2"), 1, "patch that changes a saved-data crate");
+    fixtures("1.1.2"); git("add", "-A"); git("commit", "-qm", "fixtures");
+    assert.equal(run("1.1.2"), 0, "patch with its own fixtures");
+    assert.equal(run("1.2.0"), 1, "minor release without fixtures");
+  } finally { rmSync(repo, { recursive: true, force: true }); }
 });
 
 test("private archives and reports never enter GitHub Release assets", () => {
