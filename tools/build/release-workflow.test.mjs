@@ -128,7 +128,7 @@ test("the GitHub Release waits for every package and never for store uploads", (
 
 test("Apple Store jobs reuse both retained archives without touching DMG packaging", () => {
   const publish = job(release, "apple-publish");
-  assert.match(publish, /platform: \[ipad\]$/m);
+  assert.match(publish, /platform: \[ipad, mac-store\]/);
   assert.match(publish, /name: \$\{\{ matrix.platform \}\}-archive/);
   assert.match(publish, /release\.sh \$\{\{ matrix.platform \}\} publish/);
   assert.doesNotMatch(publish, /release\.sh.* build|DEVELOPER_ID|notarytool/);
