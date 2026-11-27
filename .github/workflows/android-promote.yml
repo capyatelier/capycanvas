@@ -26,9 +26,14 @@ jobs:
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)
           test "$GITHUB_REF_NAME" = "v$version"
-          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" -q .status)
-          test "$status" = identical || test "$status" = behind
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          branch="v${version%.*}"
+          for base in main "$branch"; do
+            status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$base...$GITHUB_SHA" -q .status 2>/dev/null) || continue
+            if [ "$status" = identical ] || [ "$status" = behind ]; then exit 0; fi
+          done
+          echo "::error::Promote a tag on main or on the $branch release branch."
+          exit 1
       - id: google
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:

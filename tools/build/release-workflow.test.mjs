@@ -40,10 +40,11 @@ test("stores and the GitHub Release wait for every package, not the test suites"
 });
 
 test("a release tag may sit on main or on its release branch", () => {
-  const gate = job(release, "version");
-  assert.match(gate, /branch="v\$\{VERSION%\.\*\}"/);
-  assert.match(gate, /for base in main "\$branch"; do/);
-  assert.match(gate, /compare\/\$base\.\.\.\$GITHUB_SHA/);
+  for (const [gate, variable] of [[job(release, "version"), "VERSION"], [job(workflow("android-promote"), "promote"), "version"]]) {
+    assert.match(gate, new RegExp(`branch="v\\$\\{${variable}%\\.\\*\\}"`));
+    assert.match(gate, /for base in main "\$branch"; do/);
+    assert.match(gate, /compare\/\$base\.\.\.\$GITHUB_SHA/);
+  }
 });
 
 test("a patch release that leaves saved-data code alone reuses the series' fixtures", () => {
