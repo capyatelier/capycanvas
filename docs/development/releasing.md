@@ -68,7 +68,8 @@ these notes with Google Play, which allows
 [500 Unicode characters per language](https://support.google.com/googleplay/android-developer/answer/9859348).
 Keep any compatibility warning within that limit; validation runs before platform
 jobs and before a direct Play upload. Generate and review the
-[saved-data fixtures](#saved-data-fixtures) at this version before committing.
+[saved-data fixtures](#saved-data-fixtures) at this version before committing,
+unless it's a patch release that leaves saved-data code alone.
 Commit these files together. Fetch and
 rebase onto `origin/main`, rerun checks, and land the tested
 commit on `origin/main` under the [commit guide](../COMMIT_GUIDE.md).
@@ -352,14 +353,15 @@ other people keep landing on `main` don't enter a patch release.
   branch says why in its commit message.
 - **Cut the patch on the branch.** Follow [step 2](#2-prepare-one-version-and-source-commit)
   on the release branch head: set `Cargo.toml` to the patch version (1.1.1),
-  add its AppStream release entry and generate its
-  [saved-data fixtures](#saved-data-fixtures). Then tag that commit (`v1.1.1`) and
+  add its AppStream release entry, and generate its
+  [saved-data fixtures](#saved-data-fixtures) if it changes saved-data code.
+  Then tag that commit (`v1.1.1`) and
   continue from [step 3](#3-tag-and-collect-the-signed-candidate).
 - **The release workflow accepts the tag** when its commit is on `main` or on the
   release branch for its major and minor version. A branch created from a tag
   older than this rule needs the workflow change cherry-picked first.
 - **Bring the record back to `main`.** After publishing, copy the patch's
-  AppStream release entry and its saved-data fixture directories to `main`, but
+  AppStream release entry and any saved-data fixture directories to `main`, but
   not its `Cargo.toml` version, so later releases list the patch and keep reading
   its saved data.
 
@@ -427,6 +429,11 @@ CAPY_COMPAT_OUT="$PWD/crates/layer-core/tests/compat/$CAPY_RELEASE_VERSION" \
 CAPY_BLESS=1 cargo test --locked -p layer-workspace --features native release_fixtures_load_without_loss
 CAPY_BLESS=1 cargo test --locked -p layer-core -p layer-ui -p layer-host release_fixtures_load_without_loss
 ```
+
+A patch release reuses the fixtures of the latest earlier release in its series
+when none of `crates/layer-workspace`, `layer-core`, `layer-ui` and `layer-host`
+changed since that release; the release workflow checks this before signing.
+Minor and major releases always add their own.
 
 Never point the generators at an existing release directory. Inputs cover saved
 tools, commands, slots and panels; non-default palettes, brush and region
