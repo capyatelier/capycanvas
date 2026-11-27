@@ -88,9 +88,13 @@ CI results don't gate the release. When the release changes saved-data code,
 run the Compatibility workflow on the release commit before tagging, or
 `python3 tools/compat/run.py all` locally on that commit, with `releases=all` and
 `modes=all`; verify the workflow's `headSha`, require every compatibility job to
-pass and inspect its report artifacts. A release dry run is optional: the tag run
-builds and checks the same packages, and a tag whose build fails for a code
-reason is left behind for the next patch number. To dry-run anyway:
+pass and inspect its report artifacts. Run a release dry run on the release commit
+when anything that builds or packages the apps changed since the last release
+(release scripts, asset generators, project settings, `release.yml`); 1.1.1's tag
+failed on an iPad-only path of a new icon generator that no other check ran.
+Otherwise it's optional: the tag run builds and checks the same packages, and a
+tag whose build fails for a code reason is left behind for the next patch number.
+To dry-run:
 
 ```bash
 gh workflow run release.yml --repo capyatelier/capycanvas --ref main
