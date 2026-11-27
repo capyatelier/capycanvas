@@ -18,7 +18,7 @@ fn screen_clipped(paint: vec4<f32>) -> bool {
     return screen_beyond(screen, screen_check.options.w > .5);
 }
 fn screen_marked(paint: vec4<f32>, rgb: vec3<f32>, checker: f32) -> vec3<f32> {
-    if screen_check.options.z < .5 || !screen_clipped(paint) { return rgb; }
+    if PLAIN || screen_check.options.z < .5 || !screen_clipped(paint) { return rgb; }
     return view_ui_rgb(SCREEN_MARK) * paint.a + vec3<f32>(checker) * (1. - paint.a);
 }
 

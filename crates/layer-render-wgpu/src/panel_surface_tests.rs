@@ -625,7 +625,7 @@ fn gpu_panel_shape_cache_keeps_reprojection_and_recovers_discarded_geometry() {
     let device=renderer.device();
     let uniform=device.create_buffer(&wgpu::BufferDescriptor {label:Some("panel cache viewport"),
         size:crate::present::CAMERA_SIZE,usage:wgpu::BufferUsages::UNIFORM,mapped_at_creation:false});
-    let shader=crate::present::viewport_shader(&renderer.device,wgpu::TextureFormat::Rgba8Unorm,crate::SdrSurfaceColor::Srgb,false);
+    let shader=crate::present::viewport_shader(&renderer.device,wgpu::TextureFormat::Rgba8Unorm,crate::SdrSurfaceColor::Srgb,false,false);
     let mut panels=super::PanelSurfaces::from_recipes(&renderer.device,&uniform,&super::Recipes::new(&renderer.device,&shader,wgpu::TextureFormat::Rgba8Unorm));
     pollster::block_on(renderer.compilation.prepare_all([&panels.pipeline,&panels.mask_pipeline])).unwrap();
     let blur=crate::create_target(device,[64,56],wgpu::TextureFormat::Rgba16Float,"panel cached blur").0;
