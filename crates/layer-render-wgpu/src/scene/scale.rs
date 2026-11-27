@@ -860,10 +860,13 @@ impl Cache {
         let authored=frame.authored_revision(expression).ok()?;
         Some((frame,authored))
     }
-    pub fn presentation(&self)->Option<PresentedPage<'_>> {
+    pub fn presentation(&self)->Option<PresentedPage<'_>> {self.presentation_over(self.plan.bounds)}
+    pub(crate) fn presented_page(&self,visible:PixelRect)->Option<PresentedPage<'_>> {self.presentable()?.presentation_over(visible)}
+    fn presentation_over(&self,visible:PixelRect)->Option<PresentedPage<'_>> {
         let root=self.pixels.committed_root()?;
         let next=self.pixels.committed_next().unwrap_or(root);
-        Some(PresentedPage {holes:!root.complete(),detail:Some([root,next]),stand_in:self.stand_in().filter(|_|!root.complete()),geometry:&self.geometry})
+        let holes=!root.complete() || self.plan.bounds.intersect(visible)!=visible;
+        Some(PresentedPage {holes,detail:Some([root,next]),stand_in:self.stand_in().filter(|_|holes),geometry:&self.geometry})
     }
     #[cfg(test)]
     pub fn view(&self) -> &wgpu::TextureView {&self.pixels.root().expect("composition target").view}

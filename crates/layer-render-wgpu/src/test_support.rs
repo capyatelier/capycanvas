@@ -1254,7 +1254,7 @@ pub(crate) fn record_published_coverage(geometry:u64,submission:&crate::submissi
 #[derive(Clone,Copy,Debug)]
 pub(crate) struct StormCoverage {pub root:f64,pub presented:f64,pub total:f64,pub known:bool}
 pub(crate) fn storm_coverage(r:&crate::WgpuRasterizer,presenter:&ViewportPresenter,view:ViewState,extent:[u32;2])->StormCoverage {
-    r.presentation_page().map_or(StormCoverage {root:0.,presented:0.,total:storm_surface_area(PixelRect::full(extent),view),known:true},|page|page.storm_coverage(view,presenter.stand_in_drawn()))
+    r.presentation_page(Some(view)).map_or(StormCoverage {root:0.,presented:0.,total:storm_surface_area(PixelRect::full(extent),view),known:true},|page|page.storm_coverage(view,presenter.stand_in_drawn()))
 }
 pub(crate) fn storm_surface_area(rect:PixelRect,view:ViewState)->f64 {
     let [a,b,c,d,tx,ty]=view.document_to_surface.map(f64::from);
