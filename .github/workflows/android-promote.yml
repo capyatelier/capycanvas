@@ -2,11 +2,11 @@ name: Promote Android testing release
 on:
   workflow_dispatch:
     inputs:
-      track:
-        description: Select alpha after testing the final internal build; internal retries rollout without uploading
+      tracks:
+        description: "Space-separated tracks: alpha (closed testing), beta (open testing), production; internal retries rollout without uploading"
         required: true
-        type: choice
-        options: [alpha, internal]
+        type: string
+        default: alpha
 permissions:
   contents: read
   id-token: write
@@ -45,5 +45,5 @@ jobs:
         env:
           TOKEN: ${{ steps.google.outputs.access_token }}
           VERSION: ${{ steps.version.outputs.version }}
-          TRACK: ${{ inputs.track }}
-        run: python3 tools/build/android_publish.py promote "$VERSION" "$TRACK"
+          TRACKS: ${{ inputs.tracks }}
+        run: python3 tools/build/android_publish.py promote "$VERSION" $TRACKS

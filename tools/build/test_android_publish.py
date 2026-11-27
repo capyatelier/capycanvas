@@ -26,7 +26,8 @@ RELEASE = {
 class PlayFixture:
     def __init__(self, source, target=None, fail_at=None, bundles=None, uploaded=None):
         self.source = {"track": "internal", "releases": copy.deepcopy(source)}
-        self.target = {"track": "alpha", "releases": copy.deepcopy(target or [])}
+        self.targets = {track: {"track": track, "releases": copy.deepcopy(target or []) if track == "alpha" else []}
+                        for track in ("alpha", "beta", "production")}
         self.fail_at = fail_at
         self.bundles = bundles or []
         self.uploaded = uploaded
@@ -40,14 +41,14 @@ class PlayFixture:
             return {"id": "edit"}
         if (method, path) == ("GET", "edits/edit/tracks/internal"):
             return self.source
-        if (method, path) == ("GET", "edits/edit/tracks/alpha"):
-            return self.target
+        if method == "GET" and path.removeprefix("edits/edit/tracks/") in self.targets:
+            return self.targets[path.removeprefix("edits/edit/tracks/")]
         if (method, path) == ("GET", "edits/edit/bundles"):
             return {"bundles": self.bundles}
         if (method, path) == ("POST", "edits/edit/bundles?uploadType=media"):
             return self.uploaded
         if (method, path) in (("PUT", "edits/edit/tracks/internal"),
-                              ("PUT", "edits/edit/tracks/alpha"),
+                              *(("PUT", f"edits/edit/tracks/{track}") for track in self.targets),
                               ("POST", "edits/edit:validate"),
                               ("POST", "edits/edit:commit?changesInReviewBehavior=ERROR_IF_IN_REVIEW"),
                               ("DELETE", "edits/edit")):
@@ -63,7 +64,7 @@ class AndroidPublishTests(unittest.TestCase):
         older = dict(RELEASE, versionCodes=["1000010"])
         play = PlayFixture([older, RELEASE], [older])
         before = copy.deepcopy(play.source)
-        android_publish.promote(play, VERSION, "alpha")
+        android_publish.promote(play, VERSION, ["alpha"])
         expected = dict(RELEASE, name=VERSION)
         self.assertEqual(play.calls, [
             ("POST", "edits", {}),
@@ -78,7 +79,7 @@ class AndroidPublishTests(unittest.TestCase):
     def test_internal_rollout_preserves_notes_and_priority_without_partial_rollout(self):
         release = dict(RELEASE, status="draft", userFraction=0.25)
         play = PlayFixture([release])
-        android_publish.promote(play, VERSION, "internal")
+        android_publish.promote(play, VERSION, ["internal"])
         updated = next(body for method, path, body in play.calls if method == "PUT")
         self.assertEqual(updated, {"track": "internal", "releases": [dict(RELEASE, name=VERSION)]})
         self.assertEqual(play.source["releases"], [release])
@@ -86,7 +87,7 @@ class AndroidPublishTests(unittest.TestCase):
 
     def assert_refused(self, play, message):
         with self.assertRaisesRegex(ValueError, message):
-            android_publish.promote(play, VERSION, "alpha")
+            android_publish.promote(play, VERSION, ["alpha"])
         self.assertEqual(play.calls[-1], ("DELETE", "edits/edit", None))
         self.assertFalse(any(method == "PUT" or ":commit" in path or ":validate" in path
                              for method, path, body in play.calls))
@@ -116,7 +117,7 @@ class AndroidPublishTests(unittest.TestCase):
             with self.subTest(failure=failure):
                 play = PlayFixture([RELEASE], fail_at=failure)
                 with self.assertRaisesRegex(ValueError, "Play rejected the edit"):
-                    android_publish.promote(play, VERSION, "alpha")
+                    android_publish.promote(play, VERSION, ["alpha"])
                 self.assertEqual(play.calls[-2:], [(*failure, None), ("DELETE", "edits/edit", None)])
                 attempts = [path for method, path, body in play.calls if ":commit" in path]
                 self.assertEqual(attempts, [commit] if failure[1] == commit else [])
@@ -130,13 +131,36 @@ class AndroidPublishTests(unittest.TestCase):
             with self.subTest(failure=failure):
                 play = PlayFixture([RELEASE], fail_at=failure)
                 with self.assertRaisesRegex(ValueError, "Play rejected the edit"):
-                    android_publish.promote(play, VERSION, "alpha")
+                    android_publish.promote(play, VERSION, ["alpha"])
                 self.assertEqual(play.calls[-1], ("DELETE", "edits/edit", None))
                 self.assertFalse(any(":validate" in path or ":commit" in path
                                      for method, path, body in play.calls))
 
+    def test_open_testing_and_production_share_one_edit_and_review(self):
+        play = PlayFixture([RELEASE])
+        android_publish.promote(play, VERSION, ["alpha", "beta", "production", "beta"])
+        expected = dict(RELEASE, name=VERSION)
+        self.assertEqual(play.calls, [
+            ("POST", "edits", {}),
+            ("GET", "edits/edit/tracks/internal", None),
+            ("GET", "edits/edit/tracks/alpha", None),
+            ("GET", "edits/edit/tracks/beta", None),
+            ("GET", "edits/edit/tracks/production", None),
+            *(("PUT", f"edits/edit/tracks/{track}", {"track": track, "releases": [expected]})
+              for track in ("alpha", "beta", "production")),
+            ("POST", "edits/edit:validate", None),
+            ("POST", "edits/edit:commit?changesInReviewBehavior=ERROR_IF_IN_REVIEW", None),
+        ])
+
+    def test_a_newer_build_on_any_target_track_refuses_every_track(self):
+        play = PlayFixture([RELEASE])
+        play.targets["production"]["releases"] = [dict(RELEASE, versionCodes=["1000012"])]
+        with self.assertRaisesRegex(ValueError, "newer testing build"):
+            android_publish.promote(play, VERSION, ["alpha", "beta", "production"])
+        self.assertFalse(any(method == "PUT" or ":commit" in path for method, path, body in play.calls))
+
     def test_invalid_version_or_track_never_opens_edit(self):
-        for version, track in (("1.0", "alpha"), (VERSION, "production"), (VERSION, "beta")):
+        for version, track in (("1.0", ["alpha"]), (VERSION, ["nightly"]), (VERSION, [])):
             with self.subTest(version=version, track=track):
                 play = PlayFixture([RELEASE])
                 with self.assertRaises(ValueError):
@@ -157,7 +181,7 @@ class AndroidPublishTests(unittest.TestCase):
 
         with patch.object(play, "request", side_effect=reject), \
                 self.assertRaises(ValueError) as caught:
-            android_publish.promote(play, VERSION, "alpha")
+            android_publish.promote(play, VERSION, ["alpha"])
         self.assertIs(caught.exception, original)
 
 

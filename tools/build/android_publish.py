@@ -83,26 +83,32 @@ def upload(play, version, bundle, notes):
     print(f"Preserved and uploaded {version}; APK verification is required before rollout.")
 
 
-def promote(play, version, track):
-    if track not in ("internal", "alpha"):
-        raise ValueError("Choose internal testing or the alpha closed-testing track")
+TRACKS = ("internal", "alpha", "beta", "production")
+
+
+def promote(play, version, tracks):
+    tracks = list(dict.fromkeys(tracks))
+    if not tracks or any(track not in TRACKS for track in tracks):
+        raise ValueError("Choose tracks from internal, alpha (closed testing), beta (open testing) and production")
     code = str(version_code(version))
     with editing(play) as path:
         source = play.request("GET", f"{path}/tracks/internal")
-        target = source if track == "internal" else play.request("GET", f"{path}/tracks/{track}")
-        for current in (source, target):
+        targets = {track: source if track == "internal" else play.request("GET", f"{path}/tracks/{track}")
+                   for track in tracks}
+        for current in (source, *targets.values()):
             refuse_newer(current, code)
         releases = [release for release in source.get("releases", [])
                     if release.get("versionCodes") == [code]]
         if len(releases) != 1:
             raise ValueError(f"Version {version} must exist as a single-bundle internal release")
-        if track == "alpha" and releases[0].get("status") != "completed":
-            raise ValueError("Roll out and test the internal release before closed-beta promotion")
-        release = copy.deepcopy(releases[0])
-        release.update(name=version, status="completed")
-        release.pop("userFraction", None)
-        play.request("PUT", f"{path}/tracks/{track}", {"track": track, "releases": [release]})
-    print(f"Committed {version} to {track}; Google Play review and availability are separate checks.")
+        if tracks != ["internal"] and releases[0].get("status") != "completed":
+            raise ValueError("Roll out and test the internal release before promoting it")
+        for track in tracks:
+            release = copy.deepcopy(releases[0])
+            release.update(name=version, status="completed")
+            release.pop("userFraction", None)
+            play.request("PUT", f"{path}/tracks/{track}", {"track": track, "releases": [release]})
+    print(f"Committed {version} to {', '.join(tracks)} in one edit; Google Play review and availability are separate checks.")
 
 
 def main():
@@ -113,13 +119,13 @@ def main():
     upload_parser.add_argument("bundle", type=Path)
     promote_parser = commands.add_parser("promote")
     promote_parser.add_argument("version")
-    promote_parser.add_argument("track", choices=("internal", "alpha"))
+    promote_parser.add_argument("tracks", nargs="+", choices=TRACKS)
     args = parser.parse_args()
     play = Play(os.environ["TOKEN"])
     if args.operation == "upload":
         upload(play, args.version, args.bundle, os.environ["NOTES"])
     else:
-        promote(play, args.version, args.track)
+        promote(play, args.version, args.tracks)
 
 
 if __name__ == "__main__":
