@@ -241,7 +241,7 @@ jobs:
   apple:
     if: ${{ !inputs.windows-packages-only }}
     needs: version
-    runs-on: macos-26
+    runs-on: xcode-27
     environment: ${{ needs.version.outputs.publish == 'true' && 'release' || '' }}
     strategy:
       fail-fast: false
@@ -341,7 +341,7 @@ jobs:
   apple-publish:
     if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: [version, flatpak, web, android, windows, apple]
-    runs-on: macos-26
+    runs-on: xcode-27
     environment: release
     strategy:
       fail-fast: false

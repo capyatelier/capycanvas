@@ -554,6 +554,9 @@ the same scripts developers run and the Rust version pinned in the workflow:
 | Windows x64 and ARM64 | `package.ps1 -Architecture x64` / `-Architecture arm64`, `package-msix.ps1`, `test-msix.ps1` and `package-installer.ps1` | Separate `capycanvas-<version>-windows-<architecture>.zip`, `-setup.exe` and `.msix` |
 | macOS, iPadOS | `apps/layer-apple/scripts/release.sh mac`, `mac-store` and `ipad` | `capycanvas-<version>-macos-arm64.dmg`; private `mac-store-archive` and `ipad-archive`, uploaded separately on tag pushes |
 
+The Apple jobs run on GitHub's `xcode-27` image: from April 2027, App Store
+Connect accepts only iOS and iPadOS builds made with the iOS 27 SDK or later.
+
 Manual dispatch always validates and builds unsigned packages for every platform.
 Only a version-tag push enables signing and publishing. CI checks that the tag
 names the workspace version and its commit belongs to `main`. After validation
