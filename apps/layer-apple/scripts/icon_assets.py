@@ -5,6 +5,7 @@ split at root children and ordinary fill-before-stroke paints. Reject complex
 group mixing instead of silently changing overlap/compositing semantics.
 """
 import copy
+import os
 from pathlib import Path
 import subprocess
 import xml.etree.ElementTree as ET
@@ -75,6 +76,7 @@ def write_mac_app_icon(source, destination):
     for entry in entries:
         size = int(entry["size"].split("x")[0]) * int(entry["scale"][0])
         arguments.extend([str(destination / entry["filename"]), str(size)])
-    subprocess.run(["xcrun", "swift", str(Path(__file__).with_name("mac-app-icon.swift")),
-                    str(source), *arguments], check=True)
+    environment = {key: value for key, value in os.environ.items() if key != "SDKROOT"}
+    subprocess.run(["xcrun", "--sdk", "macosx", "swift", str(Path(__file__).with_name("mac-app-icon.swift")),
+                    str(source), *arguments], check=True, env=environment)
     return {"images": entries, "info": {"version": 1, "author": "xcode"}}
