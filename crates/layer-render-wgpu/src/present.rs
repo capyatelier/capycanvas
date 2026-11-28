@@ -2060,6 +2060,41 @@ mod tests {
     }
 
     #[test]
+    fn rounded_window_corners_keep_their_coverage_and_an_opaque_interior() {
+        let (extent, radius) = ([64u32, 48u32], 12f32);
+        let document = crate::layer_tests::placement::paint_document([8; 2], "Window corners");
+        let mut renderer = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        crate::test_support::submit_settled(&mut renderer, crate::test_support::packet(document.scene(), [8; 2]));
+        let format = wgpu::TextureFormat::Rgba32Float;
+        let mut presenter = ViewportPresenter::for_surface(&renderer, format, SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
+        presenter.set_corner_radius(radius);
+        pollster::block_on(presenter.prepare(&renderer)).unwrap();
+        let (texture, target) = crate::create_target(renderer.device(), extent, format, "rounded window");
+        let view = ViewState { document_to_surface: [1., 0., 0., 1., 1000., 1000.], ..crate::test_support::view(extent) };
+        presenter.present(&renderer, &target, view, [0.2, 0.4, 0.6, 1.]).unwrap();
+        let pixels: Vec<f32> = crate::layer_tests::page_bytes(&renderer, &texture)
+            .chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
+        let size = extent.map(|v| v as f32);
+        let mut partial = 0;
+        for y in 0..extent[1] {
+            for x in 0..extent[0] {
+                let p = [x as f32 + 0.5, y as f32 + 0.5];
+                let q = [0, 1].map(|i| (p[i] - size[i] * 0.5).abs() - size[i] * 0.5 + radius);
+                let distance = q[0].max(0.).hypot(q[1].max(0.)) + q[0].max(q[1]).min(0.) - radius;
+                let expected = (0.5 - distance).clamp(0., 1.);
+                let alpha = pixels[((y * extent[0] + x) * 4 + 3) as usize];
+                if expected == 1. {
+                    assert_eq!(alpha, 1., "pixel {x},{y} inside the rounded window is opaque");
+                } else {
+                    partial += 1;
+                    assert!((alpha - expected).abs() < 1e-5, "pixel {x},{y}: coverage {alpha} != {expected}");
+                }
+            }
+        }
+        assert!(partial > 4 * radius as usize, "each corner has an antialiased arc");
+    }
+
+    #[test]
     fn copied_retention_draws_full_frames_straight_into_the_target() {
         use crate::layer_tests::{page_bytes,placement::{paint_document,set_source}};
         let extent=[64;2];

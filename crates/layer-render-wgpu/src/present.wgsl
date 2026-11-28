@@ -331,8 +331,9 @@ fn view_quantize(original:vec4<f32>,surface:vec2<f32>,enabled:bool)->vec4<f32> {
 fn window_coverage(surface: vec2<f32>) -> f32 {
     let radius = camera.viewport.w;
     let q = abs(surface - camera.viewport.xy * 0.5) - camera.viewport.xy * 0.5 + radius;
+    if radius <= 0.0 || (min(q.x, q.y) <= 0.0 && max(q.x, q.y) < radius - 0.5) { return 1.0; }
     let distance = length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
-    return select(1.0, clamp(0.5 - distance, 0.0, 1.0), radius > 0.0);
+    return clamp(0.5 - distance, 0.0, 1.0);
 }
 @fragment fn fs_main(vertex: Vertex) -> @location(0) vec4<f32> {return surface_color(vertex,false);}
 @fragment fn fs_stand_in(vertex: Vertex) -> @location(0) vec4<f32> {return surface_color(vertex,true);}
