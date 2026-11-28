@@ -12,7 +12,7 @@ const release = workflow("release");
 const checks = workflow("release-checks");
 const ci = workflow("ci");
 const job = (source, name) => source.match(new RegExp(`^  ${name}:\\n([\\s\\S]*?)(?=^  [\\w-]+:|$(?![\\s\\S]))`, "m"))?.[1];
-const condition = (expression, event, ref) => Function("github", `return (${expression.replace(/^\$\{\{\s*|\s*\}\}$/g, "")});`)({ event_name: event, ref_type: ref });
+const condition = (expression, event, ref, summary = "success", cancelled = false) => Function("github", "needs", "cancelled", `return (${expression.replace(/^\$\{\{\s*|\s*\}\}$/g, "")});`)({ event_name: event, ref_type: ref }, { summary: { result: summary } }, () => cancelled);
 const signed = release.match(/^  SIGNED: (.+)$/m)?.[1];
 const publicRelease = release.match(/^  CAPY_PUBLIC_RELEASE: (.+)$/m)?.[1];
 const platforms = ["web", "flatpak", "android", "windows", "apple"];
@@ -37,6 +37,15 @@ test("stores and the GitHub Release wait for every package, not the test suites"
     assert.ok(!needs.includes("checks"), `${name}: checks`);
   }
   assert.match(job(release, "release"), /^    needs: \[version, summary\]$/m);
+});
+
+test("a failed store upload never skips the GitHub Release once the package gate passes", () => {
+  const gate = job(release, "release").match(/^    if: (.+)$/m)[1];
+  assert.match(gate, /!cancelled\(\)/, "an explicit status check replaces GitHub's implicit success() over every upstream job");
+  assert.equal(condition(gate, "push", "tag", "success"), true);
+  for (const summary of ["failure", "cancelled", "skipped"]) assert.equal(condition(gate, "push", "tag", summary), false, summary);
+  assert.equal(condition(gate, "push", "tag", "success", true), false, "cancelled run");
+  assert.match(job(release, "summary"), /^    needs: \[.*android-publish, apple-publish\]$/m);
 });
 
 test("a release tag may sit on main or on its release branch", () => {
