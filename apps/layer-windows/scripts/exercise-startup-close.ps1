@@ -178,8 +178,8 @@ try {
             $null = (Close-OwnedDrawing $review)
             $null = $review.WaitForExit(5000)
         }
-        $review.Dispose()
     }
     try{[CapyRowPointer]::Dispose()}catch{}
     Exit-CapyEnvironment
+    if ($null -ne $review) { $review.Dispose() }
 }
