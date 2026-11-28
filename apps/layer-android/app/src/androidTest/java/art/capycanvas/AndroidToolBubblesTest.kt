@@ -123,9 +123,24 @@ class AndroidToolBubblesTest {
         event(MotionEvent.ACTION_UP)
         host.drain()
     }
+    private fun headerItem(id: Int): Rect {
+        var placed: Rect? = null
+        waitFor("Header item $id sits where the shared header geometry puts it") {
+            instrumentation.runOnMainSync {
+                val input = host.workspaceInteraction?.bubbles?.header
+                val item = input?.geometry?.takeIf { input.measurement?.getJSONObject("model")?.toString() == host.snapshot?.objectOrNull("header")?.getJSONObject("model")?.toString() }
+                    ?.array("items")?.objects()?.firstOrNull { it.getInt("id") == id }?.getJSONObject("bounds")
+                val origin = findTag("workspace")?.second?.boundsInRoot?.topLeft
+                placed = findTag("header-item-$id")?.second?.boundsInRoot?.takeIf { node -> item != null && origin != null &&
+                    kotlin.math.abs(node.left - origin.x - item.number("x") * density) < 1f && kotlin.math.abs(node.top - origin.y - item.number("y") * density) < 1f }
+            }
+            placed != null
+        }
+        return checkNotNull(placed)
+    }
     private fun take(header: Int, target: Offset): Long {
         val before = packets().map { it.getJSONObject("view").getLong("id") }.toSet()
-        val from = bounds("header-item-$header").center
+        val from = headerItem(header).center
         stroke(from, from + Offset(0f, 8 * density), from + Offset(0f, 80 * density), target)
         waitFor("Header source $header tears out") { packets().any { it.getJSONObject("view").getLong("id") !in before } }
         return packets().single { it.getJSONObject("view").getLong("id") !in before }.getJSONObject("view").getLong("id").also { id ->
@@ -267,7 +282,7 @@ class AndroidToolBubblesTest {
     }
     private fun rapidHeaderTake(target: Offset) {
         val before = packets().map { it.getJSONObject("view").getLong("id") }.toSet()
-        val from = bounds("header-item-2").center
+        val from = headerItem(2).center
         instrumentation.runOnMainSync {
             val owner = checkNotNull(findTag("workspace")).first
             val started = SystemClock.uptimeMillis()
@@ -283,7 +298,7 @@ class AndroidToolBubblesTest {
         putBack(id)
     }
     private fun replacingCandidate(target: Offset) {
-        val from = bounds("header-item-2").center
+        val from = headerItem(2).center
         event(MotionEvent.ACTION_DOWN, from)
         val replacement = JSONObject(fixture.toString())
         replacement.getJSONObject("layout").getJSONObject("header").getJSONArray("zones").getJSONArray(1).getJSONObject(0)
@@ -518,6 +533,8 @@ class AndroidToolBubblesTest {
     @Before fun ready() {
         scenario = launchCapy(90_000)
         scenario.onActivity { host = it.host; density = it.resources.displayMetrics.density }
+        val activity = scenario.activity()
+        host.awaitMain("launch revealed", 60_000, { "${host.snapshot?.opt("launch")}" }) { !activity.launchSplash.nativeActive && findTag("launch-splash") == null }
         fixture = JSONObject(state().getJSONObject("workspace").toString()).apply { put("zen_mode", false) }
         val controls = listOf(obj("kind" to "command", "command" to "drawing_brush"), obj("kind" to "color"), obj("kind" to "color_picker"), obj("kind" to "command", "command" to "undo"), obj("kind" to "panel", "panel" to "layers"))
         fixture.getJSONObject("layout").apply {
@@ -892,7 +909,7 @@ class AndroidToolBubblesTest {
             for (header in listOf(3, 6, 2)) {
                 action(obj("type" to "restore_workspace", "workspace" to JSONObject(fixture.toString())))
                 action(obj("type" to "set_theme", "theme" to theme))
-                val from = bounds("header-item-$header").center
+                val from = headerItem(header).center
                 tap(from)
                 waitFor("Source drawer opens") { findTag("tool-drawer") != null }
                 var previousDrawer = bounds("tool-drawer")
