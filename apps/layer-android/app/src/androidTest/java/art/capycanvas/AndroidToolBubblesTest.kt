@@ -315,7 +315,9 @@ class AndroidToolBubblesTest {
         val panelId = panel.getString("id")
         val tile = panel.getJSONObject("content").getJSONArray("tiles").objects().first { it.getJSONObject("control").optString("command") == "undo" }
         action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to panelId, "visible" to true)))
-        val from = bounds("tile-$panelId-${tile.getInt("id")}").center
+        val tag = "tile-$panelId-${tile.getInt("id")}"
+        waitFor("Shown $panelId toolbar places its undo tile") { findTag(tag) != null }
+        val from = bounds(tag).center
         event(MotionEvent.ACTION_DOWN, from)
         SystemClock.sleep(ViewConfiguration.getLongPressTimeout().toLong() + 250)
         event(MotionEvent.ACTION_MOVE, from + Offset(40 * density, 0f)); event(MotionEvent.ACTION_MOVE, target); event(MotionEvent.ACTION_UP)
@@ -452,14 +454,14 @@ class AndroidToolBubblesTest {
         val closed = take(2, originalBounds.center)
         repeat(4) { if (view(closed).getBoolean("open")) tap(stable(closed)) }
         assertFalse("Viewport fixture begins with a closed bubble", view(closed).getBoolean("open"))
-        resize(500, 420)
+        resize(500, 480)
         waitFor("Resizing wakes and clamps a closed native bubble") {
             val bounds = bounds("tool-bubble-$closed"); val area = workspace()
             bounds.left >= area.left && bounds.top >= area.top && bounds.right <= area.right && bounds.bottom <= area.bottom && (bounds.center - center(closed)).getDistance() < 2f
         }
         shot("closed-viewport-clamped")
         putBack(closed)
-        resize(900, 420)
+        resize(900, 480)
         tap(bounds("header-item-2").center)
         waitFor("Brush source drawer completes opening") { findTag("tool-drawer")?.second?.boundsInRoot?.height?.let { it > 120 * density } == true }
         var previousDrawer = bounds("tool-drawer")
@@ -516,7 +518,7 @@ class AndroidToolBubblesTest {
         assertTrue("Scrolled brush opens its halo", view(id).getBoolean("open"))
         val fromCenter = stable(id)
         stroke(fromCenter, workspace().bottomRight - Offset(10 * density, 10 * density))
-        resize(400, 360)
+        resize(480, 480)
         stable(id)
         val shrunk = bounds("tool-bubble-$id"); val shrunkArea = workspace()
         assertTrue("Shrinking viewport keeps bubble within canvas walls", shrunk.left >= shrunkArea.left && shrunk.top >= shrunkArea.top && shrunk.right <= shrunkArea.right && shrunk.bottom <= shrunkArea.bottom)
@@ -780,9 +782,9 @@ class AndroidToolBubblesTest {
             assertHaloGeometry(brush)
             val original = android.view.WindowManager.LayoutParams()
             val originalBounds = workspace()
-            scenario.onActivity { original.copyFrom(it.window.attributes); it.window.setLayout((220 * density).toInt(), (420 * density).toInt()) }
+            scenario.onActivity { original.copyFrom(it.window.attributes); it.window.setLayout((480 * density).toInt(), (480 * density).toInt()) }
             try {
-                waitFor("Narrow viewport is measured") { kotlin.math.abs(workspace().width / density - 220f) < 2f }
+                waitFor("Narrow viewport is measured") { kotlin.math.abs(workspace().width / density - 480f) < 2f }
                 assertHaloGeometry(brush)
             } finally {
                 scenario.onActivity { it.window.attributes = original }
