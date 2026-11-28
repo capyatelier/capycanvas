@@ -179,7 +179,7 @@ Reject-Input 'final MSIX identity name cannot exceed 50' @{IdentityName=('A'*50)
 [IO.File]::WriteAllText((Join-Path $inputPayload 'extra.txt'),'not in inventory')
 Reject-Input 'Portable payload contains files absent from its manifest'
 [ordered]@{
-    archive=$archive;sha256=$result.sha256;source_commit=$result.source_commit;development=$result.development;
+    archive=$archive;sha256=$result.sha256;unpacked=$unpacked;source_commit=$result.source_commit;development=$result.development;
     archive_files=$names.Count;inventory='passed';makeappx_unpack='passed';activation_manifest='passed';winui_resources=$module.Count;
     repeat_logos='passed';normalization_idempotence='passed';zip32='passed';signed_refusal_without_mutation='passed';invalid_inputs='passed';
     transient_lock_retry='passed';persistent_lock_timeout_without_mutation='passed';

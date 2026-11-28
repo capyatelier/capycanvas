@@ -232,6 +232,12 @@ jobs:
           ./apps/layer-windows/scripts/package-msix.ps1 -PortableResultFile $portable
           $msix = (Get-ChildItem artifacts/windows/msix -Recurse -Filter result.json).FullName
           ./apps/layer-windows/scripts/test-msix.ps1 -ResultFile $msix
+          if ('${{ matrix.architecture }}' -eq 'x64') {
+            $unpacked = (Get-Content (Get-Item artifacts/windows/msix-review/*/result.json).FullName -Raw | ConvertFrom-Json).unpacked
+            ./apps/layer-windows/scripts/test-launch.ps1 -Executable (Join-Path $unpacked CapyCanvas.exe)
+            Expand-Archive (Get-Content $portable -Raw | ConvertFrom-Json).archive artifacts/windows/portable-review
+            ./apps/layer-windows/scripts/test-launch.ps1 -Executable (Get-ChildItem artifacts/windows/portable-review -Recurse -Filter CapyCanvas.exe).FullName
+          }
           ./apps/layer-windows/scripts/package-installer.ps1 -PortableResultFile $portable @sign
           $setup = (Get-ChildItem artifacts/windows/installer -Recurse -Filter result.json).FullName
           New-Item -ItemType Directory dist | Out-Null
