@@ -72,6 +72,7 @@ Write-PackagedPayload $portable.source $payload $manifest $packaging {
         $value=& $escape ($name.Groups[1].Value+$displaySuffix)
         [IO.File]::WriteAllText((Join-Path $directory 'Resources.resw'),"<?xml version=`"1.0`" encoding=`"utf-8`"?><root><data name=`"AppName`"><value>$value</value></data></root>"+$lf,$utf8)
     }
+    Copy-Item -LiteralPath (Join-Path $payload 'CapyCanvas.pri') -Destination $namesRoot
     $config=Join-Path $run 'pri-config.xml'
     & $makepri createconfig /cf $config /dq en /pv 10.0 /o *> (Join-Path $run 'pri-config.log')
     if($LASTEXITCODE -ne 0){throw "MakePRI configuration failed; inspect $run"}

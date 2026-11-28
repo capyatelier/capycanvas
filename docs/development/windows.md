@@ -341,7 +341,9 @@ refuses a portable build without the release identity. The manifest declares the
 languages in the shared shipping inventory (`SHIPPED_LANGUAGES`), and
 `test-msix.ps1` checks that they and the indexed names match the shared catalogs.
 Package and launcher display names use a
-MakePRI index generated from `common-app-name` in the shared catalogs, following
+MakePRI index generated from `common-app-name` in the shared catalogs and merged
+with the build's `CapyCanvas.pri`, because a packaged app reads WinUI's resources
+only from `resources.pri`; `test-msix.ps1` refuses an index that omits any of them. The index follows
 [Microsoft's manifest localization workflow](https://learn.microsoft.com/en-us/windows/uwp/app-resources/using-mrt-for-converted-desktop-apps-and-games).
 Output
 stays under ignored `artifacts/windows/msix`. The package version is the

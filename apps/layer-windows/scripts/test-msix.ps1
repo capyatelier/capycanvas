@@ -56,12 +56,20 @@ if($LASTEXITCODE -ne 0){throw 'MSIX application name resource could not be read.
 $resource=$pri.SelectSingleNode('/PriInfo/ResourceMap/ResourceMapSubtree[@name="Resources"]/NamedResource[@name="AppName"]')
 if(!$resource -or $resource.GetAttribute('uri') -cne "ms-resource://$($identity.Name)/Resources/AppName" -or @($resource.Candidate).Count -ne $languages.Count){throw 'MSIX application name resource has the wrong identity or languages.'}
 foreach($tag in $languages){
-    $candidates=@($resource.Candidate|Where-Object {$_.SelectSingleNode('QualifierSet/Qualifier[@name="Language"]').GetAttribute('value') -ceq $tag})
+    $candidates=@($resource.Candidate|Where-Object {$_.SelectSingleNode('QualifierSet/Qualifier[@name="Language"]').GetAttribute('value') -ieq $tag})
     $source=[IO.File]::ReadAllText((Join-Path $repo "assets/locales/$tag/common.ftl"))
     $name=[regex]::Match($source,'(?m)^common-app-name = ([^{}\r\n]+)$')
     $expected=$name.Groups[1].Value+$(if($result.unsigned_test_identity){' (MSIX Test)'}else{''})
     if(!$name.Success -or $candidates.Count -ne 1 -or $candidates[0].SelectSingleNode('Value').InnerText -cne $expected){throw "$($tag): MSIX application name differs from the shared catalog."}
 }
+$moduleDump=Join-Path $run 'module-pri-dump.xml'
+& (Join-Path $sdk 'makepri.exe') dump /if (Join-Path $unpacked 'CapyCanvas.pri') /of $moduleDump /dt detailed /o *> (Join-Path $run 'module-pri-dump.log')
+if($LASTEXITCODE -ne 0){throw 'The WinUI resource index could not be read.'}
+$resourcePath={param([xml]$index)@($index.SelectNodes('/PriInfo/ResourceMap//NamedResource')|ForEach-Object {$_.GetAttribute('uri') -replace '^ms-resource://[^/]+/',''})}
+$packaged=[Collections.Generic.HashSet[string]]::new([string[]](& $resourcePath $pri),[StringComparer]::OrdinalIgnoreCase)
+$module=@(& $resourcePath ([xml][IO.File]::ReadAllText($moduleDump)))
+$missing=@($module|Where-Object {!$packaged.Contains($_)})
+if(!$module.Count -or $missing.Count){throw "The MSIX resource index omits $($missing.Count) of $($module.Count) WinUI resources, so WinUI cannot start."}
 $fileType=$application.Extensions.Extension.FileTypeAssociation.SupportedFileTypes.FileType
 if($fileType.InnerText -ne '.capy' -or $fileType.ContentType -ne 'application/vnd.capycanvas'){throw 'MSIX does not associate the Capy drawing identity.'}
 $oid='OID.2.25.311729368913984317654407730594956997722=1'
@@ -172,7 +180,7 @@ Reject-Input 'final MSIX identity name cannot exceed 50' @{IdentityName=('A'*50)
 Reject-Input 'Portable payload contains files absent from its manifest'
 [ordered]@{
     archive=$archive;sha256=$result.sha256;source_commit=$result.source_commit;development=$result.development;
-    archive_files=$names.Count;inventory='passed';makeappx_unpack='passed';activation_manifest='passed';
+    archive_files=$names.Count;inventory='passed';makeappx_unpack='passed';activation_manifest='passed';winui_resources=$module.Count;
     repeat_logos='passed';normalization_idempotence='passed';zip32='passed';signed_refusal_without_mutation='passed';invalid_inputs='passed';
     transient_lock_retry='passed';persistent_lock_timeout_without_mutation='passed';
     scope='Archive validation only. Installed identity, launch, update, uninstall and distribution signing remain separate checks.'
