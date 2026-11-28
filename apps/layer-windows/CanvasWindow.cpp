@@ -260,14 +260,17 @@ void CanvasWindow::ArmLaunchCaption() {
     if(remaining.count()==0)launchCaption.Opacity(1.);
     else{launchCaptionTimer.Interval(remaining);launchCaptionTimer.Start();}
 }
+bool CanvasWindow::LaunchCoverTakesInput() const {
+    return launchCover.Visibility()==Visibility::Visible&&launchCover.IsHitTestVisible();
+}
 void CanvasWindow::HideLaunchCover(bool animate) {
     CancelLaunchReveal();
     if(launchCaptionTimer)launchCaptionTimer.Stop();
     if(launchCaptionFade)launchCaptionFade.Stop();
     if(launchCover.Visibility()!=Visibility::Visible)return;
-    if(!animate||!uiSettings.AnimationsEnabled()){if(launchFade)launchFade.Stop();launchCover.Visibility(Visibility::Collapsed);return;}
+    if(!animate||!uiSettings.AnimationsEnabled()){if(launchFade)launchFade.Stop();launchCover.Visibility(Visibility::Collapsed);Resize();return;}
     if(launchFade)return;
-    launchCover.IsHitTestVisible(false);
+    launchCover.IsHitTestVisible(false);Resize();
     auto duration=std::chrono::milliseconds(static_cast<int64_t>(bootstrap.GetNamedNumber(L"launch_reveal_ms")));
     Animation::DoubleAnimation opacity;opacity.From(launchCover.Opacity());opacity.To(0.);opacity.Duration(DurationHelper::FromTimeSpan(duration));
     Animation::Storyboard::SetTarget(opacity,launchCover);Animation::Storyboard::SetTargetProperty(opacity,L"Opacity");
@@ -323,7 +326,7 @@ void CanvasWindow::ApplyLaunchCover(Windows::Data::Json::JsonObject const& model
     if(launchFade){launchFade.Stop();launchFade=nullptr;}
     if(launchCover.Visibility()!=Visibility::Visible){
         launchCover.Visibility(Visibility::Visible);launchCover.IsHitTestVisible(true);
-        ArmLaunchCaption();
+        ArmLaunchCaption();Resize();
     }
     launchCover.Opacity(LaunchCoverOpacity);
 }
@@ -551,8 +554,9 @@ void CanvasWindow::Resize() {
         if(header){
             header->SetFullscreen(!caption);
             header->SetInsets(float(left)/scale,float(right)/scale,float(height)/scale);
-            if(caption){regions=header->DragRegions(scale,next.width);inputRegions=header->InputRegions(scale,next.width);}
-        } else if(caption)regions.push_back(Windows::Graphics::RectInt32{
+        }
+        if(caption&&header&&!LaunchCoverTakesInput()){regions=header->DragRegions(scale,next.width);inputRegions=header->InputRegions(scale,next.width);}
+        else if(caption)regions.push_back(Windows::Graphics::RectInt32{
             left,0,std::max(0,int32_t(next.width)-left-right),int32_t(48*scale)});
         if(caption){
             bool same=captionRegionsValid&&SameRegions(regions,captionRegions)&&SameRegions(inputRegions,captionInputRegions);
@@ -591,7 +595,7 @@ void CanvasWindow::PublishGlass(){
 void CanvasWindow::CollectGlass(){
     auto self=this;
     if(self->closing||self->closed||!self->panel||!self->workspace)return;
-    if(self->captionRegionsValid){
+    if(self->captionRegionsValid&&!self->LaunchCoverTakesInput()){
         auto bubbles=self->workspace->OverlayInputRegions(self->panel);auto scale=self->root.XamlRoot().RasterizationScale();auto input=self->captionInputRegions;
         for(auto value:bubbles){auto bounds=value.GetObject();
             auto x=int32_t(std::floor(CapyUi::num(bounds,L"x")*scale)),y=int32_t(std::floor(CapyUi::num(bounds,L"y")*scale));

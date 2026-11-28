@@ -7,6 +7,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
+Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 if ($Delays | Where-Object { $_ -lt 0 -or $_ -gt 30000 }) {
     throw 'Close delays must be between zero and 30000 milliseconds.'
 }
@@ -35,6 +36,26 @@ function Check-LaunchCover {
     })
     if ($shown -and !$cover.Current.IsOffscreen) { throw "The launch splash showed $($shown -join ', ') over the saved $Capy capy." }
 }
+function Launch-Covered { ($cover = Find 'launch-splash' -Within $root -NoPopups) -and !$cover.Current.IsOffscreen }
+function Check-CoveredTitleBarDrag {
+    Wait-Until { (Find 'zen-capy' -Within $root -NoPopups) -or !(Launch-Covered) } 'The title bar did not appear under the launch splash.'
+    $capy = Find 'zen-capy' -Within $root -NoPopups
+    if (!$capy -or !(Launch-Covered)) { return }
+    $box = $capy.Current.BoundingRectangle
+    $x = [int]($box.Left + $box.Width / 2); $y = [int]($box.Top + $box.Height / 2)
+    $null = [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))
+    $null = [CapyRowPointer]::SetForegroundWindow($drawing.Handle)
+    [CapyRowPointer]::Initialize([uint32]$review.Id)
+    $before = New-Object CapyWindowApi+Rect; $null = [CapyWindowApi]::GetWindowRect($drawing.Handle, [ref]$before)
+    [CapyRowPointer]::Down('mouse', $x, $y)
+    foreach ($i in 1..20) { [CapyRowPointer]::Move($x + $i * 6, $y); Start-Sleep -Milliseconds 8 }
+    Start-Sleep -Milliseconds 300
+    [CapyRowPointer]::Up()
+    $after = New-Object CapyWindowApi+Rect; $null = [CapyWindowApi]::GetWindowRect($drawing.Handle, [ref]$after)
+    $moved = $after.left - $before.left
+    if ((Launch-Covered) -and $moved -lt 100) { throw "A drag from the title-bar capy under the launch splash moved the window $moved px, not 120." }
+    Write-Output "Title-bar drag under the launch splash moved the window $moved px."
+}
 function Launch-Capture([string]$Name) {
     & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -WindowHandle $drawing.Handle.ToInt64() -TraceDirectory $directory -Output (Join-Path $launch "$Name.png") -ClientOnly -Composed -CaptureOnly
 }
@@ -58,6 +79,7 @@ try {
     $captionDelay=$bootstrap.launch_caption_delay_ms
     if(!$captionDelay){throw 'The launch bootstrap has no caption delay'}
     if($splash=Find 'launch-splash' -Within $root -NoPopups){Launch-Capture 'launch'}
+    if(!$FailSettings){Check-CoveredTitleBarDrag}
     if($FailSettings){
         Wait-Until { $view=Model; $view.error -and !$view.launch.visible -and !$view.launch.finished } 'The launch error did not bypass the unfinished splash.'
         Wait-Until { $cover=Find 'launch-splash' -Within $root -NoPopups; !$cover -or $cover.Current.IsOffscreen } 'The launch error remained covered.'
@@ -158,5 +180,6 @@ try {
         }
         $review.Dispose()
     }
+    try{[CapyRowPointer]::Dispose()}catch{}
     Exit-CapyEnvironment
 }

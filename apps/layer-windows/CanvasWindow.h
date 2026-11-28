@@ -103,6 +103,7 @@ private:
     void ArmLaunchCaption();
     void ApplyLaunchCover(winrt::Windows::Data::Json::JsonObject const& model);
     void HideLaunchCover(bool animate);
+    bool LaunchCoverTakesInput() const;
     void QueueLaunchReveal();
     void CancelLaunchReveal();
     static winrt::fire_and_forget AwaitLaunchPresent(std::weak_ptr<CanvasWindow>,
