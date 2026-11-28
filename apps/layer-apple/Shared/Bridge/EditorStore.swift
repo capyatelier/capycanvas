@@ -5,7 +5,31 @@ import UIKit
 #endif
 
 @MainActor final class CameraReadout: ObservableObject {
-    @Published var value = JSON()
+    private(set) var value = JSON()
+    private(set) var text = ""
+    private(set) var settled = ""
+    var observers = 0
+    var show: ((String) -> Void)?
+    private var settle: DispatchWorkItem?
+    func receive(_ camera: JSON) {
+        guard !SnapshotProjection.equal(value.raw, camera.raw) else { return }
+        let next = "\(Int((camera["zoom"].number * 100).rounded()))% · \(Int((camera["rotation"].number * 180 / .pi).rounded()))°"
+        let resized = next.count != text.count
+        if observers > 0 || resized { objectWillChange.send() }
+        value = camera
+        guard next != text else { return }
+        text = next
+        if resized { settled = next }
+        show?(next)
+        settle?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.settled != self.text else { return }
+            self.objectWillChange.send()
+            self.settled = self.text
+        }
+        settle = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
 }
 
 @MainActor final class EditorStore: ObservableObject {
@@ -255,7 +279,7 @@ import UIKit
                 }
                 if hadRenderer != snapshot["gpu_ready"].bool || hadCanvas != snapshot["canvas_ready"].bool { bootstrapChanged?() }
                 filterPreviews.refresh()
-                if !SnapshotProjection.equal(camera.value.raw, state["camera"].raw) { camera.value = state["camera"] }
+                camera.receive(state["camera"])
                 proof.receive(state.json, gpuReady: snapshot["gpu_ready"].bool)
                 drawingTabs.receive()
                 colorEditing.receive(state.json)
@@ -269,7 +293,7 @@ import UIKit
                     workspaces?.tick()
                 }
             case .reflow:
-                if !SnapshotProjection.equal(camera.value.raw, state["camera"].raw) { camera.value = state["camera"] }
+                camera.receive(state["camera"])
                 contentDrawers.refresh()
                 workspace.refresh()
                 bubbles.refresh()
@@ -277,9 +301,7 @@ import UIKit
             case .workspace, .camera:
                 // Camera patches update the readout alone; dragging the canvas
                 // must not rebuild every panel and brush preview at input rate.
-                if !next["camera"].isNull && !SnapshotProjection.equal(camera.value.raw, next["camera"].raw) {
-                    camera.value = next["camera"]
-                }
+                if !next["camera"].isNull { camera.receive(next["camera"]) }
             case .ignored: break
             }
             if update != .ignored, (next["workspace_update"].raw as? NSDictionary)?["canvas_bar"] != nil {

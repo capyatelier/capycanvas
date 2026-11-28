@@ -300,10 +300,79 @@ private struct StorageAlert: ViewModifier {
     }
 }
 
-private struct CameraStatus: View {
+struct CameraStatus: View {
+    @ObservedObject var store: EditorStore
+    let camera: CameraReadout
+    @State private var menu: JSON?
+    private var copy: JSON { store.catalog["native_copy"]["header"] }
+    var body: some View {
+        Button {
+            menu = menu == nil ? JSON() : nil
+        } label: {
+            CameraReadoutLabel(camera: camera, size: store.catalog["text_size_pt"].number > 0 ? store.catalog["text_size_pt"].number * 4 / 3 : 44 / 3)
+        }.buttonStyle(.plain).focusable(false).help(copy["zoom"].string)
+            .accessibilityIdentifier("camera-status")
+            .editorPopover(isPresented: Binding(get: { menu != nil }, set: { if !$0 { menu = nil } })) {
+                CameraMenu(store: store, camera: camera, menu: $menu)
+            }
+    }
+}
+
+private struct CameraReadoutLabel: View {
+    @ObservedObject var camera: CameraReadout
+    let size: CGFloat
+    @Environment(\.editorPalette) private var palette
+    var body: some View {
+        CameraReadoutText(camera: camera, size: size, color: palette["text"]).accessibilityLabel(camera.settled)
+    }
+}
+
+#if os(macOS)
+private struct CameraReadoutText: NSViewRepresentable {
+    let camera: CameraReadout
+    let size: CGFloat
+    let color: Color
+    private var font: NSFont { .monospacedDigitSystemFont(ofSize: size, weight: .regular) }
+    func makeNSView(context: Context) -> NSTextField {
+        let label = NSTextField(labelWithString: camera.text)
+        label.setAccessibilityElement(false)
+        return label
+    }
+    func updateNSView(_ label: NSTextField, context: Context) {
+        label.font = font; label.textColor = NSColor(color); label.stringValue = camera.text
+        camera.show = { [weak label] in label?.stringValue = $0 }
+    }
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSTextField, context: Context) -> CGSize? {
+        let size = (String(camera.text.map { $0.isNumber || $0 == "-" ? "0" : $0 }) as NSString).size(withAttributes: [.font: font])
+        return CGSize(width: ceil(size.width), height: ceil(size.height))
+    }
+}
+#else
+private struct CameraReadoutText: UIViewRepresentable {
+    let camera: CameraReadout
+    let size: CGFloat
+    let color: Color
+    private var font: UIFont { .monospacedDigitSystemFont(ofSize: size, weight: .regular) }
+    func makeUIView(context: Context) -> UILabel {
+        let label = UILabel()
+        label.isAccessibilityElement = false
+        return label
+    }
+    func updateUIView(_ label: UILabel, context: Context) {
+        label.font = font; label.textColor = UIColor(color); label.text = camera.text
+        camera.show = { [weak label] in label?.text = $0 }
+    }
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UILabel, context: Context) -> CGSize? {
+        let size = (String(camera.text.map { $0.isNumber || $0 == "-" ? "0" : $0 }) as NSString).size(withAttributes: [.font: font])
+        return CGSize(width: ceil(size.width), height: ceil(size.height))
+    }
+}
+#endif
+
+private struct CameraMenu: View {
     @ObservedObject var store: EditorStore
     @ObservedObject var camera: CameraReadout
-    @State private var menu: JSON?
+    @Binding var menu: JSON?
     @Environment(\.editorPalette) private var palette
     private var copy: JSON { store.catalog["native_copy"]["header"] }
     private var refreshKey: String {
@@ -323,40 +392,34 @@ private struct CameraStatus: View {
         return AppleContextMenu(JSON(["title": "", "sections": part.map(\.raw)])) { store.dispatch($0) }
     }
     var body: some View {
-        Button {
-            if menu == nil { menu = JSON(); refresh() } else { menu = nil }
-        } label: {
-            Text(verbatim: "\(Int((camera.value["zoom"].number * 100).rounded()))% · \(Int((camera.value["rotation"].number * 180 / .pi).rounded()))°")
-        }.buttonStyle(.plain).focusable(false).help(copy["zoom"].string)
-            .accessibilityIdentifier("camera-status")
-            .onChange(of: refreshKey) { if menu != nil { refresh() } }
-            .editorPopover(isPresented: Binding(get: { menu != nil }, set: { if !$0 { menu = nil } })) {
-                let model = menu ?? JSON()
-                EditorScrollView {
-                    VStack(alignment: .leading, spacing: 6) {
-                        NumberControl(store: store, label: copy["zoom"].string, value: camera.value["zoom"].number,
-                            control: store.catalog["zoom"], identifier: "zoom", inline: true) { value, completion in
-                            store.edit(["type": "set_zoom", "zoom": value], completion: completion)
-                        }.padding(.horizontal, 10).padding(.top, 8)
-                        EditorLine(color: palette.panelBorder)
-                        EditorActionMenu(model: sections(model, rotation: false), width: 240, identifier: "zoom-menu",
-                            rootFocusesSelection: false, capturesKeys: false) { menu = nil }.fixedSize(horizontal: false, vertical: true)
-                        EditorLine(color: palette.panelBorder)
-                        NumberControl(store: store, label: copy["rotation"].string, value: camera.value["rotation"].number,
-                            control: store.catalog["rotation"], identifier: "rotation", inline: true,
-                            positionChange: { value, completion in
-                                store.edit(["type": "set_rotation_from_slider", "rotation": value], completion: completion)
-                            }) { value, completion in
-                            store.edit(["type": "set_rotation", "rotation": value], completion: completion)
-                        }.padding(.horizontal, 10)
-                        EditorLine(color: palette.panelBorder)
-                        EditorActionMenu(model: sections(model, rotation: true), width: 240, identifier: "rotation-menu",
-                            rootFocusesSelection: false, capturesKeys: false) { menu = nil }.fixedSize(horizontal: false, vertical: true)
-                        EditorLine(color: palette.panelBorder)
-                        NavigationButtons(store: store, prefix: "zoom").padding([.horizontal, .bottom], 8)
-                    }
-                }.frame(width: 240).frame(maxHeight: 640).fixedSize(horizontal: false, vertical: true)
+        let model = menu ?? JSON()
+        EditorScrollView {
+            VStack(alignment: .leading, spacing: 6) {
+                NumberControl(store: store, label: copy["zoom"].string, value: camera.value["zoom"].number,
+                    control: store.catalog["zoom"], identifier: "zoom", inline: true) { value, completion in
+                    store.edit(["type": "set_zoom", "zoom": value], completion: completion)
+                }.padding(.horizontal, 10).padding(.top, 8)
+                EditorLine(color: palette.panelBorder)
+                EditorActionMenu(model: sections(model, rotation: false), width: 240, identifier: "zoom-menu",
+                    rootFocusesSelection: false, capturesKeys: false) { menu = nil }.fixedSize(horizontal: false, vertical: true)
+                EditorLine(color: palette.panelBorder)
+                NumberControl(store: store, label: copy["rotation"].string, value: camera.value["rotation"].number,
+                    control: store.catalog["rotation"], identifier: "rotation", inline: true,
+                    positionChange: { value, completion in
+                        store.edit(["type": "set_rotation_from_slider", "rotation": value], completion: completion)
+                    }) { value, completion in
+                    store.edit(["type": "set_rotation", "rotation": value], completion: completion)
+                }.padding(.horizontal, 10)
+                EditorLine(color: palette.panelBorder)
+                EditorActionMenu(model: sections(model, rotation: true), width: 240, identifier: "rotation-menu",
+                    rootFocusesSelection: false, capturesKeys: false) { menu = nil }.fixedSize(horizontal: false, vertical: true)
+                EditorLine(color: palette.panelBorder)
+                NavigationButtons(store: store, prefix: "zoom").padding([.horizontal, .bottom], 8)
             }
+        }.frame(width: 240).frame(maxHeight: 640).fixedSize(horizontal: false, vertical: true)
+            .onAppear { camera.observers += 1; refresh() }
+            .onDisappear { camera.observers -= 1 }
+            .onChange(of: refreshKey) { refresh() }
     }
 }
 
