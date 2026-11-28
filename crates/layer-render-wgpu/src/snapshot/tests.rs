@@ -353,6 +353,29 @@ fn package_previews_of_many_layers_finish_under_a_tight_shared_ledger() {
 }
 
 #[test]
+fn captures_release_the_source_pages_of_finished_regions_under_a_tight_shared_ledger() {
+    let extent = [4096, 2048];
+    let mut document = Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames {paint:"Photo".into(),paper:"Paper".into()});
+    hide_paper(&mut document);
+    let source = crate::test_support::depth_source(extent, SampleDepth::U8, RgbSpace::Srgb, 64 << 20,
+        |x, y| [(x % 97) as f32 / 97., (y % 89) as f32 / 89., ((x + y) % 71) as f32 / 71., 1.]);
+    paint_mut(&mut document).base = Some(layer_core::authored::PaintBase::new(source.into()));
+    let budget = layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {host_default_bytes: Some(2 << 30), override_bytes: Some(2 << 30), ..Default::default()});
+    let live = WgpuRasterizer::new_native_headless_in(document.composition().color,
+        layer_core::DeviceMemoryFacts {budget_bytes: Some(1 << 30), unified: true, ..Default::default()}, budget.clone()).unwrap();
+    let _pressure = budget.admit_import(budget.import_headroom_bytes()).unwrap();
+    let gpu = live.snapshot_gpu();
+    let mut capture = gpu.capture_scene(document.snapshot(), SceneScope::All, Default::default()).unwrap();
+    let mut y = 0;
+    while y < extent[1] {
+        y += capture.read_band(y).unwrap_or_else(|error| panic!("the band at row {y} was refused: {error:?}")).0;
+    }
+    let request = layer_core::ArtworkStatisticsRequest {waveform: false, query: layer_core::ArtworkQuery::new(&document, layer_core::ArtworkSource::Visible), preview: false, selection: false};
+    let histogram = pollster::block_on(gpu.artwork_statistics(request, CaptureControl::default())).expect("the histogram was refused");
+    assert_eq!(histogram.pixels, u64::from(extent[0] * extent[1]));
+}
+
+#[test]
 fn snapshot_regions_plan_and_hold_the_same_memory_for_any_layer_count() {
     let extent = [1024, 768];
     let measure = |layers| {

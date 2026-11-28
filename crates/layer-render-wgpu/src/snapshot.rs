@@ -580,6 +580,7 @@ impl SnapshotRenderer {
     fn prepare_region_gpu(&mut self, [x,y,width,height]:[u32;4], reserved_bytes:u64)
         -> Result<(&mut WgpuRasterizer, FramePacket<'_>, PixelRect, submission::CommandEncoder),GpuRasterError> {
         self.check_cancelled()?;
+        self.renderer.end_frame_memory();
         let region = PixelRect::new(
             x,
             y,
