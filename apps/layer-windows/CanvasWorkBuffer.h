@@ -1,10 +1,12 @@
 #pragma once
 #include "native/include/capy_windows.h"
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -18,6 +20,17 @@ struct CanvasScroll {
     bool zoom, horizontal;
 };
 using CanvasWork = std::variant<std::vector<CapyPointer>, CanvasCommand, CanvasScroll>;
+
+inline std::string_view CanvasStateSlot(CanvasCommand const& command) {
+    if(command.reply)return {};
+    if(command.kind==CanvasCommandKind::Glass)return "glass";
+    std::string_view json=command.json;
+    for(std::string_view report:{R"({"type":"measure_panels")",R"({"type":"measure_header")",R"({"type":"measure_titlebar")"})
+        if(json.substr(0,report.size())==report)return report;
+    std::string_view chrome=R"({"type":"chrome")";
+    if(json.substr(0,chrome.size())==chrome&&json.find(R"("event":{"kind":"refresh"})")!=std::string_view::npos)return "chrome refresh";
+    return {};
+}
 
 class CanvasWorkBuffer {
 public:
@@ -36,6 +49,17 @@ public:
         return items.size()<slots && bytes<=limit && cost<=limit-bytes;
     }
     bool Push(CanvasWork&& item) {
+        auto command=std::get_if<CanvasCommand>(&item);
+        auto slot=command?CanvasStateSlot(*command):std::string_view{};
+        auto queued=slot.empty()?items.end():std::find_if(items.begin(),items.end(),[&](CanvasWork const& entry){
+            auto other=std::get_if<CanvasCommand>(&entry);return other&&other->kind==command->kind&&CanvasStateSlot(*other)==slot;
+        });
+        if(queued!=items.end()){
+            auto replaced=bytes-Bytes(*queued)+Bytes(item);
+            if(replaced>MaxBytes)return false;
+            *queued=std::move(item);bytes=replaced;
+            return true;
+        }
         if(!CanPush(item))return false;
         auto cost=Bytes(item);
         items.emplace_back(std::move(item));

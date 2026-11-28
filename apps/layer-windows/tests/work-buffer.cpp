@@ -1001,6 +1001,38 @@ int main() {
     assert(queue.Push(CanvasScroll{1,2,3,4,2,true,false}));
     std::cout<<"Canvas queue: ordered boundaries, reserved commands, refusal ownership, item and allocation limits passed\n";
 
+    {
+        CanvasWorkBuffer reports;
+        auto glass=[](int n){return CanvasCommand{CanvasCommandKind::Glass,R"({"glass":{"regions":[]},"document":[)"+std::to_string(n)+"]}"};};
+        auto measure=[](char const* type,int n){return CanvasCommand{CanvasCommandKind::Action,std::string(R"({"type":")")+type+R"(","n":)"+std::to_string(n)+"}"};};
+        auto chrome=[](char const* kind,int n){return CanvasCommand{CanvasCommandKind::Input,std::string(R"({"type":"chrome","event":{"kind":")")+kind+R"("},"facts":{"n":)"+std::to_string(n)+"}}"};};
+        for(int n=0;n<1000;n++){
+            assert(reports.Push(glass(n)));assert(reports.Push(measure("measure_panels",n)));assert(reports.Push(measure("measure_header",n)));
+            assert(reports.Push(measure("measure_titlebar",n)));assert(reports.Push(chrome("refresh",n)));
+        }
+        assert(reports.Pushed()==5);
+        assert(reports.Push(chrome("contact",1)));assert(reports.Push(chrome("contact",2)));
+        assert(reports.Push(measure("invoke",1)));assert(reports.Push(measure("invoke",2)));
+        bool replied=false;
+        assert(reports.Push(CanvasCommand{CanvasCommandKind::Glass,"{}",[&](int32_t){replied=true;}}));
+        assert(reports.Push(glass(1000)));
+        auto latest=reports.Take();
+        assert(latest.size()==10);
+        std::vector<std::string> json;for(auto const& item:latest)json.push_back(std::get<CanvasCommand>(item).json);
+        assert(json[0]==glass(1000).json&&json[1]==measure("measure_panels",999).json&&json[4]==chrome("refresh",999).json);
+        assert(json[5]==chrome("contact",1).json&&json[6]==chrome("contact",2).json&&json[7]==measure("invoke",1).json&&json[8]==measure("invoke",2).json);
+        std::get<CanvasCommand>(latest[9]).reply(0);assert(replied);
+        CanvasQueryQueue after;
+        assert(reports.Push(measure("measure_panels",1)));
+        assert(after.Push({CanvasQueryKind::Workspace,"after-measure",{},reports.Pushed()}));
+        assert(reports.Push(measure("measure_panels",2)));
+        assert(!after.Take({},reports.Taken()));
+        auto folded=reports.Take();
+        assert(folded.size()==1&&std::get<CanvasCommand>(folded[0]).json==measure("measure_panels",2).json);
+        assert(after.Take({},reports.Taken()));
+    }
+    std::cout<<"Canvas queue: state reports keep only their newest copy in place; events and replies stay queued\n";
+
     assert(queue.Push(CanvasCommand{CanvasCommandKind::Document,"close"}));
     CapyPointer down{};down.phase=1;
     assert(queue.Push(std::vector<CapyPointer>{down}));
