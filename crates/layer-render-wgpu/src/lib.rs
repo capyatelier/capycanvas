@@ -57,6 +57,7 @@ mod brush_tiles;
 mod dry_material;
 mod destination_material;
 mod liquify;
+mod watercolor;
 mod liquify_sources;
 mod brush_stamp;
 mod changed_cells;

@@ -115,6 +115,7 @@ pub(crate) struct PipelineDevice {
     pub blend_pipelines: std::sync::Arc<std::sync::Mutex<std::sync::Weak<super::portable_blend::Pipelines>>>,
     pub tone_pipelines: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::analysis_compute::Pipelines>>>,
     pub dehaze_pipelines: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::analysis_compute::Pipelines>>>,
+    pub watercolor_pipelines: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::watercolor::Pipelines>>>,
     pub bounds_pipeline: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::thumbnails::BoundsPipeline>>>,
     pub levels_pipeline:std::sync::Arc<std::sync::OnceLock<std::sync::Arc<crate::snapshot::levels::LevelsPipeline>>>,
     pub statistics_pipeline: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<crate::snapshot::statistics::StatisticsPipeline>>>,
@@ -141,6 +142,7 @@ impl From<wgpu::Device> for PipelineDevice {
             resource_limit: Default::default(),
             tone_pipelines: Default::default(),
             dehaze_pipelines: Default::default(),
+            watercolor_pipelines: Default::default(),
             bounds_pipeline: Default::default(),
             sample_pipeline: Default::default(),
             statistics_pipeline: Default::default(),
@@ -192,6 +194,7 @@ impl PipelineDevice {
             blend_pipelines: recipes.blend_pipelines.clone(),
             tone_pipelines: recipes.tone_pipelines.clone(),
             dehaze_pipelines: recipes.dehaze_pipelines.clone(),
+            watercolor_pipelines: recipes.watercolor_pipelines.clone(),
             ..self.clone()
         }
     }
