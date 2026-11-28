@@ -729,6 +729,40 @@ class AndroidToolBubblesTest {
         }
     }
 
+    @Test fun penHoverOverBubbleKeepsTheNextCanvasStroke() {
+        action(obj("type" to "restore_workspace", "workspace" to JSONObject(fixture.toString())))
+        val id = take(2, workspace().center)
+        val owner = checkNotNull(root)
+        tool = MotionEvent.TOOL_TYPE_STYLUS
+        fun hover(phase: Int, position: Offset) {
+            val e = motion(tool, phase, position, SystemClock.uptimeMillis(), button = 0)
+            try { instrumentation.runOnMainSync { owner.view.dispatchGenericMotionEvent(e) } } finally { e.recycle() }
+            SystemClock.sleep(40)
+        }
+        fun revision() = state().getJSONArray("layers").objects().first { it.optBoolean("editing") }.getLong("paint_revision")
+        val face = bounds("tool-bubble-$id").center
+        val canvas = workspace().let { Offset(it.left + it.width * .3f, it.top + it.height * .7f) }
+        val control = revision()
+        stroke(canvas, canvas + Offset(24 * density, 0f))
+        waitFor("A pen stroke at $canvas paints") { revision() > control }
+        hover(MotionEvent.ACTION_HOVER_ENTER, canvas)
+        hover(MotionEvent.ACTION_HOVER_MOVE, face)
+        tap(face)
+        hover(MotionEvent.ACTION_HOVER_ENTER, face)
+        hover(MotionEvent.ACTION_HOVER_MOVE, face + Offset(4 * density, 0f))
+        hover(MotionEvent.ACTION_HOVER_MOVE, canvas)
+        val before = revision()
+        downAt = SystemClock.uptimeMillis()
+        val exit = motion(tool, MotionEvent.ACTION_HOVER_EXIT, canvas, downAt, button = 0)
+        val down = motion(tool, MotionEvent.ACTION_DOWN, canvas, downAt)
+        pressed = true
+        try { instrumentation.runOnMainSync { owner.view.dispatchGenericMotionEvent(exit); owner.view.dispatchTouchEvent(down) } } finally { exit.recycle(); down.recycle() }
+        event(MotionEvent.ACTION_MOVE, canvas + Offset(24 * density, 0f))
+        event(MotionEvent.ACTION_UP)
+        host.drain()
+        waitFor("The first pen stroke after the pen hovered a bubble paints") { revision() > before }
+    }
+
     @Test fun haloAndFaceShareTheCoreCenter() {
         for (theme in listOf("light", "dark")) {
             case = "$theme-geometry"

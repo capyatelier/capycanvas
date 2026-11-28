@@ -31,7 +31,8 @@ internal class BubbleInteraction(val host: CanvasHost, val dock: DockInteraction
     private var menuOwner: Pair<Int, String>? = null
     private var epoch: Long? = null
     private var presented: JSONArray? = null
-    private var hovering = false
+    var hovering = false
+        private set
     private var stroke = false
     private var restoreAt: Long? = null
     var holdMillis = 500L
@@ -387,7 +388,7 @@ internal class BubbleInteraction(val host: CanvasHost, val dock: DockInteraction
         if (event.action == KeyEvent.ACTION_DOWN) cancel()
         return true
     }
-    fun hover(point: Offset): Boolean {
+    fun hover(point: Offset) {
         val at = point / dock.density
         val target = target(at)
         if (target != null && !hovering) host.input(obj("type" to "cursor_leave"))
@@ -396,12 +397,10 @@ internal class BubbleInteraction(val host: CanvasHost, val dock: DockInteraction
             val next = if (it === target) it.hit(at) else null
             if (it.hovered?.toString() != next?.toString()) { it.hovered = next; wake() }
         }
-        return target != null && target.hit(at) !in listOf("card", "pill")
     }
-    fun clearHover(): Boolean {
+    fun clearHover() {
         hovering = false
         records.values.forEach { if (it.hovered != null) { it.hovered = null; wake() } }
-        return false
     }
     fun takeTile(item: JSONObject, position: Offset, valid: () -> Boolean) {
         val source = sourceControl(item)
@@ -440,8 +439,7 @@ internal class BubbleInteraction(val host: CanvasHost, val dock: DockInteraction
                             change.changedToDownIgnoreConsumed() -> input.down(change, event.buttons.isSecondaryPressed)
                             change.changedToUpIgnoreConsumed() -> input.up(change, change.isConsumed)
                             change.pressed -> input.move(change)
-                            event.type == PointerEventType.Exit || change.type == PointerType.Touch -> input.clearHover()
-                            else -> input.hover(change.position)
+                            else -> { if (event.type == PointerEventType.Exit || change.type == PointerType.Touch) input.clearHover() else input.hover(change.position); false }
                         }
                         if (captured) change.consume()
                     }

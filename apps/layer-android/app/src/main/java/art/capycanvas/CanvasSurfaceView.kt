@@ -224,7 +224,7 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
             barrelTwistDevice = -1
             host.chrome(obj("kind" to "refresh"))
             host.input(obj("type" to "cursor_leave"))
-        } else {
+        } else if (host.workspaceInteraction?.bubbles?.hovering != true) {
             host.chrome(obj("kind" to "motion"))
             send(event, 0, 0, true)
         }

@@ -129,6 +129,7 @@ exports it as `$CAPY_APPLICATION_ID`. The commands below write
 ### Changing the host
 
 - **Pointer icons.** Register Compose text editors with `Modifier.textCursorRegion()`; `CanvasContent` resolves other workspace cursors from the gesture hit maps.
+- **Canvas input.** `CanvasSurfaceView` gets input through Compose's view interop, which stops delivering to the view after a consumed change until every pointer lifts. Workspace modifiers must not consume hover; `CanvasSurfaceView` skips canvas hover under a bubble instead.
 - **JNI results.** `or_throw` in `native/src/android.rs` reports
   `IllegalStateException` and keeps the return sentinel; `argb_array` packs RGBA
   pixels for Kotlin. Every JNI export uses `jni_entry!`; VM loading returns
