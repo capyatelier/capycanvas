@@ -13,7 +13,7 @@ provide test and build details; the release sequence lives here.
 | Linux x86_64 | Signed Flatpak download and project-hosted update repository | Publish the GitHub Release, deploy Flatpak updates, verify installation and updating. Flathub app publication is not configured by these workflows. |
 | Web | Downloadable static/PWA ZIP and `editor.capycanvas.art` | Publish the ZIP and deploy the editor from the same tag; verify the live revision and offline/update journeys. |
 | Android ARM64 | Direct Play-signed APK; Play internal, closed (`alpha`) and open (`beta`) testing, and production | Verify both installation paths and check the tracks' current review state before promotion. |
-| Windows x64 and ARM64 | Signed installer and portable ZIP, plus MSIX for Partner Center | Verify both downloads on each architecture. Store package upload, certification and publication are separate from CI. |
+| Windows x64 and ARM64 | Signed installer and portable ZIP, plus MSIX for Partner Center | Verify both downloads and the MSIX contents on each architecture before uploading the MSIX. Store certification and publication are separate from CI. |
 | macOS Apple silicon | Signed, notarized DMG and Mac App Store archive upload | Verify download, Gatekeeper, installation and updating; check Store processing, review and release separately. |
 | iPadOS | App Store Connect archive upload and TestFlight | Verify processing and availability of the exact build to the intended tester group. Beta review and production App Store submission are separate actions. |
 
@@ -506,10 +506,10 @@ workflow instead. Release validation calls the same CI workflow, and
 
 A release is gated only on its packages. `release.yml` builds every platform
 package with its own package checks, such as signing, notarization, disk image
-verification and the MSIX install test, and store uploads and GitHub Release
-creation require all of them. The release driver then runs the install and smoke
-check in [step 4](#4-verify-the-exact-packages-and-beta-build) on the final
-binaries.
+verification, the MSIX archive test and a launch of the x64 MSIX and ZIP contents,
+and store uploads and GitHub Release creation require all of them. The release
+driver then runs the install and smoke check in
+[step 4](#4-verify-the-exact-packages-and-beta-build) on the final binaries.
 
 `.github/workflows/release-checks.yml` holds the full test suites. It runs on its
 own by manual dispatch, not as part of a release. Manual dispatch defaults to

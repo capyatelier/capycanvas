@@ -333,7 +333,15 @@ from an STA PowerShell session (Windows PowerShell 5.1 or PowerShell 7):
 ```powershell
 ./apps/layer-windows/scripts/package-msix.ps1 -PortableResultFile <portable-result.json>
 ./apps/layer-windows/scripts/test-msix.ps1 -ResultFile <msix-result.json>
+./apps/layer-windows/scripts/test-launch.ps1 -Executable '<unpacked>\CapyCanvas.exe'
 ```
+
+`test-launch.ps1` starts an app with a private profile, waits until its drawing
+workspace is ready or the canvas shows its GPU message, then closes it and
+requires exit code 0. The release workflow runs it on the unpacked x64 MSIX and
+the extracted x64 ZIP. Hosted runners have no hardware GPU, so the check proves
+the package starts, not that it paints. ARM64 packages are cross-built on the x64
+runner and can't run there; the release smoke launches them on an ARM64 device.
 
 The app runs as a `packagedClassicApp` at `mediumIL` with `runFullTrust` and
 keeps its files in the package's [app data](#where-files-live); the converter
